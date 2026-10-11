@@ -1,47 +1,43 @@
 # How does a task wait without holding a worker?
 
-<!-- scenario-names: place, placeOrder -->
+<!-- scenario-names: welcome, follow-up-window, welcome-email -->
 
-Some tasks need to pause: before a reminder, before polling an external system again, or until a
-known time. A durable wait pauses the task without keeping a worker busy, however long the pause
-lasts.
+Some tasks must pause before they continue. For example, a task waits until a reminder time, or it
+waits before it asks an external system again. A worker runs a limited number of tasks at the same
+time. If a handler sleeps in its own code, it holds one of those slots and does no work. A durable
+wait pauses the task and releases the slot for the full pause.
 
-The naive way is to sleep inside the handler. That wastes capacity. A worker runs a limited number
-of tasks at once, and a sleeping handler holds one of those slots while it does nothing.
+After a wait, Workhorse calls the handler again from its first line. A replay is a later run of the
+handler for the same task. On a replay, each ended wait returns at once. A
+[checkpoint](030-delivery-guarantees.md) stores the result of the work before a wait, so that work
+does not run again.
 
-## One order, one wait, two workers
+## Pause a task without holding a worker
 
-**Example.** A handler places an order, waits two hours for payment to settle, and then confirms the
-order.
+**Example.** An order handler sends a welcome email to a new customer. Then it sends a follow-up
+email at the time in `payload.followUpAt`, here 16:00.
+
+1. At 14:00, worker A claims the task. The `welcome` checkpoint sends the email, and Workhorse
+   stores the result.
+2. The handler calls `ctx.sleepUntil("follow-up-window", …)`. Workhorse records a wait named
+   `follow-up-window` that ends at 16:00. Workhorse removes worker A as the owner and sets the task
+   to `scheduled`. Worker A's slot is free.
+3. Between 14:00 and 16:00, no worker holds the task. A new deployment can replace worker A.
+4. Soon after 16:00, the tick sets the task to `ready`, and worker B claims it. The tick is a
+   regular maintenance pass that each worker runs.
+5. Worker B calls the handler from the first line. The `welcome` checkpoint returns the stored
+   result. The wait has ended, so `ctx.sleepUntil` returns at once. The handler sends the
+   follow-up.
+
+Thus, a durable wait releases the worker until its time comes. Each wait has a name. On a replay,
+the name tells Workhorse that the wait ended and that the handler can continue. Use `ctx.sleep` to
+wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
 
 ```ts
-const handler = async (payload, ctx) => {
-  // runs twice — once now, once after the wait — so it must be checkpointed
-  const order = await ctx.checkpoint("place", () => placeOrder(payload));
-
-  await ctx.sleep("settle", settlementDelayMs); // slot is released here
-
-  await confirm(order.id);
-};
+await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
+await ctx.sleepUntil("follow-up-window", new Date(payload.followUpAt));
+await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
 ```
-
-This is what happens:
-
-1. At 14:00 worker A claims the task and calls the handler. The `place` checkpoint places the order,
-   and Workhorse saves the result under the name `place`.
-2. The handler calls `ctx.sleep("settle", …)`. Workhorse records a wait named `settle` that ends at
-   16:00. It takes the task away from worker A and marks it `scheduled` for 16:00. The handler stops
-   there, and worker A's slot is free for other tasks.
-3. Between 14:00 and 16:00, no worker holds the task. Worker A can even be replaced by a new
-   deployment.
-4. At 16:00 the task is due. Promotion, a regular background pass that moves due tasks to
-   `ready`, makes it ready, and worker B claims it.
-5. Worker B calls the handler **from the beginning**. The `place` checkpoint finds the saved result
-   and returns it, so no second order is placed. The `settle` wait has already ended, so
-   `ctx.sleep` returns at once. The handler confirms the order.
-
-Waits are named. The name tells Workhorse, on the second pass, that `settle` has already ended and
-the handler should continue past it.
 
 <details>
 <summary>Reference: wait API and limits</summary>
@@ -50,6 +46,9 @@ the handler should continue past it.
 | ------------------------------------------------- | -------------------------- | ---------------------------- |
 | TypeScript `HandlerContext`                       | `sleep(name, durationMs)`  | `sleepUntil(name, wakeAt)`   |
 | Python `HandlerContext` and `AsyncHandlerContext` | `sleep(name, duration_ms)` | `sleep_until(name, wake_at)` |
+| Go `HandlerContext`                               | `Sleep(name, duration)`    | `SleepUntil(name, wakeAt)`   |
+| Rust handler context                              | `sleep(name, duration)`    | `sleep_until(name, wake_at)` |
+| Ruby handler context                              | `sleep(name, seconds)`     | `sleep_until(name, wake_at)` |
 
 | Limit                                      | Value                                                |
 | ------------------------------------------ | ---------------------------------------------------- |
@@ -63,10 +62,11 @@ the handler should continue past it.
 | First target in the future      | Inserts `task_wait`. Sets the task to `scheduled`. Clears the owner. Appends `wait_scheduled`. |
 | First target already past       | Records the wait. The task stays `active`. The call returns at once.                           |
 | Same relative wait on replay    | Returns the first stored target, even if the duration changed.                                 |
-| Changed absolute target or mode | Conflict. See "When a replay conflicts with saved results".                                    |
+| Changed absolute target or mode | Conflict. See "Handle a replay conflict".                                                      |
 | Replay reaches an ended wait    | Appends `wait_replayed`. The call returns at once.                                             |
 
-Promotion appends `wait_elapsed` when it makes a waiting task ready.
+Promotion is the part of the tick that sets due tasks to `ready`. It appends `wait_elapsed` when it
+makes a waiting task ready.
 
 A [fast-tier queue](305-fast-tier.md) rejects durable waits. That tier keeps no durable execution
 state.
@@ -75,33 +75,29 @@ More detail: [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle
 
 </details>
 
-## The catch: your handler restarts from the top
+## Make the code before a wait safe to run again
 
-Go back to the order. Worker A ran the first part at 14:00, and worker B runs the rest at 16:00.
+After a wait, Workhorse calls the handler from its first line. It does not continue from the line
+after the wait.
 
-1. **At 16:00** worker B calls the handler. It does not start at the line after `ctx.sleep`. It
-   starts at the first line.
-2. **Right after** the handler reaches the `place` checkpoint again. The checkpoint returns the
-   saved order, so `placeOrder` does not run a second time.
-3. **Then** the handler reaches `ctx.sleep("settle", …)`. The wait has ended, so the call returns at
-   once, and the handler confirms the order.
+**Example.** Worker A ran the first part of the order handler at 14:00. Worker B runs the rest at
+16:00.
 
-This is the part that surprises people. When the task continues, Workhorse calls your handler
-**again, from the beginning**. It does not continue in the middle of the function. There is no saved
-call stack: the process that ran the first part may be gone, and a newer deployment may run the
-second part.
+1. At 16:00, worker B calls the handler. The handler starts at its first line.
+2. The handler reaches the `welcome` checkpoint again. The checkpoint returns the stored result, so
+   the handler does not send the welcome email again.
+3. The handler reaches the `follow-up-window` wait. The wait has ended, so the call returns at
+   once.
+4. The handler sends the follow-up.
 
-So the code before a wait runs again after the wait. That means:
+Thus, the code before a wait runs again after the wait. Workhorse stores no call stack. The process
+that ran the first part can stop, and a new deployment can run the second part. Make each operation
+before a wait idempotent. Or put the operation in a [checkpoint](030-delivery-guarantees.md), as the
+example does with `welcome`.
 
-> Everything before a wait must be safe to run again.
-
-Make that code idempotent, or wrap it in a [checkpoint](030-delivery-guarantees.md), as `place` is
-in the example. The second pass then reuses the saved result instead of doing the work again.
-
-Do not catch the control signal that `ctx.sleep` or `ctx.sleepUntil` throws to stop the handler. If
-a handler catches it and returns, the worker still honors the recorded wait, and it logs a warning
-that the signal was swallowed. But any side effects after the catch have already happened, and
-nothing can undo them.
+To stop the handler, `ctx.sleep` and `ctx.sleepUntil` throw a control signal. Do not catch this
+signal. If the handler catches it and returns, the worker still applies the recorded wait. The
+worker also logs a warning. But Workhorse cannot undo the code that ran after the catch.
 
 <details>
 <summary>Reference: suspension and a swallowed signal</summary>
@@ -121,22 +117,20 @@ More detail: [Task lifecycle: Worker suspension](../architecture/lifecycle.md#wo
 
 </details>
 
-## Waiting is not failing
+## Expect a wait to keep the attempt
 
-Go back to the order.
+A wait is a normal part of the work of a task. It is not a failure, so it does not use an attempt.
 
-1. **At 14:00** worker A claims the task for attempt 1.
-2. **At 14:00, a moment later,** the handler calls `ctx.sleep`. Worker A gives up the task. Nothing
-   failed, and Workhorse schedules no retry.
-3. **At 16:00** worker B claims the task. The attempt counter still reads 1. Worker B's claim
-   carries a new [fence token](020-leases-and-fences.md).
+**Example.** The order handler waits on `follow-up-window`.
 
-The task paused for two hours, but it did not fail and it did not retry. A wait does **not** use up
-an attempt. The attempt counter stays where it was.
+1. At 14:00, worker A claims the task for attempt 1.
+2. The handler calls `ctx.sleepUntil`. Worker A releases the task. Nothing failed, and Workhorse
+   schedules no retry.
+3. At 16:00, worker B claims the task. The attempt number is still 1. The claim of worker B has a
+   new [fence token](020-leases-and-fences.md).
 
-This is deliberate. Waiting is a normal part of the task's work, not a sign that something went
-wrong. A task that sleeps many times stays in the same logical attempt. Each wake is a new claim
-with a new fence token, but the attempt is the same.
+Thus, the task paused for two hours, but it did not fail and it did not retry. A task that waits
+many times stays in the same attempt. Each wake is a new claim with a new fence token.
 
 <details>
 <summary>Reference: attempt and fence</summary>
@@ -150,20 +144,19 @@ More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycl
 
 </details>
 
-## When it wakes up
+## Expect a short delay after the wake time
 
-Go back to the order. The story said worker B claimed the task "at 16:00". This is what happens
-around that moment.
+The wake time is the time from which a worker can claim the task. It is not the time at which the
+handler starts.
 
-1. **At 16:00** the `settle` wait ends. The task becomes eligible, but it is still `scheduled`.
-2. **A moment later** promotion runs on its regular interval and makes the task `ready`.
-3. **Then** worker B has a free slot and claims the task.
+**Example.** The `follow-up-window` wait of the order ends at 16:00.
 
-So the wake time means "becomes eligible at 16:00". The task starts shortly after 16:00, not
-exactly at 16:00. Promotion runs on a regular interval, and a worker must have a free slot.
+1. At 16:00, the `follow-up-window` wait ends. The task is still `scheduled`.
+2. Soon after, the next tick sets the task to `ready`.
+3. When worker B has a free slot, it claims the task.
 
-Do not build anything that needs precise timing on top of this. A durable wait is a sleep that
-survives restarts, not a real-time scheduler.
+Thus, the task starts a short time after 16:00. The tick runs at a regular interval, and a worker
+must have a free slot. Do not use a durable wait for work that needs exact timing.
 
 <details>
 <summary>Reference: wake latency</summary>
@@ -178,17 +171,72 @@ More detail: [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#
 
 </details>
 
-## When a replay conflicts with saved results
+## Keep checkpoint and wait names stable
 
-Suppose a deployment changes the handler while the task waits. On the second pass, the `settle`
-wait now asks for a different absolute time than the one Workhorse stored. Retrying the same handler
-cannot fix that. So Workhorse fails the task at that point, instead of
-retrying it. It keeps the current attempt and records which kind of conflict happened, so an
-operator can see it. Configured redaction still hides error details.
+A later run finds each finished checkpoint and wait by its name. If a deployment changes a name,
+the task does not find the stored result.
 
-Other errors keep their usual rules. Transient errors and child-limit refusals still follow the
-task's retry policy. Lease loss keeps its ownership rules. A refused signal wait that is already
-waiting keeps its existing behavior.
+**Example.** A deployment changes the checkpoint name `welcome` to `welcome-email` while the order
+task waits.
+
+1. At 16:00, worker B calls the new handler.
+2. The handler reaches `welcome-email`. Workhorse has no checkpoint with that name.
+3. The checkpoint runs its operation, and the customer gets a second welcome email.
+
+Thus, a changed name runs its work again. A changed wait name also starts a new wait. Keep each
+name the same in all deployments while a task can use it.
+
+Workhorse also checks a repeated wait. If a relative wait repeats with a different duration,
+Workhorse keeps the first wake time. If an absolute wait repeats with a different time, Workhorse
+gives a conflict. The number of waits in one task has a limit.
+
+To read the stored results, call `HandlerContext.getCheckpoint` or `getWait` in a handler. In
+operator code, call `Admin.listCheckpoints` or `Admin.listWaits`.
+
+<details>
+<summary>Reference: names, conflicts, and inspection</summary>
+
+| Condition                                           | Result                     |
+| --------------------------------------------------- | -------------------------- |
+| A relative wait repeats with a different duration   | The original target stays. |
+| An absolute wait repeats with a different target    | `WaitConflictError`        |
+| A name switches between relative and absolute modes | `WaitConflictError`        |
+| A task exceeds its bound on open waits              | `WaitLimitExceededError`   |
+| A checkpoint name repeats with a different value    | `CheckpointConflictError`  |
+
+One task can hold at most 1,000 timer names.
+
+| Reader                         | Scope                                   |
+| ------------------------------ | --------------------------------------- |
+| `HandlerContext.getCheckpoint` | One checkpoint, from inside a handler   |
+| `getWait`                      | One wait, from inside a handler         |
+| `Admin.listCheckpoints`        | Retained checkpoints, for operator code |
+| `Admin.listWaits`              | Retained waits, for operator code       |
+
+More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint) and [Data model: `task_wait`](../architecture/data-model.md#task_wait).
+
+</details>
+
+## Handle a replay conflict
+
+A replay conflict occurs when a replay asks for a different value than the stored value. A retry
+of the same handler cannot fix a replay conflict.
+
+**Example.** A deployment changes the order handler while the task waits on `follow-up-window`.
+
+1. At 14:00, the old handler records the `follow-up-window` wait with the time 16:00.
+2. A new deployment adds one hour to the follow-up time. The new handler asks for 17:00.
+3. At 16:00, the replay reaches `follow-up-window`. The time 17:00 does not agree with the stored
+   time.
+4. Workhorse fails the task and does not retry it.
+
+Thus, Workhorse fails the task at the first replay conflict. The task keeps its current attempt.
+Workhorse records the type of conflict, so an operator can see it. If redaction is set, Workhorse
+still hides the error details.
+
+Other errors keep their usual rules. A transient error follows the retry policy of the task. A
+refusal at the child limit also follows the retry policy. A lost lease keeps its usual rules. A
+signal wait that is already pending keeps its usual rules.
 
 <details>
 <summary>Reference: conflict classes</summary>
@@ -201,7 +249,57 @@ Workhorse fails the task on the first conflict with saved evidence in one of the
 - a child set;
 - a human-decision context.
 
-The failure keeps the current attempt. Operator reads show the conflict class.
+The terminal classes are `CheckpointConflictError`, `WaitConflictError`, `ChildConflictError`, and
+`HumanWaitConflictError`. `ChildConflictError` includes a changed child set.
+
+The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
+the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.
+
+Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep
+their existing settlement behavior.
+
+More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycle.md#durable-timer-suspension) and [Schema and protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
+
+</details>
+
+## Wait for an external result
+
+A timer wait ends when its time comes. A signal wait or a human wait ends when another actor gives
+a JSON value. A signal wait gets its value from an application. A human wait gets its value from an
+operator decision.
+
+**Example.** The order handler waits for an event from a provider and then for an operator review.
+
+1. The handler calls `ctx.waitForSignal("provider-event")`. Workhorse records the wait and releases
+   the lease. No worker holds the task.
+2. Later, the application receives a webhook from the provider and calls `Queue.sendSignal`.
+   Workhorse stores the payload and sets the task to `ready`.
+3. A worker calls the handler from the first line. The signal wait returns the payload. The handler
+   calls `ctx.waitForHuman("operator-review", …)`, and the task waits again.
+4. An operator decides. An authenticated operator tool calls `Queue.completeHumanWait`.
+5. Workhorse calls the handler again, and each wait returns its stored value.
+
+Thus, each external wait releases the worker until a value arrives. Workhorse keeps each delivery,
+and each delivery is idempotent. A network retry cannot resume the task two times. Read
+[135-signals.md](135-signals.md) and [145-human-decisions.md](145-human-decisions.md) for the
+timeout and authorization rules.
+
+```ts
+const event = await ctx.waitForSignal<{ id: string }>("provider-event");
+const review = await ctx.waitForHuman("operator-review", { eventId: event.id });
+```
+
+<details>
+<summary>Reference: external results</summary>
+
+| Wait       | Handler call                      | Delivery                  |
+| ---------- | --------------------------------- | ------------------------- |
+| Signal     | `ctx.waitForSignal(name)`         | `Queue.sendSignal`        |
+| Human wait | `ctx.waitForHuman(name, context)` | `Queue.completeHumanWait` |
+
+- Each call stores a named boundary before the worker releases its lease.
+- Each delivery is idempotent, and Workhorse retains it.
+- A delivery or an expired timer settles the wait. The handler then restarts from the top.
 
 More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycle.md#durable-timer-suspension).
 
@@ -209,9 +307,10 @@ More detail: [Task lifecycle: Durable timer suspension](../architecture/lifecycl
 
 ## Next
 
-- [030-delivery-guarantees.md](030-delivery-guarantees.md) — checkpoints, which waits depend on
-- [140-deadlines-and-timeouts.md](140-deadlines-and-timeouts.md) — why sleeping doesn't spend the budget
-- [110-retries.md](110-retries.md) — how a wait differs from a retry
+- [030-delivery-guarantees.md](030-delivery-guarantees.md) — keep finished work with checkpoints
+- [140-deadlines-and-timeouts.md](140-deadlines-and-timeouts.md) — learn why a wait does not use
+  the time budget
+- [110-retries.md](110-retries.md) — learn how a wait differs from a retry
 
 ---
 

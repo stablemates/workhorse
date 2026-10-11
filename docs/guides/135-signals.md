@@ -2,53 +2,55 @@
 
 <!-- scenario-names: ord-381, review-77, review-service, review-78 -->
 
-Some tasks need a decision or event that arrives from another process. A signal wait releases the
-worker slot until an application or authenticated operator supplies a named JSON payload.
+Some tasks must wait for an event or a decision from another process. A signal wait is a named
+durable wait that ends when an application or an operator gives a JSON payload. While the task
+waits, no worker holds it. When the payload arrives, Workhorse resumes the task one time.
 
-## One order, one approval
+## Wait for a signal from another process
 
 **Example.** A task publishes order `ord-381`, but only after an external review service approves
-it. The handler asks for a signal named `approval`. The review service answers some hours later.
+it. The handler waits for a signal named `approval`. The review service answers after some hours.
+
+1. At 0 s, worker A claims the task. The handler calls `ctx.waitForSignal("approval")`. Workhorse
+   records a signal wait named `approval` and removes worker A as the owner. Worker A's slot is
+   free.
+2. Between 0 s and 3 h, no worker holds the task, and no worker can claim it. A new deployment can
+   replace worker A.
+3. At 3 h, the review service calls `Queue.sendSignal` for the task. It gives the name `approval`
+   and the payload `{ "approved": true }`. In one transaction, Workhorse stores the payload, sets
+   the task to `ready`, and tells the workers.
+4. Soon after, worker B claims the task and calls the handler from the first line. The handler
+   calls `ctx.waitForSignal("approval")` again. Now the call returns the stored payload at once, and
+   the handler publishes the order.
 
 ```ts
 const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");
-
 if (approval.approved) await publishOrder();
 ```
 
-1. **At 0 s** worker A claims the task and calls the handler. The handler reaches
-   `ctx.waitForSignal("approval")`. Workhorse records a signal wait named `approval` and takes the
-   task away from worker A. No worker can claim the task now. The handler stops there, and worker
-   A's slot is free for other tasks.
-2. **Between 0 s and 3 h** no worker holds the task. Worker A can even be replaced by a new
-   deployment.
-3. **At 3 h** the review service calls `Queue.sendSignal` for the task, with the name `approval` and
-   the payload `{ "approved": true }`. In one transaction, Workhorse stores the payload, makes the
-   task ready, and notifies workers.
-4. **Shortly after** worker B claims the task and calls the handler **from the beginning**. The
-   handler reaches `ctx.waitForSignal("approval")` again. This time the call returns the stored
-   payload at once, and the handler publishes the order.
+Thus, `HandlerContext.waitForSignal` records a named wait and releases the lease. When the payload
+arrives, Workhorse calls the handler again from its first line. The code before the wait runs
+again. Put each earlier effect in a [checkpoint](030-delivery-guarantees.md), or make it
+idempotent. The [durable waits guide](130-durable-waits.md) explains this replay rule.
 
-The handler restarts from its entry point, not from the middle. So code before the wait runs again.
-Wrap earlier effects in a [checkpoint](030-delivery-guarantees.md) or make them idempotent. The
-[durable waits guide](130-durable-waits.md) owns that replay rule.
+The wait does not use an attempt. The claim of worker B has a new [fence
+token](020-leases-and-fences.md), but it continues the same attempt. The stored payload also stays
+after a retry. If the handler fails after step 4, the `approval` wait returns the same payload on
+the next attempt.
 
-The wait does not use up an attempt. Worker B's claim gets a new
-[fence token](020-leases-and-fences.md), but it continues the same logical attempt. The stored
-payload also survives later retries. If the handler fails after step 4 and retries, the `approval`
-wait returns the same payload again.
-
-Go handlers call `HandlerContext.WaitForSignal` with the same stable name. They can pass
-`ExternalWaitOptions` when the wait needs a shorter lifetime.
+Go handlers call `HandlerContext.WaitForSignal` with the same name. To give the wait a shorter
+lifetime, pass `ExternalWaitOptions`.
 
 <details>
 <summary>Reference: declaring a signal wait</summary>
 
-| SDK        | Handler call                                                 |
-| ---------- | ------------------------------------------------------------ |
-| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`          |
-| Python     | `wait_for_signal(name, *, timeout_ms=None)`                  |
-| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)` |
+| SDK        | Handler call                                                      |
+| ---------- | ----------------------------------------------------------------- |
+| TypeScript | `HandlerContext.waitForSignal(name, { timeoutMs })`               |
+| Python     | `wait_for_signal(name, *, timeout_ms=None)`                       |
+| Go         | `HandlerContext.WaitForSignal(name, ...ExternalWaitOptions)`      |
+| Rust       | `wait_for_signal(name, timeout)`, with `Some(duration)` or `None` |
+| Ruby       | `wait_for_signal(name, timeout:)`, with `timeout:` in seconds     |
 
 | Limit                               | Value                                              |
 | ----------------------------------- | -------------------------------------------------- |
@@ -74,29 +76,33 @@ More detail: [Data model: Declaring a signal wait](../architecture/data-model.md
 
 </details>
 
-## Delivery happens once
+## Deliver a signal one time
 
-Go back to step 3. The review service sends the signal with the idempotency key `review-77` and the
-actor `review-service`. Then several things go wrong at once.
+A network error can make a sender send the same signal again. Two senders can also answer the same
+wait. Workhorse accepts only the first delivery.
 
-1. **At 3 h** Workhorse accepts the delivery and resumes the task. The response is lost on the
-   network.
-2. **At 3 h + 5 s** the review service retries with the same key and the same payload. Workhorse
-   returns `duplicate` with the stored payload. The task does not resume a second time.
-3. **At 3 h + 1 min** a second reviewer sends `{ "approved": false }` with the key `review-78`.
-   The wait already has a payload, so Workhorse returns `already_delivered` with the first payload.
-   The first delivery wins.
+**Example.** At 3 h, the review service sends `approval` with the idempotency key `review-77` and
+the actor `review-service`.
 
-Had the service reused the key `review-77` with a different payload or actor, Workhorse would have
-refused it with a conflict error. A key names one request, so it cannot carry a changed one.
+1. At 3 h, Workhorse accepts the delivery and resumes the task. The response does not reach the
+   review service.
+2. At 3 h + 5 s, the review service sends the same key and payload again. Workhorse returns
+   `duplicate` with the stored payload. The task does not resume again.
+3. At 3 h + 1 min, a second reviewer sends `{ "approved": false }` with the key `review-78`.
+   Workhorse returns `already_delivered` with the first payload.
 
-Delivery is idempotent at the state transition. Only the first accepted delivery resumes the task.
-Workhorse also does not buffer a delivery that arrives too early. A signal sent before the handler
-reaches `waitForSignal` returns `not_waiting`. The caller may retry after the handler declares the
-wait.
+Thus, the first accepted delivery resumes the task, and later deliveries do not change it. An
+idempotency key identifies one request. If the service sends `review-77` again with a different
+payload or actor, Workhorse refuses the request with a conflict error.
 
-Go applications call `Queue.SendSignal` with `ExternalWaitDelivery`. The result reports the status
-and the stored payload. A changed request under a stored key returns a typed conflict error.
+Workhorse does not keep a signal that arrives too early. If the handler did not call
+`waitForSignal` yet, the delivery returns `not_waiting`. The sender can try again after the handler
+starts the wait. If another transition closed the wait, the delivery returns `stale`. The stored
+outcome does not change.
+
+Go applications call `Queue.SendSignal` with `ExternalWaitDelivery`. The returned
+`SignalDeliveryResult` gives the status and the stored payload. If a changed request uses a stored
+key, the call returns a typed conflict error.
 
 <details>
 <summary>Reference: delivery request and statuses</summary>
@@ -135,20 +141,25 @@ More detail: [Data model: Delivering a signal](../architecture/data-model.md#del
 
 </details>
 
-## An operator can answer from the dashboard
+## Send a signal from the dashboard
 
-Suppose the review service is down. An operator opens the dashboard's `Waiting` task list and finds
-the task for `ord-381`, marked as waiting for `approval`. In the task drawer, the operator enters
-`{ "approved": true }` and sends it. The task resumes exactly as in step 3.
+If the sender cannot answer, an operator can send the signal from the dashboard.
 
-The dashboard counts pending external waits on its system page. Its delivery uses the same queue
-operation as `Queue.sendSignal`. But its server replaces any browser-supplied attribution with the
-host's audit actor. That is the signed-in operator whenever the host names one.
-[370-dashboard-authentication.md](370-dashboard-authentication.md)
-explains which actor each host records.
+**Example.** The review service is not available, and the task for `ord-381` waits on `approval`.
 
-`requestedBy` is attribution only, not authorization. An application that calls `Queue.sendSignal`
-must establish authorization before it calls the core API.
+1. An operator opens the `Waiting` task list in the dashboard.
+2. The operator finds the task for `ord-381`. The list shows that it waits for `approval`.
+3. In the task drawer, the operator enters `{ "approved": true }` and sends it.
+4. Workhorse resumes the task, as in step 3 of the first example.
+
+Thus, the dashboard uses the same queue operation as `Queue.sendSignal`. The dashboard server
+ignores the actor that the browser gives. It records the audit actor of the host. If the host names
+the signed-in operator, the record shows that operator.
+[370-dashboard-authentication.md](370-dashboard-authentication.md) explains which actor each host
+records. The system page of the dashboard counts the pending external waits.
+
+`requestedBy` records who sent the signal. It does not give permission. An application must check
+authorization before it calls `Queue.sendSignal`.
 
 <details>
 <summary>Reference: dashboard surfaces</summary>
@@ -165,19 +176,22 @@ More detail: [Data model: Dashboard waits](../architecture/data-model.md#dashboa
 
 </details>
 
-## Operator tools can list open waits
+## List open signal waits
 
-Go back to order `ord-381`. While its task waits on `approval`, an operator wants to see every open
-signal wait.
+An operator tool can list each signal wait that is open. Each row shows the task and the wait, but
+not the payload.
 
-1. **At 1 h** the operator's custom tool calls `Admin.listSignalWaits`. The first page holds the
-   oldest open waits. One row names the task for `ord-381`, its queue, its task type, the signal
-   name `approval`, the attempt, the creation time, and the effective deadline.
-2. **Right after** the page returns `nextCursor`. The tool passes it back and reads the next page.
-3. **Later** the review service delivers `approval`. The next listing no longer shows that wait.
+**Example.** While the task for `ord-381` waits on `approval`, an operator tool lists the open
+signal waits.
 
-A row never exposes a delivered payload. The tool keeps passing `nextCursor` back, so no wait beyond
-the page bound stays hidden.
+1. At 1 h, the tool calls `Admin.listSignalWaits`. The first page holds the oldest open waits.
+2. One row shows the task for `ord-381`, its queue, and its task type. The row also shows the name
+   `approval`, the attempt, the creation time, and the deadline.
+3. The page also returns `nextCursor`. The tool gives it to the next call and reads the next page.
+4. At 3 h, the review service delivers `approval`. The next list does not show that wait.
+
+Thus, a row never shows a delivered payload. To see every open wait, give `nextCursor` to each
+next call until it is null. The dashboard reads the same data.
 
 <details>
 <summary>Reference: listing signal waits</summary>
@@ -197,24 +211,31 @@ More detail: [Data model: Listing signal waits](../architecture/data-model.md#li
 
 </details>
 
-## An unanswered wait still closes
+## Close a wait that nobody answers
 
-This time the handler waits with a shorter lifetime: `ctx.waitForSignal("approval", { timeoutMs })`,
-with a timeout of one day.
+A signal wait does not continue for all time. If no payload arrives, the wait ends and the task
+fails.
 
-1. **At 0 s** the task parks on `approval`. Its boundary closes at 1 day.
-2. **At 1 day** nobody has answered. Shortly after, a regular background pass fails the task with a
-   deadline error. Workhorse starts no further attempt, because replay cannot continue without a
-   payload.
-3. **At 1 day + 10 min** the review service finally sends the signal. Workhorse returns `stale`
-   and leaves the failed task as it is.
+**Example.** The handler gives the `approval` wait a lifetime of one day:
+`ctx.waitForSignal("approval", { timeoutMs })`.
 
-When the handler names no `timeoutMs`, Workhorse applies its longest supported wait instead. An
-earlier task [deadline](140-deadlines-and-timeouts.md) wins over either. Choose a `timeoutMs` your
-application can act on. The default is long enough that a wait can outlive the event it awaited.
+1. At 0 s, the task starts to wait on `approval`. The wait ends at 1 day.
+2. At 1 day, nobody has answered.
+3. Soon after, a regular maintenance pass fails the task with a deadline error. Workhorse starts no
+   other attempt, because a replay cannot continue without a payload.
+4. At 1 day + 10 min, the review service sends the signal. Workhorse returns `stale` and does not
+   change the failed task.
 
-[Cancellation](120-cancellation.md) also closes the wait, so a late delivery returns `stale`. The
-signal row follows the parent task's safe [retention](330-retention.md).
+Thus, an unanswered wait ends at its time limit. If the handler gives no `timeoutMs`, Workhorse uses
+its longest supported wait. If the task [deadline](140-deadlines-and-timeouts.md) is earlier, the
+deadline ends the wait. Choose a `timeoutMs` that your application can act on. With the default, a
+wait can continue after its event is no longer important.
+
+Python handlers give `timeout_ms` for the same limit. Rust handlers give `Some(duration)` as the
+timeout. Ruby handlers give `timeout:` as a number of seconds.
+
+[Cancellation](120-cancellation.md) also ends the wait, and a late delivery returns `stale`. The
+signal record stays as long as its task, under the [retention](330-retention.md) rules.
 
 <details>
 <summary>Reference: timeout, deadline, and retention</summary>
@@ -243,8 +264,8 @@ More detail: [Data model: Timeout and deadline](../architecture/data-model.md#ti
 ## Next
 
 - [130-durable-waits.md](130-durable-waits.md) — pause until a time instead of an external event
-- [030-delivery-guarantees.md](030-delivery-guarantees.md) — make replayed work safe
-- [120-cancellation.md](120-cancellation.md) — close work that should no longer wait
+- [030-delivery-guarantees.md](030-delivery-guarantees.md) — make the code that runs again safe
+- [120-cancellation.md](120-cancellation.md) — end a task that must not wait longer
 
 ---
 

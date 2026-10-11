@@ -2,57 +2,59 @@
 
 <!-- scenario-names: acct-19, rev-4, rev-5, account-review -->
 
-Some tasks need a person to inspect context and decide what happens next. A human wait stores that
-context, releases the worker lease, and gives the dashboard an actionable decision.
+Some tasks must stop until a person examines the context and makes a decision. A human wait is a
+named durable wait that ends when a person gives a JSON result. Workhorse stores the context of the
+decision and releases the worker lease. The dashboard shows the decision to operators.
 
-## One account, one review
+## Wait for a human decision
 
 **Example.** A task activates account `acct-19`, but only after a person approves it. The handler
-names the decision `account-review` and stores the context an operator needs to decide.
+gives the decision the name `account-review`. It stores the context that an operator needs.
+
+1. At 0 s, worker A claims the task. The handler calls `ctx.waitForHuman("account-review", …)`.
+   Workhorse stores the decision and its context, and removes worker A as the owner. No worker can
+   claim the task, and worker A's slot is free.
+2. At 40 min, an operator reads the context and approves the account. Workhorse stores the result
+   `{ "approved": true }`, sets the task to `ready`, and tells the workers.
+3. Soon after, worker B claims the task and calls the handler from the first line. The handler
+   calls `ctx.waitForHuman("account-review", …)` again, with the same context. Now the call returns
+   the stored result at once, and the handler activates the account.
 
 ```ts
 const review = await ctx.waitForHuman<{ accountId: string; prompt: string }, { approved: boolean }>(
   "account-review",
-  {
-    accountId,
-    prompt: "Approve this account?",
-  },
+  { accountId, prompt: "Approve this account?" },
 );
 
 if (review.approved) await activateAccount(accountId);
 ```
 
-1. **At 0 s** worker A claims the task and calls the handler. The handler reaches
-   `ctx.waitForHuman("account-review", …)`. Workhorse stores the decision and its context, and takes
-   the task away from worker A. No worker can claim the task now, and worker A's slot is free.
-2. **At 40 min** an operator reads the context and approves the account. Workhorse stores the
-   result `{ "approved": true }`, makes the task ready, and notifies workers.
-3. **Shortly after** worker B claims the task and calls the handler **from the beginning**. The
-   handler reaches `ctx.waitForHuman("account-review", …)` again, with the same context. This time
-   the call returns the stored result at once, and the handler activates the account.
+Thus, `HandlerContext.waitForHuman` stops the task until a person decides. The wait does not use an
+attempt. The claim of worker B has a new [fence token](020-leases-and-fences.md), but it continues
+the same attempt.
 
-The wait does not use up the task's logical attempt. Worker B's claim gets a new
-[fence token](020-leases-and-fences.md), but it continues the same attempt.
+Workhorse calls the handler again from its first line, because it does not restore a call stack.
+The code before the wait runs again. Put each earlier effect in a
+[checkpoint](030-delivery-guarantees.md), or make it idempotent.
 
-The handler restarts from its entry point, because Workhorse does not restore a JavaScript stack.
-Wrap earlier effects in a [checkpoint](030-delivery-guarantees.md) or make them idempotent.
-
-The replay must also pass the same context. Suppose a deployment between steps 1 and 3 changed the
-prompt text. The replayed call then conflicts with the stored context. Workhorse fails the task
-instead of retrying it, as the [durable waits guide](130-durable-waits.md) explains for every
+The replay must give the same context. If a deployment changes the prompt text between steps 1
+and 3, the replay does not agree with the stored context. Then Workhorse fails the task and does
+not retry it. The [durable waits guide](130-durable-waits.md) explains this rule for each
 replay conflict.
 
-Go handlers call `HandlerContext.WaitForHuman` with the stable name and JSON context. They can pass
-`ExternalWaitOptions` when the decision needs a shorter lifetime.
+Go handlers call `HandlerContext.WaitForHuman` with the same name and a JSON context. To give the
+decision a shorter lifetime, pass `ExternalWaitOptions`.
 
 <details>
 <summary>Reference: declaring a human wait</summary>
 
-| SDK        | Handler call                                                         |
-| ---------- | -------------------------------------------------------------------- |
-| TypeScript | `HandlerContext.waitForHuman(name, context, { timeoutMs })`          |
-| Python     | `wait_for_human(name, context, *, timeout_ms=None)`                  |
-| Go         | `HandlerContext.WaitForHuman(name, context, ...ExternalWaitOptions)` |
+| SDK        | Handler call                                                              |
+| ---------- | ------------------------------------------------------------------------- |
+| TypeScript | `HandlerContext.waitForHuman(name, context, { timeoutMs })`               |
+| Python     | `wait_for_human(name, context, *, timeout_ms=None)`                       |
+| Go         | `HandlerContext.WaitForHuman(name, context, ...ExternalWaitOptions)`      |
+| Rust       | `wait_for_human(name, context, timeout)`, with `Some(duration)` or `None` |
+| Ruby       | `wait_for_human(name, context, timeout:)`, with `timeout:` in seconds     |
 
 | Limit                               | Value                                              |
 | ----------------------------------- | -------------------------------------------------- |
@@ -79,26 +81,32 @@ More detail: [Data model: Declaring a human wait](../architecture/data-model.md#
 
 </details>
 
-## An operator answers from the dashboard
+## Approve a decision from the dashboard
 
-The dashboard marks pending decisions in its `Waiting` task list. Go back to step 2. Suppose the
-handler's context also carried a quick action: a `dashboard.quickAction` object with the `label`
-`"Approve"` and the `result` `{ "approved": true }`.
+The `Waiting` task list of the dashboard shows each pending decision. A quick action lets an
+operator give a stored result from the task menu. The handler puts the quick action in the context
+as a `dashboard.quickAction` object.
+
+**Example.** The context of `acct-19` has a quick action with the `label` `"Approve"` and the
+`result` `{ "approved": true }`.
 
 1. The operator opens the `Waiting` list and finds the task for `acct-19`.
 2. The task menu shows **Approve**. The operator selects it.
 3. The dashboard shows the stored result `{ "approved": true }` and asks the operator to confirm.
-4. The operator confirms. The dashboard server completes the decision. It replaces any
-   browser-supplied attribution with the host's audit actor, so the signed-in operator is the
-   recorded actor. [370-dashboard-authentication.md](370-dashboard-authentication.md) explains
-   which actor each host records.
+4. The operator confirms, and the dashboard server completes the decision. The server records the
+   audit actor of the host, not an actor from the browser.
 
-The quick action is opt-in. Without a valid `dashboard.quickAction`, the menu action stays
-disabled. The dashboard never assumes that `{ "approved": true }` is a valid answer to a generic
-decision.
+Thus, the operator gives only the result that the handler stored. If the host names the signed-in
+operator, the record shows that operator.
+[370-dashboard-authentication.md](370-dashboard-authentication.md) explains which actor each host
+records.
 
-The `Waiting` filter includes open signal and human-decision waits. The `Blocked` filter keeps tasks
-held by dependencies or child joins separate. An operator cannot resume those tasks by supplying a
+The quick action is optional. If the context has no valid `dashboard.quickAction`, the menu action
+stays disabled. The dashboard does not make a result for a decision. For example, it does not
+send `{ "approved": true }` to a decision that has no quick action.
+
+The `Waiting` filter shows open signal waits and human decisions. The `Blocked` filter shows tasks
+that wait for dependencies or child tasks. An operator cannot resume a blocked task with a
 decision.
 
 <details>
@@ -116,21 +124,22 @@ More detail: [Data model: Dashboard quick action](../architecture/data-model.md#
 
 </details>
 
-## Custom tools can list pending decisions
+## List pending decisions in a custom tool
 
-Go back to account `acct-19`. Not every answer fits one quick action. A reviewer might need to
-reject the account and explain why. So your team builds a custom operator tool that collects that
-result.
+One quick action cannot give every result. For example, a reviewer can reject the account and
+give a reason. For this result, your team can make a custom operator tool.
 
-1. **At 0 s** the task parks on `account-review`.
-2. **At 30 min** the tool calls `Admin.listHumanWaits`. The first page holds the oldest pending
-   decisions. The row for `acct-19` holds its stored context, with the prompt, and its effective
-   deadline.
-3. **Right after** the page returns `nextCursor`. The tool passes it to the next call, and reads
-   pages until it has seen every pending decision.
+**Example.** The custom tool shows each decision that waits for an answer.
 
-A completed decision no longer appears in the list. So the tool shows only decisions that still
-need an answer.
+1. At 0 s, the task starts to wait on `account-review`.
+2. At 30 min, the tool calls `Admin.listHumanWaits`. The first page holds the oldest pending
+   decisions.
+3. The row for `acct-19` holds its stored context, with the prompt, and its deadline.
+4. The page also returns `nextCursor`. The tool gives it to the next call. The tool reads pages
+   until it has each pending decision.
+
+Thus, the list shows only the decisions that need an answer. A completed decision does not appear
+in the list. The dashboard reads the same data, page by page.
 
 <details>
 <summary>Reference: listing human waits</summary>
@@ -151,27 +160,34 @@ More detail: [Data model: Listing and events](../architecture/data-model.md#list
 
 </details>
 
-## Applications can complete a decision
+## Complete a decision from an application
 
-Two reviewers use that tool on `acct-19` at about the same time.
+The custom tool completes a decision with `Queue.completeHumanWait`. Workhorse accepts only the
+first result.
 
-1. **At 40 min** reviewer Dana approves. The tool calls `Queue.completeHumanWait` with the task, the
-   name `account-review`, the result `{ "approved": true }`, the idempotency key `rev-4`, and Dana
-   as `requestedBy`. Workhorse accepts it and resumes the task.
-2. **At 40 min + 3 s** Dana's tool retries the same request after a network error. Workhorse
-   returns `duplicate` with the stored result. The task does not resume a second time.
-3. **At 41 min** reviewer Lee rejects with the key `rev-5`. Workhorse returns `already_completed`
-   with Dana's result and Dana as the actor. Lee's answer does not overwrite the audit evidence.
+**Example.** Two reviewers use the tool on `acct-19` at almost the same time.
 
-The first accepted completion resumes the task. The response exposes the accepted decision as
-`payload`, matching `Queue.sendSignal`. A reused key with a changed result or actor is refused with
-a conflict error.
+1. At 40 min, reviewer Dana approves. The tool calls `Queue.completeHumanWait` with the task, the
+   name `account-review`, and the result `{ "approved": true }`. It gives the idempotency key
+   `rev-4` and Dana as `requestedBy`. Workhorse accepts the result and resumes the task.
+2. At 40 min + 3 s, the tool of Dana sends the same request again after a network error. Workhorse
+   returns `duplicate` with the stored result. The task does not resume again.
+3. At 41 min, reviewer Lee rejects with the key `rev-5`. Workhorse returns `already_completed` with
+   the result and the actor of Dana. The answer of Lee does not change the audit record.
 
-The application must establish authorization before it calls `Queue.completeHumanWait`.
-`requestedBy` is attribution only.
+Thus, the first accepted completion resumes the task. The response gives the accepted decision as
+`payload`, as `Queue.sendSignal` does. Human decisions still have their own completion method and
+authorization path. If a request uses a stored key with a different result or actor, Workhorse
+refuses it with a conflict error.
 
-Go applications use `Queue.CompleteHumanWait` with `ExternalWaitDelivery`. The result holds the
-accepted decision and actor. A changed request under a stored key returns a typed conflict error.
+The application must check authorization before it calls `Queue.completeHumanWait`. `requestedBy`
+records who completed the decision. It does not give permission.
+
+Go applications use `Queue.CompleteHumanWait` with `ExternalWaitDelivery`. Rust applications call
+`Queue::complete_human_wait` with `DeliveryOptions`. Ruby applications call
+`Queue#complete_human_wait` with `idempotency_key:` and `requested_by:`. Each result holds the
+accepted decision and the actor. If a changed request uses a stored key, the call returns a typed
+conflict error.
 
 <details>
 <summary>Reference: completion request and statuses</summary>
@@ -209,23 +225,30 @@ More detail: [Data model: Completing a human wait](../architecture/data-model.md
 
 </details>
 
-## An unanswered decision still closes
+## Close a decision that nobody answers
 
-This time the handler gives the decision a lifetime of one day through `timeoutMs`.
+A human wait does not continue for all time. If nobody decides, the wait ends and the task fails.
 
-1. **At 0 s** the task parks on `account-review`. Its boundary closes at 1 day.
-2. **At 1 day** no operator has answered. Shortly after, a regular background pass fails the task
-   with a deadline error. Workhorse starts no further attempt, because replay cannot continue
-   without a result.
-3. **At 1 day + 2 h** an operator tries to approve. Workhorse returns `stale` and leaves the failed
-   task as it is.
+**Example.** The handler gives the `account-review` decision a lifetime of one day with
+`timeoutMs`.
 
-When the handler names no `timeoutMs`, Workhorse applies its longest supported wait instead. An
-earlier task [deadline](140-deadlines-and-timeouts.md) wins over either. Choose a `timeoutMs` your
-operators can meet. The default is long enough that a decision can sit past the point it mattered.
+1. At 0 s, the task starts to wait on `account-review`. The wait ends at 1 day.
+2. At 1 day, no operator has answered.
+3. Soon after, a regular maintenance pass fails the task with a deadline error. Workhorse starts no
+   other attempt, because a replay cannot continue without a result.
+4. At 1 day + 2 h, an operator tries to approve. Workhorse returns `stale` and does not change the
+   failed task.
 
-[Cancellation](120-cancellation.md) also closes the decision, so a late completion returns `stale`.
-The decision row follows the parent task's safe [retention](330-retention.md).
+Thus, an unanswered decision ends at its time limit. If the handler gives no `timeoutMs`, Workhorse
+uses its longest supported wait. If the task [deadline](140-deadlines-and-timeouts.md) is earlier,
+the deadline ends the wait. Choose a `timeoutMs` that your operators can meet. With the default, a
+decision can stay open after it is no longer important.
+
+Python handlers give `timeout_ms` for the same limit. Rust handlers give `Some(duration)` as the
+timeout. Ruby handlers give `timeout:` as a number of seconds.
+
+[Cancellation](120-cancellation.md) also ends the decision, and a late completion returns `stale`.
+The decision record stays as long as its task, under the [retention](330-retention.md) rules.
 
 <details>
 <summary>Reference: timeout, cancellation, and retention</summary>
@@ -251,9 +274,9 @@ More detail: [Data model: Timeout, cancellation, and retention](../architecture/
 
 ## Next
 
-- [135-signals.md](135-signals.md) — wait for an application-owned external event
-- [030-delivery-guarantees.md](030-delivery-guarantees.md) — make replayed work safe
-- [120-cancellation.md](120-cancellation.md) — close work that should no longer wait
+- [135-signals.md](135-signals.md) — wait for an external event that an application owns
+- [030-delivery-guarantees.md](030-delivery-guarantees.md) — make the code that runs again safe
+- [120-cancellation.md](120-cancellation.md) — end a task that must not wait longer
 
 ---
 

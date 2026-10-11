@@ -1,28 +1,28 @@
 ---
 title: Child tasks
-description: Delegate durable work from a handler and join its result without holding a worker slot.
+description: Give durable work from a handler to a child task and use its result without a worker slot.
 ---
 
-A child task lets one handler hand durable work to another task and use its result later. The
-parent gives up its lease while it waits, so it does not occupy a worker slot.
+A child task is a task that a handler creates and then waits for. The task that creates it is the
+parent. Use a child task when a handler must give durable work to another task and use its result.
 
-## Run the child from a handler
+While the parent waits, it gives up its [lease](/docs/workers). A lease is the right of
+one worker to run a task. Thus, the parent does not use a worker slot while its child runs.
+
+## Run one child task from a handler
 
 **Example.** A checkout handler for order `ord-9` must charge a card before it can finish. The
-charge runs as its own task, on the `payments` queue, so a payments worker can handle it.
+charge runs as its own task on the `payments` queue, so a payments worker can do it.
 
-1. **The call.** Worker A claims the `orders.checkout` task for `ord-9`. The handler calls
+1. Worker A claims the `orders.checkout` task for `ord-9`. The handler calls
    `HandlerContext.runChild` with the name `charge`, the type `payments.charge`, and a payload.
-2. **The handoff.** In one transaction, PostgreSQL creates the child task, links it to the parent
-   under the name `charge`, and moves the parent to `blocked`. The parent loses its owner, and the
-   child enters the `payments` queue. The handler stops at `runChild`, and worker A's slot is free.
-3. **The child runs.** A payments worker claims the child and charges the card. The child succeeds
-   with a receipt.
-4. **The release.** The child's success releases the parent. Worker B claims the parent with a new
+2. In one transaction, Workhorse creates the child, links it to the parent, and moves the parent to
+   `blocked`. The handler stops, and worker A has a free slot.
+3. A payments worker claims the child and charges the card. The child succeeds with a receipt.
+4. The success of the child releases the parent. Worker B claims the parent with a new
    [fence token](/docs/workers).
-5. **The replay.** Worker B calls the handler from its entry point. The repeated `runChild` call
-   sees the same name and the same request. It returns the stored receipt instead of creating
-   another task, and the handler returns.
+5. Worker B runs the handler again from the start. The `runChild` call has the same name and
+   request, so it returns the stored receipt and creates no task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -74,12 +74,12 @@ charge runs as its own task, on the `payments` queue, so a payments worker can h
   </Tab>
 </Tabs>
 
-The wait does not use up an attempt of the parent. `runChild` passes the parent on only a
-successful child. If the child fails, Workhorse fails the parent. If the child is canceled,
-Workhorse cancels the parent.
+Thus, `runChild` gives the parent only the result of a successful child. If the child fails,
+Workhorse fails the parent. If the child is canceled, Workhorse cancels the parent. The wait does
+not use an attempt of the parent.
 
-A parent can own one child created by `runChild`. Use a child set, described next, when one handler
-delegates more than one piece of work.
+A parent can own only one child that `runChild` creates. If a handler must give more than one piece
+of work to children, use a child set. The next section describes child sets.
 
 <details>
 <summary>Reference: one child</summary>
@@ -117,45 +117,107 @@ A rollback removes the child, the link, the dependency, the events, and the susp
 **Events.** `child_created` on the parent, `parent_linked` on the child, and the first
 `child_joined` on the parent.
 
-More detail: [Data model: runChild lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#runchild-lifecycle).
+More detail: [Data model: runChild lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#runchild-lifecycle) and [Data model: Columns and constraints](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-constraints).
 
 </details>
 
-## Run several children at once
+## Run several children at the same time
 
-The checkout handler now checks fraud and reserves inventory before it accepts `ord-9`. The two
-checks do not depend on each other, so they can run at the same time.
+**Example.** The checkout handler for `ord-9` must also check for fraud and reserve inventory. The
+two checks do not depend on each other, so they can run at the same time.
 
-1. **The call.** The handler calls `HandlerContext.runChildren` with two named requests, `fraud`
-   and `inventory`. PostgreSQL creates both children in one transaction and blocks the parent once.
-2. **At 2 s** the inventory child succeeds. The fraud child is still running, so the parent stays
+1. The handler calls `HandlerContext.runChildren` with two named requests, `fraud` and `inventory`.
+   Workhorse creates both children in one transaction and blocks the parent one time.
+2. At 2 s, the `inventory` child succeeds. The `fraud` child still runs, so the parent stays
    blocked.
-3. **At 5 s** the fraud child fails. Both children have now ended, so PostgreSQL releases the
-   parent.
-4. **The replay.** A worker runs the handler from the top. `runChildren` returns a tagged outcome
-   under each name: `fraud` has the status `failed` with its error, and `inventory` has the status
-   `succeeded` with its result. The handler reads the failure and rejects the order.
+3. At 5 s, the `fraud` child fails. Both children have ended, so Workhorse releases the parent.
+4. A worker runs the handler again from the start. `runChildren` returns one outcome for each name.
+5. The outcome of `fraud` has the status `failed`, so the handler rejects the order.
 
-A failed or canceled child stays in the returned set, so the parent decides its own result. Every
-set method retains the declared names.
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const results = await context.runChildren<{
+      fraud: { accepted: boolean };
+      inventory: { reserved: boolean };
+    }>([
+      { name: "fraud", type: "orders.check-fraud", payload: { orderId } },
+      { name: "inventory", type: "orders.reserve", payload: { orderId } },
+    ]);
 
-Each SDK names the set call and its outcomes in its own way. Python handlers call `run_child` or
-`run_children`. Go handlers use `RunChild` for one child and `RunChildren` for a stable set. The
-set method returns named `ChildResult` values in request order. Each result contains a
-`ChildSucceeded`, `ChildFailed`, or `ChildCanceled` outcome, so a type switch covers every terminal
-state. Rust handlers pass `ChildTaskRequest` values to `run_children`, which returns a map from each
-name to a `ChildOutcome`. Its `Succeeded`, `Failed`, and `Canceled` variants cover every terminal
-state. Ruby handlers call `run_child` with a name, type, and payload, or `run_children` with
-`ChildTaskRequest` values. Ruby returns a Hash from each name to a `ChildOutcome`, whose `status` is
-`:succeeded`, `:failed`, or `:canceled`.
+    if (results.fraud.status === "failed") {
+      return { accepted: false, reason: results.fraud.error };
+    }
+    ```
 
-An empty set returns at once and does not suspend the parent. A non-empty set suspends the parent
-once. PostgreSQL releases the parent only after every child reaches a terminal state.
+  </Tab>
+  <Tab value="Python">
+    ```python
+    results = context.run_children([
+        ChildTaskRequest(name="fraud", type="orders.check-fraud", payload={"orderId": order_id}),
+        ChildTaskRequest(name="inventory", type="orders.reserve", payload={"orderId": order_id}),
+    ])
 
-Use `runChildrenAll`, `run_children_all`, or `RunChildrenAll` when every child must succeed. That
-operation propagates outcomes. In the example, the failed fraud check would fail the parent
-instead of returning an outcome. A canceled child cancels the parent, unless another child failed:
-a failure takes precedence.
+    if results["fraud"]["status"] == "failed":
+        return {"accepted": False, "reason": results["fraud"]["error"]}
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    results, err := handler.RunChildren([]workhorse.ChildTaskRequest{
+    	{Name: "fraud", Type: "orders.check-fraud", Payload: map[string]any{"orderId": orderID}},
+    	{Name: "inventory", Type: "orders.reserve", Payload: map[string]any{"orderId": orderID}},
+    })
+    if err != nil {
+    	return nil, err
+    }
+
+    if failed, ok := results[0].Outcome.(workhorse.ChildFailed); ok {
+    	return map[string]any{"accepted": false, "reason": failed.Error}, nil
+    }
+    ```
+
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let results = context
+        .run_children(vec![
+            ChildTaskRequest::new("fraud", "orders.check-fraud", &order)?,
+            ChildTaskRequest::new("inventory", "orders.reserve", &order)?,
+        ])
+        .await?;
+
+    if let Some(ChildOutcome::Failed(error)) = results.get("fraud") {
+        return Ok(json!({ "accepted": false, "reason": error.message }));
+    }
+    ```
+
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    outcomes = context.run_children([
+      Stablemates::Workhorse::ChildTaskRequest.new(name: "fraud", task_type: "orders.check-fraud", payload: order),
+      Stablemates::Workhorse::ChildTaskRequest.new(name: "inventory", task_type: "orders.reserve", payload: order)
+    ])
+
+    fraud = outcomes.fetch("fraud")
+    if fraud.status == :failed
+      {"accepted" => false, "reason" => fraud.error["message"]}
+    else
+      {"accepted" => true}
+    end
+    ```
+
+  </Tab>
+</Tabs>
+
+Thus, a failed or canceled child stays in the returned set, and the parent decides its own result.
+Workhorse releases the parent only after every child in the set ends. A set blocks the parent one
+time. If the set is empty, `runChildren` returns at once and does not block the parent.
+
+Each outcome has one of three statuses: `succeeded` with a result, `failed` with an error, or
+`canceled` with an error. Each SDK gives the outcomes its own types.
 
 <details>
 <summary>Reference: child sets and join modes</summary>
@@ -169,6 +231,18 @@ a failure takes precedence.
 | Go         | `RunChildren` → `[]ChildResult` | `RunChildrenAll` → `[]ChildSuccessResult` |
 | Rust       | `run_children`                  | `run_children_all`                        |
 | Ruby       | `run_children`                  | `run_children_all`                        |
+
+**Outcome types in mode `settled`**
+
+| SDK        | Request            | Returned value                               | Outcome values                                                                |
+| ---------- | ------------------ | -------------------------------------------- | ----------------------------------------------------------------------------- |
+| TypeScript | `ChildTaskRequest` | An object from each name to a `ChildOutcome` | `{ status, result }` or `{ status, error }`                                   |
+| Python     | `ChildTaskRequest` | A dict from each name to a `ChildOutcome`    | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`                           |
+| Go         | `ChildTaskRequest` | Named `ChildResult` values in request order  | `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`; a type switch covers all |
+| Rust       | `ChildTaskRequest` | A map from each name to a `ChildOutcome`     | The `Succeeded`, `Failed`, and `Canceled` variants                            |
+| Ruby       | `ChildTaskRequest` | A Hash from each name to a `ChildOutcome`    | `status` is `:succeeded`, `:failed`, or `:canceled`                           |
+
+Every set method keeps the declared names.
 
 **`create_children_v1(parent_task_id, worker_id, fence_token, children, mode)`**
 
@@ -192,8 +266,7 @@ In mode `settled`, each value is exactly one of:
 - `{ status: "failed", error }`
 - `{ status: "canceled", error }`
 
-The error is the bounded terminal evidence from `task_outcome.error`. In mode `all_success`,
-failure takes precedence over cancellation when more than one child is rejected.
+The error is the bounded terminal evidence from `task_outcome.error`.
 
 **Result size.** The joined object may not exceed the parent's `result_max_bytes`, which defaults
 to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
@@ -201,35 +274,72 @@ to 1,048,576 bytes. An oversized join returns `result_too_large` and raises
 
 **Events.** `children_created` and `children_joined` each append once per set.
 
-More detail: [Data model: Join modes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#join-modes).
+More detail: [Data model: Join modes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#join-modes), [Data model: Creating a child set](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#creating-a-child-set), and [Data model: Columns and constraints](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-constraints).
 
 </details>
 
-## Keep work before the child replay-safe
+## Require every child to succeed
 
-Suppose the checkout handler emails the customer "We are processing your order" before it calls
-`runChild`. The parent resumes after the charge, and the handler runs from the top. The customer
-gets a second email.
+Use `runChildrenAll`, `run_children_all`, or `RunChildrenAll` when every child must succeed. This
+call does not return a failed or canceled outcome to the handler.
 
-Code before `runChild` runs again after the parent resumes. Make it idempotent, or wrap it in
-`HandlerContext.checkpoint`, when repeating it would cause an unwanted external effect.
+**Example.** The checkout handler for `ord-9` calls `runChildrenAll` with `fraud` and `inventory`.
 
-Child names must stay stable too. Suppose a deployment renames `charge` to `payment` while the
-`ord-9` parent is blocked. When the parent resumes, the new code asks for `payment`, but Workhorse
-stored `charge`. Workhorse raises a conflict that names the stored and the requested child. That
-diagnosis points at handler code that changed under a suspended parent. Workhorse then fails the
-parent instead of retrying it, as [durable execution](/docs/durable-execution) describes for every
-replay conflict.
+1. At 2 s, the `inventory` child succeeds.
+2. At 5 s, the `fraud` child fails.
+3. Workhorse fails the parent. The handler does not run again.
 
-A different case gives a different error. If the same handler run first joins `charge` and then
-asks for a second name, Workhorse raises the child-limit error. Keep child names stable across
-deployments while parents still need their results.
+Thus, a failed child fails the parent, and a canceled child cancels the parent. If one child fails
+and another child is canceled, the failure has priority. If every child succeeds, the call returns
+the result of each child under its name.
 
-The same rule covers the rest of the request, so a deploy cannot silently rewrite an in-flight
-parent. Changing a child's name, payload, type, option, or set membership on replay raises
-`ChildConflictError`. A set over the bound raises `ChildLimitExceededError`. A joined object over
-the parent's result limit raises `ChildResultLimitExceededError`. Workhorse raises these errors
-before a tree or a retained result can grow without a bound.
+<details>
+<summary>Reference: all children must succeed</summary>
+
+- Mode `all_success` uses the edge policies `release`, `fail`, and `cancel`.
+- The parent ends with the outcome `DependencyFailed` or `DependencyCanceled`. Workhorse deletes
+  its runtime row, so the handler does not run again.
+- In mode `all_success`, failure takes precedence over cancellation when more than one child is
+  rejected.
+
+More detail: [Data model: Join modes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#join-modes) and [Data model: Settlement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#settlement).
+
+</details>
+
+## Make the code before the child safe to repeat
+
+**Example.** The checkout handler sends the email "We are processing your order" before it calls
+`runChild`.
+
+1. Worker A runs the handler. The handler sends the email and calls `runChild`.
+2. The child succeeds, and worker B claims the parent.
+3. Worker B runs the handler from the start. The handler sends the email again.
+
+Thus, the code before `runChild` runs again after the parent continues. If a repeat causes an
+unwanted external effect, make that code idempotent. As an alternative, put that code in
+`HandlerContext.checkpoint`.
+
+## Keep child names stable across deployments
+
+**Example.** The `ord-9` parent is blocked on its child `charge`.
+
+1. A deployment renames the child `charge` to `payment` in the handler code.
+2. The child succeeds, and a worker claims the parent with the new code.
+3. The handler asks for `payment`, but Workhorse stored `charge`. Workhorse raises a conflict error.
+4. The worker fails the parent and does not retry it.
+
+Thus, a parent cannot continue if a deployment renames its child while the parent is blocked. The error
+message names the stored child and the requested child. [Durable execution](/docs/durable-execution)
+describes the same rule for every replay conflict.
+
+The rule applies to the full request. If a replay changes the name, payload, type, option, or set
+members of a child, Workhorse raises a conflict error. Keep child names stable while parents still
+wait for their results.
+
+A different case gives a different error. If one handler run joins `charge` and then asks for a
+second name, Workhorse raises a limit error. Workhorse also raises a limit error for a set with too
+many children. If a joined object is larger than the result limit of the parent, Workhorse raises
+an error. Thus, a child tree or a stored result cannot grow without a limit.
 
 <details>
 <summary>Reference: replay errors</summary>
@@ -256,146 +366,29 @@ names the stored and the requested child.
 `ChildConflictError` is a terminal replay conflict. The worker fails the parent through `fail_v1`
 and keeps the current attempt. A child-limit refusal follows the parent's retry policy.
 
-More detail: [Data model: Renamed replay of a single child](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#renamed-replay-of-a-single-child).
+More detail: [Data model: Renamed replay of a single child](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#renamed-replay-of-a-single-child) and [Data model: Cancellation and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#cancellation-and-errors).
 
 </details>
 
-## Validate a contracted child
+## Find the parent and the children of a task
 
-A child type can declare a payload contract like any other task type. Suppose `payments.charge`
-requires an `orderId` string, and a handler passes a number. The context validates the payload
-and raises a validation error before PostgreSQL creates any child.
+**Example.** The `fraud` child of order `ord-9` failed. An operator sees the `inventory` child in
+the task list and wants to find the checkout that created it.
 
-Every context treats a child request like an enqueue. It stamps the child with the type's current
-contract and validates the payload first.
+1. The tool of the operator calls `Admin.getTask` on the `inventory` child. Its `parentTaskId`
+   names the `orders.checkout` task for `ord-9`.
+2. The tool reads that parent with `Admin.getTask`. Its `childTaskIds` name the `fraud` child and
+   the `inventory` child.
+3. The tool calls `Admin.getChildLineage(taskId)` on the parent. Each returned record has the
+   terminal state of the child, so the operator sees that `fraud` failed.
 
-A replay can meet a newer contract. Suppose `ord-9`'s parent is blocked on `charge` when a deploy
-moves `payments.charge` to a new contract version.
+Thus, `Admin.getTask` and `Admin.listTasks` give the `parentTaskId` of a task and the
+`childTaskIds` of a parent. `Admin.getChildLineage(taskId)` gives the stored links in the two
+directions.
 
-1. The parent resumes and builds the same request under the new current version.
-2. PostgreSQL compares it with the accepted request, sees a different version, and reports a
-   conflict.
-3. The context reads the version each existing child was accepted under. It rebuilds the request
-   under those versions and tries once more.
-4. The rebuilt request matches, and the replay joins the existing child instead of raising
-   `ChildConflictError`.
-
-The new contract may also reject the replayed payload outright. The context then rebuilds the
-request under the accepted versions before it writes anything.
-
-A changed payload or child set still conflicts. Python applies this to both `HandlerContext` and
-`AsyncHandlerContext`. [Contracts](/docs/contracts) explains versions and stamping.
-
-<details>
-<summary>Reference: contracts on child requests</summary>
-
-**Validation errors**
-
-| SDK                    | Error                         |
-| ---------------------- | ----------------------------- |
-| TypeScript, Python, Go | `TaskContractValidationError` |
-| Ruby                   | `ContractValidationError`     |
-| Rust                   | `Error::ContractValidation`   |
-
-**Replay under accepted versions**
-
-- On `conflict`, the module reads each existing child's `contract_version` through `task_child`
-  and `get_task`. It retries once if the rebuilt request differs.
-- A stored null version keeps the child uncontracted.
-- The rebuild restores both size limits and both sensitive-key lists.
-- If the rebuild also rejects the payload, the original validation error remains.
-- PostgreSQL still compares the complete request. A changed payload, type, option, set membership,
-  or join mode remains a `ChildConflictError`.
-
-More detail: [Data model: Contract versions on replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-versions-on-replay).
-
-</details>
-
-## Cancel a parent or a child
-
-An operator cancels the `inventory` child while the `ord-9` parent waits on its set.
-
-1. **The request.** The child is active, so Workhorse records a cancellation request. The child's
-   worker learns about it through its next heartbeat and signals the handler.
-2. **The wait.** The parent stays blocked until the child acknowledges the request.
-3. **The acknowledgement.** The child's handler stops, and the child ends as `canceled`.
-4. **The join.** With `runChildren`, PostgreSQL releases the parent, and the set returns the
-   cancellation as the outcome of `inventory`. With `runChildrenAll`, Workhorse cancels the parent
-   instead.
-
-Canceling a child that already finished returns its terminal state. The parent-child record does
-not change.
-
-Canceling a blocked parent works the other way. The parent ends, but its child keeps running
-independently. A later child outcome cannot return that terminal parent to dispatch.
-[Cancellation](/docs/cancellation) explains the cooperative request.
-
-<details>
-<summary>Reference: cancellation</summary>
-
-| Canceled task           | Effect                                                                |
-| ----------------------- | --------------------------------------------------------------------- |
-| Blocked parent          | The parent ends `canceled`. The child is not canceled.                |
-| Active child            | `cancel_requested`, then `acknowledge_cancel_v1` creates the outcome. |
-| Child that has finished | Returns the existing terminal state. Nothing else changes.            |
-
-A child's `canceled` outcome follows its edge policy: `release` for `settled`, `cancel` for
-`all_success` and for `runChild`.
-
-More detail: [Data model: Cancellation and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#cancellation-and-errors).
-
-</details>
-
-## Retry, redrive, and retention
-
-Suppose the `ord-9` parent joins its receipt and then throws on a later step. The parent retries.
-It keeps the same identity, so the retried handler reuses the same child names, results, and join
-evidence. No second charge task appears.
-
-Now suppose the parent runs out of attempts, and an operator [redrives](/docs/dead-letters) it.
-Redrive creates a fresh parent identity. The fresh parent starts without copied child relationships,
-so its `runChild` call creates a new child. The dashboard shows the redrive link beside the original
-child tree.
-
-Retention keeps the parent-child record while either side still needs it. A live child protects its
-terminal parent. Cleanup removes the old tree only after every linked outcome has crossed its
-configured evidence window.
-
-<details>
-<summary>Reference: retry, redrive, and retention</summary>
-
-- A retry or a duplicate dependency wakeup reuses the same edges and results. It appends no
-  further join event.
-- `redrive_v1` creates a fresh ready task. It never copies child lineage, checkpoints, waits,
-  signal deliveries, attempts, or results.
-- The parent owns edge lifetime. `prune_terminal_tasks_v1` refuses to prune it while any linked
-  child is live or has not crossed the identity, outcome, and history cutoffs.
-- Parent deletion removes the dependency and child edges together. A later pass can then reclaim
-  the children.
-
-More detail: [Data model: Retention](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retention).
-
-</details>
-
-## Find a task's parent and children
-
-Go back to order `ord-9` after its `fraud` child failed. An operator sees the `inventory` child in
-the task list and wants to know which checkout created it.
-
-1. The operator's tool calls `Admin.getTask` on the `inventory` child. Its `parentTaskId` names the
-   `orders.checkout` task for `ord-9`.
-2. The tool reads that parent with `Admin.getTask`. Its `childTaskIds` list both the `fraud` child
-   and the `inventory` child.
-3. The tool calls `Admin.getChildLineage(taskId)` on the parent. Each returned edge carries the
-   child's terminal state, so the operator sees that `fraud` failed.
-
-`Admin.getTask` and `Admin.listTasks` return a task's `parentTaskId`, and the parent's own record
-lists its `childTaskIds`. `Admin.getChildLineage(taskId)` returns the retained edges in either
-direction.
-
-The dashboard task detail shows the same parent, child, name, type, and join state. Related ids open
-that task in the drawer. For a parent, the detail also summarizes how many retained child results it
-has joined.
+The task detail of the dashboard shows the same parent, children, names, types, and join state. A
+related task ID opens that task in the drawer. For a parent, the detail also shows how many stored
+child results the parent has joined.
 
 <details>
 <summary>Reference: lineage reads</summary>
@@ -413,7 +406,138 @@ direct lineage.
 `Queue.health().children` reports `waitingParents`, `pendingChildren`, `unjoinedResults`,
 `failedParents`, `canceledParents`, and `capped`.
 
-More detail: [Data model: Lineage reads](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#lineage-reads).
+More detail: [Data model: Lineage reads](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#lineage-reads) and [Data model: Child health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#child-health).
+
+</details>
+
+## Cancel a parent or a child
+
+**Example.** An operator cancels the `inventory` child while the `ord-9` parent waits for its set.
+
+1. The child is active, so Workhorse records a cancellation request.
+2. The worker of the child gets the request with its next heartbeat and signals the handler.
+3. The handler of the child stops, and the child ends as `canceled`. Until then, the parent stays
+   blocked.
+4. With `runChildren`, Workhorse releases the parent. The set gives the cancellation as the outcome
+   of `inventory`.
+5. With `runChildrenAll`, Workhorse cancels the parent.
+
+Thus, the join mode of the parent decides what a canceled child does to the parent. If the child
+has already ended, the cancellation returns its terminal state. The link between parent and child
+does not change.
+
+If an operator cancels a blocked parent, the parent ends, but its child continues to run. A later
+outcome of the child cannot return that parent to the queue. [Cancellation](/docs/cancellation)
+explains how a cancellation request reaches a handler.
+
+<details>
+<summary>Reference: cancellation</summary>
+
+| Canceled task           | Effect                                                                |
+| ----------------------- | --------------------------------------------------------------------- |
+| Blocked parent          | The parent ends `canceled`. The child is not canceled.                |
+| Active child            | `cancel_requested`, then `acknowledge_cancel_v1` creates the outcome. |
+| Child that has finished | Returns the existing terminal state. Nothing else changes.            |
+
+A child's `canceled` outcome follows its edge policy: `release` for `settled`, `cancel` for
+`all_success` and for `runChild`.
+
+More detail: [Data model: Cancellation and errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#cancellation-and-errors).
+
+</details>
+
+## Retry or redrive a parent
+
+**Example.** The `ord-9` parent joins its receipt and then throws an error in later code.
+
+1. Workhorse schedules a retry. The parent keeps its identity.
+2. The retried handler gets the same receipt from `runChild`. Workhorse creates no second charge
+   task.
+3. The parent fails again and has no attempts left.
+4. An operator [redrives](/docs/dead-letters) the parent. Workhorse creates a new parent identity
+   without the child links.
+5. The `runChild` call of the new parent creates a new child.
+
+Thus, a retry keeps the child names, results, and join records of the parent. A redrive starts a
+new set of children. The dashboard shows the redrive link next to the original parent and its
+children.
+
+Workhorse keeps the records of a parent and its children while either side still needs them. A
+child that still runs keeps its ended parent. Workhorse deletes the records only after every linked
+outcome is older than its configured retention period.
+
+<details>
+<summary>Reference: retry, redrive, and retention</summary>
+
+- A retry or a duplicate dependency wakeup reuses the same edges and results. It appends no
+  further join event.
+- `redrive_v1` creates a fresh ready task. It never copies child lineage, checkpoints, waits,
+  signal deliveries, attempts, or results.
+- The parent owns edge lifetime. `prune_terminal_tasks_v1` refuses to prune it while any linked
+  child is live or has not crossed the identity, outcome, and history cutoffs.
+- Parent deletion removes the dependency and child edges together. A later pass can then reclaim
+  the children.
+
+More detail: [Data model: Retention](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retention).
+
+</details>
+
+## Check the payload of a child against its payload contract
+
+A child type can have a payload contract, as any other task type can. The SDK treats a child
+request as an enqueue. It stamps the child with the current contract of its type and checks the
+payload first.
+
+If the payload does not match the payload contract, the SDK raises a validation error. Workhorse
+creates no child. For example, if `payments.charge` requires an `orderId` string and the handler
+gives a number, the call fails. [Payload contracts](/docs/contracts) explain versions and
+stamping.
+
+<details>
+<summary>Reference: contract validation of child requests</summary>
+
+| SDK                    | Error                         |
+| ---------------------- | ----------------------------- |
+| TypeScript, Python, Go | `TaskContractValidationError` |
+| Ruby                   | `ContractValidationError`     |
+| Rust                   | `Error::ContractValidation`   |
+
+TypeScript `runChild`, `runChildren`, and `runChildrenAll` validate and stamp each child's current
+contract through `EnqueueContractsModule.taskAcceptance`.
+
+More detail: [Data model: Contract versions on replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-versions-on-replay).
+
+</details>
+
+## Join a child after its payload contract changes
+
+**Example.** The `ord-9` parent is blocked on `charge`. Then a deployment adds a new payload
+contract version for `payments.charge`.
+
+1. The parent continues. Its handler builds the same request under the new current version.
+2. PostgreSQL compares the request with the accepted request. The versions differ, so PostgreSQL
+   reports a conflict.
+3. The SDK reads the version of each existing child. It builds the request again under those
+   versions and tries one more time.
+4. The new request matches, and the handler joins the existing child without a conflict error.
+
+Thus, a new payload contract version does not stop a blocked parent. If the new version rejects the
+replayed payload, the SDK also builds the request under the accepted versions before it writes. A
+changed payload or child set still causes a conflict error. Python applies this rule to
+`HandlerContext` and to `AsyncHandlerContext`.
+
+<details>
+<summary>Reference: replay under accepted versions</summary>
+
+- On `conflict`, the module reads each existing child's `contract_version` through `task_child`
+  and `get_task`. It retries once if the rebuilt request differs.
+- A stored null version keeps the child uncontracted.
+- The rebuild restores both size limits and both sensitive-key lists.
+- If the rebuild also rejects the payload, the original validation error remains.
+- PostgreSQL still compares the complete request. A changed payload, type, option, set membership,
+  or join mode remains a `ChildConflictError`.
+
+More detail: [Data model: Contract versions on replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-versions-on-replay).
 
 </details>
 

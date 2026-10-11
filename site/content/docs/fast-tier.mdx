@@ -1,31 +1,38 @@
 ---
 title: Fast tier
-description: Let a high-volume queue skip durable-execution bookkeeping, keep one outcome row per task, and opt into history only where you need it.
+description: Let a high-volume queue skip the records of durable execution, keep one outcome row for each task, and record history only where you need it.
 ---
 
-Some queues run short, simple handlers at high volume: send an email, resize an image, call a
-webhook. The fast tier lets such a queue skip the bookkeeping that only durable execution needs.
-You choose the tier per queue, and the queue gives up a defined set of features in return.
+A tier is a queue setting. It sets how much Workhorse records for each task of the queue. The full
+tier is the default. It records everything that durable execution needs, so a handler can stop and
+continue later on a different worker.
 
-## Every task pays for durable execution
+Some queues run short handlers at a high volume, for example handlers that send an email or call a
+webhook. These handlers never stop to wait. The fast tier removes the records that only durable
+execution needs. But a fast-tier queue cannot use a known set of features.
 
-**Example.** Queue `emails` sends a welcome email per signup. Each handler calls the mail provider,
-returns within a few milliseconds, and never pauses. On an ordinary queue, one email task still
-writes this record:
+## Choose the fast tier for handlers that never wait
 
-1. **Claim.** A worker claims the task. Workhorse updates the task's runtime row and appends a
-   `claimed` event.
-2. **Completion.** The handler returns. Workhorse deletes the runtime row, writes the task's outcome
-   row, appends an event, and writes an attempt row that closes the attempt.
-3. **Retry.** If the provider had failed, the retry would have updated the runtime row, appended an
-   event, and written an attempt row as well.
+**Example.** The queue `emails` sends a welcome email for each new user. The handler calls the mail
+provider and returns after a few milliseconds. It never waits. On a full-tier queue, each task still
+makes these writes:
 
-That record is what lets a task checkpoint, sleep, wait for a signal, or spawn children. It is how
-a task can suspend for days and resume on another worker. The welcome email never suspends, so its
-event and attempt writes buy nothing. At high volume that cost dominates the database's work.
+1. A worker claims the task. Workhorse changes the runtime row of the task and adds a `claimed`
+   event.
+2. The handler returns. Workhorse deletes the runtime row and writes an outcome row. It also adds an
+   event and writes an attempt row.
+3. If the provider fails, the retry also changes the runtime row, adds an event, and writes an
+   attempt row.
 
-A queue's tier decides whether its tasks pay that cost. A **full-tier** queue keeps the complete
-record and supports every feature. A **fast-tier** queue keeps only what dispatch and outcomes need.
+These records let a task use checkpoints, durable waits, signals, and child tasks. With them, a task
+can stop for days and continue on a different worker. The welcome email never stops, so these
+writes give it nothing.
+
+The tier of the queue decides if its tasks make these writes. A full-tier queue keeps the complete
+record and supports every feature. A fast-tier queue keeps only the records that claims and outcomes
+need.
+
+Thus, choose the fast tier for a queue if all of its handlers only do work and return.
 
 <details>
 <summary>Reference: what each tier writes</summary>
@@ -41,100 +48,111 @@ record and supports every feature. A **fast-tier** queue keeps only what dispatc
 - After a committed transition, a fast-tier task has exactly one of `fast_task_runtime` and
   `fast_task_outcome`, and neither `task_runtime` nor `task_outcome`.
 - A fast-tier queue writes claim events and `attempt_history` rows only when it opts in. Two audit
-  paths write `task_event` rows regardless: batch evidence (`batch_dispatched`) and redrive
+  paths always write `task_event` rows: batch evidence (`batch_dispatched`) and redrive
   (`redriven`, `redrive_created`).
 
 More detail: [Fast tier: Fast tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#fast-tier).
 
 </details>
 
-## What a fast-tier task keeps
+## Move a queue to the fast tier
 
-Queue `emails` is now fast-tier. A signup enqueues task `welcome-17`.
+Each queue starts on the full tier. An operator must move a queue to the fast tier. The queue must
+have no live task when the tier changes.
 
-1. **At enqueue** Workhorse writes one `fast_task_runtime` row in state `ready`. It writes no
-   `enqueued` event.
-2. **At claim** worker A takes a lease and a fence token, as on the full tier.
-3. **Attempt 1** fails, because the mail provider times out. Workhorse appends an entry to the
-   row's list of recent errors. The retry policy picks a delay, and the row goes back to `ready`
-   with a later run time.
-4. **Attempt 2** succeeds. Workhorse deletes the runtime row and writes one `fast_task_outcome` row.
-   The outcome keeps the error list, so attempt 1's failure is still readable.
+**Example.** An operator moves the queue `emails` to the fast tier. At that time, 300 emails wait in
+the queue.
 
-The core guarantees do not change. A claim still takes a lease and a fence, so a stale worker still
-cannot overwrite a newer attempt ([leases and fences](/docs/workers)).
+1. The operator calls `Admin.setQueueTier`. Workhorse refuses the change, because the queue has live
+   tasks.
+2. The operator stops the producers.
+3. The workers send the 300 emails. The queue is now empty.
+4. The operator calls `Admin.setQueueTier` again. Workhorse changes the tier.
+5. New tasks in `emails` are fast-tier tasks.
 
-Failed attempts are not lost. The runtime row carries a short list of recent errors, and the
-outcome keeps it. When the list is full, Workhorse drops the oldest entry and counts the drop, so
-a reader knows the list is incomplete. When a lease, timeout, or deadline closes a task instead of
-the handler, the outcome's `closed_as` names that boundary.
+`Admin.setQueueTier` records who asked for the change and why:
 
-A fast-tier task is only ready or active. A delayed task is a ready row whose run time has not
-arrived, so the tier has no scheduled state and no promotion pass.
+```ts
+const admin = new Admin(pool);
+
+await admin.setQueueTier("emails", "fast", {
+  actor: "ops@example.com",
+  reason: "email handlers never suspend",
+  requestId: crypto.randomUUID(),
+});
+```
+
+From a shell, `workhorse admin set-tier` does the same change. The CLI checks the target and asks
+for a confirmation first. The Queues page of the dashboard shows the tier of each queue.
+
+Workhorse refuses a tier change while the queue has a live task in either tier. Thus, a task never
+moves between tiers, and its record stays in one place. Workhorse also refuses a move to the fast
+tier while a concurrency policy or a rate-limit policy names the queue.
+
+Finished tasks stay in the tier where they finished. After a tier change, the old outcomes of the
+queue stay readable. Retention and cold export include the outcomes of both tiers.
 
 <details>
-<summary>Reference: runtime row, error list, and outcome</summary>
+<summary>Reference: changing the tier</summary>
 
-**`fast_task_runtime`**
+`set_queue_tier_v1(p_queue_name, p_tier, p_requested_by, p_reason)` takes the exclusive tier lock
+of the queue, then:
 
-- `state` is `ready` or `active`. A ready row with a future `run_at` counts as `scheduled` in the
-  dashboard and in `queue_health_v1`.
-- The row keeps no heartbeat time, no execution budget across releases, and no wait name.
-- The execution timeout restarts on every claim.
+1. returns at once when the tier is unchanged;
+2. raises `P1007` with feature `tier change` when the queue holds a live task in either runtime
+   table;
+3. raises `P1007` with feature `concurrency policies` or `rate-limit policies` when moving to
+   `fast` while such a policy names the queue;
+4. otherwise upserts `queue_control.tier`, `updated_by`, `reason`, and `updated_at`.
 
-**`errors` list.** `fast_retry_v1` appends one entry per closed attempt, with `attempt`,
-`fence_token` as text, `worker_id`, `claimed_at`, `finished_at`, `outcome`, and `error`. The
-`outcome` is `retry`, `timeout`, or `lease_expired`. The list holds at most 10 entries. At the cap,
-`fast_retry_v1` drops the oldest entry and increments `errors_dropped`.
+- `queue_control.tier` defaults to `full`. A queue without a `queue_control` row is full-tier.
+- `p_requested_by` is 1 to 200 characters, and `p_reason` is 1 to 2,000.
+- The function changes neither `paused` nor the history switches.
+- TypeScript `Admin.setQueueTier(queueName, tier, { actor, reason, requestId })` passes only
+  `actor` and `reason`, and emits the `workhorse.queue.tier_set` log event.
+- The CLI command is `workhorse admin set-tier <queue> --tier <fast|full>`.
+- `redrive_v1` copies a task into the current tier of its queue, not the tier it closed in.
+- Retention prunes `fast_task_outcome`, and cold export has a `fast_task_outcome` dataset.
 
-**`fast_task_outcome`**
-
-| Column           | Values                                                               |
-| ---------------- | -------------------------------------------------------------------- |
-| `state`          | `succeeded`, `failed`, or `canceled`                                 |
-| `closed_as`      | Null, `canceled`, `deadline_exceeded`, `timeout`, or `lease_expired` |
-| `errors`         | Carried over from the runtime row                                    |
-| `errors_dropped` | Carried over from the runtime row                                    |
-
-A handler's own terminal failure leaves `closed_as` null.
-
-More detail: [Fast tier: The errors list](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#the-errors-list).
+More detail: [Fast tier: Changing the tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#changing-the-tier).
 
 </details>
 
-## Which features each tier has
+## Check which features the fast tier supports
 
-Go back to queue `emails`. Its team plans two new handlers. The first calls the mail provider and
-returns. The second sends a message, then waits for a bounce signal before it decides what to do.
-The first handler fits the fast tier. The second needs a signal wait, which a fast-tier task cannot
-make, so it belongs on a full-tier queue such as `reports`.
+The fast tier removes the features that need durable execution or coordination state for each
+task. For example, the team of the queue `emails` plans two new handlers:
 
-The fast tier drops features that need durable execution or per-task coordination state. The
-table lists each feature, and says why the fast tier lacks it where it does.
+- The first handler calls the mail provider and returns. It can use the fast tier.
+- The second handler sends an email, then waits for a bounce signal. A fast-tier task cannot wait
+  for a signal. Thus, this handler must use a full-tier queue, such as `reports`.
 
-| Feature                                                           | Full   | Fast              | Why the fast tier does not have it                                                                                                         |
-| ----------------------------------------------------------------- | ------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Leases, fences, and heartbeats                                    | Yes    | Yes               |                                                                                                                                            |
-| Priority and delayed runs                                         | Yes    | Yes               |                                                                                                                                            |
-| Retry policies, `maxAttempts`, deadlines, and execution timeouts  | Yes    | Yes               |                                                                                                                                            |
-| Idempotency keys                                                  | Yes    | Yes               |                                                                                                                                            |
-| Cancellation, pause, purge, run-now, and redrive                  | Yes    | Yes               |                                                                                                                                            |
-| Combined completion and next claim                                | No     | Yes, every worker |                                                                                                                                            |
-| `claimed` events and attempt history                              | Always | Opt-in per queue  | Each write is part of the cost the tier removes.                                                                                           |
-| Checkpoints                                                       | Yes    | No                | A checkpoint is durable execution state, which a fast-tier task never keeps.                                                               |
-| Progress                                                          | Yes    | No                | A progress write checks the attempt against a `task_runtime` row. A fast-tier task has none.                                               |
-| Durable sleeps, signal waits, and human waits                     | Yes    | No                | A wait suspends the task. A fast-tier task is only ready or active, so it cannot suspend.                                                  |
-| Task dependencies, in either direction                            | Yes    | No                | A fast-tier task cannot wait blocked on a prerequisite. A finished fast-tier task never releases its dependents.                           |
-| Child tasks, as parent or child                                   | Yes    | No                | A parent waits for its children, and a fast-tier task cannot wait. A fast-tier child never releases its parent.                            |
-| Concurrency keys, budgets, and concurrency or rate-limit policies | Yes    | No                | The full claim admits one task at a time against each policy. The fast claim takes a whole batch in one statement, with no admission step. |
-| Debounce                                                          | Yes    | No                | While its window is open, debounce rewrites the pending task's `task_runtime` row. No fast-tier path rewrites a pending row.               |
-| Throttle                                                          | Yes    | No                | No reason is settled yet. Throttle only decides whether enqueue accepts a request.                                                         |
+The table shows each feature. For each feature that the fast tier does not have, it gives the
+reason.
 
-The full tier has no combined completion and claim yet. Only the fast tier's version has been
-measured.
+| Feature                                                           | Full   | Fast              | Why the fast tier does not have it                                                                                                      |
+| ----------------------------------------------------------------- | ------ | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Leases, fences, and heartbeats                                    | Yes    | Yes               |                                                                                                                                         |
+| Priority and delayed runs                                         | Yes    | Yes               |                                                                                                                                         |
+| Retry policies, `maxAttempts`, deadlines, and execution timeouts  | Yes    | Yes               |                                                                                                                                         |
+| Idempotency keys                                                  | Yes    | Yes               |                                                                                                                                         |
+| Cancellation, pause, purge, run-now, and redrive                  | Yes    | Yes               |                                                                                                                                         |
+| Combined completion and next claim                                | No     | Yes, every worker |                                                                                                                                         |
+| `claimed` events and attempt history                              | Always | Opt-in per queue  | Each write is a part of the cost that the tier removes.                                                                                 |
+| Checkpoints                                                       | Yes    | No                | A checkpoint is durable execution state. A fast-tier task does not keep this state.                                                     |
+| Progress                                                          | Yes    | No                | A progress write checks the attempt against a `task_runtime` row. A fast-tier task has no such row.                                     |
+| Durable sleeps, signal waits, and human waits                     | Yes    | No                | A wait stops the task. A fast-tier task is only ready or active, so it cannot stop.                                                     |
+| Task dependencies, in either direction                            | Yes    | No                | A fast-tier task cannot stay blocked on a prerequisite. A finished fast-tier task never releases its dependents.                        |
+| Child tasks, as parent or child                                   | Yes    | No                | A parent waits for its children, and a fast-tier task cannot wait. A fast-tier child never releases its parent.                         |
+| Concurrency keys, budgets, and concurrency or rate-limit policies | Yes    | No                | The full claim admits one task at a time against each policy. The fast claim takes many tasks in one statement, with no admission step. |
+| Debounce                                                          | Yes    | No                | While its window is open, debounce changes the `task_runtime` row of the pending task. No fast-tier path changes a pending row.         |
+| Throttle                                                          | Yes    | No                | No reason is recorded yet. Throttle only decides if Workhorse accepts an enqueue request.                                               |
 
-The rule of thumb is simple. If a handler only computes and returns, the fast tier fits. If it
-ever needs to pause and come back, keep the queue full-tier.
+The full tier does not combine a completion with the next claim. The project measured this
+combination only on the fast tier.
+
+Thus, if a handler only does work and returns, use the fast tier. If a handler must stop and
+continue later, keep its queue on the full tier.
 
 <details>
 <summary>Reference: supported features and combined completion</summary>
@@ -154,31 +172,35 @@ More detail: [Fast tier: Rejected features and `P1007`](https://github.com/stabl
 
 </details>
 
-## Ask a fast-tier queue for a missing feature
+## Handle a request for a missing feature
 
-Two mistakes reach queue `emails` after it moves to the fast tier.
+If code asks a fast-tier queue for a feature that the tier does not have, Workhorse rejects the
+request. The error names the queue and the feature.
 
-1. **A producer** enqueues a task with `concurrencyKey: "acme"`. PostgreSQL rejects the enqueue with
-   `P1007`. The SDK raises `FastTierUnsupportedError`, naming queue `emails` and the feature
-   `concurrency keys`. No task is created.
-2. **A handler** calls `ctx.checkpoint("render", …)`. The handler context rejects the call before
-   it reaches PostgreSQL, with the same error and the feature `checkpoints`. The rejection is an
-   ordinary handler failure, so the task's retry policy applies.
+**Example.** The queue `emails` is now fast-tier. Two incorrect calls reach it.
 
-If a producer asks a fast-tier queue for a feature it lacks, PostgreSQL rejects the request with
-`P1007`. Every SDK surfaces it as `FastTierUnsupportedError`, naming the queue and the feature.
-Adding a concurrency or rate-limit policy to a fast-tier queue fails the same way.
+1. A producer enqueues a task with `concurrencyKey: "acme"`. Workhorse rejects the enqueue and
+   creates no task.
+2. The SDK raises `FastTierUnsupportedError` with the queue `emails` and the feature
+   `concurrency keys`.
+3. A handler calls `ctx.checkpoint("render", …)`. The handler context rejects the call with the
+   same error and the feature `checkpoints`.
+4. The handler fails. The retry policy of the task applies, as for each handler failure.
 
-In Ruby, an invalid step name raises `ArgumentError` before the tier check runs. That covers
-checkpoint, wait, signal, human wait, and child names. A child set's type and size are checked
-before its names.
+The handler context rejects a call for durable execution before the call goes to PostgreSQL. If an
+operator adds a concurrency policy or a rate-limit policy to a fast-tier queue, Workhorse rejects it
+with the same error.
+
+In Ruby, some argument checks occur before the tier check. If a checkpoint, wait, signal, human
+wait, or child name is not valid, Ruby raises `ArgumentError` first. Ruby also checks the type and
+the size of a child set before its names.
 
 <details>
 <summary>Reference: rejections and errors</summary>
 
 `reject_fast_feature_v1` raises SQLSTATE `P1007` with the message
 `fast-tier queue <name> does not support <feature>` and `DETAIL` JSON `{ queue, feature, ordinal? }`.
-`ordinal` names the offending request's position in a batch.
+`ordinal` names the position of the rejected request in a batch.
 
 | Feature text                                  | Raised by                                                       |
 | --------------------------------------------- | --------------------------------------------------------------- |
@@ -199,7 +221,9 @@ before its names.
 | Go         | `*FastTierUnsupportedError` matching `ErrFastTierUnsupported` |
 | Rust       | `Error::FastTierUnsupported { queue, feature, ordinal }`      |
 
-**Handler context rejections**
+**Handler context rejections.** The handler context raises `FastTierUnsupportedError` before any
+statement reaches PostgreSQL. The rejection is a handler failure, so the retry policy of the task
+applies.
 
 | Call                                        | Feature text    |
 | ------------------------------------------- | --------------- |
@@ -215,98 +239,106 @@ before its names.
 that is not an Array of `ChildTaskRequest` raises `ArgumentError`. A set of more than 100 children
 raises `LimitExceededError`.
 
-More detail: [Fast tier: Rejected features and P1007](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#rejected-features-and-p1007).
+More detail: [Fast tier: Rejected features and P1007](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#rejected-features-and-p1007), [Fast tier: Handler context rejections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#handler-context-rejections), and [Fast tier: Ruby argument validation order](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#ruby-argument-validation-order).
 
 </details>
 
-## Switching tier needs an empty queue
+## Read what a fast-tier task records
 
-An operator wants to move queue `emails` to the fast tier while 300 emails wait in it.
+A fast-tier task keeps fewer records than a full-tier task. But the core guarantees do not change,
+and Workhorse keeps the errors of recent failed attempts.
 
-1. **First try.** `Admin.setQueueTier` fails with `P1007` and the feature `tier change`, because
-   the queue holds live tasks.
-2. **Drain.** The operator stops the producers. The workers finish the 300 waiting emails.
-3. **Second try.** The queue is empty, so the switch succeeds. New enqueues create fast-tier tasks.
+**Example.** A new user signs up. The app enqueues the task `welcome-17` in the fast-tier queue
+`emails`.
 
-`Admin.setQueueTier` moves a queue between tiers and records who asked and why. Every queue starts
-full-tier, so nothing changes until an operator moves one:
+1. Workhorse writes one `fast_task_runtime` row in the state `ready`. It writes no `enqueued` event.
+2. Worker A claims the task. The worker gets a lease and a fence token, as on the full tier.
+3. Attempt 1 fails, because the mail provider times out. Workhorse adds the error to a list of
+   recent errors in the runtime row. The row goes back to `ready`, with a later run time.
+4. Attempt 2 succeeds. Workhorse deletes the runtime row and writes one `fast_task_outcome` row.
+5. The outcome row keeps the list of recent errors. Thus, the failure of attempt 1 stays readable.
 
-```ts
-const admin = new Admin(pool);
+A claim still gives a lease and a fence token. Thus, a worker with an old lease cannot change the
+result of a newer attempt. [Leases and fences](/docs/workers) explains these terms.
 
-await admin.setQueueTier("emails", "fast", {
-  actor: "ops@example.com",
-  reason: "email handlers never suspend",
-  requestId: crypto.randomUUID(),
-});
-```
+The list of recent errors has a size limit. When the list is full, Workhorse removes the oldest
+entry and counts the removal. Thus, a reader knows that the list is not complete. If a lease, a
+timeout, or a deadline closes the task, the column `closed_as` of the outcome names that cause.
 
-From a shell, `workhorse admin set-tier` and `workhorse admin set-history` make the same calls,
-behind the CLI's target and confirmation checks. The dashboard's Queues page shows each queue's
-tier and the history it records.
-
-Workhorse refuses the switch while the queue holds a live task in either tier. A task never
-changes tables mid-flight, so the refusal is what keeps each task's record in one place. Moving to
-the fast tier also fails while a concurrency or rate-limit policy still names the queue.
-
-Finished tasks stay where they closed. A queue that switched tier keeps its old outcomes readable,
-and retention and cold export handle both tables.
+A fast-tier task is only ready or active. A delayed task is a ready row with a run time in the
+future. Thus, the fast tier has no `scheduled` state and no step that moves scheduled tasks to
+ready.
 
 <details>
-<summary>Reference: changing the tier</summary>
+<summary>Reference: runtime row, error list, and outcome</summary>
 
-`set_queue_tier_v1(p_queue_name, p_tier, p_requested_by, p_reason)` takes the queue's exclusive tier
-lock, then:
+**`fast_task_runtime`**
 
-1. returns at once when the tier is unchanged;
-2. raises `P1007` with feature `tier change` when the queue holds a live task in either runtime
-   table;
-3. raises `P1007` with feature `concurrency policies` or `rate-limit policies` when moving to
-   `fast` while such a policy names the queue;
-4. otherwise upserts `queue_control.tier`, `updated_by`, `reason`, and `updated_at`.
+- `state` is `ready` or `active`. A ready row with a future `run_at` counts as `scheduled` in the
+  dashboard and in `queue_health_v1`.
+- The row keeps no heartbeat time, no execution budget across releases, and no wait name.
+- The execution timeout restarts on every claim.
+- The tier has no separate scheduled state and no promotion pass.
 
-- `queue_control.tier` defaults to `full`. A queue without a `queue_control` row is full-tier.
-- `p_requested_by` is 1 to 200 characters, and `p_reason` is 1 to 2,000.
-- The function changes neither `paused` nor the history switches.
-- TypeScript `Admin.setQueueTier(queueName, tier, { actor, reason, requestId })` passes only
-  `actor` and `reason`, and emits the `workhorse.queue.tier_set` log event.
-- The CLI command is `workhorse admin set-tier <queue> --tier <fast|full>`.
-- `redrive_v1` copies a task into its queue's current tier, not the tier it closed in.
-- Retention prunes `fast_task_outcome`, and cold export has a `fast_task_outcome` dataset.
+**`errors` list.** `fast_retry_v1` appends one entry per closed attempt, with `attempt`,
+`fence_token` as text, `worker_id`, `claimed_at`, `finished_at`, `outcome`, and `error`. The
+`outcome` is `retry`, `timeout`, or `lease_expired`. The list holds at most 10 entries. At the cap,
+`fast_retry_v1` drops the oldest entry and increments `errors_dropped`.
 
-More detail: [Fast tier: Changing the tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#changing-the-tier).
+**`fast_task_outcome`**
+
+| Column           | Values                                                               |
+| ---------------- | -------------------------------------------------------------------- |
+| `state`          | `succeeded`, `failed`, or `canceled`                                 |
+| `closed_as`      | Null, `canceled`, `deadline_exceeded`, `timeout`, or `lease_expired` |
+| `errors`         | Carried over from the runtime row                                    |
+| `errors_dropped` | Carried over from the runtime row                                    |
+
+If the handler itself fails the task for the last time, `closed_as` stays null.
+
+More detail: [Fast tier: The errors list](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#the-errors-list) and [Fast tier: `fast_task_outcome`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#fast_task_outcome).
 
 </details>
 
-## Workers need no configuration
+## Run workers with no tier configuration
 
-Worker W starts with two queues: `emails`, which is fast-tier, and `reports`, which is full-tier.
-Its configuration names neither tier.
+The tier belongs to the queue. It never belongs to a worker or to a task. Thus, the worker
+configuration does not name a tier. The worker finds the tier of each queue itself.
 
-1. **At start** W tries a fast claim on each queue. On `emails` the fast claim succeeds.
-2. On `reports` PostgreSQL answers `P1007`, so W marks `reports` full-tier. It claims `reports`
-   the ordinary way and tries a fast claim again later.
-3. **While running** an `emails` handler returns. W sends one statement that completes that task
-   and claims new `emails` work for the free slots.
+**Example.** Worker W serves two queues: `emails` is fast-tier, and `reports` is full-tier.
 
-The tier belongs to the queue, never to a worker or a task. A worker that believes the wrong tier
-is still safe. PostgreSQL routes every claim by the queue's current tier, so a stale belief costs a
-round trip, not correctness.
+1. W starts and tries a fast claim on each queue. On `emails`, the fast claim succeeds.
+2. On `reports`, Workhorse rejects the fast claim. W marks `reports` as full-tier for some time.
+3. W claims from `reports` with the full claim. Later, W tries a fast claim on `reports` again.
+4. An `emails` handler returns. W sends one statement that completes the task and claims new
+   `emails` tasks for the free slots.
 
-On a fast-tier queue, every worker also combines a completion with the next claim. One statement
-closes the finished tasks and hands their slots new work, which saves a round trip per task.
+If a worker has an old belief about a tier, the result is still correct. Workhorse sends each claim
+to the current tier of the queue. Thus, an old belief costs one round trip and no correctness.
 
-Combining has a cost. Handlers that finish together wait together for that one statement, and
-their slots idle during the round trip. A busy worker therefore splits its slots into cohorts. Each
-cohort combines only its own completions, so one cohort's handlers run while another cohort waits
-on PostgreSQL. A worker with more slots gets more cohorts, up to a cap. Each cohort wants its own
-pooled connection, so on a small pool the worker picks fewer. The `cohorts` option, `Cohorts` in
-Go, overrides that count when the database is far away or short of CPU.
+### Combine a completion with the next claim
 
-A combined completion carries many results in one statement. If one result exceeds its size limit,
-Workhorse fails only that attempt with `TaskValueSizeLimitError`, and the retry policy applies. The
-other completions still commit if their leases are still live, and the next claim still runs. On the full tier, an oversized result makes
-`complete_v1` raise, which rolls back the caller's statement.
+On a fast-tier queue, each worker combines a completion with the next claim. A slot is the capacity
+of a worker to run one handler. One statement closes the finished tasks and gives new tasks to their
+slots. This saves one round trip for each task.
+
+The combination has a cost. Handlers that finish at the same time wait together for that statement.
+Their slots do no work during the round trip. Thus, a busy worker divides its slots into cohorts. A
+cohort is a group of slots that combines only its own completions. While one cohort waits for
+PostgreSQL, the handlers of another cohort continue to run.
+
+A worker with more slots uses more cohorts, up to a limit. Each cohort uses its own connection from
+the pool. Thus, a worker with a small pool uses fewer cohorts. If the database is far away or has
+little CPU, set the cohort count with the `cohorts` option (`Cohorts` in Go).
+
+### Expect one large result to fail only its own attempt
+
+A combined completion sends many results in one statement. If one result is larger than its size
+limit, Workhorse fails only that attempt. The retry policy of that task applies. Workhorse completes
+the other tasks if their leases are still live, and the next claim still runs.
+
+The SDK workers check the size of each result before they send it. Thus, a worker sends a result
+that is too large only because of a defect. On the full tier, a result that is too large makes the statement of the caller fail.
 
 <details>
 <summary>Reference: tier probe, combined completion, and cohorts</summary>
@@ -324,13 +356,15 @@ other completions still commit if their leases are still live, and the next clai
 
 **Combined completion.** `complete_many_and_claim_v1` completes up to 100 tasks and claims up to
 `p_limit` more from one fast-tier queue. `p_limit` is 0 to 100. `p_lease_ms` is 100 to 86,400,000,
-with a default of 30,000. A worker's combined claim asks for its free slots plus one. A
+with a default of 30,000. The combined claim of a worker asks for its free slots plus one. A
 `batched completion` rejection sends the worker back to `complete_v1`.
 
-**Oversized results.** `fast_complete_many_v1` passes each result larger than the row's
-`result_max_bytes` to `fast_fail_v1` with a `TaskValueSizeLimitError` error. It then reads the clock
-again, completes the rest of the batch whose leases are still live, and the combined claim still
-runs.
+**Oversized results.** `fast_complete_many_v1` passes each result larger than the
+`result_max_bytes` of its row to `fast_fail_v1` with a `TaskValueSizeLimitError` error. It then
+reads the clock again, completes the rest of the batch whose leases are still live, and the
+combined claim still runs. On the full tier, `complete_v1` raises for an oversized result, and the
+statement or transaction of the caller rolls back. The TypeScript, Go, Python, Ruby, and Rust
+workers measure results before they call, so they reach this path only through a bug.
 
 **Cohorts.** Without an explicit count, `defaultDispatchCohorts(concurrency, spareConnections)`
 gives:
@@ -339,9 +373,9 @@ gives:
 - otherwise `ceil(concurrency / 8)`, clamped to 2 through 8;
 - then capped at the spare connections, and never below 1.
 
-Spare connections are the pool size minus the pooled connections the worker keeps for its listener
-and its heartbeats. Each SDK reads its own pool settings. In TypeScript, pools of 3, 4, 6, and 10
-connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
+Spare connections are the pool size minus the pooled connections that the worker keeps for its
+listener and its heartbeats. Each SDK reads its own pool settings. In TypeScript, pools of 3, 4, 6,
+and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
 | SDK        | Option                   | Rule                                           |
 | ---------- | ------------------------ | ---------------------------------------------- |
@@ -353,33 +387,39 @@ connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
 An explicit count is never capped.
 
-More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue) and [Fast tier: Oversized results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#oversized-results).
+More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue), [Fast tier: `complete_many_and_claim_v1`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#complete_many_and_claim_v1), and [Fast tier: Oversized results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#oversized-results).
 
 </details>
 
-## History is opt-in
+## Record history for a fast-tier queue
 
-Task `welcome-17` failed twelve times before it succeeded, and an operator opens it in the
-dashboard. The attempt list shows the last ten failed attempts and the final one. The error list
-dropped the two oldest entries and counted them. The timeline has a claim event only for the final
-attempt.
+By default, a fast-tier queue writes no attempt history and no claim events. The dashboard still
+shows each fast-tier task. It makes the timeline and the attempt list from the runtime row and the
+outcome row. But it cannot show the records that the tier did not write.
 
-Without history, the dashboard still shows every fast-tier task. It derives the timeline and the
-attempt list from the runtime and outcome rows. It cannot show detail the tier never wrote. An
-attempt older than the error list keeps is gone, and only the final claim has an event.
+**Example.** The task `welcome-17` fails twelve times and then succeeds. An operator opens the task
+in the dashboard.
 
-Two switches restore that detail per queue. `Admin.setQueueHistory` sets them:
+1. The list of recent errors keeps only ten entries. Workhorse removed the two oldest entries and
+   counted them.
+2. The attempt list shows the last ten failed attempts and the final attempt.
+3. The timeline shows a claim event only for the final attempt.
+
+Two switches add these records for one queue. Set them with `Admin.setQueueHistory`:
 
 ```ts
 await admin.setQueueHistory("emails", { recordAttempts: true, recordClaims: false });
 ```
 
-- `recordAttempts` writes an `attempt_history` row for each closed attempt, in place of the error
-  list entry.
+- `recordAttempts` writes an `attempt_history` row for each closed attempt. The row replaces the
+  entry in the list of recent errors.
 - `recordClaims` writes a `claimed` event for each claim.
 
-Each switch brings back part of the cost the tier removes. Turn one on when you need the evidence,
-not by default.
+From a shell, `workhorse admin set-history` sets the same switches. The Queues page of the dashboard
+shows the history that each queue records.
+
+Each switch adds back a part of the cost that the tier removes. Keep the switches off by default.
+Set a switch only when you need its records.
 
 <details>
 <summary>Reference: history switches</summary>
@@ -391,7 +431,7 @@ not by default.
 
 - `set_queue_history_v1(p_queue_name, p_record_attempts, p_record_claims)` sets the switches. A null
   argument keeps the current value.
-- The function does not check the tier. The settings take effect once the queue is fast-tier.
+- The function does not check the tier. The settings take effect when the queue is fast-tier.
 - A change applies to claims and completions that start after it commits.
 - TypeScript `Admin.setQueueHistory(queueName, settings)`, Python `Admin.set_queue_history`, Go
   `Admin.SetQueueHistory`, and Rust `set_queue_history` wrap it.
@@ -402,23 +442,24 @@ not by default.
 one for the final attempt. `dashboard_task_event_v1` derives an `enqueued` event, a `claimed` event
 unless a recorded one exists, and a terminal event named `COALESCE(closed_as, state)`.
 
-More detail: [Fast tier: Changing the history switches](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#changing-the-history-switches).
+More detail: [Fast tier: Changing the history switches](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#changing-the-history-switches) and [Fast tier: Fast read models](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#fast-read-models).
 
 </details>
 
 ## What this means for you
 
-- Choose the fast tier for high-volume queues whose handlers never suspend.
-- Expect `FastTierUnsupportedError` wherever code asks a fast-tier queue for a durable feature.
-  In Ruby, an invalid step name raises `ArgumentError` first.
-- Drain a queue before you switch its tier.
-- Turn history on only for the evidence you need.
+- Choose the fast tier for a high-volume queue whose handlers never wait.
+- Make sure that the queue is empty before you change its tier.
+- Expect `FastTierUnsupportedError` when code asks a fast-tier queue for a feature that it does not
+  have. In Ruby, a name that is not valid raises `ArgumentError` first.
+- Set the history switches only for the records that you need.
 
 ## Next
 
-- [Concepts](/docs/concepts) — the full-tier task record the fast tier trims
-- [Checkpoints](/docs/durable-execution) — the durable execution a fast-tier queue gives up
-- [Workers](/docs/workers) — the process that claims from both tiers
+- [Concepts](/docs/concepts) — the full-tier task record that the fast tier makes smaller
+- [Checkpoints](/docs/durable-execution) — the durable execution that a fast-tier queue does not
+  have
+- [Workers](/docs/workers) — the process that claims tasks from both tiers
 
 ---
 

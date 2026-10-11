@@ -1,27 +1,43 @@
 # What happens when I cancel a task?
 
-<!-- scenario-names: export-report, import-rows -->
+<!-- scenario-names: order.upload -->
 
-You cannot forcibly stop running JavaScript. No call outside a handler can stop a loop inside it.
-Everything about how cancellation works in Workhorse follows from that one fact.
+Cancellation ends a task that your app does not need. A call from outside a handler cannot stop
+JavaScript code that runs in the handler. Thus, Workhorse cancels a task at once only if no worker
+holds it. If a handler runs, Workhorse asks the handler to stop, and the handler decides when it
+stops.
 
-## If the task hasn't started
+## Cancel a task that has not started
 
-**Example.** An `export-report` task is scheduled to run in 10 minutes. At 2 minutes, an operator
-cancels it.
+**Example.** An `order.upload` task sends the files of an order to a customer. The task is scheduled
+to run in 10 min. At 2 min, the customer withdraws the order.
 
-1. The application calls `queue.cancel(taskId)`. `cancel_v1` locks the task's runtime row.
-2. The task is `scheduled`, so no worker holds it. Workhorse deletes the runtime row and writes a
-   `canceled` outcome in the same transaction.
-3. The call returns the status `canceled`. Nothing ever ran, so Workhorse records no attempt.
+1. Your app calls `queue.cancel` with the ID of the task and the reason.
+2. The task is `scheduled`, so no worker holds it. Workhorse cancels the task at once.
+3. The call returns the status `canceled`. No attempt started, so Workhorse records no attempt.
 
-A task in `ready` settles the same way. So does a task that is
-[waiting on a timer](130-durable-waits.md), because no worker holds it either. One difference: if
-the wait began partway through an attempt, Workhorse closes that attempt as canceled. The record
-then keeps the work that had already started.
+Thus, if no worker holds a task, cancellation ends the task in one step.
 
-A task held by [dependencies](160-task-dependencies.md) also settles at once. Workhorse releases its
-dependency edges in the same transaction, so they stop holding their prerequisites.
+```ts
+const result = await queue.cancel(taskId, {
+  requestedBy: actor.email,
+  reason: "customer withdrew the order",
+});
+```
+
+A `ready` task is canceled in the same way. A task in a [durable wait](130-durable-waits.md) is also
+canceled at once, because no worker holds it. If the wait started during an attempt, Workhorse
+closes that attempt as canceled. A task that never started gets no attempt history.
+
+A task that waits for its [dependencies](160-task-dependencies.md) is also canceled at once.
+Workhorse releases its dependency edges in the same transaction. Thus, the edges stop holding the
+tasks that it waited for.
+
+If a [schedule](220-schedules.md) created the task, cancellation ends only that task. The schedule
+stays enabled and creates its next task as usual.
+
+Each SDK uses the same cancellation function in PostgreSQL. Thus, cancellation has the same result
+in each language.
 
 <details>
 <summary>Reference: immediate cancellation</summary>
@@ -33,7 +49,8 @@ dependency edges in the same transaction, so they stop holding their prerequisit
 | `requestedBy` | Optional. 1 to 200 characters.   |
 | `reason`      | Optional. 1 to 2,000 characters. |
 
-For a `ready`, `scheduled`, or `blocked` runtime, one transaction:
+`cancel_v1` locks the runtime row of the task. For a `ready`, `scheduled`, or `blocked` runtime, one
+transaction:
 
 1. deletes the runtime row;
 2. inserts a `canceled` outcome that carries the cancellation envelope;
@@ -53,36 +70,38 @@ into the canceled task as released, with resolution `release`.
 | `already_terminal` | The task already succeeded or failed.     |
 | `not_found`        | No task has this id.                      |
 
-More detail: [Task lifecycle: Inactive work](../architecture/lifecycle.md#inactive-work) and [Task lifecycle: Cancellation](../architecture/lifecycle.md#cancellation).
+Canceling one task that a recurring schedule created does not disable the schedule definition or
+change its revision. The next occurrence enqueues independently.
+
+More detail: [Task lifecycle: Inactive work](../architecture/lifecycle.md#inactive-work), [Task lifecycle: Cancellation](../architecture/lifecycle.md#cancellation), and [Task lifecycle: Races with terminal transitions](../architecture/lifecycle.md#races-with-terminal-transitions).
 
 </details>
 
-## If a handler is running right now
+## Stop a handler that runs
 
-Worker A runs an `import-rows` task. The handler loops over many rows. The worker uses the default
-lease and heartbeat interval, so it sends a heartbeat about every third of the lease.
+**Example.** Worker A runs the `order.upload` task. The handler uploads many parts in a loop. The
+worker uses the default lease and heartbeat interval, so it sends a heartbeat each 10 s.
 
-1. **At 0 s — the claim.** Worker A claims the task, and the handler starts its loop.
-2. **At 12 s — the request.** An operator calls `queue.cancel(taskId, { requestedBy, reason })`.
-   `cancel_v1` cannot stop the handler. So it records the request on the runtime row, with who asked
-   and why, and emits a `cancel_requested` event. The call returns `cancel_requested`. The task stays
-   `active`.
-3. **At 20 s — the heartbeat.** Worker A's next heartbeat comes back `cancel_requested`. Workhorse
-   no longer renews the lease. The worker stops heartbeating and aborts the handler's `AbortSignal`
-   with a `CancellationRequestedError`.
-4. **At about 20 s — the handler stops.** Before the next row, the handler sees that the signal
-   aborted. It returns.
-5. **Right after — the acknowledgement.** The worker confirms the cancellation with its worker id and
-   fence token. Workhorse writes the `canceled` outcome and closes the attempt as canceled.
+1. At 0 s, worker A claims the task, and the handler starts its loop.
+2. At 12 s, an operator cancels the task. Workhorse records the request and returns
+   `cancel_requested`. The task stays `active`.
+3. At 20 s, the next heartbeat of worker A returns `cancel_requested`. The worker aborts
+   `ctx.signal`.
+4. Before the next part, the handler sees the aborted signal and stops.
+5. The worker confirms the cancellation. Workhorse writes the `canceled` outcome and closes the
+   attempt as canceled.
 
-Step 4 is yours. Suppose the handler ignores the signal and keeps going. Nothing stops it. The last
-accepted heartbeat was at 10 s, so the lease expires at about 40 s. Recovery then finishes the
-cancellation instead of retrying the task.
+Thus, Workhorse asks the handler to stop, and the handler decides when it stops.
 
-Once a cancellation is requested, the task ends canceled. If the handler returns, throws, or calls
-complete, Workhorse refuses the completion or failure, and the worker confirms the cancellation. If
-the handler runs past its lease, recovery confirms it. So the cancellation always lands, but your
-code decides how quickly.
+If the handler does not obey the signal, nothing stops the handler. Workhorse does not extend the
+lease after the request. In the example, the last accepted heartbeat was at 10 s. Thus, the lease
+expires at about 40 s. Then recovery cancels the task, and Workhorse does not schedule another
+attempt.
+
+After a cancellation request, the task always ends `canceled`. If the handler returns, throws an
+error, or completes the task, Workhorse refuses the completion or the failure. Then the worker
+confirms the cancellation. If the handler runs after its lease expires, recovery confirms the
+cancellation. Your handler code decides how quickly the cancellation occurs.
 
 <details>
 <summary>Reference: cooperative cancellation</summary>
@@ -109,36 +128,42 @@ More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-w
 
 </details>
 
-## What this means for handlers
+## Make the handler obey the signal
 
-Watch the `AbortSignal`. Pass it to your HTTP calls. Check it between steps of a long loop. When it
-fires, stop starting new work and return. Do not start an API call you are about to abandon.
+Pass `ctx.signal` to each API that accepts an `AbortSignal`. Check the signal between units of
+work. If the signal is aborted, start no new work and throw `ctx.signal.reason`. Do not start an API
+call that you then cannot use.
 
 ```ts
-const handler = async (payload, ctx) => {
-  for (const row of payload.rows) {
-    if (ctx.signal.aborted) return; // stop between items
-    await fetch(url, { body: row, signal: ctx.signal }); // and mid-request
-  }
-};
+for (const part of payload.parts) {
+  if (ctx.signal.aborted) throw ctx.signal.reason;
+  await uploadPart(part, { signal: ctx.signal });
+}
 ```
 
-In the story, the rows imported before 20 s stay imported. Effects you already started are still
-[at-least-once](030-delivery-guarantees.md). Cancellation undoes nothing. It only stops more from
-happening. If you need to roll back, write that compensation logic yourself.
+If the handler throws `ctx.signal.reason`, the worker confirms the cancellation. The same signal is
+also aborted for a [deadline or an execution timeout](140-deadlines-and-timeouts.md). Each case has
+a different reason. Thus, one pattern stops the handler in all three cases.
 
-## Who wins a race
+Cancellation does not undo effects that the handler started. In the example, the parts that the
+handler uploaded before 20 s stay uploaded. These effects are
+[at-least-once](030-delivery-guarantees.md). Make each effect safe if it occurs more than one time.
+If you must reverse an effect, write the code that reverses it.
 
-Worker A's handler for an `import-rows` task returns. At almost the same moment, an operator cancels
-the task. Both writes need the same row lock, so one of them gets it first.
+## Know which result wins a race
 
-- **The cancellation is first.** It records the request. The completion then finds the request and
-  is refused. The worker confirms the cancellation, and the task ends canceled.
-- **The completion is first.** The task succeeds. The cancellation finds the outcome and reports
-  `already_terminal`, with state `succeeded`.
+**Example.** The handler of worker A for the `order.upload` task returns. At almost the same time,
+an operator cancels the task. Both writes need the lock on the same runtime row. One write gets the
+lock first.
 
-Either way, the answer is consistent. A late write cannot bring back a finished task. Repeating
-either request creates no duplicate events or outcomes.
+- If the cancellation is first, Workhorse records the request. Then Workhorse refuses the
+  completion. The worker confirms the cancellation, and the task ends `canceled`.
+- If the completion is first, the task succeeds. The cancellation finds the outcome and returns
+  `already_terminal`. The result also gives the final state, `succeeded`.
+
+Thus, the first write that commits wins. A late write cannot change a task that ended. If you
+cancel a task again, Workhorse returns the request or the outcome that exists. Workhorse does not
+make duplicate events or outcomes.
 
 <details>
 <summary>Reference: races with terminal transitions</summary>
@@ -155,18 +180,17 @@ More detail: [Task lifecycle: Races with terminal transitions](../architecture/l
 
 </details>
 
-## One thing it is not
+## Check permissions before you cancel
 
-Go back to the `import-rows` task. Your app lets support staff cancel imports, but only for their
-own team.
+**Example.** Your app lets support staff cancel uploads, but only for their own team.
 
-1. **At 12 s** a support user from another team presses cancel. Your app passes their name as
-   `requestedBy` and calls `queue.cancel`.
-2. **Right after** Workhorse records the request with that name and returns `cancel_requested`. It
-   never asks whether that user may cancel the task.
+1. At 12 s, a support user from a different team cancels the `order.upload` task. Your app gives the
+   name of the user as `requestedBy` and calls `queue.cancel`.
+2. Workhorse records the request with that name and returns `cancel_requested`. Workhorse does not
+   check if that user can cancel the task.
 
-`requestedBy` is recorded for the audit trail. Workhorse does **not** check whether that person was
-allowed to cancel the task. Check permissions in your application before you call cancel.
+Thus, `requestedBy` and `reason` are only a record for the audit. Workhorse does not check
+permissions. Your app must check the permissions of the user before it calls `queue.cancel`.
 
 <details>
 <summary>Reference: cancellation attribution</summary>
@@ -183,9 +207,10 @@ More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-w
 
 ## Next
 
-- [130-durable-waits.md](130-durable-waits.md) — cancelling a task that's asleep
-- [140-deadlines-and-timeouts.md](140-deadlines-and-timeouts.md) — the other reason your signal aborts
-- [310-workers.md](310-workers.md) — pausing a worker, which is cooperative in the same way
+- [130-durable-waits.md](130-durable-waits.md) — cancel a task that is in a durable wait
+- [140-deadlines-and-timeouts.md](140-deadlines-and-timeouts.md) — the other reasons that abort the
+  signal
+- [310-workers.md](310-workers.md) — pause a worker, which also does not stop a running handler
 
 ---
 

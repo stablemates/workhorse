@@ -1,33 +1,33 @@
 ---
 title: Retries
-description: Follow one failing task through its attempt budget, then choose the backoff policy that PostgreSQL applies to every retry.
+description: Set the attempt budget of a task and choose the retry policy that PostgreSQL applies to each retry.
 ---
 
-When a handler throws, the task usually is not finished. Only that attempt failed. Workhorse records
-the failure, checks the attempt budget, and either schedules another attempt or writes a failed
-outcome. This page covers who decides, when the next attempt runs, and what survives in between.
+If a handler throws an error, only that attempt fails. The task stays the same task. Workhorse
+records the failure and checks the attempt budget. The attempt budget is the maximum number of
+attempts for a task. If attempts are left, Workhorse schedules another attempt. If no attempts are
+left, Workhorse writes a failed outcome.
 
-## Set an attempt budget
+This page tells when the next attempt starts, who selects the delay, and what a retry keeps.
 
-**Example.** A task charges a card through a payment provider, and the provider is having an outage.
-The task was enqueued with a budget of four attempts and an exponential retry policy. The policy
-waits 30 seconds after the first failure, doubles the wait after each failure, and never waits
-longer than ten minutes.
+## Set the attempt budget
 
-1. **At 0 s, attempt 1.** The provider returns an error, and the handler throws. Attempt 1 is below
-   the budget of four, so PostgreSQL schedules attempt 2 for 30 seconds later. The task goes back to
-   `scheduled`, not straight to `ready`.
-2. **At about 30 s, attempt 2.** The provider fails again. The wait doubles, so attempt 3 is
-   scheduled about 60 seconds later.
-3. **At about 90 s, attempt 3.** This time the worker crashes during the call. About half a minute
-   later its lease expires, and recovery returns the task. Recovery uses the same policy as a thrown
-   error, so attempt 4 waits 120 seconds.
-4. **At about 4 min, attempt 4.** The provider fails once more. Four attempts have now run, and the
-   budget is used up. Workhorse stops retrying. It deletes the task's runtime row and writes an
-   immutable failed outcome.
+**Example.** A `provider.sync` task copies the data of an account from a provider. The provider has
+an outage. The task has an attempt budget of 5 and an exponential retry policy. The policy waits
+30 s after the first failure, and doubles the wait after each failure.
 
-`EnqueueOptions.maxAttempts` sets that budget. Each failure spends one attempt, whether the handler
-threw or a crashed worker's lease expired.
+1. At 0 s, attempt 1 fails because the provider returns an error. The task becomes `scheduled`, and
+   attempt 2 waits 30 s.
+2. At 30 s, attempt 2 fails. Workhorse doubles the wait, so attempt 3 waits 60 s.
+3. At 90 s, the worker process stops during attempt 3. About 30 s later, the lease expires, and
+   recovery returns the task. Attempt 4 waits 120 s.
+4. At about 240 s, attempt 4 fails, and attempt 5 waits 240 s.
+5. At about 480 s, attempt 5 fails. No attempts are left, so Workhorse writes a failed outcome.
+
+Thus, each failure uses one attempt. A thrown error and an expired lease both count as a failure.
+The waits become longer because each failure shows that the provider needs more time.
+
+To set the budget, give `maxAttempts` when you enqueue the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -69,9 +69,8 @@ threw or a crashed worker's lease expired.
   </Tab>
 </Tabs>
 
-PostgreSQL checks the budget in SQL on every failure. A worker override can change retry timing, but
-no client configuration can create extra attempts. So you cannot accidentally configure infinite
-retries.
+PostgreSQL checks the budget on each failure. A worker setting can change the delay, but it cannot
+add attempts. Thus, a task cannot retry without a limit.
 
 <details>
 <summary>Reference: attempt budget</summary>
@@ -82,33 +81,36 @@ retries.
 
 - PostgreSQL checks the budget in SQL on every failure and recovery. A retry runs only if the failed
   attempt number is less than `maxAttempts`.
-- The check applies whatever the source of the delay. No worker setting can turn it off.
+- The check applies for each source of the delay. No worker setting can turn it off.
 - Retry and recovery increment `current_attempt`.
-- When the budget is used up, the task moves from `active` to `failed`. The runtime row is deleted.
+- When the budget is used up, the task moves from `active` to `failed`. Workhorse deletes the
+  runtime row and writes the failed outcome.
+- A lease expires when no heartbeat renews it. `leaseMs` defaults to 30,000 ms.
 
-More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts).
+More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts) and [Task lifecycle: Worker options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-options).
 
 </details>
 
-## Persist the delay policy with the task
+## Choose the retry delay
 
-Go back to the card charge. Its exponential policy waited 30 seconds, then 60, then 120. Two other
-policies would have waited differently:
+**Example.** At 0 s, the provider stops, and 1,000 `provider.sync` tasks fail together.
 
-1. **A fixed policy of 30 seconds** waits 30 seconds after every failure.
-2. **A decorrelated-jitter policy** picks each task's wait from a range that grows after each
-   failure. Suppose a thousand charges fail together at 0 s. Their retries spread across the range
-   instead of all landing at 30 s.
+1. With the exponential policy, all 1,000 tasks retry at 30 s.
+2. At 30 s, the provider gets 1,000 requests at the same time and fails again.
+3. With a decorrelated-jitter policy, each task selects a different delay in a range.
+4. The retries arrive across the range, so the provider gets fewer requests at one time.
 
-Retrying at once is usually wrong, because hammering a provider that is down only uses up attempts.
-`EnqueueOptions.retryPolicy` stores a backoff shape with the accepted task definition. PostgreSQL
-validates it at enqueue time. A pending keyed debounce may replace that definition before dispatch.
-There are three shapes:
+Thus, a random spread keeps tasks that failed together from all retrying at the same time.
 
-- **Fixed.** Always wait the same time.
-- **Exponential.** Start small, multiply the wait after each failure, and stop growing at a ceiling.
-- **Decorrelated jitter.** Like exponential, but with a random spread. Tasks that failed together
-  then do not all retry at the same moment and knock the recovering service over again.
+A retry policy calculates the delay before the next attempt. This delay is the backoff. Give
+`retryPolicy` when you enqueue the task.
+Workhorse stores the policy with the task. A policy has one of three types:
+
+- **Fixed.** The delay is always the same.
+- **Exponential.** The delay starts small and becomes larger after each failure, to a maximum.
+  This type is also called exponential backoff.
+- **Decorrelated jitter.** The delay is random in a range. The range becomes larger after each
+  failure, to a maximum.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -159,15 +161,16 @@ There are three shapes:
   </Tab>
 </Tabs>
 
-Fixed and exponential policies use the same JSON field names in every SDK, because PostgreSQL owns
-their validation and execution.
+Use decorrelated jitter for a task that calls an external service. Workhorse calculates the jitter
+from the task ID and the attempt number, not from a new random value. Thus, if Workhorse replays the
+same transition, it selects the same delay.
 
-Prefer decorrelated jitter for anything that calls an external service. Workhorse derives the jitter
-from the task's own identity and attempt number, not from fresh randomness. So replaying the same
-transition selects the same delay, which keeps retry timing explainable after the fact.
+A policy uses the same field names in each SDK, because PostgreSQL validates the policy and runs
+it. If a pending task uses [keyed debounce](/docs/debounce), a replacement can also change its
+retry policy.
 
 <details>
-<summary>Reference: policy shapes and bounds</summary>
+<summary>Reference: policy types and bounds</summary>
 
 | `type`                | Fields                                       | Delay after failed attempt `n`                                                                              |
 | --------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -185,25 +188,28 @@ Decorrelated jitter hashes the task ID, the attempt number, and the previous del
 `previous_retry_delay_ms` keeps the previous delay for this policy only. Replay and `Queue`
 recreation therefore select the same value.
 
-More detail: [Data model: Retry delay selection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retry-delay-selection).
+PostgreSQL validates the policy when it accepts the task. While a keyed debounce task is pending,
+`enqueue_debounce_v1` can replace its attempt budget and its retry policy.
+
+More detail: [Data model: Retry delay selection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retry-delay-selection) and [Data model: Definition replacement under debounce](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#definition-replacement-under-debounce).
 
 </details>
 
-## One policy for both failure paths
+## Use the same delay after an error and after a crash
 
-In the card charge story, attempt 3 ended in a crash, not an error. Its wait still followed the same
-policy as the thrown errors. PostgreSQL picks the delay from the policy stored on the task. A thrown
-error and an expired lease go through the same selector. So a crashed process does not get different
-backoff behavior from a failing one.
+In the first example, attempt 3 ended because the worker process stopped. Workhorse used the same
+policy as for the errors. PostgreSQL selects the delay from the policy that the task stores. It uses
+this policy after a thrown error and after an expired lease. Thus, a worker that stops does not
+cause a different delay than a handler that fails.
 
-You can override the delay. `Queue.fail` accepts an explicit delay. `WorkerOptions.retryDelayMs`
-takes a number or `(attempt, task) => number | undefined`. An explicit value wins, including an
-explicit `0` for "retry immediately". A callback that returns `undefined` defers to the persisted
-policy or the compatibility default.
+If a task has no retry policy, the two paths use different delays. After a thrown error, Workhorse
+uses an older random delay. After an expired lease, Workhorse retries the task at once. Set a retry
+policy if the delay must be the same on both paths.
 
-A task with no policy keeps older compatibility behavior, which differs between the two paths. A
-thrown error gets a legacy randomized backoff, and an expired lease retries at once. Set a persisted
-policy whenever consistent timing matters.
+You can also give a delay that has priority over the policy. `Queue.fail` takes a delay.
+`WorkerOptions.retryDelayMs` takes a number or a function of the attempt number and the task. A
+delay of 0 retries the task at once. If the function returns `undefined`, Workhorse uses the policy
+of the task.
 
 <details>
 <summary>Reference: delay precedence</summary>
@@ -221,51 +227,56 @@ policy whenever consistent timing matters.
 | Lease recovery    | 0                                                                           |
 | Execution timeout | 0                                                                           |
 
-A callback that returns `undefined` gives no override, so step 2 or 3 applies.
+`WorkerOptions.retryDelayMs` is a number or `(attempt, task) => number | undefined`. A callback that
+returns `undefined` gives no override, so step 2 or 3 applies.
 
 `fail_v1` reserves a delay of `-1` for a terminal failure: the task fails with no retry, even with
 attempts left. The worker sends it for a durable replay conflict.
 
-More detail: [Data model: Retry delay selection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retry-delay-selection).
+More detail: [Data model: Retry delay selection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#retry-delay-selection) and [Schema and SQL protocol: Durable replay conflicts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#durable-replay-conflicts).
 
 </details>
 
-## What survives another attempt
+## Know what a retry keeps
 
-Go back to the card charge. Suppose attempt 1 saved a [checkpoint](/docs/durable-execution) before
-the provider failed.
+**Example.** Attempt 1 of the `provider.sync` task saves a
+[checkpoint](/docs/durable-execution) before the provider fails.
 
-1. **At 0 s** attempt 1 saves the checkpoint and then throws. The attempt counter reads 1.
-2. **At about 4 min** a worker claims attempt 4. The attempt counter now reads 4, and the claim
-   carries a new [fence token](/docs/workers).
-3. **Still attempt 4.** The handler receives the same task ID and the same payload as attempt 1.
-   The checkpoint from attempt 1 is still there, so the handler reuses its saved result.
+1. At 0 s, attempt 1 saves the checkpoint and then throws an error. The attempt number is 1.
+2. At about 480 s, a worker claims attempt 5. The claim gets a new
+   [fence token](/docs/workers).
+3. The handler gets the same task ID and the same payload as attempt 1.
+4. The checkpoint from attempt 1 is still there, so the handler uses its saved result.
 
-So a retry raises the attempt counter and gets a new fence token. The new token stops a stale
-previous owner from writing over the new attempt. The task ID, payload, tags, policy, and every saved
-checkpoint survive. A retry is the same task having another go. A redrive is different: it happens
-only after terminal failure and creates a [new task identity](/docs/dead-letters).
+Thus, a retry increases the attempt number and gets a new fence token. The new fence token stops an
+earlier owner of the task from writing over the new attempt. The task ID, the payload, the tags, the
+policy, and each saved checkpoint stay the same. A retry is another attempt of the same task.
 
-`TaskSnapshot.retryPolicy` shows the normalized policy. Timeline events record each selected delay
-with its source. So when an operator asks why a task is still `scheduled`, the evidence answers.
+A [redrive](/docs/dead-letters) is different. It occurs only after the task fails, and it creates a
+new task. An operator can read the policy of a task and the delay of each retry. Thus, the operator
+can see why a task is still `scheduled`.
 
 <details>
 <summary>Reference: what a retry keeps and changes</summary>
 
-| Kept                                    | Changed                                                          |
-| --------------------------------------- | ---------------------------------------------------------------- |
-| The `task` row: ID, payload, and policy | `current_attempt`, which retry and recovery increment            |
-| Every `task_checkpoint` row             | `fence_token`, which the next claim takes from `fence_token_seq` |
+| Kept                                          | Changed                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------- |
+| The `task` row: ID, payload, tags, and policy | `current_attempt`, which retry and recovery increment            |
+| Every `task_checkpoint` row                   | `fence_token`, which the next claim takes from `fence_token_seq` |
 
-More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts).
+`TaskSnapshot.retryPolicy` shows the normalized policy. The details of a `retry_scheduled` event
+include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`. The details of a `lease_expired`
+event include the policy, the selected delay, and its source.
+
+More detail: [Data model: Priority and attempts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#priority-and-attempts), [Task lifecycle: Failure](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#failure), and [Task lifecycle: Expired-lease recovery](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#expired-lease-recovery).
 
 </details>
 
 ## Next
 
-- [Durable execution](/docs/durable-execution) — reuse completed work on another attempt
-- [Dead letters](/docs/dead-letters) — create a fresh task after retries end
-- [Deadlines and timeouts](/docs/deadlines) — end work before the attempt budget is gone
+- [Durable execution](/docs/durable-execution) — use completed work again on another attempt
+- [Dead letters](/docs/dead-letters) — create a new task after the retries end
+- [Deadlines and timeouts](/docs/deadlines) — end work before the attempt budget is used up
 
 ---
 

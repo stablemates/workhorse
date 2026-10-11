@@ -1,17 +1,25 @@
 ---
 title: Progress
-description: Publish a live, bounded status value for operators without changing durable control flow.
+description: Show operators the latest status of a running handler, without a change to what the handler does.
 ---
 
-A three-minute import looks identical to a stuck one from the outside: both sit in `active`.
-Progress closes that gap. It is a mutable, latest-value-only projection of what the handler is
-doing right now — operator data, not control flow. After a retry, progress cannot tell
-Workhorse to skip a stage; that is what [checkpoints](/docs/durable-execution) are for.
+Progress is a JSON value that a handler writes to show what it does now. An operator cannot see the
+difference between a slow task and a stuck task, because both are `active`. Progress shows that
+difference.
 
-## Publish the latest value
+Workhorse keeps only the latest progress value of a task. Progress is data for an operator. It does
+not change what the handler does after a retry. To keep a result for a later run of the handler,
+use a [checkpoint](/docs/durable-execution).
 
-Call `HandlerContext.setProgress` with any JSON value your operator surface understands.
-Each accepted update replaces the previous one.
+## Report the progress of a handler
+
+**Example.** An import handler loads a file of 12,000 rows in batches of 500 rows.
+
+1. The handler starts. It calls `HandlerContext.setProgress` with the phase `reading` and 0
+   processed rows.
+2. After each batch, the handler calls `setProgress` with the phase `importing` and the new count.
+3. After four batches, an operator opens the task in the [dashboard](/docs/dashboard).
+4. The dashboard shows the phase `importing` and 2,000 processed rows.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -67,43 +75,145 @@ Each accepted update replaces the previous one.
   </Tab>
 </Tabs>
 
-`HandlerContext.getProgress` returns the latest retained value from inside a handler. Outside
-one, `Admin.getProgress` reads it by task ID, and a custom runtime can write through
-`Queue.updateProgress` with the claimed task and worker identity. The
-[dashboard](/docs/dashboard) renders the value live.
+Thus, each accepted update replaces the previous value. Use any JSON value that your operator tools
+can read.
 
-Python exposes the handler methods as `set_progress` and `get_progress`. Go exposes `SetProgress`
-and `GetProgress`. Their returned progress records carry the same revision and ownership provenance
-as the TypeScript record. Rust's `set_progress` and `get_progress` read and write the value alone;
-`Admin::get_progress` returns the full record. Ruby's `set_progress` and `get_progress` return the full
-`TaskProgress` record.
+In a handler, `HandlerContext.getProgress` returns the latest value. Outside a handler,
+`Admin.getProgress` reads the value by task ID. The dashboard shows the value while it changes. A
+custom runtime can write progress with `Queue.updateProgress`. It must give the claimed task and
+the worker ID.
 
-## Why progress is rate-limited
+<details>
+<summary>Reference: progress API</summary>
 
-Every changed value updates one `task_progress` row and appends a small `progress_updated`
-event. A tight loop — say, one update per imported row — would churn the database without
-making the interface more useful; no operator reads a thousand updates a second.
+**Handler calls**
 
-PostgreSQL therefore size-caps the value and rate-limits changed writes. A caller that
-updates too quickly gets `ProgressRateLimitError`, which says when it may retry. In the loop
-above, updating once per batch stays comfortably inside the limit.
+| SDK        | Write          | Read           | Returned value                                                 |
+| ---------- | -------------- | -------------- | -------------------------------------------------------------- |
+| TypeScript | `setProgress`  | `getProgress`  | The full `TaskProgress` record                                 |
+| Python     | `set_progress` | `get_progress` | The full `TaskProgress` record                                 |
+| Go         | `SetProgress`  | `GetProgress`  | The full `*TaskProgress` record                                |
+| Rust       | `set_progress` | `get_progress` | The value only. `Admin::get_progress` returns the full record. |
+| Ruby       | `set_progress` | `get_progress` | The full `TaskProgress` record                                 |
 
-Repeating an identical value is a free no-op: it does not advance the revision or append an
-event. You can call `setProgress` defensively without paying for it.
+**Other calls**
 
-## What survives, and who may write
+- `Admin.getProgress(taskId)` reads the latest record of a task.
+- `Queue.updateProgress(task, workerId, value)` writes progress for a claimed task. It calls
+  `update_progress_v1`.
 
-Each accepted update records the attempt, fence token, worker ID, revision, and timestamps.
-The latest value survives retries and terminal materialization, until retention removes the
-task identity — so a failed task's last reported phase remains readable evidence.
+**`TaskProgress` fields.** `taskId`, `value`, `revision`, `attempt`, `fenceToken`, `workerId`,
+`createdAt`, and `updatedAt`.
 
-Only the current unexpired owner can write. If a stale generation tries — an old handler
-still running after its lease was recovered — it gets `ProgressLeaseLostError`, so a zombie
-cannot overwrite the newer activation's status.
+**Fast tier.** A fast-tier handler context rejects `setProgress` with `FastTierUnsupportedError`.
+Reads still answer.
 
-Keep the division of labor sharp: progress is what an operator watches; a checkpoint is what
-another activation reuses. If losing the value would change what your code does next, it is
-not progress — make it a checkpoint.
+More detail: [Data model: Handler API](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#handler-api) and [Fast tier: Handler context rejections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#handler-context-rejections).
+
+</details>
+
+## Keep the update rate low
+
+**Example.** A new version of the import handler calls `setProgress` after each row, not after each
+batch.
+
+1. The handler imports row 1 and writes the count 1. Workhorse accepts the update.
+2. A few milliseconds later, the handler imports row 2 and writes the count 2.
+3. Workhorse rejects the update with a rate-limit error. The error tells when the handler can write
+   again.
+
+Thus, Workhorse limits how often one owner can change the value. Each accepted change updates one
+row and adds one event to the history of the task. An operator does not need a thousand updates in
+one second. Write progress one time for each batch, or at a fixed interval.
+
+Workhorse also limits the size of the value. If the handler writes the same value again, Workhorse
+does nothing. The revision does not change, and Workhorse adds no event. Thus, the handler can
+repeat an update at no cost.
+
+<details>
+<summary>Reference: limits</summary>
+
+- `update_progress_v1` serializes on the active runtime row.
+- A value is limited to 64 KiB of canonical JSONB text.
+- One fence may commit a changed value at most every 100 milliseconds. A new ownership generation
+  may report immediately.
+- An identical value is a no-op. It does not change the revision or append an event.
+- Each accepted change emits a bounded `progress_updated` event with the revision and the byte
+  size, but not the value.
+- The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth
+  before they write. TypeScript throws a `TypeError`, and Rust returns `Error::InvalidArgument`.
+
+**Rate-limit errors**
+
+| SDK                    | Error                        | Retry delay               |
+| ---------------------- | ---------------------------- | ------------------------- |
+| TypeScript, Python, Go | `ProgressRateLimitError`     | The remaining delay       |
+| Rust                   | `Error::ProgressRateLimited` | `retry_after`, a duration |
+| Ruby                   | `ProgressRateLimitedError`   | `retry_after`, in seconds |
+
+More detail: [Data model: Writes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#writes) and [Data model: Limits and lifetime](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#limits-and-lifetime).
+
+</details>
+
+## Read the last progress of a failed task
+
+**Example.** The import task fails on its last attempt.
+
+1. On its last attempt, the handler writes the phase `importing` and 3,500 processed rows.
+2. The handler throws an error. The task fails and has no attempts left.
+3. An operator reads the progress of the failed task. The value shows the phase `importing` and
+   3,500 rows.
+
+Thus, the latest value stays after a retry and after the task ends. It stays until retention
+deletes the task. The operator can use it as evidence of where the task stopped.
+
+Each accepted update also records the attempt, the fence token, the worker ID, the revision, and
+the time.
+
+<details>
+<summary>Reference: record and lifetime</summary>
+
+- An accepted change increments a monotonic revision. It replaces the attempt, fence, worker, and
+  update-time provenance.
+- The latest projection survives retry and terminal materialization. It cascades only with the
+  stable parent identity.
+
+More detail: [Data model: Writes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#writes) and [Data model: Limits and lifetime](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#limits-and-lifetime).
+
+</details>
+
+## Keep an old handler from writing progress
+
+**Example.** Worker A runs the import, but its [lease](/docs/workers) expires during a long batch.
+
+1. Workhorse recovers the task. Worker B claims it with a new fence token.
+2. Worker B writes the phase `reading` and 0 processed rows.
+3. Worker A finishes its batch and tries to write 2,500 rows.
+4. Workhorse rejects the write of worker A with a lease-lost error.
+
+Thus, only the current owner of the task can write progress. Its lease must not be expired. An old
+handler cannot replace the progress of the newer attempt.
+
+<details>
+<summary>Reference: ownership</summary>
+
+`update_progress_v1` accepts only the exact unexpired worker and fence generation.
+
+| SDK                    | Error for a stale write  |
+| ---------------------- | ------------------------ |
+| TypeScript, Python, Go | `ProgressLeaseLostError` |
+| Rust                   | `Error::LeaseLost`       |
+| Ruby                   | `LeaseLostError`         |
+
+More detail: [Data model: Writes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#writes) and [Data model: Handler API](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#handler-api).
+
+</details>
+
+## Use a checkpoint when the code needs the value
+
+Progress is for an operator to read. A checkpoint is a stored result that a later run of the
+handler uses again. After a retry, progress cannot tell Workhorse to skip a stage. If the next
+action of your code depends on a value, store that value in a checkpoint, not in progress.
 
 ## Next
 
