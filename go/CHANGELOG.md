@@ -37,8 +37,17 @@ callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not acc
 (member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
 member of the group).
 
-This SDK does not add a task group API yet. It needs schema 65 because its statement catalogue
-names the new functions.
+`Queue` gains `CreateTaskGroup`, `AddToTaskGroup`, `SealTaskGroup`, the block form `TaskGroup`,
+`GetTaskGroup`, `ListTaskGroupMembers`, and `FindTaskGroup` (SM-1234). The block form creates,
+adds, and seals in one statement, so in one transaction. To create a group in your own
+transaction, use a `Queue` over a transaction executor. `TaskGroupCallbacks` holds the `OnFinish`,
+`OnSuccess`, and `OnFailure` requests. A handler reads its group through
+`HandlerContext.GetTaskGroup`, and a running member task adds tasks through
+`HandlerContext.AddToTaskGroup`. `Admin` gains `GetTaskGroup`, `ListTaskGroupMembers`,
+`ListTaskGroupEvents`, `CancelTaskGroup`, `ListTaskGroupDrift`, and `RepairTaskGroupDrift`.
+`P1008`, `P1009`, and `P1010` map to `TaskGroupClosedError`, `TaskGroupLimitExceededError`, and
+`TaskGroupMembershipConflictError`, which match `ErrTaskGroupClosed`, `ErrTaskGroupLimitExceeded`,
+and `ErrTaskGroupMembershipConflict`. A fast-tier member gives `FastTierUnsupportedError`.
 
 ## 0.7.1 — 2026-10-09
 

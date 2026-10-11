@@ -179,7 +179,8 @@ type Queue struct {
 	executor      Executor
 	defaultQueue  string
 	compatibility *CachedCompatibilityCheck
-	contracts     contractCache
+	// contracts is shared with the worker when a handler adds tasks to its task group.
+	contracts *contractCache
 }
 
 // QueueHealth is PostgreSQL's versioned health document. Stable fields and reason codes are
@@ -230,11 +231,12 @@ type CancelResult struct {
 
 // NewQueue constructs an enqueue client without taking ownership of the executor.
 func NewQueue(executor Executor, defaultQueue string) *Queue {
+	contracts := newContractCache()
 	return &Queue{
 		executor:      executor,
 		defaultQueue:  defaultQueue,
 		compatibility: NewCachedCompatibilityCheck(executor),
-		contracts:     newContractCache(),
+		contracts:     &contracts,
 	}
 }
 
@@ -442,8 +444,25 @@ func (queue *Queue) EnqueueManyWithResults(
 	if len(requests) > MaxEnqueueBatchSize {
 		return nil, ErrEnqueueBatchTooLarge
 	}
+	return queue.submitEnqueueRequests(ctx, requests, func(ctx context.Context, input []byte) ([]Row, error) {
+		return queue.executor.Query(ctx, protocolStatementRegistry[enqueueManyStatementName], input)
+	})
+}
+
+// enqueueSubmission sends one serialized request batch through an enqueue statement and returns
+// one row per request, or one contract_mismatch row.
+type enqueueSubmission func(ctx context.Context, input []byte) ([]Row, error)
+
+// submitEnqueueRequests serializes the batch, sends it through submit, and maps the rows to results
+// in request order. On a contract mismatch, PostgreSQL enqueued nothing: the queue reloads the named
+// contracts and sends the batch one more time.
+func (queue *Queue) submitEnqueueRequests(
+	ctx context.Context,
+	requests []EnqueueRequest,
+	submit enqueueSubmission,
+) ([]EnqueueResult, error) {
 	for attempt := 0; ; attempt++ {
-		rows, err := queue.enqueueAttempt(ctx, requests)
+		rows, err := queue.enqueueAttempt(ctx, requests, submit)
 		if err != nil {
 			return nil, err
 		}
@@ -463,8 +482,12 @@ func (queue *Queue) EnqueueManyWithResults(
 	}
 }
 
-// enqueueAttempt serializes the batch against the cached contracts and runs enqueue_many_v1.
-func (queue *Queue) enqueueAttempt(ctx context.Context, requests []EnqueueRequest) ([]Row, error) {
+// enqueueAttempt serializes the batch against the cached contracts and sends it through submit.
+func (queue *Queue) enqueueAttempt(
+	ctx context.Context,
+	requests []EnqueueRequest,
+	submit enqueueSubmission,
+) ([]Row, error) {
 	inputs, err := serializeEnqueueRequests(
 		requests,
 		queue.defaultQueue,
@@ -484,7 +507,7 @@ func (queue *Queue) enqueueAttempt(ctx context.Context, requests []EnqueueReques
 	if err != nil {
 		return nil, err
 	}
-	rows, err := queue.executor.Query(ctx, protocolStatementRegistry[enqueueManyStatementName], payload)
+	rows, err := submit(ctx, payload)
 	if err != nil {
 		return nil, translateEnqueueError(err)
 	}
@@ -663,7 +686,7 @@ func (contract *payloadContract) validatePayload(taskType string, payload any) e
 
 // loadPayloadContract returns the current contract for a task type, or nil when the type has none.
 func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*payloadContract, error) {
-	return loadPayloadContract(ctx, queue.executor, &queue.contracts, taskType, nil)
+	return loadPayloadContract(ctx, queue.executor, queue.contracts, taskType, nil)
 }
 
 // loadPayloadContract reads one contract version of a task type, the current one when version is
@@ -1216,6 +1239,8 @@ func translateEnqueueError(err error) error {
 		}
 	case fastTierUnsupportedSQLState:
 		return fastTierRejection(err)
+	case taskGroupClosedSQLState, taskGroupLimitExceededSQLState, taskGroupMembershipConflictSQLState:
+		return taskGroupRejection(databaseError)
 	case dependencyLimitExceededSQLState:
 		details := DependencyLimitDetails{}
 		_ = json.Unmarshal([]byte(databaseError.Detail), &details)
