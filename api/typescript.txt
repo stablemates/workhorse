@@ -148,6 +148,9 @@ const MAX_REDRIVE_REQUEST_ID_BYTES
 const MAX_TASK_CONTRACT_SENSITIVE_KEYS
 const MAX_TASK_DEPENDENCIES
 const MAX_TASK_DEPENDENTS
+const MAX_TASK_GROUP_DRIFT_LIMIT
+const MAX_TASK_GROUP_MEMBERS
+const MAX_TASK_GROUP_PAGE_SIZE
 const MAX_TASK_PRIORITY
 const MAX_TASK_QUERY_PAGE_SIZE
 const MAX_TASK_QUERY_PAYLOAD_BYTES
@@ -250,6 +253,33 @@ class TaskContractUnavailableError
 class TaskContractValidationError
 interface TaskContractVersion
 type TaskDependencies
+interface TaskGroup
+interface TaskGroupBlockResult
+interface TaskGroupBuilder
+interface TaskGroupCallback
+type TaskGroupCallbackKind
+interface TaskGroupCallbacks
+interface TaskGroupClosedDetails
+class TaskGroupClosedError
+interface TaskGroupContext
+interface TaskGroupCounts
+interface TaskGroupDrift
+interface TaskGroupEvent
+type TaskGroupEventType
+interface TaskGroupLimitDetails
+class TaskGroupLimitExceededError
+interface TaskGroupLink
+interface TaskGroupMember
+type TaskGroupMemberOutcome
+interface TaskGroupMemberPage
+interface TaskGroupMemberQuery
+interface TaskGroupMembershipConflictDetails
+class TaskGroupMembershipConflictError
+type TaskGroupRefusal
+interface TaskGroupRepair
+type TaskGroupRepairAction
+type TaskGroupResult
+type TaskGroupState
 interface TaskListCursor
 interface TaskListFilter
 interface TaskListItem
@@ -858,6 +888,29 @@ class Admin {
   * only dependents that drifted again.
   */
   repairDependencyDrift(audit: AdminAudit, limit?: number): Promise<DependencyRepair[]>;
+  getTaskGroup(groupId: string): Promise<TaskGroup | null>;
+  listTaskGroupMembers(groupId: string, query?: TaskGroupMemberQuery): Promise<TaskGroupMemberPage>;
+  /** Read a group's history in time order: create, seal, cancel, finish, callbacks, repairs. */
+  listTaskGroupEvents(groupId: string, limit?: number): Promise<TaskGroupEvent[]>;
+  /**
+  * Seal an open group, so no task can join it after this call, not even from a running member
+  * task. Then cancel every member task that is not terminal. The canceled members count as not
+  * succeeded, so the group finishes as usual and `onFinish` and `onFailure` run. A finished group
+  * stays unchanged. Returns null for an unknown group.
+  */
+  cancelTaskGroup(groupId: string, audit: AdminAudit): Promise<TaskGroup | null>;
+  /**
+  * List groups that are not finished and whose counters disagree with their member outcomes, and
+  * sealed groups whose members are all finished. It writes nothing, so it is the dry run of
+  * {@link repairTaskGroupDrift}.
+  */
+  listTaskGroupDrift(limit?: number): Promise<TaskGroupDrift[]>;
+  /**
+  * Recount each group {@link listTaskGroupDrift} reports from its member outcomes, and finish a
+  * sealed group with no pending member. Each repaired group's `counter_repaired` event records
+  * the audit.
+  */
+  repairTaskGroupDrift(audit: AdminAudit, limit?: number): Promise<TaskGroupRepair[]>;
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
   budgetMetricSnapshot(): Promise<BudgetMetricSnapshot[]>;
   health(): Promise<QueueHealth>;
@@ -3214,6 +3267,8 @@ interface HandlerContext<TPayload extends Json = Json> {
   runChildren<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildTaskRequest[]): Promise<ChildOutcomes<TResult>>;
   /** Join a bounded child set only when every child succeeds. */
   runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildTaskRequest[]): Promise<TResult>;
+  /** The task group of this task, as a member task or as a callback task (ADR 0095). */
+  taskGroup: TaskGroupContext;
 }
 
 type HeartbeatStatus = "accepted" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
@@ -3325,7 +3380,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 64;
+const MAXIMUM_SCHEMA_VERSION = 65;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3373,6 +3428,12 @@ const MAX_TASK_DEPENDENCIES = 100;
 
 const MAX_TASK_DEPENDENTS = 100;
 
+const MAX_TASK_GROUP_DRIFT_LIMIT = 10000;
+
+const MAX_TASK_GROUP_MEMBERS = 100000;
+
+const MAX_TASK_GROUP_PAGE_SIZE = 1000;
+
 const MAX_TASK_PRIORITY = 100;
 
 const MAX_TASK_QUERY_PAGE_SIZE = 1000;
@@ -3397,13 +3458,13 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 54;
+const MINIMUM_SCHEMA_VERSION = 65;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
 type MaintenanceLoopCadences = DashboardMaintenanceLoopCadences;
 
-type MaintenancePhase = "promote" | "recover" | "history_partitions" | "stat_rollup" | "stat_retention" | "event_retention" | "attempt_retention" | "schedule_occurrences" | "enqueue_idempotency" | "released_dependencies" | "terminal_tasks";
+type MaintenancePhase = "promote" | "recover" | "history_partitions" | "stat_rollup" | "stat_retention" | "event_retention" | "attempt_retention" | "schedule_occurrences" | "enqueue_idempotency" | "released_dependencies" | "terminal_tasks" | "task_groups";
 
 interface MaintenancePhaseResult {
   phase: MaintenancePhase;
@@ -3590,6 +3651,30 @@ class Queue {
   enqueueWithResult<TPayload extends Json>(type: string, payload: TPayload, options?: EnqueueOptions, transaction?: Queryable): Promise<EnqueueResult>;
   enqueueMany(requests: readonly EnqueueRequest[], transaction?: Queryable): Promise<string[]>;
   enqueueManyWithResults(requests: readonly EnqueueRequest[], transaction?: Queryable): Promise<EnqueueResult[]>;
+  /**
+  * Create an open task group (ADR 0095). Add tasks with {@link addToTaskGroup}, then seal it with
+  * {@link sealTaskGroup}. When the group is sealed and every member task is finished, Workhorse
+  * enqueues the callbacks that the result selects.
+  */
+  createTaskGroup(callbacks?: TaskGroupCallbacks, transaction?: Queryable): Promise<TaskGroup>;
+  /**
+  * Create a task group, add the tasks that `build` collects, and seal the group, in one statement
+  * and so in one transaction. A group with no tasks finishes at the seal.
+  */
+  taskGroup(callbacks: TaskGroupCallbacks, build: (group: TaskGroupBuilder) => void | Promise<void>, transaction?: Queryable): Promise<TaskGroupBlockResult>;
+  /**
+  * Enqueue up to 1,000 tasks as members of an open group. A sealed group accepts tasks only from
+  * a running member task, through its handler context.
+  */
+  addToTaskGroup(groupId: string, requests: readonly EnqueueRequest[], transaction?: Queryable): Promise<EnqueueResult[]>;
+  /** Add tasks to the group of a running member task, under that task's fenced lease. */
+  addToTaskGroupAsMember(task: ClaimedTask, workerId: string, requests: readonly EnqueueRequest[]): Promise<EnqueueResult[]>;
+  /** Seal an open group. Sealing a sealed or finished group changes nothing. */
+  sealTaskGroup(groupId: string, transaction?: Queryable): Promise<TaskGroup>;
+  getTaskGroup(groupId: string): Promise<TaskGroup | null>;
+  listTaskGroupMembers(groupId: string, query?: TaskGroupMemberQuery): Promise<TaskGroupMemberPage>;
+  /** The group a task is a member of, or whose callback the task is. */
+  findTaskGroup(taskId: string): Promise<TaskGroupLink | null>;
   promote(limit?: number): Promise<number>;
   /**
   * Announce or refresh this worker's registration and read back the operator-requested pause flag.
@@ -4485,6 +4570,174 @@ type TaskDependencies = Dependencies;
 
 type TaskDetailNavigation = "push" | "replace";
 
+interface TaskGroup {
+  id: string;
+  state: TaskGroupState;
+  result: TaskGroupResult | null;
+  counts: TaskGroupCounts;
+  createdAt: Date;
+  sealedAt: Date | null;
+  finishedAt: Date | null;
+  canceledAt: Date | null;
+  canceledBy: string | null;
+  cancelReason: string | null;
+  callbacks: TaskGroupCallback[];
+}
+
+interface TaskGroupBlockResult {
+  group: TaskGroup;
+  /** One result for each added request, in order. */
+  tasks: EnqueueResult[];
+}
+
+interface TaskGroupBuilder {
+  add(requests: readonly EnqueueRequest[]): void;
+}
+
+interface TaskGroupCallback {
+  kind: TaskGroupCallbackKind;
+  /** Null until the group finishes, and null for the callback that the result does not select. */
+  taskId: string | null;
+}
+
+type TaskGroupCallbackKind = "onFinish" | "onSuccess" | "onFailure";
+
+interface TaskGroupCallbacks {
+  /** Runs when every member task is finished. */
+  onFinish?: EnqueueRequest;
+  /** Runs when every member task is finished and every member task succeeded. */
+  onSuccess?: EnqueueRequest;
+  /** Runs when every member task is finished and one or more member tasks did not succeed. */
+  onFailure?: EnqueueRequest;
+}
+
+interface TaskGroupClosedDetails {
+  groupId: string;
+  state: TaskGroupState;
+  reason: TaskGroupRefusal;
+}
+
+class TaskGroupClosedError extends WorkhorseError {
+  readonly details: TaskGroupClosedDetails;
+  constructor(details: TaskGroupClosedDetails);
+}
+
+interface TaskGroupContext {
+  /**
+  * Read the group this task is a member of, or whose callback this task is, with its counts.
+  * Returns null for a task with no group. The activation reads it one time and keeps it.
+  */
+  get(): Promise<TaskGroupLink | null>;
+  /**
+  * Add up to 1,000 tasks to the group of this member task, under the current fenced lease. A
+  * running member task can add tasks after the seal, until its group is canceled.
+  */
+  add(requests: readonly EnqueueRequest[]): Promise<EnqueueResult[]>;
+}
+
+interface TaskGroupCounts {
+  total: number;
+  succeeded: number;
+  failed: number;
+  canceled: number;
+  pending: number;
+}
+
+interface TaskGroupDrift {
+  groupId: string;
+  state: TaskGroupState;
+  /** The counters the group row records. */
+  recorded: Omit<TaskGroupCounts, "pending">;
+  /** The counts the member outcomes give. */
+  counted: TaskGroupCounts;
+  action: TaskGroupRepairAction;
+}
+
+interface TaskGroupEvent {
+  id: string;
+  type: TaskGroupEventType;
+  details: Json;
+  occurredAt: Date;
+}
+
+type TaskGroupEventType = "created" | "sealed" | "canceled" | "finished" | "callback_enqueued" | "callback_failed" | "counter_repaired";
+
+interface TaskGroupLimitDetails {
+  groupId: string;
+  limit: number;
+  total: number;
+  requested: number;
+}
+
+class TaskGroupLimitExceededError extends WorkhorseError {
+  readonly details: TaskGroupLimitDetails;
+  constructor(details: TaskGroupLimitDetails);
+}
+
+interface TaskGroupLink {
+  /** `member` for a member task, `callback` for a callback task. */
+  role: "member" | "callback";
+  /** The kind of callback, for a callback task. */
+  callback: TaskGroupCallbackKind | null;
+  group: TaskGroup;
+}
+
+interface TaskGroupMember {
+  /** One-based order in which the member joined its group. */
+  position: number;
+  taskId: string;
+  /** Null after the task is deleted, by a purge or by retention. */
+  queue: string | null;
+  type: string | null;
+  state: TaskState | null;
+  /** The outcome the group counted, or null while the member is pending. */
+  outcome: TaskGroupMemberOutcome | null;
+  addedAt: Date;
+  countedAt: Date | null;
+}
+
+type TaskGroupMemberOutcome = "succeeded" | "failed" | "canceled";
+
+interface TaskGroupMemberPage {
+  members: TaskGroupMember[];
+  /** The `after` value of the next page, or null on the last page. */
+  nextAfter: number | null;
+}
+
+interface TaskGroupMemberQuery {
+  /** Return members after this position. */
+  after?: number;
+  limit?: number;
+}
+
+interface TaskGroupMembershipConflictDetails {
+  groupId: string;
+  taskId: string;
+  ordinal: number;
+  /** The group the existing task belongs to, or null. */
+  memberOf: string | null;
+}
+
+class TaskGroupMembershipConflictError extends WorkhorseError {
+  readonly details: TaskGroupMembershipConflictDetails;
+  constructor(details: TaskGroupMembershipConflictDetails);
+}
+
+type TaskGroupRefusal = "sealed" | "finished" | "canceled" | "not_running_member";
+
+interface TaskGroupRepair {
+  groupId: string;
+  recordedPending: number;
+  pending: number;
+  action: TaskGroupRepairAction;
+}
+
+type TaskGroupRepairAction = "recounted" | "finished";
+
+type TaskGroupResult = "succeeded" | "failed";
+
+type TaskGroupState = "open" | "sealed" | "finished";
+
 interface TaskListCursor {
   /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
   createdAt: string;
@@ -4820,7 +5073,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 64;
+const WORKHORSE_SCHEMA_VERSION = 65;
 
 const WORKHORSE_VERSION = "0.7.1";
 
@@ -5099,6 +5352,10 @@ interface WorkerQueueApi {
   createChild<TPayload extends Json, TResult extends Json = Json>(parent: ClaimedTask, workerId: string, name: string, type: string, payload: TPayload, options?: ChildTaskOptions): Promise<CreateChildResult<TResult>>;
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
+  /** Reads the task group of a task. Without it, `ctx.taskGroup` rejects. */
+  findTaskGroup?(taskId: string): Promise<TaskGroupLink | null>;
+  /** Adds tasks to the group of a running member task. Without it, `ctx.taskGroup.add` rejects. */
+  addToTaskGroupAsMember?(task: ClaimedTask, workerId: string, requests: readonly EnqueueRequest[]): Promise<EnqueueResult[]>;
   complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
   fail(task: ClaimedTask, workerId: string, error: unknown, retryDelayMs?: number): Promise<FailureStatus>;
   tick(options?: {

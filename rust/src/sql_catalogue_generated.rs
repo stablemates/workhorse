@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 54;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 64;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 65;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 65;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -1187,3 +1187,33 @@ pub const POSTGRES_SUPPORT: &str = r#"SELECT current_setting('server_version_num
 
 /// `current_database` (admin)
 pub const CURRENT_DATABASE: &str = r#"SELECT current_database() AS database"#;
+
+/// `create_task_group_v1` (internal)
+pub const CREATE_TASK_GROUP_V1: &str = r#"SELECT group_id, ordinal, task_id, outcome, reason FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)"#;
+
+/// `add_task_group_members_v1` (internal)
+pub const ADD_TASK_GROUP_MEMBERS_V1: &str = r#"SELECT ordinal, task_id, outcome, reason FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb, $3::uuid, $4::text, $5::bigint) ORDER BY ordinal"#;
+
+/// `seal_task_group_v1` (internal)
+pub const SEAL_TASK_GROUP_V1: &str = r#"SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.seal_task_group_v1($1::uuid)"#;
+
+/// `get_task_group_v1` (internal, admin)
+pub const GET_TASK_GROUP_V1: &str = r#"SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.get_task_group_v1($1::uuid)"#;
+
+/// `task_group_for_task_v1` (internal)
+pub const TASK_GROUP_FOR_TASK_V1: &str = r#"SELECT role, callback_kind, group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.task_group_for_task_v1($1::uuid)"#;
+
+/// `list_task_group_members_v1` (internal, admin)
+pub const LIST_TASK_GROUP_MEMBERS_V1: &str = r#"SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)"#;
+
+/// `list_task_group_events_v1` (admin)
+pub const LIST_TASK_GROUP_EVENTS_V1: &str = r#"SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)"#;
+
+/// `cancel_task_group_v1` (admin)
+pub const CANCEL_TASK_GROUP_V1: &str = r#"SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)"#;
+
+/// `list_task_group_drift_v1` (admin)
+pub const LIST_TASK_GROUP_DRIFT_V1: &str = r#"SELECT group_id, state, recorded_total, recorded_succeeded, recorded_failed, recorded_canceled, total, succeeded, failed, canceled, pending, action FROM workhorse.list_task_group_drift_v1($1::integer)"#;
+
+/// `repair_task_group_drift_v1` (admin)
+pub const REPAIR_TASK_GROUP_DRIFT_V1: &str = r#"SELECT group_id, recorded_pending, pending, action FROM workhorse.repair_task_group_drift_v1($1::integer, $2::text, $3::text, $4::text)"#;

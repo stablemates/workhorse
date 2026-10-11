@@ -256,6 +256,7 @@ PostgreSQL raises the rejection through
 | `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`                  |
 | `tier change`                                 | `set_queue_tier_v1` while live tasks exist                      |
 | `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue               |
+| `task groups`                                 | `add_task_group_members_v1` for a member on a fast-tier queue   |
 
 Two rejections differ from that shape:
 

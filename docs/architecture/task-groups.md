@@ -1,0 +1,259 @@
+# Task groups
+
+A task group is a set of full-tier tasks that Workhorse tracks as one unit. A member task is a task
+in a task group. When the group is sealed and every member task is finished, Workhorse enqueues the
+callback tasks of the group. [ADR 0095](../decisions/0095-add-task-groups-with-completion-callbacks.md)
+records the decision. Migration 0066 adds the tables and functions, and schema version 65 carries
+them.
+
+## Lifecycle
+
+A group has one of three states in `task_group.state`:
+
+1. `open`: the group accepts new member tasks.
+2. `sealed`: the group accepts new member tasks only from a running member task.
+3. `finished`: every member task is finished. Workhorse enqueued the callbacks in the transaction
+   that set this state.
+
+`create_task_group_v1` creates an `open` group. `seal_task_group_v1` changes `open` to `sealed`.
+If no member task is pending at the seal, the same call changes the group to `finished`. A seal of
+a `sealed` or `finished` group changes nothing. An `open` group never expires.
+
+A member task is finished when Workhorse writes its `task_outcome` row: `succeeded`, `failed`, or
+`canceled`. A retry writes no outcome, so a retry never counts a member task.
+
+The result in `task_group.result` is `succeeded` when every member task succeeded, and `failed`
+otherwise. An empty group finishes with the result `succeeded`.
+
+## Order of group changes
+
+Five changes affect a group: an add, a seal, a cancel, a member outcome, and a purge of a member
+task. Each change locks the `task_group` row with `FOR UPDATE` before it reads or changes the
+counters. Only `finish_task_group_internal_v1` changes a group from `sealed` to `finished`, and it
+enqueues the callbacks in the same transaction. Thus each callback is enqueued one time.
+
+If a seal and the last member outcome occur at the same time, the row lock puts them in order. The
+change that comes second finishes the group.
+
+A member outcome locks its group from the statement trigger `task_outcome_settle_task_groups_insert`
+on `task_outcome`. The trigger name sorts after `task_outcome_resolve_dependencies_insert`, so a
+dependency cascade settles its dependents before the trigger locks a group row. When one statement
+writes the outcomes of members of several groups, the trigger locks the groups in identity order.
+
+`cancel_task_group_v1` and `purge_queue_internal_v1` lock the runtime rows of the member tasks
+before the group row, in the order that completion locks them.
+
+## Tables
+
+### `task_group`
+
+| Column                                                 | Rule                                                                   |
+| ------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `id uuid`                                              | Primary key; default `uuid_v7_v1()`                                    |
+| `state text`                                           | `open`, `sealed`, or `finished`; default `open`                        |
+| `result text`                                          | `succeeded` or `failed`; set only when `finished`                      |
+| `total_count integer`                                  | 0 through 100,000                                                      |
+| `succeeded_count`, `failed_count`, `canceled_count`    | Non-negative; their sum is at most `total_count`                       |
+| `on_finish`, `on_success`, `on_failure jsonb`          | The callback enqueue requests; each is a JSON object or null           |
+| `created_at`, `sealed_at`, `finished_at`, `updated_at` | `sealed_at` is set from `sealed` on; `finished_at` only when finished  |
+| `canceled_at`, `canceled_by`, `cancel_reason`          | All set or all null; actor 1 through 200 characters; reason 1 to 2,000 |
+
+`task_group_state_shape_check` requires that an `open` group has no seal, finish, result, or
+cancel, and that a `finished` group has counts that add up to `total_count`.
+
+| Index                     | Columns             | Predicate            |
+| ------------------------- | ------------------- | -------------------- |
+| `task_group_created_idx`  | `(created_at, id)`  |                      |
+| `task_group_sealed_idx`   | `(sealed_at, id)`   | `state = 'sealed'`   |
+| `task_group_finished_idx` | `(finished_at, id)` | `state = 'finished'` |
+
+### `task_group_member`
+
+One row for each member task.
+
+| Column                   | Rule                                                                    |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `task_id uuid`           | Primary key, so a task is a member of one group at most; no foreign key |
+| `group_id uuid`          | References `task_group.id` `ON DELETE CASCADE`                          |
+| `position integer`       | 1 through 100,000; unique in its group; the order of the add            |
+| `outcome text`           | The counted outcome: `succeeded`, `failed`, `canceled`, or null         |
+| `added_at`, `counted_at` | `counted_at` is null exactly when `outcome` is null                     |
+
+`task_id` has no foreign key. A purge deletes a member task that is not terminal, and the row then
+keeps the `canceled` outcome that the purge counted. `task_group_member_pending_idx` indexes
+`(group_id, task_id)` where `outcome IS NULL`.
+
+### `task_group_callback`
+
+One row for each callback task that a finished group enqueued: `task_id` (primary key), `group_id`
+(`ON DELETE CASCADE`), `kind` (`on_finish`, `on_success`, or `on_failure`), and `enqueued_at`. The
+pair `(group_id, kind)` is unique. A callback task is not a member task.
+
+### `task_group_event`
+
+The group history: `event_id` (primary key, `uuid_v7_v1()`), `group_id` (`ON DELETE CASCADE`),
+`event_type`, `details jsonb`, and `occurred_at`. `task_group_event_group_time_idx` indexes
+`(group_id, occurred_at, event_id)`.
+
+| Event type          | Written by                             | Details                                                      |
+| ------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| `created`           | `create_task_group_v1`                 | `callbacks`: the requested callback names                    |
+| `sealed`            | A seal, or a cancel of an `open` group | `total`                                                      |
+| `canceled`          | `cancel_task_group_v1`                 | Actor, reason, request ID preview, digest, length, `members` |
+| `finished`          | `finish_task_group_internal_v1`        | `result`, `total`, `succeeded`, `failed`, `canceled`         |
+| `callback_enqueued` | `finish_task_group_internal_v1`        | `kind`, `taskId`                                             |
+| `callback_failed`   | `finish_task_group_internal_v1`        | `kind`, `code`, `message`                                    |
+| `counter_repaired`  | `repair_task_group_internal_v1`        | The audit, `recorded` and `counted` counts                   |
+
+## Create and callbacks
+
+`create_task_group_v1(p_callbacks jsonb DEFAULT '{}', p_requests jsonb DEFAULT '[]', p_seal boolean
+DEFAULT false)` returns `(group_id, ordinal, task_id, outcome, reason)`:
+
+1. It checks that `p_callbacks` is an object with only `onFinish`, `onSuccess`, and `onFailure`.
+2. It rejects a callback request with `idempotency`, `debounce`, or `throttle`. With these options,
+   the enqueue could return a task that already exists.
+3. It enqueues each callback request one time in a subtransaction, then rolls the subtransaction
+   back. Thus a callback request that cannot enqueue fails the create, not the last member outcome.
+4. If a member request or a callback request names a task type whose current contract version
+   differs, it returns one `contract_mismatch` row with a null group and creates nothing. The
+   TypeScript client then reloads the contracts and serializes the requests and callbacks again.
+5. It creates the group and its `created` event, adds `p_requests` in adds of at most 1,000, and
+   seals the group if `p_seal` is true.
+
+The function returns one row for each request. Without requests, it returns one row whose ordinal,
+task, and outcome are null. The TypeScript block form `Queue.taskGroup` uses one call with
+`p_seal = true`, so it creates, adds, and seals in one transaction.
+
+`finish_task_group_internal_v1` enqueues `on_finish`, then `on_success` or `on_failure` as the
+result selects, through `enqueue_batch_v1`. Each callback enqueue runs in a subtransaction. If it
+fails with a SQLSTATE that does not start with `40` or `57`, the function writes a `callback_failed` event
+and the transaction that wrote the last member outcome continues. A callback can be on any queue,
+the fast tier included. Its payload is the payload the caller gave.
+
+## Add
+
+`add_task_group_members_v1(p_group_id uuid, p_requests jsonb, p_member_task_id uuid DEFAULT NULL,
+p_worker_id text DEFAULT NULL, p_fence_token bigint DEFAULT NULL)` returns the rows of
+`enqueue_many_v1`: `(ordinal, task_id, outcome, reason)`. In order, it:
+
+1. Rejects more than 1,000 requests, and any request with `debounce` or `throttle`.
+2. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
+   the group row. Completion, cancellation, and purge lock a runtime row before its group row, so
+   an add that names a member as a prerequisite takes the same order. An unknown group raises an
+   error.
+3. Refuses the add with `P1008` when the group is canceled or finished, when the member arguments
+   do not name an `active` member of this group with that worker and fence token, or when the group
+   is sealed and no member arguments are given.
+4. Rejects a request on a fast-tier queue with `P1007` and feature `task groups`.
+5. Enqueues the requests through `enqueue_many_v1`. On a contract mismatch it returns that row and
+   adds nothing.
+6. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
+   this call enqueued. Thus an idempotent retry of the same add returns the existing member.
+7. Rejects with `P1009` an add that takes `total_count` above 100,000. The check runs under the
+   group row lock.
+8. Inserts the membership rows, increases `total_count`, and counts the outcomes that the enqueue
+   already wrote, for example for a deadline in the past.
+
+A task becomes a member only when this function enqueues it. A child task, a dependent task, or a
+redrive target of a member task is not a member.
+
+`Queue.addToTaskGroup` adds to an `open` group. `ctx.taskGroup.add` in a handler passes the member
+arguments of its own attempt.
+
+## Errors
+
+| SQLSTATE | Error text                                                                   | `DETAIL`                                 | TypeScript error                   |
+| -------- | ---------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------- |
+| `P1008`  | `the task group does not accept tasks`                                       | `{ groupId, state, reason }`             | `TaskGroupClosedError`             |
+| `P1009`  | `a task group accepts at most 100000 member tasks`                           | `{ groupId, limit, total, requested }`   | `TaskGroupLimitExceededError`      |
+| `P1010`  | `enqueue idempotency returned a task that is not a member of the task group` | `{ groupId, taskId, ordinal, memberOf }` | `TaskGroupMembershipConflictError` |
+
+The `P1008` reason is `sealed`, `finished`, `canceled`, or `not_running_member`.
+
+## Cancel
+
+`cancel_task_group_v1(p_group_id, p_requested_by, p_reason, p_request_id)` returns the group
+snapshot, or no row for an unknown group:
+
+1. It locks the runtime rows of the pending member tasks, then the group row.
+2. If the group is `finished`, it returns the snapshot and changes nothing.
+3. It seals an `open` group and records the cancel columns. No task can join a canceled group, not
+   even from a running member task.
+4. It calls `cancel_v1` for each pending member task. A queued member task becomes `canceled` at
+   once. An active member task gets a cancel request, and its outcome follows.
+5. It writes the `canceled` event and finishes the group if no member task is pending.
+
+The canceled member tasks count as not succeeded, so `onFinish` and `onFailure` run.
+`Admin.cancelTaskGroup(groupId, { actor, reason, requestId })` calls it.
+
+## Purge
+
+`purge_queue_internal_v1` deletes the tasks of a queue that are not terminal. Before the deletes it
+reads the member tasks among them. After the deletes, it counts each of them as `canceled` through
+`count_task_group_outcomes_internal_v1` in the same transaction. Thus the group can finish, and a
+callback that it enqueues on the purged queue stays.
+
+## Drift and repair
+
+`list_task_group_drift_v1(p_limit integer)` reads groups that are not finished, in identity order,
+with `p_limit` from 1 through 10,000. For each member it takes the counted outcome, else the
+`task_outcome` state, else `canceled` when the task row is gone. A group drifts when these counts
+differ from its counters, or when it is sealed and no member is pending. The `action` is `finished`
+for a sealed group with no pending member, and `recounted` otherwise.
+
+`repair_task_group_drift_v1(p_limit, p_requested_by, p_reason, p_request_id)` repairs each listed
+group through `repair_task_group_internal_v1`. That function locks the group, records the missing
+member outcomes, sets the counters from the membership rows, writes a `counter_repaired` event, and
+finishes a sealed group with no pending member. It returns `(group_id, recorded_pending, pending,
+action)`. `Admin.listTaskGroupDrift` and `Admin.repairTaskGroupDrift` call these functions.
+
+## Maintenance
+
+The `terminal_storage` routine reports the `task_groups` phase after `terminal_tasks`. The phase
+calls `maintain_task_groups_v1(p_outcome_before, p_limit)` with the cutoff of
+`terminal_outcome_retention_days` and the limit `terminal_task_prune_limit`:
+
+1. It repairs at most `p_limit` sealed groups that have no pending member with a live runtime row,
+   oldest `sealed_at` first. A healthy sealed group stops the probe at its first live member.
+2. If `terminal_outcome_retention_days` is set, it deletes at most `p_limit` finished groups whose
+   `finished_at` is before the cutoff and whose callback tasks have no live runtime row in either
+   tier. The delete cascades to the membership, callback, and event rows.
+
+A callback task that a purge deleted has no runtime row, so it counts as terminal. A purge deletes
+it without an outcome, and no later change can make it run.
+
+`rows_affected` is the sum of the repaired and deleted groups. The routine never deletes an `open`
+or `sealed` group. A redrive of a member task or a callback task does not extend the retention of
+a finished group.
+
+Terminal-task pruning keeps a member task while its group is not finished.
+[Terminal-task pruning](lifecycle.md#terminal-task-pruning) states the other conditions.
+
+## Reads
+
+| Function                                                   | Returns                                                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `get_task_group_v1(p_group_id)`                            | The snapshot: state, result, counts with `pending`, times, cancel columns, and `callbacks` |
+| `task_group_for_task_v1(p_task_id)`                        | `role` (`member` or `callback`), `callback_kind`, and the snapshot of the group of a task  |
+| `list_task_group_members_v1(p_group_id, p_after, p_limit)` | Members after a position, at most 1,000, with the live task state and the counted outcome  |
+| `list_task_group_events_v1(p_group_id, p_limit)`           | At most 1,000 events in time order                                                         |
+
+`callbacks` is a JSON object with one key for each requested callback, such as
+`{"on_finish": {"taskId": null}}`. `taskId` is set when the finished group enqueued that callback.
+
+`Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
+`listTaskGroupEvents`. A handler reads the group of its task through `ctx.taskGroup.get()`, which
+calls `task_group_for_task_v1` one time for each handler activation.
+
+## Limits
+
+| Limit                              | Value                                                              |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| Member tasks in one group          | 100,000 (`task_group_member_limit_v1()`, `MAX_TASK_GROUP_MEMBERS`) |
+| Tasks in one add call              | 1,000                                                              |
+| Callbacks of each kind             | 1                                                                  |
+| Members or events in one read      | 1,000 (`MAX_TASK_GROUP_PAGE_SIZE`)                                 |
+| Groups in one drift read or repair | 10,000 (`MAX_TASK_GROUP_DRIFT_LIMIT`)                              |
+
+A task group cannot contain another task group. No column supports nesting.

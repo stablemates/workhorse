@@ -21,6 +21,9 @@ const registry = {
     "queue %s has live tasks, so its tier cannot change",
     "queue %s is not a fast-tier queue",
   ],
+  P1008: ["the task group does not accept tasks"],
+  P1009: ["a task group accepts at most 100000 member tasks"],
+  P1010: ["enqueue idempotency returned a task that is not a member of the task group"],
 } as const;
 
 describe("Workhorse SQLSTATE registry", () => {

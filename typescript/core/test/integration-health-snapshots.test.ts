@@ -193,6 +193,13 @@ describe("health snapshots", () => {
         skippedLock: false,
         error: null,
       },
+      {
+        phase: "task_groups",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
     ]);
     expect(
       (
@@ -273,6 +280,13 @@ describe("health snapshots", () => {
         },
         {
           phase: "terminal_tasks",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
+        {
+          phase: "task_groups",
           rowsAffected: 0,
           durationMs: 0,
           skippedLock: true,

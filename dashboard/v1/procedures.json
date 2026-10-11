@@ -7461,6 +7461,12 @@
             "none"
           ]
         },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardTaskRow"
+          }
+        },
         "worker": {
           "anyOf": [
             {
@@ -7479,12 +7485,6 @@
         },
         "pageSize": {
           "type": "number"
-        },
-        "tasks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/DashboardTaskRow"
-          }
         }
       },
       "required": [
@@ -7500,11 +7500,11 @@
         "taskType",
         "capturedAt",
         "count",
+        "tasks",
         "worker",
         "canCompleteHumanWait",
         "page",
-        "pageSize",
-        "tasks"
+        "pageSize"
       ]
     },
     "DashboardTasksPage": {

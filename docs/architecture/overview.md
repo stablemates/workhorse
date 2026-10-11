@@ -536,6 +536,9 @@ and fails if a code gains an unregistered meaning.
 | `P1005`  | Dependency graph bound exceeded      | `DependencyLimitExceededError`                              |
 | `P1006`  | Purge idempotency conflict           | `PurgeIdempotencyConflictError`                             |
 | `P1007`  | Fast-tier queue rejects a feature    | `FastTierUnsupportedError`                                  |
+| `P1008`  | Task group does not accept tasks     | `TaskGroupClosedError`                                      |
+| `P1009`  | Task group member limit exceeded     | `TaskGroupLimitExceededError`                               |
+| `P1010`  | Task group membership conflict       | `TaskGroupMembershipConflictError`                          |
 
 `Queue` decodes the diagnostics of each exposed error from `DETAIL`.
 [Rejected features and `P1007`](fast-tier.md#rejected-features-and-p1007) lists every feature text

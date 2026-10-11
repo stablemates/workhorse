@@ -1057,7 +1057,7 @@
             },
             "keyDigest": "b0fd606eefe8",
             "keyLength": 17,
-            "keyPreview": "protocol\u2026lict",
+            "keyPreview": "protocol…lict",
             "ordinal": 1,
             "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
             "scope": "protocol",
@@ -2157,7 +2157,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 64,
+                "schemaVersion": 65,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -2524,6 +2524,9 @@
             },
             {
               "phase": "terminal_tasks"
+            },
+            {
+              "phase": "task_groups"
             },
             {
               "phase": "worker_registry"
@@ -3208,6 +3211,185 @@
                 "state": "failed",
                 "attempt": 1,
                 "name": "ChildConflictError"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "task-groups",
+    "steps": [
+      {
+        "id": "create-sealed-group",
+        "covers": ["task-groups"],
+        "sql": "SELECT jsonb_build_object('groupId', group_id, 'ordinal', ordinal, 'taskId', task_id, 'outcome', outcome) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+        "parameters": [
+          {
+            "onFinish": {
+              "queue": "protocol-group-callbacks",
+              "type": "protocol.group.finished",
+              "payload": {
+                "report": true
+              }
+            }
+          },
+          [
+            {
+              "queue": "protocol-group",
+              "type": "protocol.group.member",
+              "payload": {
+                "index": 1
+              }
+            }
+          ],
+          true
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "groupId": {
+                  "$type": "uuid"
+                },
+                "ordinal": 1,
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "group": "0.value.groupId",
+          "groupMember": "0.value.taskId"
+        }
+      },
+      {
+        "id": "reject-add-after-seal",
+        "sql": "SELECT * FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb)",
+        "parameters": [
+          {
+            "$ref": "group"
+          },
+          [
+            {
+              "queue": "protocol-group",
+              "type": "protocol.group.member",
+              "payload": {
+                "index": 2
+              }
+            }
+          ]
+        ],
+        "error": {
+          "code": "P1008",
+          "message": "the task group does not accept tasks",
+          "detail": {
+            "groupId": {
+              "$ref": "group"
+            },
+            "state": "sealed",
+            "reason": "sealed"
+          }
+        }
+      },
+      {
+        "id": "claim-member",
+        "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        "parameters": ["protocol-group", "protocol-group-worker", 1, 30000],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "groupMember"
+                },
+                "fenceToken": {
+                  "$type": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "groupMemberFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "complete-last-member",
+        "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+        "parameters": [
+          {
+            "$ref": "groupMember"
+          },
+          "protocol-group-worker",
+          {
+            "$ref": "groupMemberFence"
+          },
+          {
+            "done": true
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "accepted": true
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-finished-group",
+        "sql": "SELECT jsonb_build_object('state', state, 'result', result, 'total', total, 'succeeded', succeeded, 'pending', pending, 'callbacks', callbacks) AS value FROM workhorse.get_task_group_v1($1::uuid)",
+        "parameters": [
+          {
+            "$ref": "group"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "state": "finished",
+                "result": "succeeded",
+                "total": 1,
+                "succeeded": 1,
+                "pending": 0,
+                "callbacks": {
+                  "on_finish": {
+                    "taskId": {
+                      "$type": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "capture": {
+          "groupCallback": "0.value.callbacks.on_finish.taskId"
+        }
+      },
+      {
+        "id": "read-callback-link",
+        "sql": "SELECT jsonb_build_object('role', role, 'callbackKind', callback_kind, 'groupId', group_id) AS value FROM workhorse.task_group_for_task_v1($1::uuid)",
+        "parameters": [
+          {
+            "$ref": "groupCallback"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "role": "callback",
+                "callbackKind": "on_finish",
+                "groupId": {
+                  "$ref": "group"
+                }
               }
             }
           ]

@@ -1,0 +1,652 @@
+import { describe, expect, it } from "vitest";
+import {
+  FastTierUnsupportedError,
+  MAX_TASK_GROUP_MEMBERS,
+  Queue,
+  TaskGroupClosedError,
+  TaskGroupLimitExceededError,
+  TaskGroupMembershipConflictError,
+  Worker,
+  type ClaimedTask,
+  type EnqueueRequest,
+  type Queryable,
+  type TaskGroupLink,
+} from "../src/index.js";
+import { createIntegrationTestContext } from "./support/integration.js";
+
+const { admin, adminAudit, pool, queue, waitForDatabaseCondition } = createIntegrationTestContext(
+  import.meta.url,
+);
+
+const member = (queueName: string, payload: number, options = {}): EnqueueRequest => ({
+  type: "member",
+  payload,
+  options: { queue: queueName, maxAttempts: 1, ...options },
+});
+
+const callbacks = (queueName: string) => ({
+  onFinish: { type: "finished", payload: { kind: "finish" }, options: { queue: queueName } },
+  onSuccess: { type: "succeeded", payload: { kind: "success" }, options: { queue: queueName } },
+  onFailure: { type: "failed", payload: { kind: "failure" }, options: { queue: queueName } },
+});
+
+async function claimAll(queueName: string, workerId = "group-worker"): Promise<ClaimedTask[]> {
+  return queue.claimMany(workerId, 100, { queue: queueName });
+}
+
+async function completeAll(queueName: string, workerId = "group-worker"): Promise<void> {
+  for (const task of await claimAll(queueName, workerId)) {
+    expect(await queue.complete(task, workerId, null)).toBe(true);
+  }
+}
+
+async function callbackTypes(queueName: string): Promise<string[]> {
+  const result = await pool.query<{ task_type: string }>(
+    "SELECT task_type FROM workhorse.task WHERE queue_name = $1 ORDER BY task_type",
+    [queueName],
+  );
+  return result.rows.map((row) => row.task_type);
+}
+
+async function eventTypes(groupId: string): Promise<string[]> {
+  return (await admin.listTaskGroupEvents(groupId)).map((event) => event.type);
+}
+
+describe("task groups", () => {
+  it("creates, adds, and seals in one transaction, then enqueues onFinish and onSuccess", async () => {
+    const { group, tasks } = await queue.taskGroup(callbacks("block-callbacks"), (builder) => {
+      builder.add([member("block-members", 1), member("block-members", 2)]);
+      builder.add([member("block-members", 3)]);
+    });
+    expect(group).toMatchObject({
+      state: "sealed",
+      result: null,
+      counts: { total: 3, succeeded: 0, failed: 0, canceled: 0, pending: 3 },
+    });
+    expect(tasks.map((task) => task.outcome)).toEqual(["accepted", "accepted", "accepted"]);
+
+    await completeAll("block-members");
+    const finished = await queue.getTaskGroup(group.id);
+    expect(finished).toMatchObject({
+      state: "finished",
+      result: "succeeded",
+      counts: { total: 3, succeeded: 3, pending: 0 },
+    });
+    expect(finished!.callbacks.map((callback) => callback.kind).toSorted()).toEqual([
+      "onFailure",
+      "onFinish",
+      "onSuccess",
+    ]);
+    expect(finished!.callbacks.find((callback) => callback.kind === "onFailure")!.taskId).toBe(
+      null,
+    );
+    await expect(callbackTypes("block-callbacks")).resolves.toEqual(["finished", "succeeded"]);
+    await expect(eventTypes(group.id)).resolves.toEqual([
+      "created",
+      "sealed",
+      "finished",
+      "callback_enqueued",
+      "callback_enqueued",
+    ]);
+
+    const page = await queue.listTaskGroupMembers(group.id, { limit: 2 });
+    expect(page.members.map((item) => [item.position, item.outcome, item.state])).toEqual([
+      [1, "succeeded", "succeeded"],
+      [2, "succeeded", "succeeded"],
+    ]);
+    expect(page.nextAfter).toBe(2);
+    const rest = await admin.listTaskGroupMembers(group.id, { after: page.nextAfter! });
+    expect(rest).toMatchObject({ members: [{ position: 3 }], nextAfter: null });
+  });
+
+  it("lets a callback handler read the group and its counts through ctx.taskGroup", async () => {
+    const { group } = await queue.taskGroup(
+      { onFinish: { type: "report", payload: { report: true }, options: { queue: "ctx-cb" } } },
+      (builder) => builder.add([member("ctx-members", 1)]),
+    );
+    const failed = (await claimAll("ctx-members"))[0]!;
+    expect(await queue.fail(failed, "group-worker", new Error("boom"))).toBe("failed");
+
+    let seen: TaskGroupLink | null = null;
+    let payload: unknown;
+    const worker = new Worker(queue, { queue: "ctx-cb", workerId: "ctx-worker" });
+    worker.handle("report", async (value, context) => {
+      payload = value;
+      seen = await context.taskGroup.get();
+      return null;
+    });
+    expect(await worker.runOnce()).toBe(true);
+    expect(payload).toEqual({ report: true });
+    expect(seen).toMatchObject({
+      role: "callback",
+      callback: "onFinish",
+      group: { id: group.id, result: "failed", counts: { total: 1, failed: 1 } },
+    });
+  });
+
+  it("runs onFinish and onFailure when a member fails, and counts a canceled member as not succeeded", async () => {
+    const { group } = await queue.taskGroup(callbacks("fail-callbacks"), (builder) =>
+      builder.add([member("fail-members", 1), member("fail-members", 2)]),
+    );
+    const [first, second] = await claimAll("fail-members");
+    expect(await queue.fail(first!, "group-worker", new Error("boom"))).toBe("failed");
+    await queue.cancel(second!.id, { requestedBy: "test", reason: "stop" });
+    expect(await queue.acknowledgeCancel(second!, "group-worker")).toBe(true);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { failed: 1, canceled: 1, pending: 0 },
+    });
+    await expect(callbackTypes("fail-callbacks")).resolves.toEqual(["failed", "finished"]);
+  });
+
+  it("finishes an empty group at the seal and rejects an add to it", async () => {
+    const group = await queue.createTaskGroup(callbacks("empty-callbacks"));
+    expect(group).toMatchObject({ state: "open", counts: { total: 0 } });
+    await expect(queue.sealTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "succeeded",
+    });
+    await expect(callbackTypes("empty-callbacks")).resolves.toEqual(["finished", "succeeded"]);
+    const refusal = queue.addToTaskGroup(group.id, [member("empty-members", 1)]);
+    await expect(refusal).rejects.toBeInstanceOf(TaskGroupClosedError);
+    await expect(refusal).rejects.toMatchObject({
+      details: { groupId: group.id, state: "finished", reason: "finished" },
+    });
+    await expect(queue.sealTaskGroup(group.id)).resolves.toMatchObject({ state: "finished" });
+  });
+
+  it("accepts adds after the seal only from a running member task", async () => {
+    const { group } = await queue.taskGroup(callbacks("member-add-cb"), (builder) =>
+      builder.add([member("member-add", 1)]),
+    );
+    await expect(queue.addToTaskGroup(group.id, [member("member-add", 2)])).rejects.toMatchObject({
+      details: { reason: "sealed" },
+    });
+
+    const worker = new Worker(queue, { queue: "member-add", workerId: "member-add-worker" });
+    worker.handle("member", async (payload: number, context) => {
+      if (payload === 1) await context.taskGroup.add([member("member-add", 10)]);
+      return null;
+    });
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "sealed",
+      counts: { total: 2, succeeded: 1, pending: 1 },
+    });
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      counts: { total: 2, succeeded: 2 },
+    });
+
+    // A stale member lease cannot add.
+    const { group: other } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("stale-add", 1)]),
+    );
+    const claimed = (await claimAll("stale-add"))[0]!;
+    await expect(
+      queue.addToTaskGroupAsMember(
+        { ...claimed, fenceToken: claimed.fenceToken + 1n },
+        "group-worker",
+        [member("stale-add", 2)],
+      ),
+    ).rejects.toMatchObject({ details: { groupId: other.id, reason: "not_running_member" } });
+  });
+
+  it.each(["seal", "outcome"] as const)(
+    "enqueues each callback one time when the %s comes first and the other change waits",
+    async (first) => {
+      const queueName = `race-${first}`;
+      const group = await queue.createTaskGroup(callbacks(`${queueName}-cb`));
+      await queue.addToTaskGroup(group.id, [member(queueName, 1)]);
+      const task = (await claimAll(queueName))[0]!;
+      const seal = (database: Queryable) => queue.forDatabase(database).sealTaskGroup(group.id);
+      const complete = (database: Queryable) =>
+        queue.forDatabase(database).complete(task, "group-worker", null);
+      const holder = await pool.connect();
+      const waiter = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await (first === "seal" ? seal(holder) : complete(holder));
+        const waiterPid = (await waiter.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+          .rows[0]!.pid;
+        const waiting = first === "seal" ? complete(waiter) : seal(waiter);
+        // The second change waits for the group row lock that the first one holds.
+        await waitForDatabaseCondition(async () => {
+          const activity = await pool.query<{ waiting: boolean }>(
+            "SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1",
+            [waiterPid],
+          );
+          return activity.rows[0]?.waiting === true;
+        });
+        await holder.query("COMMIT");
+        await waiting;
+      } finally {
+        holder.release();
+        waiter.release();
+      }
+      await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ state: "finished" });
+      await expect(callbackTypes(`${queueName}-cb`)).resolves.toEqual(["finished", "succeeded"]);
+    },
+  );
+
+  it("locks the prerequisites of an add before the group row", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("lock-order", 1)]),
+    );
+    const running = (await claimAll("lock-order"))[0]!;
+    const completion = await pool.connect();
+    const observer = await pool.connect();
+    try {
+      // The first step of a completion: it holds the member's runtime row.
+      await completion.query("BEGIN");
+      await completion.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        running.id,
+      ]);
+      const pid = (await completion.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const add = queue.addToTaskGroupAsMember(running, "group-worker", [
+        member("lock-order", 2, { prerequisiteTaskId: running.id }),
+      ]);
+      await waitForDatabaseCondition(async () => {
+        const blocked = await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+          [pid],
+        );
+        return blocked.rows[0]!.count > 0;
+      });
+      // The add waits for the runtime row and does not hold the group row, so the completion can
+      // take the group row next.
+      await observer.query("BEGIN");
+      await expect(
+        observer.query("SELECT 1 FROM workhorse.task_group WHERE id = $1 FOR UPDATE NOWAIT", [
+          group.id,
+        ]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await observer.query("ROLLBACK");
+      await completion.query("ROLLBACK");
+      await expect(add).resolves.toEqual([expect.objectContaining({ outcome: "accepted" })]);
+    } finally {
+      completion.release();
+      observer.release();
+    }
+  });
+
+  it("stores a callback under the current contract version after a mismatch", async () => {
+    const versions = { one: { payloadSchema: {} }, two: { payloadSchema: {} } };
+    const synced = new Queue(pool, "default", {
+      contracts: { "contracted.callback": { currentVersion: "one", versions } },
+    });
+    await synced.syncContracts();
+    await pool.query("SELECT workhorse.override_contract_version_v1('contracted.callback', 'two')");
+    const group = await synced.createTaskGroup({
+      onFinish: { type: "contracted.callback", payload: {}, options: { queue: "contract-cb" } },
+    });
+    const stored = await pool.query<{ version: string }>(
+      "SELECT on_finish->>'contractVersion' AS version FROM workhorse.task_group WHERE id = $1",
+      [group.id],
+    );
+    expect(stored.rows).toEqual([{ version: "two" }]);
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task_group"),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("does not count a retry, and counts the outcome that ends the member", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([
+        {
+          type: "member",
+          payload: 1,
+          options: {
+            queue: "retry-members",
+            maxAttempts: 2,
+            retryPolicy: { type: "fixed", delayMs: 1 },
+          },
+        },
+      ]),
+    );
+    const firstAttempt = (await claimAll("retry-members"))[0]!;
+    expect(await queue.fail(firstAttempt, "group-worker", new Error("again"), 0)).toBe("ready");
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      counts: { pending: 1, failed: 0 },
+    });
+    const secondAttempt = (await claimAll("retry-members"))[0]!;
+    expect(await queue.fail(secondAttempt, "group-worker", new Error("final"), 0)).toBe("failed");
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      counts: { pending: 0, failed: 1 },
+    });
+  });
+
+  it("counts a member whose enqueue writes its outcome at once", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("late-members", 1, { deadline: new Date(Date.now() - 60_000) })]),
+    );
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { total: 1, failed: 1 },
+    });
+  });
+
+  it("enforces the membership rules", async () => {
+    const group = await queue.createTaskGroup();
+    await admin.setQueueTier("fast-members", "fast", adminAudit("fast tier"));
+    const fast = queue.addToTaskGroup(group.id, [member("fast-members", 1)]);
+    await expect(fast).rejects.toBeInstanceOf(FastTierUnsupportedError);
+    await expect(fast).rejects.toMatchObject({ feature: "task groups" });
+
+    await expect(
+      queue.addToTaskGroup(group.id, [
+        member("rules", 1, { debounce: { key: "k", windowMs: 1_000 } }),
+      ]),
+    ).rejects.toThrow("cannot use debounce or throttle");
+    await expect(
+      pool.query("SELECT * FROM workhorse.add_task_group_members_v1($1, $2)", [
+        group.id,
+        JSON.stringify([{ queue: "rules", type: "member", payload: 1, throttle: { key: "k" } }]),
+      ]),
+    ).rejects.toThrow("cannot use debounce or throttle");
+
+    // A task enqueued outside the group cannot join it through an idempotency hit.
+    const [outside] = await queue.enqueueMany([
+      member("rules", 1, { idempotency: { key: "outside" } }),
+    ]);
+    const conflict = queue.addToTaskGroup(group.id, [
+      member("rules", 1, { idempotency: { key: "outside" } }),
+    ]);
+    await expect(conflict).rejects.toBeInstanceOf(TaskGroupMembershipConflictError);
+    await expect(conflict).rejects.toMatchObject({
+      details: { groupId: group.id, taskId: outside, ordinal: 1, memberOf: null },
+    });
+
+    // An idempotent retry of the same add returns the existing member.
+    const [added] = await queue.addToTaskGroup(group.id, [
+      member("rules", 2, { idempotency: { key: "inside" } }),
+    ]);
+    const [replayed] = await queue.addToTaskGroup(group.id, [
+      member("rules", 2, { idempotency: { key: "inside" } }),
+    ]);
+    expect(replayed).toEqual({ taskId: added!.taskId, outcome: "replayed" });
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ counts: { total: 1 } });
+
+    // The same task cannot join a second group.
+    const other = await queue.createTaskGroup();
+    await expect(
+      queue.addToTaskGroup(other.id, [member("rules", 2, { idempotency: { key: "inside" } })]),
+    ).rejects.toMatchObject({ details: { memberOf: group.id } });
+
+    await expect(
+      queue.addToTaskGroup(
+        group.id,
+        Array.from({ length: 1_001 }, (_, index) => member("rules", index)),
+      ),
+    ).rejects.toThrow("at most 1000 tasks");
+  });
+
+  it("does not make a redriven member a member", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("redrive-members", 1)]),
+    );
+    const task = (await claimAll("redrive-members"))[0]!;
+    expect(await queue.fail(task, "group-worker", new Error("boom"))).toBe("failed");
+    const redrive = await admin.redrive(task.id, adminAudit("redrive"));
+    await expect(queue.findTaskGroup(redrive.targetTaskId!)).resolves.toBeNull();
+    await expect(queue.findTaskGroup(task.id)).resolves.toMatchObject({
+      role: "member",
+      group: { id: group.id },
+    });
+  });
+
+  it("validates callbacks, and enqueues a callback on a fast-tier queue", async () => {
+    await expect(
+      queue.createTaskGroup({
+        onFinish: { type: "cb", payload: null, options: { idempotency: { key: "k" } } },
+      }),
+    ).rejects.toThrow("cannot use enqueue idempotency, debounce, or throttle");
+    await expect(
+      pool.query("SELECT * FROM workhorse.create_task_group_v1($1)", [
+        JSON.stringify({ onFinish: { queue: "q", type: "cb", throttle: { key: "k" } } }),
+      ]),
+    ).rejects.toThrow("cannot use enqueue idempotency, debounce, or throttle");
+    await expect(
+      pool.query("SELECT * FROM workhorse.create_task_group_v1($1)", [
+        JSON.stringify({ onFinish: { queue: "", type: "cb" } }),
+      ]),
+    ).rejects.toThrow(/queue/);
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task_group"),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    await admin.setQueueTier("fast-callbacks", "fast", adminAudit("fast tier"));
+    const { group } = await queue.taskGroup(
+      { onFinish: { type: "cb", payload: null, options: { queue: "fast-callbacks" } } },
+      (builder) => builder.add([member("fast-cb-members", 1)]),
+    );
+    await completeAll("fast-cb-members");
+    const callback = (await queue.getTaskGroup(group.id))!.callbacks[0]!;
+    expect(callback.taskId).not.toBeNull();
+    const fast = await queue.claimFast("fast-worker", 1, { queue: "fast-callbacks" });
+    expect(fast.map((task) => task.id)).toEqual([callback.taskId]);
+    await expect(queue.findTaskGroup(callback.taskId!)).resolves.toMatchObject({
+      role: "callback",
+      callback: "onFinish",
+    });
+  });
+
+  it("cancels a group: it seals, cancels live members, and finishes through onFailure", async () => {
+    const group = await queue.createTaskGroup(callbacks("cancel-cb"));
+    await queue.addToTaskGroup(group.id, [
+      member("cancel-members", 1),
+      member("cancel-members", 2),
+      member("cancel-members", 3),
+    ]);
+    const [running] = await queue.claimMany("group-worker", 1, { queue: "cancel-members" });
+    const audit = adminAudit("stop the import");
+    const canceled = await admin.cancelTaskGroup(group.id, audit);
+    expect(canceled).toMatchObject({
+      state: "sealed",
+      canceledBy: audit.actor,
+      cancelReason: audit.reason,
+      counts: { canceled: 2, pending: 1 },
+    });
+    await expect(
+      queue.addToTaskGroupAsMember(running!, "group-worker", [member("cancel-members", 4)]),
+    ).rejects.toMatchObject({ details: { reason: "canceled" } });
+    expect(await queue.acknowledgeCancel(running!, "group-worker")).toBe(true);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { canceled: 3 },
+    });
+    await expect(callbackTypes("cancel-cb")).resolves.toEqual(["failed", "finished"]);
+    await expect(eventTypes(group.id)).resolves.toEqual([
+      "created",
+      "sealed",
+      "canceled",
+      "finished",
+      "callback_enqueued",
+      "callback_enqueued",
+    ]);
+    const finished = await queue.getTaskGroup(group.id);
+    await expect(admin.cancelTaskGroup(group.id, adminAudit("again"))).resolves.toEqual(finished);
+    await expect(admin.cancelTaskGroup(crypto.randomUUID(), adminAudit("unknown"))).resolves.toBe(
+      null,
+    );
+  });
+
+  it("counts a purged member as canceled, so the group can finish", async () => {
+    const { group } = await queue.taskGroup(callbacks("purge-members"), (builder) =>
+      builder.add([member("purge-members", 1), member("purge-other", 2)]),
+    );
+    await completeAll("purge-other");
+    await expect(admin.purgeQueue("purge-members", adminAudit("purge"))).resolves.toBe(1);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { succeeded: 1, canceled: 1 },
+    });
+    // The callbacks the purge enqueued on the purged queue survive it.
+    await expect(callbackTypes("purge-members")).resolves.toEqual(["failed", "finished"]);
+    await expect(admin.listTaskGroupMembers(group.id)).resolves.toMatchObject({
+      members: [
+        { position: 1, outcome: "canceled", state: null, queue: null },
+        { position: 2, outcome: "succeeded", state: "succeeded" },
+      ],
+    });
+  });
+
+  it("finds and repairs a counter that disagrees with the member outcomes", async () => {
+    const { group } = await queue.taskGroup(callbacks("drift-cb"), (builder) =>
+      builder.add([member("drift-members", 1), member("drift-members", 2)]),
+    );
+    await completeAll("drift-members");
+    // Simulate a lost count: the members are finished, but the group still counts them pending.
+    await pool.query(
+      `UPDATE workhorse.task_group_member SET outcome = NULL, counted_at = NULL WHERE group_id = $1`,
+      [group.id],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_group SET state = 'sealed', result = NULL, finished_at = NULL,
+         succeeded_count = 0 WHERE id = $1`,
+      [group.id],
+    );
+    await pool.query("DELETE FROM workhorse.task_group_callback WHERE group_id = $1", [group.id]);
+    await pool.query("DELETE FROM workhorse.task WHERE queue_name = 'drift-cb'");
+
+    await expect(admin.listTaskGroupDrift()).resolves.toEqual([
+      {
+        groupId: group.id,
+        state: "sealed",
+        recorded: { total: 2, succeeded: 0, failed: 0, canceled: 0 },
+        counted: { total: 2, succeeded: 2, failed: 0, canceled: 0, pending: 0 },
+        action: "finished",
+      },
+    ]);
+    const audit = adminAudit("repair the counter");
+    await expect(admin.repairTaskGroupDrift(audit)).resolves.toEqual([
+      { groupId: group.id, recordedPending: 2, pending: 0, action: "finished" },
+    ]);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "succeeded",
+    });
+    await expect(callbackTypes("drift-cb")).resolves.toEqual(["finished", "succeeded"]);
+    const repaired = (await admin.listTaskGroupEvents(group.id)).find(
+      (event) => event.type === "counter_repaired",
+    );
+    expect(repaired?.details).toMatchObject({
+      requested_by: audit.actor,
+      request_reason: audit.reason,
+      recorded: { succeeded: 0 },
+      counted: { succeeded: 2 },
+    });
+    await expect(admin.listTaskGroupDrift()).resolves.toEqual([]);
+  });
+
+  it("finishes a stalled sealed group in the terminal storage routine", async () => {
+    const { group } = await queue.taskGroup(callbacks("stall-cb"), (builder) =>
+      builder.add([member("stall-members", 1)]),
+    );
+    const task = (await claimAll("stall-members"))[0]!;
+    // Lose the count of the last outcome.
+    await pool.query(
+      "ALTER TABLE workhorse.task_outcome DISABLE TRIGGER task_outcome_settle_task_groups_insert",
+    );
+    try {
+      expect(await queue.complete(task, "group-worker", null)).toBe(true);
+    } finally {
+      await pool.query(
+        "ALTER TABLE workhorse.task_outcome ENABLE TRIGGER task_outcome_settle_task_groups_insert",
+      );
+    }
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ state: "sealed" });
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases.map((phase) => phase.phase)).toEqual([
+      "enqueue_idempotency",
+      "released_dependencies",
+      "terminal_tasks",
+      "task_groups",
+    ]);
+    expect(phases.at(-1)).toMatchObject({ rowsAffected: 1, error: null });
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      counts: { succeeded: 1 },
+    });
+    await expect(callbackTypes("stall-cb")).resolves.toEqual(["finished", "succeeded"]);
+  });
+
+  it("keeps members of an unfinished group and deletes a finished group after its callbacks", async () => {
+    const age = async (sql: string, ids: readonly string[]) =>
+      pool.query(sql.replaceAll("$ago", "clock_timestamp() - interval '30 days'"), [ids]);
+    const ageTasks = (ids: readonly string[]) =>
+      Promise.all([
+        age("UPDATE workhorse.task SET created_at = $ago WHERE id = ANY($1::uuid[])", ids),
+        age(
+          "UPDATE workhorse.task_outcome SET finished_at = $ago, history_through_at = $ago WHERE task_id = ANY($1::uuid[])",
+          ids,
+        ),
+        pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [ids]),
+        pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [ids]),
+      ]);
+
+    const open = await queue.createTaskGroup();
+    const [kept] = await queue.addToTaskGroup(open.id, [
+      member("retention-members", 1),
+      member("retention-members", 2),
+    ]);
+    await completeAll("retention-members");
+    await ageTasks([kept!.taskId]);
+
+    const { group: finished } = await queue.taskGroup(
+      { onFinish: { type: "cb", payload: null, options: { queue: "retention-cb" } } },
+      (builder) => builder.add([member("retention-finished", 1)]),
+    );
+    await completeAll("retention-finished");
+    await age("UPDATE workhorse.task_group SET finished_at = $ago WHERE id = ANY($1::uuid[])", [
+      finished.id,
+    ]);
+
+    // The callback task is live, so the finished group stays.
+    await queue.pruneTerminalStorage({ force: true });
+    await expect(queue.getTaskGroup(finished.id)).resolves.not.toBeNull();
+    await expect(admin.getTask(kept!.taskId)).resolves.not.toBeNull();
+
+    await completeAll("retention-cb");
+    await queue.pruneTerminalStorage({ force: true });
+    await expect(queue.getTaskGroup(finished.id)).resolves.toBeNull();
+    await expect(
+      pool.query(
+        "SELECT count(*)::integer AS count FROM workhorse.task_group_member WHERE group_id = $1",
+        [finished.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    // The open group never expires, and its finished member stays.
+    await expect(queue.getTaskGroup(open.id)).resolves.toMatchObject({ state: "open" });
+    await expect(admin.getTask(kept!.taskId)).resolves.not.toBeNull();
+  });
+
+  it("checks the member limit under the group lock", async () => {
+    const group = await queue.createTaskGroup();
+    await queue.addToTaskGroup(group.id, [member("limit-members", 1)]);
+    await pool.query("UPDATE workhorse.task_group SET total_count = $2 WHERE id = $1", [
+      group.id,
+      MAX_TASK_GROUP_MEMBERS - 1,
+    ]);
+    const refusal = queue.addToTaskGroup(group.id, [
+      member("limit-members", 2),
+      member("limit-members", 3),
+    ]);
+    await expect(refusal).rejects.toBeInstanceOf(TaskGroupLimitExceededError);
+    await expect(refusal).rejects.toMatchObject({
+      details: { groupId: group.id, limit: MAX_TASK_GROUP_MEMBERS, total: 99_999, requested: 2 },
+    });
+    await expect(
+      pool.query(
+        "SELECT count(*)::integer AS count FROM workhorse.task WHERE queue_name = 'limit-members'",
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+});

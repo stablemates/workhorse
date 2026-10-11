@@ -1026,11 +1026,11 @@ type DashboardTasksCursorPage struct {
 	TaskType             *string              `json:"taskType"`
 	CapturedAt           string               `json:"capturedAt"`
 	Count                string               `json:"count"`
+	Tasks                []DashboardTaskRow   `json:"tasks"`
 	Worker               *string              `json:"worker"`
 	CanCompleteHumanWait bool                 `json:"canCompleteHumanWait"`
 	Page                 float64              `json:"page"`
 	PageSize             float64              `json:"pageSize"`
-	Tasks                []DashboardTaskRow   `json:"tasks"`
 }
 
 type DashboardTasksPage struct {

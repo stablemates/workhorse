@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 54
-	maximumSchemaVersion   = 64
+	minimumSchemaVersion   = 65
+	maximumSchemaVersion   = 65
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -698,6 +698,12 @@ var internalStatementRegistry = map[string]string{
         ORDER BY usage.queue_name`,
 	"postgres_support": `SELECT current_setting('server_version_num') AS number,
             current_setting('server_version') AS version`,
+	"create_task_group_v1":       `SELECT group_id, ordinal, task_id, outcome, reason FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)`,
+	"add_task_group_members_v1":  `SELECT ordinal, task_id, outcome, reason FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb, $3::uuid, $4::text, $5::bigint) ORDER BY ordinal`,
+	"seal_task_group_v1":         `SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.seal_task_group_v1($1::uuid)`,
+	"get_task_group_v1":          `SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.get_task_group_v1($1::uuid)`,
+	"task_group_for_task_v1":     `SELECT role, callback_kind, group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.task_group_for_task_v1($1::uuid)`,
+	"list_task_group_members_v1": `SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)`,
 }
 
 var protocolStatementRegistry = map[string]string{
@@ -851,7 +857,13 @@ var adminStatementRegistry = map[string]string{
 	"set_queue_paused":        `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
 	"set_worker_paused": `SELECT * FROM workhorse.set_worker_paused_v1(
          $1::text, $2::boolean, $3::text, $4::text, $5::text)`,
-	"set_queue_tier":    `SELECT workhorse.set_queue_tier_v1($1::text,$2::text,$3::text,$4::text) AS tier`,
-	"set_queue_history": `SELECT record_attempts, record_claims FROM workhorse.set_queue_history_v1($1::text,$2::boolean,$3::boolean)`,
-	"current_database":  `SELECT current_database() AS database`,
+	"set_queue_tier":             `SELECT workhorse.set_queue_tier_v1($1::text,$2::text,$3::text,$4::text) AS tier`,
+	"set_queue_history":          `SELECT record_attempts, record_claims FROM workhorse.set_queue_history_v1($1::text,$2::boolean,$3::boolean)`,
+	"current_database":           `SELECT current_database() AS database`,
+	"get_task_group_v1":          `SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.get_task_group_v1($1::uuid)`,
+	"list_task_group_members_v1": `SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)`,
+	"list_task_group_events_v1":  `SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)`,
+	"cancel_task_group_v1":       `SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)`,
+	"list_task_group_drift_v1":   `SELECT group_id, state, recorded_total, recorded_succeeded, recorded_failed, recorded_canceled, total, succeeded, failed, canceled, pending, action FROM workhorse.list_task_group_drift_v1($1::integer)`,
+	"repair_task_group_drift_v1": `SELECT group_id, recorded_pending, pending, action FROM workhorse.repair_task_group_drift_v1($1::integer, $2::text, $3::text, $4::text)`,
 }

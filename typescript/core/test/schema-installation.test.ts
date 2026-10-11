@@ -569,6 +569,10 @@ describe("schema installation", () => {
         version: 64,
         description: "give the terminal cleanup backlog reason its own health budget",
       },
+      {
+        version: 65,
+        description: "add task groups with completion callbacks",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

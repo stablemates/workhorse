@@ -38,6 +38,11 @@ columns, and limits of that area. For an explanation of a concept, read the
 - [Delivery semantics](architecture/lifecycle.md#delivery-semantics)
 - [Read models and health](architecture/lifecycle.md#read-models-and-health)
 
+### [Task groups](architecture/task-groups.md)
+
+- The [task group](architecture/task-groups.md#task-groups) lifecycle, tables, callbacks, cancel,
+  drift repair, maintenance, and limits
+
 ### [Fast tier](architecture/fast-tier.md)
 
 - The [fast task tier](architecture/fast-tier.md#fast-tier): its settings, tables, functions,

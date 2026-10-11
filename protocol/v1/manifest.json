@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 64,
-    "minimumVersion": 54,
-    "maximumVersion": 64,
+    "installedVersion": 65,
+    "minimumVersion": 65,
+    "maximumVersion": 65,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -54,7 +54,8 @@
     "retention-maintenance",
     "enqueue-trace-propagation",
     "unknown-type-release",
-    "terminal-replay-conflict"
+    "terminal-replay-conflict",
+    "task-groups"
   ],
   "contractSchemaProfile": {
     "dialect": "https://json-schema.org/draft/2020-12/schema",
@@ -1155,6 +1156,66 @@
       "name": "current_database",
       "arity": 0,
       "contract": "SELECT current_database() AS database",
+      "catalogues": ["admin"]
+    },
+    {
+      "name": "create_task_group_v1",
+      "arity": 3,
+      "contract": "SELECT group_id, ordinal, task_id, outcome, reason FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "add_task_group_members_v1",
+      "arity": 5,
+      "contract": "SELECT ordinal, task_id, outcome, reason FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb, $3::uuid, $4::text, $5::bigint) ORDER BY ordinal",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "seal_task_group_v1",
+      "arity": 1,
+      "contract": "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.seal_task_group_v1($1::uuid)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "get_task_group_v1",
+      "arity": 1,
+      "contract": "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.get_task_group_v1($1::uuid)",
+      "catalogues": ["internal", "admin"]
+    },
+    {
+      "name": "task_group_for_task_v1",
+      "arity": 1,
+      "contract": "SELECT role, callback_kind, group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.task_group_for_task_v1($1::uuid)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "list_task_group_members_v1",
+      "arity": 3,
+      "contract": "SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)",
+      "catalogues": ["internal", "admin"]
+    },
+    {
+      "name": "list_task_group_events_v1",
+      "arity": 2,
+      "contract": "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)",
+      "catalogues": ["admin"]
+    },
+    {
+      "name": "cancel_task_group_v1",
+      "arity": 4,
+      "contract": "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)",
+      "catalogues": ["admin"]
+    },
+    {
+      "name": "list_task_group_drift_v1",
+      "arity": 1,
+      "contract": "SELECT group_id, state, recorded_total, recorded_succeeded, recorded_failed, recorded_canceled, total, succeeded, failed, canceled, pending, action FROM workhorse.list_task_group_drift_v1($1::integer)",
+      "catalogues": ["admin"]
+    },
+    {
+      "name": "repair_task_group_drift_v1",
+      "arity": 4,
+      "contract": "SELECT group_id, recorded_pending, pending, action FROM workhorse.repair_task_group_drift_v1($1::integer, $2::text, $3::text, $4::text)",
       "catalogues": ["admin"]
     }
   ]

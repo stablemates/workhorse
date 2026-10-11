@@ -148,6 +148,15 @@ import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbea
 import { statementPoolCapacity } from "./connection-pool.js";
 import { FastTierUnsupportedError } from "./errors.js";
 import { queryFencedWrite } from "./queue/fenced-write.js";
+import type {
+  TaskGroup,
+  TaskGroupBlockResult,
+  TaskGroupBuilder,
+  TaskGroupCallbacks,
+  TaskGroupLink,
+  TaskGroupMemberPage,
+  TaskGroupMemberQuery,
+} from "./queue/task-groups.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -294,6 +303,72 @@ export class Queue {
     transaction: Queryable = this.database,
   ): Promise<EnqueueResult[]> {
     return this.modules.enqueueContracts.enqueueManyWithResults(requests, transaction);
+  }
+
+  /**
+   * Create an open task group (ADR 0095). Add tasks with {@link addToTaskGroup}, then seal it with
+   * {@link sealTaskGroup}. When the group is sealed and every member task is finished, Workhorse
+   * enqueues the callbacks that the result selects.
+   */
+  async createTaskGroup(
+    callbacks: TaskGroupCallbacks = {},
+    transaction: Queryable = this.database,
+  ): Promise<TaskGroup> {
+    return this.modules.taskGroups.create(callbacks, transaction);
+  }
+
+  /**
+   * Create a task group, add the tasks that `build` collects, and seal the group, in one statement
+   * and so in one transaction. A group with no tasks finishes at the seal.
+   */
+  async taskGroup(
+    callbacks: TaskGroupCallbacks,
+    build: (group: TaskGroupBuilder) => void | Promise<void>,
+    transaction: Queryable = this.database,
+  ): Promise<TaskGroupBlockResult> {
+    return this.modules.taskGroups.createSealed(callbacks, build, transaction);
+  }
+
+  /**
+   * Enqueue up to 1,000 tasks as members of an open group. A sealed group accepts tasks only from
+   * a running member task, through its handler context.
+   */
+  async addToTaskGroup(
+    groupId: string,
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable = this.database,
+  ): Promise<EnqueueResult[]> {
+    return this.modules.taskGroups.add(groupId, requests, transaction);
+  }
+
+  /** Add tasks to the group of a running member task, under that task's fenced lease. */
+  async addToTaskGroupAsMember(
+    task: ClaimedTask,
+    workerId: string,
+    requests: readonly EnqueueRequest[],
+  ): Promise<EnqueueResult[]> {
+    return this.modules.taskGroups.addAsMember(task, workerId, requests);
+  }
+
+  /** Seal an open group. Sealing a sealed or finished group changes nothing. */
+  async sealTaskGroup(groupId: string, transaction: Queryable = this.database): Promise<TaskGroup> {
+    return this.modules.taskGroups.seal(groupId, transaction);
+  }
+
+  getTaskGroup(groupId: string): Promise<TaskGroup | null> {
+    return this.modules.taskGroups.get(groupId);
+  }
+
+  listTaskGroupMembers(
+    groupId: string,
+    query: TaskGroupMemberQuery = {},
+  ): Promise<TaskGroupMemberPage> {
+    return this.modules.taskGroups.listMembers(groupId, query);
+  }
+
+  /** The group a task is a member of, or whose callback the task is. */
+  findTaskGroup(taskId: string): Promise<TaskGroupLink | null> {
+    return this.modules.taskGroups.forTask(taskId);
   }
 
   async promote(limit = 100): Promise<number> {

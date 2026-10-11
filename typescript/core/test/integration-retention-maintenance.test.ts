@@ -279,9 +279,9 @@ describe("retention maintenance", () => {
     );
     expect(await queue.prepareHistoryPartitions({ force: true, now })).toHaveLength(1);
 
-    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(3);
+    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(4);
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 1_000) })).toEqual([]);
-    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(3);
+    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(4);
   });
 
   it("retains bounded routine history while omitting idle tick executions", async () => {

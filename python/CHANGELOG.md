@@ -8,6 +8,38 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+Requires **schema v65** and Python **3.12** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
+
+1. Run `workhorse schema migrate`. The final schema version is **65**.
+2. Roll out the updated processes.
+
+The SDK compatibility floor is schema version **65**, which migration 0066 reaches. The floor rises
+from 54, because every SDK statement catalogue now names the task group functions that migration
+0066 adds. An updated process refuses a schema below version 65 at startup. A 0.7 process keeps
+working on version 65, because a migration inside a major line only adds.
+
+Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
+[ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
+A task group is a set of full-tier tasks that Workhorse tracks as one unit. When the group is
+sealed and every member task is finished, Workhorse enqueues its `onFinish`, `onSuccess`, or
+`onFailure` callback task. The migration adds the `task_group`, `task_group_member`,
+`task_group_callback`, and `task_group_event` tables, and a trigger on `task_outcome` that counts
+each member outcome in the transaction that writes it. A queue purge counts a purged member task as
+`canceled`. The `terminal_storage` routine keeps member tasks while their group is not finished,
+reports a new `task_groups` phase after `terminal_tasks`, and deletes a finished group after its
+callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not accept tasks), `P1009`
+(member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
+member of the group).
+
+This SDK does not add a task group API yet. It needs schema 65 because its statement catalogue
+names the new functions.
+
 ## 0.7.1 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

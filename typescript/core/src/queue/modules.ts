@@ -8,6 +8,7 @@ import { OperatorReadsModule } from "./operator-reads.js";
 import { QueueAdministrationModule } from "./queue-administration.js";
 import { RetentionMaintenanceModule } from "./retention-maintenance.js";
 import { SignalsModule } from "./signals.js";
+import { TaskGroupsModule } from "./task-groups.js";
 import { HumanWaitsModule } from "./human-waits.js";
 import { WorkerRegistryModule } from "./worker-registry.js";
 
@@ -42,6 +43,7 @@ export interface QueueModules {
   readonly retentionMaintenance: RetentionMaintenanceModule;
   readonly cronSchedules: CronSchedulesModule;
   readonly operatorReads: OperatorReadsModule;
+  readonly taskGroups: TaskGroupsModule;
 }
 
 export function createQueueModules(
@@ -61,5 +63,6 @@ export function createQueueModules(
     retentionMaintenance: new RetentionMaintenanceModule(context),
     cronSchedules: new CronSchedulesModule(context, enqueueContracts),
     operatorReads: new OperatorReadsModule(context),
+    taskGroups: new TaskGroupsModule(context, enqueueContracts),
   });
 }

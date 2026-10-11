@@ -37,9 +37,12 @@ import {
   withSpan,
   type TaskExecutionOutcome,
 } from "./telemetry.js";
+import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
   ChildTaskOptions,
   ChildOutcomes,
+  EnqueueRequest,
+  EnqueueResult,
   ChildTaskRequest,
   BatchExecutionRecord,
   ClaimedTask,
@@ -178,6 +181,22 @@ export interface HandlerContext<TPayload extends Json = Json> {
   runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
     children: readonly ChildTaskRequest[],
   ): Promise<TResult>;
+  /** The task group of this task, as a member task or as a callback task (ADR 0095). */
+  taskGroup: TaskGroupContext;
+}
+
+/** Task group operations of one handler activation. */
+export interface TaskGroupContext {
+  /**
+   * Read the group this task is a member of, or whose callback this task is, with its counts.
+   * Returns null for a task with no group. The activation reads it one time and keeps it.
+   */
+  get(): Promise<TaskGroupLink | null>;
+  /**
+   * Add up to 1,000 tasks to the group of this member task, under the current fenced lease. A
+   * running member task can add tasks after the seal, until its group is canceled.
+   */
+  add(requests: readonly EnqueueRequest[]): Promise<EnqueueResult[]>;
 }
 
 export type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (
@@ -334,6 +353,14 @@ export interface WorkerQueueApi {
     workerId: string,
     children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>>;
+  /** Reads the task group of a task. Without it, `ctx.taskGroup` rejects. */
+  findTaskGroup?(taskId: string): Promise<TaskGroupLink | null>;
+  /** Adds tasks to the group of a running member task. Without it, `ctx.taskGroup.add` rejects. */
+  addToTaskGroupAsMember?(
+    task: ClaimedTask,
+    workerId: string,
+    requests: readonly EnqueueRequest[],
+  ): Promise<EnqueueResult[]>;
   complete<TResult extends Json>(
     task: ClaimedTask,
     workerId: string,
