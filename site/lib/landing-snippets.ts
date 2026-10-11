@@ -253,7 +253,7 @@ pub async fn create_order(
   end
 end`,
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
-  // Runs once. Every later activation replays the stored result.
+  // After Workhorse stores a checkpoint result, later runs return it.
   const charge = await ctx.checkpoint("charge", () =>
     payments.charge(payload.amount),
   );
@@ -286,6 +286,7 @@ def render_invoice(charge_id: Json) -> dict[str, Json]:
 
 def register_invoice(worker: Worker) -> None:
     def issue(payload: Invoice, context: HandlerContext) -> dict[str, Json]:
+        # After Workhorse stores a checkpoint result, later runs return it.
         charge = context.checkpoint("charge", lambda: charge_card(payload["amount"]))
         pdf = context.checkpoint("render", lambda: render_invoice(charge["id"]))
         print("email", payload["email"], pdf)
@@ -305,6 +306,7 @@ func registerInvoice(worker *workhorse.Worker) {
 	worker.Handle("invoice.issue", func(
 		_ context.Context, payload any, handler *workhorse.HandlerContext,
 	) (any, error) {
+		// After Workhorse stores a checkpoint result, later runs return it.
 		charge, err := handler.Checkpoint("charge", func() (any, error) {
 			return map[string]any{"payload": payload}, nil
 		})
@@ -341,7 +343,7 @@ async fn render_invoice(charge_id: Value) -> Result<Value, HandlerError> {
 
 pub fn register_invoice(worker: &Worker) {
     worker.handle("invoice.issue", |invoice: Invoice, context| async move {
-        // Runs once. Every later activation replays the stored result.
+        // After Workhorse stores a checkpoint result, later runs return it.
         let charge: Value =
             context.checkpoint("charge", || charge_card(invoice.amount)).await?;
 
@@ -359,7 +361,7 @@ def self.render_invoice(charge_id) = {"chargeId" => charge_id}
 
 def self.register_invoice(worker)
   worker.handle("invoice.issue") do |invoice, context|
-    # Runs once. Every later activation replays the stored result.
+    # After Workhorse stores a checkpoint result, later runs return it.
     charge = context.checkpoint("charge") { charge_card(invoice.fetch("amount")) }
 
     pdf = context.checkpoint("render") { render_invoice(charge["id"]) }

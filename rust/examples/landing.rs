@@ -79,7 +79,7 @@ mod landing_checkpoints {
 
     pub fn register_invoice(worker: &Worker) {
         worker.handle("invoice.issue", |invoice: Invoice, context| async move {
-            // Runs once. Every later activation replays the stored result.
+            // After Workhorse stores a checkpoint result, later runs return it.
             let charge: Value =
                 context.checkpoint("charge", || charge_card(invoice.amount)).await?;
 
