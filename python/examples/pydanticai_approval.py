@@ -46,7 +46,7 @@ from workhorse import AsyncAdmin, AsyncHandlerContext, AsyncQueue, AsyncWorker, 
 
 ai_models.ALLOW_MODEL_REQUESTS = False
 
-VERSION = "2.53.0"
+VERSION = "2.54.0"
 RECIPE = "local-credit-v1"
 TASK_TYPE = "pydanticai.credit"
 WAIT_NAME = "credit-approval"
