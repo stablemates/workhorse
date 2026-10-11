@@ -3,20 +3,21 @@ title: Worker processes
 description: Run workers as dedicated processes with one configuration file, graceful drain on SIGTERM, and probe endpoints for your orchestrator.
 ---
 
-Your web tier and your task workers have different failure modes, different scaling curves, and
-different memory budgets. A dedicated worker process keeps them apart: web replicas serve
-traffic, worker replicas process tasks, and the two meet only in PostgreSQL. Workhorse packages
-the whole process lifecycle — startup, signals, drain, probes — so a worker deployment is one
-configuration file and one command.
+A worker process is a process that runs only workers. Your web servers and your workers fail in
+different ways, scale differently, and need different amounts of memory. A dedicated worker process
+keeps them apart: web replicas serve requests, worker replicas run tasks, and the two meet only in
+PostgreSQL. Workhorse gives the full process lifecycle: startup, signals, drain, and probes. Thus, a
+worker deployment needs one configuration file and one command.
 
-If the web tier runs in a function or edge isolate, use the [serverless and edge matrix](/docs/serverless)
-to check its enqueue path. The worker still runs here, in continuous compute with its own process
-lifecycle.
+If your web tier runs in a function or an edge isolate, use the
+[serverless and edge matrix](/docs/serverless) to check its enqueue path. The worker still runs in
+a process that runs continuously and has its own lifecycle.
 
-## Define the process
+## Define the worker process
 
-`defineWorkerProcess` type-checks a configuration and returns it unchanged. The definition owns
-its adapter — and through it, its database pool — plus one entry per worker.
+Use `defineWorkerProcess` to write the configuration. The function checks the types of the
+configuration and returns it unchanged. The definition owns its adapter, and through the adapter,
+its database pool. It also has one entry for each worker.
 
 ```ts title="src/workhorse.worker.ts"
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
@@ -45,70 +46,171 @@ export default defineWorkerProcess({
 });
 ```
 
-Compile it, then run the default export with the packaged CLI:
+To run the process:
+
+1. Compile the configuration module to JavaScript.
+2. Run its default export with the packaged CLI:
 
 ```bash
 workhorse worker --config ./dist/workhorse.worker.js
 ```
 
-The CLI imports JavaScript the current Node.js process understands — it bundles no TypeScript
-loader, so production runs compiled output. `--shutdown-timeout-ms` overrides the configured
-drain deadline per deployment.
+The CLI does not include a TypeScript loader. It imports only JavaScript that the current Node.js
+process can read. Thus, production must run compiled output. To change the drain deadline for one
+deployment, use `--shutdown-timeout-ms`.
 
-If you already own process supervision, skip the CLI: `startWorkerProcess(definition)` starts
-workers without installing global signal handlers, and `runWorkerProcess(definition, options)`
-adds the standalone Node.js lifecycle — signal handling, exit codes, forced exit.
+If your app already supervises its processes, you do not need the CLI. Use one of these functions:
 
-## Drain, don't drop
+- `startWorkerProcess(definition)` starts the workers. It does not install global signal handlers.
+- `runWorkerProcess(definition, options)` also adds the Node.js process lifecycle: signal handling,
+  exit codes, and a forced exit.
 
-On the first `SIGTERM` or `SIGINT`, the process marks readiness false and calls `Worker.stop` on
-every worker. Workers stop asking PostgreSQL for tasks; active handlers keep their leases and
-finish. If a claim was already in flight when the signal arrived, it can still commit — the
-process now owns that lease, so it drains that task too.
+<details>
+<summary>Reference: process entry points</summary>
 
-The drain is bounded by `shutdownTimeoutMs` (25 seconds by default). If the deadline expires, the
-process exits and leaves the remaining leases in PostgreSQL, where ordinary fenced recovery hands
-them to another worker. Nothing is lost either way — a drained task finished here, an abandoned
-one finishes elsewhere.
+| Entry point                             | Behavior                                                     |
+| --------------------------------------- | ------------------------------------------------------------ |
+| `defineWorkerProcess(definition)`       | Type-checks and returns a configuration.                     |
+| `startWorkerProcess(definition)`        | Starts workers without global signal handlers.               |
+| `runWorkerProcess(definition, options)` | Adds the standalone Node.js process lifecycle.               |
+| `workhorse worker --config <module>`    | Loads the default export and calls the standalone lifecycle. |
 
-Two boundaries worth knowing:
+- `RunWorkerProcessOptions.shutdownTimeoutMs` and `--shutdown-timeout-ms` override the deadline of
+  the definition.
+- At startup, the process validates the definition, creates one adapter, creates and configures
+  every `Worker`, starts the optional probe server, and starts every run loop. It reports readiness
+  only after every worker starts.
 
-- Process shutdown does not abort `HandlerContext.signal` and creates no cancellation evidence.
-  When the task itself must stop, call `queue.cancel`.
-- Keep the drain deadline shorter than your platform's termination window. A second signal
-  requests immediate exit, so handlers must stay safe for recovery after a forced stop — which
-  checkpointed, idempotent handlers already are.
+More detail: [Worker process lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-process-lifecycle).
 
-The [Kubernetes deployment reference](/docs/kubernetes) pairs a 110-second process deadline with a
-120-second Pod grace, then wires both probe endpoints into a worker Deployment.
+</details>
 
-## Probes for your orchestrator
+## Stop a worker process without losing work
 
-The optional probe listener serves exactly two endpoints: liveness (`/livez`) while the process
-exists, readiness (`/readyz`) while workers can still ask for tasks. Readiness drops the moment
-draining begins, so a rolling deployment routes nothing to a process on its way out.
+When a worker process stops, it lets its active tasks finish. A drain is the time in which the
+process waits for its active tasks to finish and takes no new tasks.
 
-The probe server is not application ingress. It exposes no task data, no queue data, no metrics,
-and no mutations — safe to bind wherever your orchestrator needs it.
+**Example.** A deployment replaces a worker process that runs 3 tasks.
 
-If startup fails partway, the process closes every resource it already created. If any worker
-loop exits unexpectedly, the process stops its siblings and exits, so your supervisor restarts
-the whole unit rather than running it half-alive.
+1. The platform sends `SIGTERM` to the process.
+2. The process sets readiness to false and calls `Worker.stop` on each worker.
+3. The workers stop asking PostgreSQL for tasks. The 3 active tasks keep their leases.
+4. Two tasks finish. The third task is still running when the 25-second deadline ends.
+5. The process exits. Another worker recovers the third task after its lease expires.
 
-## One process, one pool
+If a claim was already in progress when the signal arrived, that claim can still commit. The
+process then owns that lease, so it also drains that task.
 
-Give each process its own pool and let the adapter's `close` shut it down after the last worker
-drains. Size total capacity across replicas. The notification listener and, unless
-`sharedHeartbeats` is set, the heartbeat connection each hold one; handler queries and maintenance
-share the rest. Each worker also registers itself in PostgreSQL on its `registryIntervalMs`
-cadence, which is what lets a dashboard on another machine see the fleet — see
-[Operations](/docs/operations).
+`shutdownTimeoutMs` sets the drain deadline. If the deadline ends, the process exits. The remaining
+leases stay in PostgreSQL. After a lease expires, the fenced recovery of Workhorse gives the task to
+another worker. Thus, each task finishes in this process or in another worker.
+
+Two limits apply:
+
+- Process shutdown does not abort `HandlerContext.signal`, and it does not record a cancellation.
+  If the task itself must stop, call `queue.cancel`.
+- Set the drain deadline shorter than the termination window of your platform. A second signal
+  makes the process exit immediately. Thus, a handler must be safe to recover after a forced stop.
+  A handler that uses checkpoints and is idempotent is safe.
+
+The [Kubernetes deployment reference](/docs/kubernetes) uses a 110-second process deadline and a
+120-second Pod grace period. It also connects the two probe endpoints to a worker Deployment.
+
+<details>
+<summary>Reference: shutdown, deadline, and exit codes</summary>
+
+- The first `SIGINT` or `SIGTERM` marks readiness false and calls `stop()` on every `Worker`.
+  Later claim requests stop. Active handlers and the heartbeat batch of the worker continue.
+  Adapter resources close only after every run loop settles.
+- A claim transaction that is in flight can commit after shutdown starts. The worker drains that
+  lease.
+- Process termination does not abort a handler and does not cancel a task.
+- `shutdownTimeoutMs` is a safe integer from 1 to 3,600,000. The default is 25,000 ms.
+
+| Event                          | Exit                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| Clean drain                    | Code 0                                                                       |
+| Second `SIGINT`                | Code 130                                                                     |
+| Second `SIGTERM`               | Code 143                                                                     |
+| Missed deadline                | Code 1                                                                       |
+| Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, and exits with code 1 |
+
+A hard exit leaves active leases for the usual fenced recovery after lease expiry.
+
+More detail: [Graceful shutdown](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#graceful-shutdown)
+and [Shutdown deadline and failure](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#shutdown-deadline-and-failure).
+
+</details>
+
+## Connect the probes to your orchestrator
+
+The probe server is an optional HTTP server that tells an orchestrator the state of the process. It
+has two endpoints:
+
+- Liveness (`/livez`) reports success while the process runs or drains.
+- Readiness (`/readyz`) reports success only while the workers can ask for tasks.
+
+Readiness fails as soon as the drain starts. Thus, a rolling deployment sends no work to a process
+that stops.
+
+The probe server does not serve your application. It shows no task data, no queue data, and no
+metrics, and it accepts no changes. You can bind it where your orchestrator needs it.
+
+If startup fails, the process closes each resource that it already created. If a worker loop stops
+unexpectedly, the process stops the other workers and exits. Your supervisor then restarts the full
+process. The process does not continue with only some of its workers.
+
+<details>
+<summary>Reference: probe listener</summary>
+
+| Endpoint      | Running | Draining or failing |
+| ------------- | ------: | ------------------: |
+| `GET /livez`  |     200 |                 200 |
+| `GET /readyz` |     200 |                 503 |
+
+- `probes.livenessPath` and `probes.readinessPath` change the two paths. `HEAD` is supported.
+  Other paths and methods return 404.
+- `probes.hostname` defaults to `127.0.0.1`. Bind `0.0.0.0` only if the orchestrator must reach the
+  pod or container network address.
+- `probes.port` is an integer from 0 to 65,535.
+
+More detail: [Probe listener](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#probe-listener).
+
+</details>
+
+## Give each process its own pool
+
+Give each worker process its own database pool. Let the `close` function of the adapter close the
+pool after the last worker drains. Plan the total number of connections across all replicas.
+
+Some connections stay reserved in each pool:
+
+- The notification listener holds one connection.
+- The heartbeat connection holds one connection, unless you set `sharedHeartbeats`.
+- Claims, handler queries, and routines share the other connections.
+
+Each worker also registers itself in PostgreSQL at each `registryIntervalMs`. Thus, a dashboard on
+another machine can see the workers. See [Operations](/docs/operations).
+
+<details>
+<summary>Reference: connection budget</summary>
+
+- Notification-assisted dispatch reserves one shared listener connection for each node-postgres
+  pool.
+- Heartbeats reserve one more connection unless `sharedHeartbeats` is set.
+- Claims, handler queries, and maintenance use the remaining pool capacity.
+- By default, each worker upserts `workhorse.worker_registry` on its `registryIntervalMs` cadence.
+  `registryIntervalMs: 0` turns registration off.
+
+More detail: [Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
+
+</details>
 
 ## Next
 
-- [Workers](/docs/workers) — handlers, concurrency, and local lifecycle
-- [Maintenance and retention](/docs/maintenance) — the background work these processes drive
-- [Kubernetes](/docs/kubernetes) — deploy schema, worker, and dashboard workloads
+- [Workers](/docs/workers) — handlers, concurrency, and the local lifecycle
+- [Maintenance and retention](/docs/maintenance) — the routines that these processes run
+- [Kubernetes](/docs/kubernetes) — deploy the schema, worker, and dashboard workloads
 
 ---
 

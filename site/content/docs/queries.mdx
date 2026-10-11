@@ -1,23 +1,24 @@
 ---
 title: Queries and timelines
-description: Inspect any task's state, list work with bounded payloads, replay lifecycle evidence, and ask the queue how it feels.
+description: Read the state of a task, list tasks, find out what happened to a task, and check the health of a queue.
 ---
 
-When something goes wrong at 2 a.m., you need answers from the queue itself: what state is this
-task in, what happened to it, and is the system healthy? Workhorse answers all three from
-PostgreSQL read models that stay separate from the dispatch path. You can page through millions
-of terminal tasks without slowing a single worker's claim.
+If work fails, an operator must find the state of a task, its history, and the health of the queue.
+Workhorse reads these answers from PostgreSQL read models. A read model is a set of tables and
+queries that operator reads use. Claims do not write the read models, so a large list does not slow
+a worker.
 
-Construct `Admin` from the same caller-owned pool or executor as `Queue`:
+Create `Admin` with the same pool or executor that your app gives to `Queue`:
 
 ```ts
 const admin = new Admin(pool);
 ```
 
-## Read one known task
+## Read the state of one task
 
-`admin.getTask(taskId)` joins the task's stable identity and accepted definition to its runtime or outcome row and
-returns a `TaskSnapshot` — or `null` when the identity is unknown or retired.
+Use `admin.getTask(taskId)` if you know the ID of a task. The method returns a `TaskSnapshot` with
+the current state of the task. If Workhorse does not know the ID, or deleted the task, the method
+returns `null`.
 
 ```ts
 const snapshot = await admin.getTask(taskId);
@@ -25,17 +26,30 @@ const snapshot = await admin.getTask(taskId);
 if (snapshot) {
   console.log(snapshot.state, snapshot.currentAttempt, snapshot.result);
 } else {
-  console.log("no such task, or its identity was retired");
+  console.log("no such task, or Workhorse deleted it");
 }
 ```
 
-That `null` matters. A history query alone cannot distinguish "never existed" from "existed and
-was cleaned up", so use `getTask` whenever existence is the question.
+Use `getTask` to find out if a task exists. A history query cannot tell a task that never existed
+from a task that Workhorse deleted.
 
-## List tasks with bounded payloads
+<details>
+<summary>Reference: task lookup</summary>
 
-`admin.listTasks(query)` filters by queue, type, states, and creation time. It orders pages
-newest-first by immutable creation keys and returns a signed cursor for the next call.
+- `Admin.getTask(id)` joins the stable `task` identity and the accepted definition to the one
+  lifecycle relation that holds the task: `task_runtime` while it is live, `task_outcome` when it is
+  terminal.
+- The snapshot keeps `retryPolicy` and the cancellation request metadata of active work.
+- The result is `null` if the identity is unknown or if terminal storage retired it.
+
+More detail: [Read models and health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#read-models-and-health).
+
+</details>
+
+## List tasks with a limited payload
+
+Use `admin.listTasks(query)` to list tasks. You can filter by queue, type, states, and creation
+time. Each page shows the newest tasks first and gives a cursor for the next page.
 
 ```ts
 const page = await admin.listTasks({
@@ -62,23 +76,47 @@ if (page.nextCursor) {
 }
 ```
 
-Payloads are omitted by default because operator lists rarely need them. When you opt in,
-PostgreSQL redacts the top-level keys you name, enforces the size ceiling, and marks each row's
-`payloadStatus` as `included`, `omitted`, or `too_large`. Sensitive data never has to leave the
-database just to render a list.
+By default, a list does not include payloads. An operator list seldom needs them. If you request
+payloads, PostgreSQL removes the values of the top-level keys that you name. It also applies the
+size limit that you give. The `payloadStatus` of each row is `included`, `omitted`, or `too_large`.
+Thus, sensitive data stays in the database.
 
-Two rules keep paging honest:
+Two rules apply to the cursor:
 
-- A cursor is signed against the filters and payload projection that created it. Reusing it with
-  a different query fails loudly instead of silently changing page membership.
-- Pages are weakly consistent across calls. Tasks enqueued or transitioned between calls can shift
-  later pages, so confirm any individual task with `getTask`.
+- A cursor is valid only for the filters and the payload settings that made it. If you use it with
+  a different query, Workhorse rejects the request. It does not show a different set of tasks.
+- A page shows the tasks at the time of its query. If tasks change state or arrive between two
+  calls, later pages can change. Use `getTask` to confirm the state of one task.
 
-## Reconstruct what happened
+<details>
+<summary>Reference: task list limits</summary>
 
-`admin.getTaskTimeline(taskId, query)` merges retained `task_event` rows and closed
-`attempt_history` rows into one newest-first stream, with its own cursor for long histories. Cursor
-record identities are UUIDv7 values and can also identify exported history rows.
+| Setting                      | Rule                                                          |
+| ---------------------------- | ------------------------------------------------------------- |
+| `limit`                      | 1 to 1,000 (`MAX_TASK_QUERY_PAGE_SIZE`). The default is 100.  |
+| `payload.include`            | The default is `false`.                                       |
+| `payload.maxBytes`           | 1 to 1,048,576. The default is 16,384 when `include` is true. |
+| `payload.redactKeys`         | At most 50 unique keys, each 1 to 200 characters.             |
+| Filter `createdAfter`        | Must be earlier than `createdBefore`.                         |
+| `TaskListItem.payloadStatus` | `included`, `omitted`, or `too_large`.                        |
+
+- `list_tasks_v1` scans the `task_query` creation-time indexes, then joins each candidate to its
+  `task_runtime` or `task_outcome` row before it applies a state filter.
+- Pages use immutable `(created_at, task_id)` keys. A cursor holds `createdAt`, `taskId`, and a
+  `signature`: 16 hexadecimal characters of a digest of the normalized filter and payload
+  projection. A cursor with a different signature fails with "cursor does not match the requested
+  filter and payload projection".
+- Redaction applies only to top-level object keys. It runs before the byte limit.
+
+More detail: [Data model: `task_query`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_query).
+
+</details>
+
+## Find out what happened to a task
+
+Use `admin.getTaskTimeline(taskId, query)` to read the history of a task. The timeline merges the
+events of the task and its closed attempts into one stream. The stream shows the newest entry
+first, and it has its own cursor for a long history.
 
 ```ts
 const timeline = await admin.getTaskTimeline(taskId, { limit: 50 });
@@ -92,20 +130,49 @@ for (const entry of timeline.items) {
 }
 ```
 
-This is the durable answer to "why did attempt 3 retry?" — each closed attempt carries its
-outcome, and each event carries its details. One caveat: history categories retire on independent
-retention windows, so a known task can have a partial or empty timeline. Absence of timeline is
-never proof of absence of the task.
+The timeline tells why a task retried. Each closed attempt shows its outcome, and each event shows
+its details.
 
-For the other durable projections, `admin.getCheckpoint`, `listCheckpoints`, `getWait`,
-`listWaits`, and `getProgress` expose checkpoints, durable waits, and progress without
-interpreting them as lifecycle state.
+A timeline can be empty for a task that exists. Workhorse deletes history on its own retention
+windows, and a task can stay after its history.
 
-## Ask the queue how it feels
+**Example.** A task on queue `billing` fails on attempt 3.
 
-`queue.health()` reads every correctness-sensitive value in a single SQL statement, so
-the snapshot describes one instant — reported as `capturedAt`. It then evaluates the snapshot
-against database-owned budgets and returns a verdict.
+1. The timeline shows the failed attempt and its error.
+2. Later, the retention window for history ends, and Workhorse deletes the events and attempts of
+   the task.
+3. `getTaskTimeline` returns an empty page.
+4. `getTask` still returns the task with the state `failed`.
+
+An empty timeline does not prove that a task does not exist. Use `getTask` for that question.
+
+To read the other durable data of a task, use `admin.getCheckpoint`, `listCheckpoints`, `getWait`,
+`listWaits`, and `getProgress`. These methods show checkpoints, durable waits, and progress. They do
+not change the lifecycle state.
+
+<details>
+<summary>Reference: timeline reads</summary>
+
+- `list_task_timeline_v1` merges retained `task_event` rows and closed `attempt_history` rows. It
+  orders them by event or attempt time, kind rank, and record identity, newest first.
+- `limit` is 1 to 1,000. The default is 100.
+- A cursor holds `taskId`, `occurredAt`, `kind` (`event` or `attempt`), and `recordId`. The record
+  identity is a UUIDv7 value. It also identifies the row in an export store.
+- An attempt entry has an `outcome`: `succeeded`, `failed`, `retry`, `lease_expired`, `canceled`,
+  `deadline_exceeded`, or `timeout`.
+- Event details and attempt errors are operator evidence. Payload redaction does not change them.
+- Event and attempt retention are independent, so a known task can return a partial or empty
+  history.
+
+More detail: [Data model: Timeline reads](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#timeline-reads).
+
+</details>
+
+## Check the health of the queue
+
+Use `queue.health()` to get the health of the queue. Workhorse reads all values that must agree in
+one SQL statement. Thus, the result shows one moment, which `capturedAt` records. Then Workhorse
+compares the result with the health policy in the database and gives a verdict.
 
 ```ts
 const health = await queue.health();
@@ -117,22 +184,48 @@ if (health.status.level !== "healthy") {
 }
 ```
 
-`status.level` is `healthy`, `degraded`, or `critical`. Each exceeded budget produces a reason
-with a stable machine-readable `code` and the `observed` value, so automation branches on codes
-instead of parsing prose. Exact counts live at the top level of `QueueHealth`; values that come
-from PostgreSQL's own lagging statistics live under `observations`, where lag is expected.
-The applied policy lives under `budgets`, so callers can explain the threshold without carrying
-process-local configuration.
+`status.level` is `healthy`, `degraded`, or `critical`. Each value over its limit adds a reason. A
+reason has a stable `code` and the `observed` value. Thus, your automation can use the code, and it
+does not have to read text.
 
-The `workhorse health --json` command runs the identical evaluation and exits non-zero on any
-exceeded budget. It is ready for probes and cron checks. For continuous export instead of polling, see
-`WorkhorseMetricsObserver` in [Maintenance and retention](/docs/maintenance).
+The result has three parts:
+
+- The top level of `QueueHealth` holds the counts. The counts of live tasks are exact.
+- `observations` holds the statistics of PostgreSQL. These values can be late.
+- `budgets` holds the limits that Workhorse used for the verdict. Thus, a caller can explain the
+  verdict without its own configuration.
+
+The `workhorse health --json` command does the same check. If the level is not `healthy`, the
+command exits with code 2. Use it in probes and in scheduled checks. To export health
+continuously, see `WorkhorseMetricsObserver` in [Maintenance and retention](/docs/maintenance).
+
+<details>
+<summary>Reference: health snapshot and verdict</summary>
+
+- `queue_health_v1` returns the snapshot. TypeScript `Queue.health()`, Go `Queue.Health()`, and
+  Python `Queue.health()` and `AsyncQueue.health()` call it.
+- `capturedAt` is the PostgreSQL transaction timestamp of the statement.
+- Terminal state counts stop at 100,000 rows. `terminalCountsCapped` marks a capped count as a
+  lower bound.
+- `observations` comes from `pg_stat_user_tables`, `pg_stat_activity`, and
+  `pg_notification_queue_usage()`. Workhorse reads them after the snapshot, in the same call.
+- `evaluate_queue_health_v1` sets `status.level` and `status.reasons`. Each reason is
+  `{ code, severity, observed, budget }`.
+- The `queue_health_policy` row holds the limits. A caller cannot give limits for one call.
+- `workhorse health --json` writes the same `QueueHealth` object and exits 2 if the level is not
+  `healthy`.
+
+More detail: [Health snapshot](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-snapshot),
+[Health verdict](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-verdict),
+and [Health consumers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-consumers).
+
+</details>
 
 ## Next
 
-- [Dashboard](/docs/dashboard) — the same read models, rendered for humans
-- [Dead letters and redrive](/docs/dead-letters) — page terminal failures through their cold index
-- [Operations](/docs/operations) — route each operational concern to its owner
+- [Dashboard](/docs/dashboard) — see the same read models in a browser
+- [Dead letters and redrive](/docs/dead-letters) — list failed tasks and send them again
+- [Operations](/docs/operations) — find the owner of each operational concern
 
 ---
 

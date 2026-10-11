@@ -1,49 +1,32 @@
-# How does Workhorse count tasks without rescanning all history?
+# How does Workhorse count tasks without a scan of all history?
 
-<!-- scenario-names: invoice.send, exports, billing -->
+<!-- scenario-names: invoice.send, billing -->
 
-The dashboard needs to answer questions like "how many tasks failed in the last hour?" This guide
-explains why that is harder than it sounds, and how Workhorse answers it at a bounded cost.
+The dashboard must answer questions such as "how many tasks failed in the last hour?" Workhorse
+answers them from summaries of the history, not from the full history. Thus, the cost of a count
+stays bounded while the history grows.
 
-## Why counting raw history fails
+## Read counts at a bounded cost
 
-**Example.** An operator keeps the dashboard open, and it refreshes the hourly failure count every
-few seconds.
+**Example.** An operator keeps the dashboard open. The dashboard counts the failures of the last
+hour again every few seconds.
 
-1. **On day one** the event log holds a few thousand rows. Counting them is quick.
-2. **On day thirty** the log holds millions of rows. Each refresh counts far more rows, and the
-   query slows down.
-3. **During an incident** traffic spikes, the log grows faster, and more people open the dashboard.
-   The count is most expensive exactly when the operator needs it most.
+1. On day one, the event history holds a few thousand rows. The count is fast.
+2. On day thirty, the history holds millions of rows. Each count reads more rows, and the query
+   gets slow.
+3. During an incident, more tasks fail and more people open the dashboard. The count is most
+   expensive when the operator needs it most.
 
-Counting the raw event log on every request works on day one and gets slower every day, because the
-log only grows. A dashboard that refreshes on its own would cost more the busier the system is.
+A count of the raw history gets slower each day, because the history only grows. Thus, Workhorse
+keeps summaries for each queue and task type. A summary row covers one minute, one hour, or one day.
+Recent rows cover minutes, older rows cover hours, and the oldest rows cover days. Each row also
+holds the last error. Thus, the dashboard can show a probable cause without a read of the history.
 
-## Summaries per minute, hour, and day
-
-So Workhorse keeps running summaries per queue and task type. Take one task.
-
-1. **At 10:01:10** the app enqueues `invoice.send` on the queue `billing`.
-2. **At 10:01:12** attempt 1 fails. **At 10:01:45** attempt 2 fails.
-3. **At 10:03:20** attempt 3 succeeds.
-
-The summaries count this as one task that succeeded. They also count three closed attempts: two
-failed and one succeeded. Both numbers are kept, separately and on purpose:
-
-- **Tasks.** A task that retried several times and then succeeded counts as one success.
-- **Attempts.** Each recorded or retained closed attempt counts separately.
-
-Mixing the two is how a failure rate can exceed the number of tasks that ran.
-
-Recent summary rows cover one minute each, older rows cover hours, and the oldest rows cover days.
-Each row also holds the last error seen, so a dashboard can name a likely cause without touching
-history.
-
-The summaries include full-tier and fast-tier queues. Fast-tier counts come from the compact runtime
-and outcome records, even when the queue's optional history is off.
+The summaries include full-tier and fast-tier queues. A fast-tier queue gets summaries also when its
+optional history is off.
 
 <details>
-<summary>Reference: tiers and measures</summary>
+<summary>Reference: summary tiers</summary>
 
 | Table                   | Grain                                                   |
 | ----------------------- | ------------------------------------------------------- |
@@ -51,33 +34,61 @@ and outcome records, even when the queue's optional history is off.
 | `task_stat_bucket_hour` | Complete hours derived from minute rows                 |
 | `task_stat_bucket_day`  | Complete days derived from hour rows                    |
 
-**Measures**
-
-- `enqueued` and the `task_*` columns count tasks.
-- The `attempt_*` columns count closed attempts.
-- Each row carries the latest attempt error and a `wait_sketch`.
+Each row carries the latest attempt error and a `wait_sketch`.
 
 **Fast tier.** Inputs come from `fast_task_runtime` and `fast_task_outcome`. When `record_attempts`
-is enabled, recorded `attempt_history` rows replace the compact error entries, and the final attempt
-is not counted twice. If the compact error list overflows, older unrecorded attempts can be absent
-from a raw recomputation.
+is enabled, recorded `attempt_history` rows replace the compact error entries, and Workhorse does
+not count the final attempt twice. If the compact error list overflows, a raw recomputation can miss
+older unrecorded attempts.
 
 More detail: [Data model: Tiers and measures](../architecture/data-model.md#tiers-and-measures).
 
 </details>
 
-## The watermark keeps every window current
+## Tell task counts from attempt counts
 
-1. **At 10:05:00** minute 10:04 closes.
-2. **At 10:05:02** the rollup runs. The rollup is a background pass that summarizes periods that
-   have fully elapsed. It summarizes 10:04 and records how far it got, 10:05. That marker is the
-   **watermark**.
-3. **At 10:05:40** an operator asks for the last hour. Workhorse reads summary rows below the
-   watermark. It computes the part from 10:05 onward live from raw history.
+**Example.** The application enqueues one `invoice.send` task on the queue `billing`.
 
-A window is therefore correct the instant a task runs. You never wait for a rollup to see your own
-work. If the rollup falls behind, you get a longer live section and a slower query, not a wrong
-answer.
+1. At 10:01:10, the application enqueues the task.
+2. At 10:01:12, attempt 1 fails.
+3. At 10:01:45, attempt 2 fails.
+4. At 10:03:20, attempt 3 succeeds.
+
+The summaries count one task that succeeded. They also count three closed attempts: two that failed
+and one that succeeded. The summaries keep the two numbers separately:
+
+- **Tasks.** A task that retries and then succeeds counts as one success.
+- **Attempts.** Each closed attempt that Workhorse records or keeps counts separately.
+
+If you mix the two numbers, a failure count can be larger than the number of tasks that ran. Use
+task counts for the result of the work. Use attempt counts for the number of tries.
+
+<details>
+<summary>Reference: measures</summary>
+
+- `enqueued` and the `task_*` columns count tasks.
+- The `attempt_*` columns count closed attempts.
+
+More detail: [Data model: Tiers and measures](../architecture/data-model.md#tiers-and-measures).
+
+</details>
+
+## See your own work in a window at once
+
+The rollup is a routine that summarizes each period after the period ends. A routine is work that a
+worker offers to PostgreSQL on a schedule. The watermark is the time up to which the rollup has
+summarized the history.
+
+**Example.** The operator asks for the last hour at 10:05:40.
+
+1. At 10:05:00, the minute 10:04 ends.
+2. At 10:05:02, the rollup summarizes 10:04. It moves the watermark to 10:05.
+3. At 10:05:40, Workhorse reads the summary rows before the watermark.
+4. Workhorse counts the part after 10:05 from the raw history.
+
+A window is correct as soon as a task runs. You do not wait for the rollup to see your own work. If
+the rollup is late, the raw part of the window is longer and the query is slower. The answer stays
+correct.
 
 <details>
 <summary>Reference: rollup and window reads</summary>
@@ -105,23 +116,25 @@ More detail: [Data model: Window reads](../architecture/data-model.md#window-rea
 
 </details>
 
-## Late commits and repeated passes
+## Count a late commit one time
 
-A summary must not miss a row that commits late, and it must not count a row twice.
+A summary must include a row that commits late. It must also not count a row two times.
 
-1. **At 10:04:59** a task fails, and its transaction writes the attempt row with that time.
-2. **At 10:05:02** the rollup summarizes 10:04. The transaction has not committed yet, so the rollup
-   cannot see the row.
-3. **At 10:05:03** the transaction commits.
-4. **At 10:06:02** the next pass summarizes 10:05. It also rewrites the last few closed minutes,
-   including 10:04. This time it sees the row.
+**Example.** An `invoice.send` attempt fails at the end of a minute.
 
-Each pass rebuilds a minute from the raw history in that minute. It replaces the row instead of
-adding to it. Running the pass twice therefore produces the same numbers rather than double counting.
+1. At 10:04:59, the attempt fails. Its transaction writes the attempt row with that time.
+2. At 10:05:02, the rollup summarizes 10:04. The transaction is not committed, so the rollup does
+   not see the row.
+3. At 10:05:03, the transaction commits.
+4. At 10:06:02, the next pass summarizes 10:05. It also writes the last closed minutes again,
+   10:04 included. This time it sees the row.
 
-Hour summaries come only from complete minute summaries. Day summaries come only from complete hour
-summaries. A long window starts on the matching tier boundary and uses coarse complete rows. It then
-fills its newest part from finer rows and raw history.
+Each pass builds a minute again from the raw history of that minute. It replaces the row. It does
+not add to the row. Thus, if the pass runs two times, the numbers stay the same.
+
+Workhorse makes hour summaries only from complete minute summaries. It makes day summaries only from
+complete hour summaries. A long window starts on a boundary of its tier and uses complete rows. For
+its newest part, it uses smaller rows and the raw history.
 
 <details>
 <summary>Reference: rewrites and cadence</summary>
@@ -138,56 +151,58 @@ fills its newest part from finer rows and raw history.
 - Workers offer `run_maintenance_v1` on their slow maintenance cadence. It runs `rollup_stats_v1`
   before retention.
 - `rollup_stats_v1` returns without work until the interval has elapsed.
-- Passes serialize on a transaction-scoped advisory lock, so every worker may offer it.
+- Passes serialize on a transaction-scoped advisory lock, so every worker can offer it.
 
 More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality) and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
 
 </details>
 
-## Every boundary is a UTC boundary
+## Compare charts from different timezones
 
-Two operators open the throughput chart. One works in Tokyo and one in New York. The database runs
-with `TimeZone` set to `America/Chicago`.
+Each summary boundary is a UTC boundary. Thus, two operators in different timezones see the same
+days.
 
-1. **At 23:59 UTC** an `invoice.send` task succeeds on the queue `billing`. In Tokyo it is already
-   the next morning. In New York and Chicago it is still the evening before.
-2. **Later** the rollup builds the day summary for that UTC day. The task counts in it.
-3. **Both operators** look at the chart. The task falls in the same day bar on both screens.
+**Example.** Two operators open the throughput chart. One operator works in Tokyo, and one works in
+New York. The `TimeZone` setting of the database is `America/Chicago`.
 
-Both charts split days at the same instants, because every summary boundary is a UTC boundary. A day
-summary covers a UTC day, whatever timezone the database is set to. A daylight-saving change does
-not shift a boundary. A day summary also lines up with the day of history it came from, because the
-history partitions are UTC days too.
+1. At 23:59 UTC, an `invoice.send` task succeeds. In Tokyo, it is the next morning. In New York and
+   Chicago, it is the evening before.
+2. Later, the rollup makes the day summary for that UTC day. The summary counts the task.
+3. Both operators look at the chart. The task is in the same day bar on the two screens.
+
+A day summary covers one UTC day. The `TimeZone` setting of the database does not change this. A
+change to or from daylight saving time does not move a boundary. A day summary also agrees with the
+day of history that it comes from, because each history partition is a UTC day too.
 
 <details>
 <summary>Reference: bin origin</summary>
 
-Every bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant. Bucket
-boundaries are therefore UTC boundaries on every database, whatever its `TimeZone`. Each window step
-is a fixed number of hours, so the session `TimeZone` cannot move a boundary.
+Every bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant. Thus, bucket
+boundaries are UTC boundaries on every database, whatever its `TimeZone`. Each window step is a
+fixed number of hours, so the session `TimeZone` cannot move a boundary.
 
-The history day partitions also pin UTC. The day tier therefore agrees with them.
+The history day partitions also pin UTC. Thus, the day tier agrees with them.
 
 More detail: [Data model: UTC bin origin](../architecture/data-model.md#utc-bin-origin).
 
 </details>
 
-## Wait percentiles
+## Read a wait percentile for a long window
 
-An operator asks for the 95th percentile of queue wait over the last 30 days. Wait here means the
-time from enqueue to the first claim.
+The wait of a task is the time from enqueue to the first claim. Workhorse does not keep a list of
+all wait values. Each summary row keeps a sketch of its waits. A sketch is a set of bins, with a
+count of waits in each bin. Each bin covers a slightly wider range than the bin before it.
 
-1. **Workhorse reads the summary rows** for the window: hour rows for most of it, and finer rows for
-   its newest part. Each row holds a sketch of its waits.
-2. **For the last few minutes**, which the rollup has not summarized yet, it builds the same kind of
-   sketch from the raw `enqueued` and `claimed` events.
-3. **It merges the sketches** by adding the counts of matching bins.
-4. **It reads the 95th percentile** from the merged sketch.
+**Example.** The operator asks for the 95th percentile of the wait in the last 30 days.
 
-Workhorse does not keep a list of every wait sample. Each summary row holds a logarithmic sketch: a
-count of waits per bin, where each bin covers a slightly wider range than the one before. Sketches
-merge by adding the counts of matching bins. So a long window reads raw events only for the short
-tail after the rollup watermark, and never needs the samples.
+1. Workhorse reads the summary rows of the window. Most are hour rows. The newest part uses smaller
+   rows.
+2. For the last minutes, Workhorse makes a sketch from the raw `enqueued` and `claimed` events.
+3. Workhorse merges all sketches. It adds the counts of each bin.
+4. Workhorse reads the 95th percentile from the merged sketch.
+
+Workhorse merges sketches with an addition of counts. Thus, a long window reads raw events only for
+the short part after the watermark. It does not need each wait value.
 
 <details>
 <summary>Reference: wait sketch</summary>
@@ -200,40 +215,40 @@ tail after the rollup watermark, and never needs the samples.
 | `stat_sketch_merge_v1(sketches)`       | Adds matching counts                                    |
 | `stat_sketch_percentile_v1(sketch, q)` | Returns `1.02^(bin + 0.5) - 1` for the nearest-rank bin |
 
-The estimate has roughly one percent relative error. Zero and sub-millisecond waits stay
-representable.
+The estimate has a relative error of approximately one percent. The sketch can show zero and
+sub-millisecond waits.
 
-For full-tier tasks, the wait is attributed to the minute of the first `claimed` event.
+For full-tier tasks, Workhorse assigns the wait to the minute of the first `claimed` event.
 
 More detail: [Data model: Wait sketch](../architecture/data-model.md#wait-sketch).
 
 </details>
 
-## Why the watermark protects history
+## Keep history until the rollup summarizes it
 
-This is the part that connects to cleanup. The rollup can rebuild a summary row only by re-reading
-the raw history it came from. Delete that history first, and those numbers are gone for good.
+The rollup makes a summary row from the raw history. If [retention](330-retention.md) deletes the
+raw history first, those numbers are lost. Thus, retention does not delete history that the rollup
+has not summarized.
 
-Suppose events are kept for 14 days.
+**Example.** The retention window for events is 14 days.
 
-1. **On day 1 at 02:00** the rollup stops, for example because its pass keeps failing. The
-   watermark stays at day 1, 02:00.
-2. **On day 16 at 03:00** the daily [retention](330-retention.md) pass runs. Its 14-day window
-   would delete events up to the start of day 2.
-3. **The pass stops at the watermark.** It deletes nothing from day 1, 02:00 onward, because the
-   rollup has not summarized it.
-4. **Health reports the gap.** Statistics lag and retention lag grow on the health page until the
-   rollup runs again.
+1. On day 1 at 02:00, the rollup stops, because each pass fails. The watermark stays at day 1,
+   02:00.
+2. On day 16 at 03:00, the daily retention pass starts. Its window lets it delete events up to the
+   start of day 2.
+3. The pass stops at the watermark. It does not delete events from day 1, 02:00 or later.
+4. The health page shows the gap. Statistics lag and retention lag increase until the rollup runs
+   again.
 
-A stuck rollup makes history pile up rather than making data disappear. That is annoying but
-fixable. The alternative would be a silent hole in your numbers, which is not.
+If the rollup stops, the history increases. Workhorse does not lose data, and the summaries have no
+gap. Repair the rollup, and retention continues.
 
 <details>
 <summary>Reference: retention interlock</summary>
 
 - `task_event_retention_days` and `attempt_history_retention_days` default to 14 days.
 - `retain_history_v1` clamps its event and attempt cutoffs to `rolled_up_through`.
-- A stalled rollup surfaces as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
+- A stalled rollup shows as growing retention lag and a rising `QueueHealth.statistics.lagMs`.
 - While cold export is enabled, `retain_history_v1` also clamps each dataset to
   `cold_export_dataset.exported_through`.
 
@@ -241,19 +256,25 @@ More detail: [Data model: Retention interlock](../architecture/data-model.md#ret
 
 </details>
 
-## Generated task types
+## Limit the rows for generated task types
 
-The queue `exports` runs one task type per customer: `export.customer-0001`, `export.customer-0002`,
-and so on. In one busy minute, 500 of those types run.
+Some applications make one task type for each customer. Without a limit, each of these types adds a
+summary row in each minute.
 
-Without a bound, that minute would need 500 summary rows, and the next busy minute another 500. So
-each minute keeps its own rows only for the busiest pairs up to a limit. Workhorse folds the rest
-into a catch-all type within their own queue. You lose the per-type breakdown for the long tail. You
-keep the totals, and the table stays bounded.
+**Example.** The queue `billing` runs one task type for each customer: `invoice.customer-0001`,
+`invoice.customer-0002`, and more. In one busy minute, 500 of these types run.
 
-Worker identities and tags stay out of the summaries, because deployment data controls how many
-there are. Unstable worker names or tenant tags would multiply every row. Views filtered by those
-dimensions therefore keep using bounded live queries.
+1. Workhorse ranks the pairs of queue and task type. A pair with more enqueues and attempts ranks
+   higher.
+2. Workhorse keeps one summary row for each pair up to the group limit.
+3. Workhorse adds the other pairs to one catch-all task type in the queue `billing`.
+
+You lose the details for each rare task type. You keep the totals, and the summary table stays
+bounded.
+
+The summaries do not include worker identities or tags. Your deployment controls how many of these
+values exist. Changing worker names or tenant tags can multiply each row. Thus, a view that filters
+by worker or tag uses a bounded query of the raw history.
 
 <details>
 <summary>Reference: group limit</summary>
@@ -265,27 +286,29 @@ dimensions therefore keep using bounded live queries.
 - The limit applies per minute bucket.
 - `aggregate_stats_v1` ranks `(queue_name, task_type)` pairs by activity: `enqueued` plus every
   `attempt_*` count, highest first. Ties go by queue name, then task type.
-- Pairs ranked beyond the limit are folded into the task type `__other__` within their own queue.
-- Worker and tag dimensions are never rolled up.
+- Workhorse folds pairs ranked beyond the limit into the task type `__other__` within their own
+  queue.
+- Workhorse never rolls up worker and tag dimensions.
 
 More detail: [Data model: Rewrites and cardinality](../architecture/data-model.md#rewrites-and-cardinality) and [Data model: Policy columns](../architecture/data-model.md#policy-columns-1).
 
 </details>
 
-## Turning it off
+## Turn off the rollup
 
-A team runs one worker against a small database and wants every window computed from raw history.
+The rollup interval is a setting in the maintenance policy. The maintenance policy is in the
+database, so one change applies to all workers. Turn off the rollup only for a small deployment.
 
-1. They disable the rollup in maintenance policy. The whole fleet stops rolling up, because the
-   setting lives in the database, not in each worker.
-2. A dashboard window now reads raw history each time. It stays correct, but it gets slower as
-   history grows.
-3. History retention stops advancing at the last watermark. The settings page warns about that.
+**Example.** A team runs one worker on a small database. The team wants each window from the raw
+history.
 
-Disable the rollup, and every window is computed live from raw history. Windows stay
-correct but get slower, and history retention stops advancing. The interval is maintenance policy
-stored beside the other cleanup cadences, so the whole fleet opts out together. This suits only a
-small deployment. The settings page warns while retention depends on the watermark.
+1. The team sets the rollup interval to zero. All workers stop the rollup.
+2. Each dashboard window reads the raw history. The window stays correct, but it gets slower while
+   the history increases.
+3. History retention stops at the last watermark. The settings page shows a warning.
+
+If the rollup is off, Workhorse counts each window from the raw history. History retention does not
+continue past the last watermark.
 
 <details>
 <summary>Reference: opting out</summary>
@@ -300,9 +323,9 @@ More detail: [Data model: Rollup cadence](../architecture/data-model.md#rollup-c
 
 ## Next
 
-- [330-retention.md](330-retention.md) — the cleanup this interlocks with
-- [310-workers.md](310-workers.md) — who runs the rollup pass
-- [010-tasks-and-state.md](010-tasks-and-state.md) — where the raw history lives
+- [330-retention.md](330-retention.md) — the cleanup that waits for the rollup
+- [310-workers.md](310-workers.md) — the workers that run the rollup
+- [010-tasks-and-state.md](010-tasks-and-state.md) — where the raw history is
 
 ---
 

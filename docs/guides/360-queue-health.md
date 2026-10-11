@@ -1,29 +1,28 @@
 # How do I know the queue is healthy?
 
-<!-- scenario-names: emails, billing, invoice-7 -->
+<!-- scenario-names: billing, invoice-7 -->
 
-You can watch dashboards all day, or you can ask the queue directly. `Queue.health()` returns one
-snapshot with everything an operator would ask about: backlog depths, lease state, retention
-progress, and admission pressure. It adds a verdict: healthy, degraded, or critical. Every budget
-the queue has exceeded comes with a machine-readable reason.
+A health check tells you if the queue does its work on time. `Queue.health()` returns one snapshot
+of the queue: backlog depths, lease state, external waits, statistics, retention progress, and
+admission pressure. Workhorse adds a verdict to the snapshot: `healthy`, `degraded`, or `critical`. For each budget that the queue
+exceeds, the verdict gives a reason that a program can read.
 
-## One statement, one instant
+## Read the whole queue at one instant
 
-**Example.** Imagine a health report built from two separate queries. Worker A crashed, and its
-lease on task `invoice-7` has expired.
+**Example.** A health report reads queue `billing` with two separate queries. Worker A stopped, and
+its lease on task `invoice-7` expired. A lease is the time in which one worker owns a running task.
 
-1. **At 0 ms** the report counts expired leases. It finds one: `invoice-7`.
-2. **At 3 ms** recovery, the background pass that returns expired leases to the queue, puts
-   `invoice-7` back in `ready`.
-3. **At 5 ms** the report counts tasks by state. `invoice-7` now shows up as ready.
+1. At 0 ms, the report counts expired leases. It finds `invoice-7`.
+2. At 3 ms, recovery makes `invoice-7` ready again. Recovery is the part of the worker tick that
+   gives expired leases back to the queue.
+3. At 5 ms, the report counts tasks by state. It counts `invoice-7` as ready.
 
-The report now claims an expired lease next to state counts that already include its recovery.
-Nothing is wrong with the queue, but the report says something is.
+The report shows an expired lease and also the result of its recovery. The queue has no problem,
+but the report shows one.
 
-Workhorse avoids this by reading every correctness-sensitive value in a single SQL statement.
-PostgreSQL gives one statement one consistent view of the database. So every count, depth, and
-watermark in the snapshot describes the queue at the same instant. The snapshot reports that
-instant as `capturedAt`.
+To prevent this result, Workhorse reads all exact values in one SQL statement. PostgreSQL gives one
+statement one consistent view of the database. Thus every count, depth, and watermark in the
+snapshot is from the same instant. The snapshot gives this instant as `capturedAt`.
 
 <details>
 <summary>Reference: the snapshot function</summary>
@@ -33,6 +32,8 @@ instant as `capturedAt`.
 - TypeScript `Queue.health()`;
 - Go `Queue.Health()`;
 - Python `Queue.health()` and `AsyncQueue.health()`.
+
+The Rust and Ruby clients call it through `queue.health()` and `queue.health`.
 
 One MVCC snapshot covers the verified schema version, state counts, and dispatch depths. It also
 covers dependency, child, deadline, timeout, promotion, concurrency, rate-limit, rollup, and
@@ -51,19 +52,21 @@ More detail: [Task lifecycle: Health snapshot](../architecture/lifecycle.md#heal
 
 </details>
 
-## Facts versus observations
+## Tell exact values from statistics
 
-Not everything in the report can be a transactional fact. Suppose retention has just deleted a
-large batch of old rows. The exact counts in the snapshot drop at once. PostgreSQL's own estimate of
-dead rows in that table still shows the old value. It changes only after the statistics collector
-flushes.
+Some values in the report are not exact facts. PostgreSQL collects table statistics in the
+background. Table sizes, dead-row estimates, and vacuum times come from these statistics, so they
+can be late.
 
-PostgreSQL keeps those running statistics in the background, so table sizes, dead-row estimates,
-and vacuum timestamps lag reality by design. Pretending they are exact would be a lie.
+**Example.** Retention deletes a large batch of old rows from the history of `billing`.
 
-So the report keeps the two apart. Exact values live at the top level of `QueueHealth`. Everything
-that comes from PostgreSQL's statistics lives under `observations`, where lagging is expected. If a
-number under `observations` disagrees with an exact count, the exact count wins.
+1. The exact counts in the next snapshot become smaller immediately.
+2. The estimate of dead rows for that table continues to show the old value.
+3. The estimate changes when the PostgreSQL statistics collector flushes.
+
+The report keeps the two kinds of values apart. Exact values are at the top level of `QueueHealth`.
+Values from the PostgreSQL statistics are under `observations`, and they can be late. If a value
+under `observations` is different from an exact count, use the exact count.
 
 <details>
 <summary>Reference: observations</summary>
@@ -75,26 +78,31 @@ number under `observations` disagrees with an exact count, the exact count wins.
 - `oldestTransactionAgeMs` and `lockWaitCount` from `pg_stat_activity`;
 - `pg_notification_queue_usage()`.
 
-`queue_health_v1` reads them after the correctness snapshot, in the same function call. They may lag
-until the statistics collector flushes.
+`queue_health_v1` reads them after the correctness snapshot, in the same function call. They can be
+late until the statistics collector flushes.
 
 More detail: [Task lifecycle: Observations](../architecture/lifecycle.md#observations).
 
 </details>
 
-## Bounded by design
+## Poll health on a long history
 
-A queue `emails` has run for two years. It has millions of succeeded tasks in its history, and a
-few hundred live tasks. A health poll should not need to scan every old task to say how the queue
-feels.
+A health poll must not scan every old task. If it does, each poll becomes slower as the history
+grows.
 
-So the snapshot counts the live tasks exactly. It counts succeeded tasks only up to a limit, then
-stops. It reports the limit as a lower bound and sets `terminalCountsCapped`. The statistics bucket
-count gets the same treatment. The cost of the snapshot tracks live work, not lifetime history.
+**Example.** Queue `billing` runs for two years. Its history has millions of finished tasks, and a
+few hundred live tasks.
 
-Rejected signal deliveries and human decisions describe a recent rolling window instead of all
-retained history. The window keeps this operational signal relevant. It also lets a partial index
-skip unrelated lifecycle events during every health poll.
+1. The snapshot counts the live tasks exactly.
+2. The snapshot counts finished tasks until it reaches a limit.
+3. At the limit, it stops. It reports the limit as a lower bound and sets `terminalCountsCapped`.
+
+The count of statistics buckets has the same limit. Thus the cost of the snapshot follows the live
+work, not the full history.
+
+Rejected signal deliveries and rejected human decisions use a recent time window, not the full
+retained history. The window keeps the value relevant to current operation. It also lets a partial
+index skip unrelated task events during each health poll.
 
 <details>
 <summary>Reference: scan caps and windows</summary>
@@ -118,33 +126,33 @@ More detail: [Task lifecycle: Snapshot cost](../architecture/lifecycle.md#snapsh
 
 </details>
 
-## Budgets and reasons
+## Act on the verdict and its reasons
 
-Suppose every worker on queue `billing` stops after a bad deploy.
+A raw number is useful only if you know its normal value. A health budget gives that normal value.
+A budget is the limit to which a value can increase before it is a problem. Each budget is large
+compared to the interval of the work that it watches. Thus a small delay does not cause an alert.
 
-1. **Soon after** the stop, scheduled tasks fall due, but no worker runs promotion, the regular
-   background pass that moves due tasks to `ready`.
-2. **Once the oldest due task waits longer than its budget,** the verdict turns `critical`. It
-   carries the reason `stalled-promotion`, with the observed age and the budget it broke.
-3. **At the same time,** the leases of tasks that were running when the workers stopped expire. No
-   worker runs recovery either, so a second critical reason, `expired-leases`, appears beside the
-   first.
+**Example.** A bad deployment stops all workers of queue `billing`.
 
-Raw numbers ask the operator to know what normal looks like. Health budgets encode that knowledge.
-Each one says how far a value may drift before it counts as a problem. Each is generous against its
-maintenance cadence, so routine jitter does not alert.
+1. Scheduled tasks become due. No worker tick moves them to `ready`.
+2. The oldest due task waits longer than its budget. The verdict becomes `critical`, with the
+   reason `stalled-promotion`.
+3. The leases of the tasks that were running expire. No worker tick recovers them.
+4. The verdict adds a second critical reason, `expired-leases`.
 
-Each reason is a stable code plus the observed value and the budget it broke. Codes split into two
-severities:
+Each reason has a stable code, the observed value, and the budget that the value exceeds. The codes
+have two severities:
 
-- **Critical** means work is stopping or being lost right now. Examples include an expired lease, an
-  overdue external wait, stalled promotion, or missing daily history storage.
-- **Degraded** means the queue still runs but something is falling behind. Examples include a
-  stalled statistics rollup, late retention cleanup, terminal cleanup that cannot keep pace, history
-  spilling into fallback storage, or ready work blocked by concurrency or rate-limit policies.
+- **Critical** means that work stops or that Workhorse loses work now. For example, a lease
+  expired, an external wait is late, scheduled tasks do not become ready, or daily history storage
+  is missing.
+- **Degraded** means that the queue runs, but a problem costs storage or throughput. For example,
+  the statistics rollup stopped, retention cleanup is late, or terminal cleanup is too slow.
+  Other examples are history rows in fallback storage, or ready tasks that a concurrency or
+  rate-limit policy holds back.
 
-Because the codes are stable strings, automation can branch on them instead of parsing prose. The
-`workhorse health --json` command exits non-zero when any budget is exceeded.
+The codes are stable strings. Thus your automation can use the code and does not have to parse
+text. If the queue exceeds a budget, `workhorse health --json` exits with a non-zero code.
 
 ```ts
 const health = await queue.health();
@@ -154,6 +162,8 @@ if (health.status.level !== "healthy") {
   }
 }
 ```
+
+Each client returns the same reason codes and the same `capped` lower-bound markers.
 
 <details>
 <summary>Reference: verdict and reason codes</summary>
@@ -182,26 +192,35 @@ if (health.status.level !== "healthy") {
 | `rate-limit-throttled`        | degraded | A rate limit holds ready tasks back.                                          |
 | `budget-blocked`              | degraded | A shared budget holds ready tasks back.                                       |
 
+Promotion and expired-lease recovery are the two phases of the worker tick, `tick_v1`.
+
+**Clients.** TypeScript `Queue.health()` returns a typed `QueueHealth` object. Go, Python, and Rust
+return the document as a map type named `QueueHealth`. Ruby returns it as a `Hash`.
+
 **CLI.** `workhorse health --json` writes the same `QueueHealth` object. `workhorse health` exits 2
 when the level is not `healthy`, with or without `--json`.
 
-More detail: [Task lifecycle: Health verdict](../architecture/lifecycle.md#health-verdict).
+More detail: [Task lifecycle: Health verdict](../architecture/lifecycle.md#health-verdict), [Task lifecycle: Health snapshot](../architecture/lifecycle.md#health-snapshot), and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 
 </details>
 
-## The database owns the budgets
+## Change a health budget
 
-The database owns the budgets, so every SDK and dashboard backend receives the same verdict.
+PostgreSQL keeps the budgets. Thus each SDK, the dashboard, and `workhorse health --json` get the
+same verdict.
 
-Suppose an operator raises the promotion budget for a slow staging cluster.
+**Example.** The staging database for `billing` is slow, so the operator increases the promotion
+budget.
 
 1. The operator overrides `promotion_lag_ms`. PostgreSQL records the override.
-2. Later, the application syncs its own defaults. PostgreSQL stores them as application defaults
-   but keeps the operator's value in force.
-3. The next snapshot's `budgets` field shows the operator's value, because PostgreSQL used it.
+2. Later, the application syncs its default budgets. PostgreSQL stores them as application
+   defaults. The value of the operator stays in effect.
+3. The `budgets` field of the next snapshot shows the value of the operator, because PostgreSQL
+   used it.
 
-An application sync records defaults, while operator overrides survive later syncs. The `budgets`
-field lets automation explain a reason without guessing which process supplied its threshold.
+An application sync records defaults. An operator override stays in effect after each later sync.
+The `budgets` field shows the budget that each reason uses. Thus your automation can explain a
+reason and does not have to find which process set the budget.
 
 <details>
 <summary>Reference: health policy</summary>
@@ -232,26 +251,27 @@ More detail: [Task lifecycle: Health policy](../architecture/lifecycle.md#health
 
 </details>
 
-## Health on the dashboard
+## Read health on the dashboard
 
-Go back to the `billing` incident.
+The System page of the dashboard shows each health check with its status. Critical and degraded
+checks are first, with advice to fix them.
 
-1. **During the incident** an operator opens the dashboard's System page. The failing promotion
-   check appears first, with resolution advice. The passing checks stay visible below it.
-2. **A minute later** the operator switches the time range to the last hour. The Activity over time
-   section redraws, and the health checks refresh to a new snapshot.
+**Example.** The workers of `billing` are stopped, as in the earlier example.
 
-Every check is listed with its own status. Critical and degraded checks appear first, with
-resolution advice.
+1. An operator opens the System page. The failed `stalled-promotion` check is first, with advice.
+2. The checks that pass stay visible below it.
+3. A minute later, the operator selects the last hour as the time range.
+4. The Activity over time section shows the new range. The health checks show a new snapshot.
 
-Some checks show a neutral operating state instead of a failure. Rate limits show "Throttling" when
-ready tasks wait for tokens. Concurrency limits and shared budgets show "Limiting" when they hold
-ready tasks back. The dashboard does not display an aggregate verdict. The underlying
-`QueueHealth.status` still carries the database's evaluation.
+Some checks show a neutral state, not a failure. A rate limit shows "Throttling" when ready tasks
+wait for tokens. A concurrency limit or a shared budget shows "Limiting" when it holds ready tasks
+back. The dashboard does not show the verdict of the full queue. `QueueHealth.status` still holds
+the verdict from the database.
 
-The time range controls the separate Activity over time section. That section labels
-[statistics](320-statistics.md) as "Full + fast tiers". Health checks and Current operations show
-the latest snapshot. Changing the range also refreshes that snapshot.
+The time range applies only to the Activity over time section. That section labels its
+[statistics](320-statistics.md) as "Full + fast tiers". The health checks and the Current operations
+section show the latest snapshot. When you change the range, the dashboard also reads a new
+snapshot.
 
 <details>
 <summary>Reference: System page health</summary>
@@ -273,8 +293,8 @@ More detail: [Task lifecycle: System page](../architecture/lifecycle.md#system-p
 ## Next
 
 - [320-statistics.md](320-statistics.md) — the rollup watermark that health watches
-- [330-retention.md](330-retention.md) — the cleanup lag that health budgets
-- [355-observability.md](355-observability.md) — exporting metrics instead of polling health
+- [330-retention.md](330-retention.md) — the cleanup lag that health budgets watch
+- [355-observability.md](355-observability.md) — export metrics instead of polling health
 
 ---
 

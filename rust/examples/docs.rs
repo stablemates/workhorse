@@ -579,19 +579,13 @@ async fn queue_health(queue: &Queue<Client>) -> Result {
     Ok(())
 }
 
-async fn dead_letters(
-    admin: &Admin<Client>,
-    source_task_id: Uuid,
-    actor: &Actor,
-    incident_id: &str,
-    page_size: u32,
-) -> Result {
+async fn dead_letters(admin: &Admin<Client>, source_task_id: Uuid) -> Result {
     // docs:start dead-letters-list
-    let finished_after = Utc.with_ymd_and_hms(2026, 8, 12, 9, 0, 0).unwrap();
+    let finished_after = Utc.with_ymd_and_hms(2026, 3, 14, 9, 0, 0).unwrap();
     let page = admin
         .list_dead_letters(DeadLetterQuery {
             filter: DeadLetterFilter {
-                queue: Some("billing".into()),
+                queue: Some("payments".into()),
                 error_name: Some("ProviderTimeout".into()),
                 finished_after: Some(finished_after),
                 ..Default::default()
@@ -602,33 +596,46 @@ async fn dead_letters(
     // docs:end
     // docs:start dead-letters-redrive
     let audit = AdminAudit {
-        actor: actor.email.clone(),
-        reason: "provider incident resolved".into(),
-        request_id: incident_id.into(),
+        actor: "ops@example.com".into(),
+        reason: "Provider outage ended".into(),
+        request_id: "r-77".into(),
     };
     let result = admin.redrive(source_task_id, &audit).await?;
     // docs:end
     // docs:start dead-letters-redrive-many
     let filter = DeadLetterFilter {
-        queue: Some("billing".into()),
+        queue: Some("payments".into()),
         error_name: Some("ProviderTimeout".into()),
         ..Default::default()
     };
     let audit = AdminAudit {
-        actor: actor.email.clone(),
-        reason: "provider incident resolved".into(),
-        request_id: incident_id.into(),
+        actor: "ops@example.com".into(),
+        reason: "Provider outage ended".into(),
+        request_id: "outage-0314".into(),
     };
     let preview = admin
         .redrive_many(
             filter.clone(),
             &audit,
-            BulkRedriveOptions { dry_run: true, limit: page_size, ..Default::default() },
+            BulkRedriveOptions { dry_run: true, limit: 100, ..Default::default() },
         )
         .await?;
-    let page = admin
-        .redrive_many(filter, &audit, BulkRedriveOptions { limit: page_size, ..Default::default() })
+    let mut page = admin
+        .redrive_many(
+            filter.clone(),
+            &audit,
+            BulkRedriveOptions { limit: 100, ..Default::default() },
+        )
         .await?;
+    while let Some(cursor) = page.next_cursor {
+        page = admin
+            .redrive_many(
+                filter.clone(),
+                &audit,
+                BulkRedriveOptions { limit: 100, cursor: Some(cursor), ..Default::default() },
+            )
+            .await?;
+    }
     // docs:end
     Ok(())
 }

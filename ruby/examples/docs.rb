@@ -287,28 +287,29 @@ module DocsExamples
 
   def dead_letters_list(admin)
     # docs:start dead-letters-list
-    page = admin.list_dead_letters(queue: "billing", error_name: "ProviderTimeout",
-      finished_after: Time.utc(2026, 8, 12, 9, 0, 0))
+    page = admin.list_dead_letters(queue: "payments", error_name: "ProviderTimeout",
+      finished_after: Time.utc(2026, 3, 14, 9, 0, 0))
     # docs:end
     page
   end
 
-  def dead_letters_redrive(admin, source_task_id, actor, incident_id)
+  def dead_letters_redrive(admin, source_task_id)
     # docs:start dead-letters-redrive
-    audit = Stablemates::Workhorse::AdminAudit.new(actor: actor.email, reason: "provider incident resolved",
-      request_id: incident_id)
+    audit = Stablemates::Workhorse::AdminAudit.new(actor: "ops@example.com", reason: "Provider outage ended",
+      request_id: "r-77")
     result = admin.redrive(source_task_id, audit: audit)
     # docs:end
     result
   end
 
-  def dead_letters_redrive_many(admin, actor, incident_id, page_size)
+  def dead_letters_redrive_many(admin)
     # docs:start dead-letters-redrive-many
-    filter = {queue: "billing", error_name: "ProviderTimeout"}
-    audit = Stablemates::Workhorse::AdminAudit.new(actor: actor.email, reason: "provider incident resolved",
-      request_id: incident_id)
-    preview = admin.redrive_many(audit: audit, dry_run: true, limit: page_size, **filter)
-    page = admin.redrive_many(audit: audit, limit: page_size, **filter)
+    filter = {queue: "payments", error_name: "ProviderTimeout"}
+    audit = Stablemates::Workhorse::AdminAudit.new(actor: "ops@example.com", reason: "Provider outage ended",
+      request_id: "outage-0314")
+    preview = admin.redrive_many(audit: audit, dry_run: true, limit: 100, **filter)
+    page = admin.redrive_many(audit: audit, limit: 100, **filter)
+    page = admin.redrive_many(audit: audit, limit: 100, cursor: page.next_cursor, **filter) while page.next_cursor
     # docs:end
     [preview, page]
   end

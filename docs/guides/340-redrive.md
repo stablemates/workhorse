@@ -2,34 +2,49 @@
 
 <!-- scenario-names: payments, charge-4711, charge-9020, charge-9311, r-77, outage-0314 -->
 
-A task used up all its attempts and gave up. Later you discover the API it was calling had been
-down for an hour. The task would work fine now.
+A dead letter is a task that failed and that Workhorse does not try again. Redrive creates a new
+task from a dead letter, so the work can run again after you fix the cause of the failure. The
+failed task does not change, so you keep the evidence of the failure.
 
-Redriving is an operator saying: make me a fresh copy of this task and run it. TypeScript, Go,
-Rust, and Ruby application code make that request through `Admin`. Python uses `Admin` or
-`AsyncAdmin`. Each operator client stays separate from the application-shaped `Queue` client. An
-operator without a terminal asks for the same thing from the dashboard, in the listing that shows
-the failed tasks, one task or one filtered batch at a time.
+An operator uses an operator client for these actions. Each SDK keeps the operator client separate
+from the `Queue` client of the application. TypeScript makes an `Admin` with a pool, and Python uses
+`Admin` or `AsyncAdmin`. Go calls `NewAdmin` with a pgx or `database/sql` executor that the caller
+owns. Rust uses `Admin::connect` or `Admin::new`, and Ruby calls `Admin.new` with a connection or a
+pool. An operator can also redrive from the dashboard.
 
-## Dead letters
+## Find the tasks that failed
 
-**Example.** On Monday the payment provider is down for an hour. On queue `payments`, task
-`charge-4711` runs out of attempts during the outage. Workhorse does not delete it. The task becomes
-a failed outcome with its last error attached. On Tuesday you open the list of failed tasks for
-`payments`. `charge-4711` is there, beside every other task that failed. The newest failures come
-first.
+**Example.** Queue `payments` charges cards through a payment provider.
 
-Most queues call this the dead letter queue. In Workhorse it is just the set of failed tasks. You
-can filter it and page through it to see what has accumulated.
+1. At 09:00 on 14 March, the payment provider stops. It starts again at 10:00.
+2. During this time, task `charge-4711` uses all its attempts and fails.
+3. Workhorse keeps `charge-4711` as a failed task, with its last error.
+4. Later, you get the list of failed tasks for `payments`. `charge-4711` is in the list, with the
+   other tasks that failed. The newest failures are first.
 
-Running out of attempts is the common way in, but not the only one. Some failures end a task while
-attempts remain. Suppose a handler saves a different value under a checkpoint name it already used.
-That is a durable replay conflict, and the worker fails the task without a retry. Such tasks are in
-the same set.
+The set of failed tasks is the dead-letter list. Other queue products call it a dead letter queue.
+Use `Admin.listDeadLetters` to filter the list and to read it one page at a time.
 
-Workhorse keeps that listing off the dispatch path. Full-tier failures have their own index, which
-claim never reads. Dead-letter growth therefore does not enlarge the dispatch indexes. Database load
-and storage health can still affect both paths.
+```ts
+const page = await admin.listDeadLetters({
+  queue: "payments",
+  errorName: "ProviderTimeout",
+  finishedAfter: new Date("2026-03-14T09:00:00Z"),
+});
+```
+
+Each `DeadLetter` holds the payload, the last error, the attempt counts, and `redriveCount`. The
+`redriveCount` is the number of times an operator redrove the task. The page cursor uses the finish
+time and the task ID, and these values do not change. Thus, the pages stay stable while you work.
+
+Most tasks go into the list when they use all their attempts. Some failures end a task before its
+attempts are used. A durable replay conflict is one example. A durable replay conflict occurs when a
+handler gives a different result for a [checkpoint](130-durable-waits.md) name that it used
+before. The worker then fails the task with no retry, and the task goes into the list.
+
+The dead-letter list does not slow down the claim of ready tasks. Failed full-tier tasks have their
+own index, and a claim never reads it. Thus, a long dead-letter list does not make the claim
+indexes larger. A high database load can still slow down the list and the claim.
 
 <details>
 <summary>Reference: dead-letter listing</summary>
@@ -41,15 +56,16 @@ p_cursor_task_id)`.
 | ------- | ----------------------------------------------------------------------- |
 | Filter  | `queue`, `type`, `tags`, `errorName`, `finishedAfter`, `finishedBefore` |
 | `limit` | 1 through 1,000 (`MAX_REDRIVE_BATCH_SIZE`). Default 100.                |
-| Cursor  | `(finished_at, task_id)` of the previous page's last row                |
+| Cursor  | `(finished_at, task_id)` of the last row of the previous page           |
 
-- Order is newest-first: `finished_at DESC, task_id DESC`.
-- The listing covers failed outcomes of both tiers.
-- Each row carries `redriveCount`, the number of redrives of that task.
-- The payload is redacted by the task's declared redaction keys.
+- A task must have every tag in `tags`.
+- The order is newest first: `finished_at DESC, task_id DESC`.
+- The listing includes the failed outcomes of both tiers.
+- Each row has `redriveCount`, the number of redrives of that task.
+- Workhorse redacts the payload with the redaction keys that the task declares.
 - A worker settles a durable replay conflict (`CheckpointConflictError`, `WaitConflictError`,
   `ChildConflictError`, or `HumanWaitConflictError`) with `fail_v1` and `p_retry_delay_ms = -1`.
-  That fails the task even when `current_attempt < max_attempts`.
+  That fails the task also when `current_attempt < max_attempts`.
 - `task_outcome_failed_finished_idx` is a partial index on `(finished_at DESC, task_id DESC)` where
   `state = 'failed'`. It is not a dispatch path.
 
@@ -57,28 +73,40 @@ More detail: [Data model: Dead-letter index](../architecture/data-model.md#dead-
 
 </details>
 
-## A new task, not a resurrection
+## Redrive one task
 
-You redrive `charge-4711`.
+**Example.** The payment provider works again. You redrive `charge-4711`.
 
-1. **The request.** You pass the task ID, your name, a reason, and a request ID.
-2. **The copy.** Workhorse creates a new task, `charge-9020`, with the same queue, type, and
-   payload. It is `ready` at once, on attempt 1, with no deadline.
-3. **The link.** In the same transaction, Workhorse records that `charge-9020` came from
-   `charge-4711`. It appends an event to each task.
-4. **The run.** A worker claims `charge-9020` and charges the card.
+1. You send the task ID, your name, a reason, and the request ID `r-77`.
+2. Workhorse creates a new task, `charge-9020`, with the same queue, type, and payload. The new task
+   is `ready` at once, on attempt 1, with no deadline.
+3. In the same transaction, Workhorse records that `charge-9020` comes from `charge-4711`. It adds
+   an event to each task.
+4. A worker claims `charge-9020` and charges the card.
 
-Redriving does **not** restart the old task. `charge-4711` stays failed, with its error, as evidence.
-Its error stays readable until [retention](330-retention.md) retires it.
+```ts
+const result = await admin.redrive(sourceTaskId, {
+  actor: "ops@example.com",
+  reason: "Provider outage ended",
+  requestId: "r-77",
+});
+```
 
-The new task copies what defines the work: queue, type, payload, tags, attempt budget, retry policy,
-and execution timeout. It deliberately does not copy the wreckage. It gets no checkpoints, no waits,
-no attempt count, and no old error. It does not get the original deadline either. A deadline that
-already passed would make the copy fail at once, which is never what you meant.
+Redrive does **not** restart the failed task. `charge-4711` stays failed, with its error, as
+evidence. Its error stays available until [retention](330-retention.md) deletes the task.
 
-Dependency edges, child lineage, signal deliveries, and human decisions stay with the old identity.
-See [dependencies](160-task-dependencies.md), [children](170-child-tasks.md),
-[signals](135-signals.md), and [human decisions](145-human-decisions.md) for those lifecycles.
+The new task copies the fields that define the work. These are the queue, the type, the payload,
+the tags, the maximum number of attempts, the retry policy, and the execution timeout. The new task
+does not copy the state of the failed run. It gets no checkpoints, no waits, no attempt count, no
+cancellation state, and no old error.
+
+The new task also does not get the deadline of the failed task. If that deadline is in the past, a
+copy of it makes the new task fail at once.
+
+Dependency edges, child tasks, signal deliveries, and human decisions stay with the failed task.
+For these lifecycles, see [dependencies](160-task-dependencies.md),
+[child tasks](170-child-tasks.md), [signals](135-signals.md), and
+[human decisions](145-human-decisions.md).
 
 <details>
 <summary>Reference: redrive_v1</summary>
@@ -93,74 +121,89 @@ timeout.
 **Not copied:** the absolute deadline, dependency edges, child lineage, checkpoints, waits, signal
 deliveries, attempts, results, and cancellation state.
 
-The target starts `ready` with `run_at` now and attempt 1. It takes its queue's current tier. A
-fast-tier queue rejects a copy that carries a concurrency key or a budget.
+The target starts `ready` with `run_at` now and attempt 1. It takes the current tier of its queue. A
+fast-tier queue rejects a copy that has a concurrency key or a budget.
 
-| `status`     | When                                                  |
-| ------------ | ----------------------------------------------------- |
-| `redriven`   | A new target was created.                             |
-| `replayed`   | The same source and request ID already made a target. |
-| `not_found`  | No retained task has this ID.                         |
-| `not_failed` | The source exists but is not `failed`.                |
-| `eligible`   | Bulk dry run only. The source would be redriven.      |
+| `status`     | When                                                     |
+| ------------ | -------------------------------------------------------- |
+| `redriven`   | Workhorse created a new target.                          |
+| `replayed`   | The same source and request ID already created a target. |
+| `not_found`  | No retained task has this ID.                            |
+| `not_failed` | The source exists, but it is not `failed`.               |
+| `eligible`   | Bulk dry run only. Workhorse can redrive the source.     |
 
 **Events.** The source gets `redriven`, with the target ID. The target gets `redrive_created`, with
-the source ID. Both record the actor, reason, request ID preview and digest, and request time.
+the source ID. Both record the actor, the reason, the request ID preview and digest, and the request
+time.
 
-The source outcome's terminal columns are never updated.
+Workhorse never updates the terminal columns of the source outcome.
 
 More detail: [Data model: redrive_v1](../architecture/data-model.md#redrive_v1).
 
 </details>
 
-## Why a link and not a copy
+## Follow the lineage of a task
 
-The redriven `charge-9020` fails too, because the provider had a second outage. You redrive it
-again and get `charge-9311`. Now the chain is `charge-4711` to `charge-9020` to `charge-9311`.
-From any of the three, you can walk the chain back to the original failure and read its error.
+Lineage is the chain of tasks that redrive creates from one failed task.
 
-Every redriven task records where it came from. [Retention](330-retention.md) keeps that lineage
-intact. It does not delete `charge-4711` while a descendant remains. When the descendant goes, its
-link goes with it, and the ancestor becomes eligible under the normal windows.
+**Example.** The provider stops a second time.
+
+1. `charge-9020` fails too.
+2. You redrive `charge-9020`, and Workhorse creates `charge-9311`.
+3. The chain is now `charge-4711`, then `charge-9020`, then `charge-9311`.
+
+From any task in the chain, `Admin.getRedriveLineage` returns the chain. It goes back to the first
+failure and forward to the newest redrive.
+
+Workhorse records each link in `task_redrive`. [Retention](330-retention.md) keeps the lineage
+complete. It does not delete `charge-4711` while a newer task in the chain stays. When retention
+deletes the newer task, it also deletes the link to that task. Then the normal retention windows
+apply to the older task.
 
 <details>
 <summary>Reference: lineage and retention</summary>
 
-`task_redrive` is insert-only. One row per edge records:
+`task_redrive` is insert-only. Each edge has one row, which records:
 
-- source and target task IDs;
-- the request ID preview, digest, and length, never the raw ID;
-- actor, reason, and the request fingerprint;
-- source state `failed`, target initial state `ready`, and request time.
+- the source and target task IDs;
+- the request ID preview, digest, and length, but never the raw ID;
+- the actor, the reason, and the request fingerprint;
+- the source state `failed`, the initial target state `ready`, and the request time.
 
-A unique target means every new task has one parent.
+The target is unique, so each new task has one parent.
 
-`Admin.getRedriveLineage(taskId, limit)` walks the retained connected graph. `limit` is 1 through
-1,000, default 1,000. The result has `records` and a `truncated` flag.
+`Admin.getRedriveLineage(taskId, limit)` reads the retained connected graph. `limit` is 1 through
+1,000, and the default is 1,000. The result has `records` and a `truncated` flag.
 
-**Retention.** Terminal identity pruning skips any source with a retained descendant edge. Deleting
-the target cascades its inbound edge.
+**Retention.** Terminal identity pruning skips each source that has a retained descendant edge. When
+Workhorse deletes the target, the delete cascades to its inbound edge.
 
 More detail: [Data model: Lineage retention](../architecture/data-model.md#lineage-retention).
 
 </details>
 
-## Sending the same request twice
+## Send a redrive request again safely
 
-An operator's script redrives `charge-4711` and the network drops before the answer arrives. The
-script cannot tell whether the redrive happened, so it sends the request again.
+A redrive request can fail before its answer arrives. Then you cannot know if Workhorse created the
+new task. The request ID lets you send the request again with no risk of a second task.
 
-1. **The first call.** It sends request ID `r-77`. Workhorse creates `charge-9020` and commits, but
-   the answer is lost. The result would have been `redriven`.
-2. **The retry.** It sends the same source and the same request ID. Workhorse finds the first
-   redrive and returns `charge-9020` again. The result is `replayed`. No second copy runs.
+**Example.** An operator script redrives `charge-4711`.
 
-The protection holds only when the caller reuses the request ID. Keep it across retries of one
-decision, and use a new one for a new decision.
+1. The script sends the request ID `r-77`. Workhorse creates `charge-9020` and commits.
+2. The network stops before the answer arrives. The script does not get the result `redriven`.
+3. The script sends the same source and the same request ID again.
+4. Workhorse finds the first redrive and returns `charge-9020` again. The result is `replayed`.
+   Workhorse does not create a second task.
 
-Now suppose the retry sends request ID `r-77` with a different reason. Workhorse treats that as
-a conflict, not a duplicate. The two requests make different claims about what happened. Silently
-keeping one would lose an audit record.
+This protection works only if the caller sends the same request ID again. Keep the request ID for
+all retries of one decision. Use a new request ID for a new decision.
+
+If the retry sends `r-77` with a different reason, Workhorse rejects the request. The two requests
+give different audit records, and Workhorse must not lose one of them. TypeScript raises
+`RedriveIdempotencyConflictError`.
+
+PostgreSQL stores a digest of the request ID, not the raw value. Thus, incident IDs do not become
+stored data, and operator views can still show safe diagnostics.
 
 <details>
 <summary>Reference: request identity and conflicts</summary>
@@ -171,35 +214,59 @@ keeping one would lose an audit record.
 | `reason`    | 1 through 2,000 characters |
 | `requestId` | 1 through 512 UTF-8 bytes  |
 
-- Idempotency is keyed by the source task and the SHA-256 of the request ID.
-- `redrive_v1` takes a transaction advisory lock on the source and request ID, so concurrent
+- The idempotency key is the source task and the SHA-256 of the request ID.
+- `redrive_v1` takes a transaction advisory lock on the source and the request ID. Thus, concurrent
   repeats run one at a time.
 - The fingerprint is the actor and the reason. A replay with a different fingerprint raises SQLSTATE
   `P1002`.
 - TypeScript raises `RedriveIdempotencyConflictError`. Its details name `conflictingFields`
-  (`requestedBy`, `reason`), the existing target, and digests of the stored and rejected requests.
+  (`requestedBy`, `reason`), the existing target, and the digests of the stored and rejected
+  requests.
 - The dashboard sends a new random request ID with each confirmed redrive.
 
 More detail: [Data model: Keys and columns](../architecture/data-model.md#keys-and-columns).
 
 </details>
 
-## Bulk redrive
+## Redrive a backlog in pages
 
-The outage left 300 failed tasks on `payments`. You want to replay them, but the provider may still
-be fragile.
+`Admin.redriveMany` redrives all failed tasks that match a filter, one bounded page at a time. A dry
+run shows the tasks of a page and changes nothing.
 
-1. **The dry run.** You ask for a page of 100 with `dryRun`. Workhorse lists the 100 oldest failures
-   that match your filter, each marked `eligible`. It writes nothing.
-2. **The first page.** You run the same request without `dryRun`, with request ID `outage-0314`.
-   Workhorse redrives the 100 oldest and returns a cursor.
-3. **The next pages.** You pass the cursor back, twice, and finish the backlog.
+**Example.** The outage left 300 failed tasks on `payments`. The provider can still be unstable.
 
-The cursor matters. A redrive leaves the source failed, so a request without the cursor selects the
-same page again. With the same request ID, that page only replays.
+1. You request a page of 100 with `dryRun`. Workhorse returns the 100 oldest failures that match
+   the filter, each with the status `eligible`. It creates no tasks and no lineage.
+2. You make sure that the provider works again.
+3. You send the same request without `dryRun`, with the request ID `outage-0314`. Workhorse redrives
+   the 100 oldest failures and returns a cursor.
+4. You send the request with the cursor two more times. Workhorse redrives the remaining 200 tasks.
 
-Use the dry run before you replay a large backlog into a service that may still be unhealthy. A dry
-run does not reserve its candidates.
+```ts
+const filter = { queue: "payments", errorName: "ProviderTimeout" };
+const audit = {
+  actor: "ops@example.com",
+  reason: "Provider outage ended",
+  requestId: "outage-0314",
+};
+const preview = await admin.redriveMany(filter, audit, { dryRun: true, limit: 100 });
+let page = await admin.redriveMany(filter, audit, { limit: 100 });
+while (page.nextCursor) {
+  page = await admin.redriveMany(filter, audit, { limit: 100, cursor: page.nextCursor });
+}
+```
+
+Always send the cursor of the previous page. A redrive does not change the failed task. Thus, a
+request without the cursor selects the same page again. With the same request ID, Workhorse only
+replays that page. If the loop stops before the end, start it again. The pages that Workhorse
+already redrove return their existing new tasks.
+
+Use a dry run before you redrive a large backlog into a service that can still be unhealthy. A dry
+run does not reserve its tasks. Thus, the next request can select different tasks.
+
+A redriven task is one more at-least-once execution. Handlers that charge cards, send email, or call
+webhooks still need idempotency at the provider before an operator redrives them. Redrive makes the
+operation auditable. It does not make the operation run exactly once.
 
 <details>
 <summary>Reference: redrive_many_v1</summary>
@@ -213,48 +280,87 @@ run does not reserve its candidates.
 | `dryRun` | Returns `eligible` rows and writes nothing. |
 | `cursor` | `nextCursor` of the previous bulk page      |
 
-- Order is oldest-first: `finished_at, task_id`. Dead-letter listing pages newest-first, so use only
-  a bulk page's cursor.
-- Every source in the page is redriven with the same actor, reason, and request ID.
+- The order is oldest first: `finished_at, task_id`. The dead-letter listing pages newest first, so
+  use only the cursor of a bulk page.
+- Workhorse redrives each source in the page with the same actor, reason, and request ID.
 - `admin redrive-many --dry-run` writes nothing and needs no request ID. Execution requires an
   explicit `--request-id`.
-- The dashboard batch accepts a limit of 1 through 1,000 and defaults to 100.
+- The dashboard batch accepts a limit of 1 through 1,000. The default is 100.
 
 More detail: [Operations and CLI: Bulk redrive](../architecture/operations.md#bulk-redrive).
 
 </details>
 
-## Attribution is not permission
+## Check permission before you redrive
 
-A support script redrives `charge-4711`. It passes an actor name and a reason. Your application
-does not allow the person it names to touch payment tasks.
+Workhorse records who redrove a task and why. It does not check if that person has permission to
+redrive the task.
 
-1. **Workhorse checks the shape.** The actor and the reason are within their length limits.
-2. **Workhorse records both** on the redrive and creates the copy.
-3. **Nothing asks** whether that person may redrive tasks on `payments`.
+**Example.** A support script redrives `charge-4711`. It sends an actor name and a reason. Your
+application does not let that person change payment tasks.
 
-The person and reason recorded on a redrive are for the audit trail. Workhorse does not check
-whether they were allowed to do it. That check belongs in your application, before you call
-redrive.
+1. Workhorse checks that the actor and the reason are in their length limits.
+2. Workhorse records the actor and the reason on the redrive, and creates the new task.
+3. Workhorse does not check if that person can redrive tasks on `payments`.
+
+The actor and the reason are for the audit trail. Your operator layer must do the permission check
+before it calls redrive.
 
 <details>
 <summary>Reference: recorded attribution</summary>
 
 - `redrive_v1` and `redrive_many_v1` require `p_requested_by` of 1 through 200 characters and a
   reason of 1 through 2,000 characters.
-- Each redrive stores both in its `task_redrive` row and in the `redriven` and `redrive_created`
-  events.
-- Neither function checks a database role or any other permission.
+- Each redrive stores both values in its `task_redrive` row and in the `redriven` and
+  `redrive_created` events.
+- Neither function checks a database role or another permission.
 
 More detail: [Data model: `task_redrive`](../architecture/data-model.md#task_redrive).
 
 </details>
 
+## Redrive from the dashboard
+
+An operator who does not use a terminal can redrive tasks from the dashboard.
+
+**Example.** An operator uses the dashboard for the same outage on `payments`.
+
+1. The operator opens the discarded listing. It shows the same failed tasks as the dead-letter
+   list.
+2. The operator selects redrive in the row menu of `charge-4711`, and confirms. The dashboard
+   redrives that task.
+3. The operator uses the batch control above the table, and confirms. The dashboard redrives a
+   bounded batch of the tasks in the listing, oldest failure first. It shows where the next batch
+   starts.
+4. The operator adds a search term. The dashboard disables the batch control and tells why.
+
+A batch selects tasks only by queue, task type, and tags. The listing has three more filters:
+worker, priority, and search. If one of these filters is set, the dashboard disables the batch
+control. Thus, a batch cannot redrive more tasks than the screen shows.
+
+Each action asks for a confirmation first. Each confirmation tells the operator that a redriven task
+is one more at-least-once execution. The dashboard records the operator that the server
+authenticated, not a name from the browser.
+
+<details>
+<summary>Reference: dashboard redrive</summary>
+
+- `redriveDeadLetters` receives a `DashboardRedriveFilter` of `queue`, `taskType`, and `tags`.
+- The dashboard batch accepts a limit of 1 through 1,000. The default is 100.
+- The dashboard sends a new random request ID with each confirmed redrive.
+- `auditWithOccurredAt` replaces the browser `audit.actor` with the authenticated actor before an
+  operator controller runs.
+
+More detail: [Operations and CLI: Bulk redrive](../architecture/operations.md#bulk-redrive), [Dashboard: Redrive controllers](../architecture/dashboard.md#redrive-controllers), and [Dashboard: Mutations and attribution](../architecture/dashboard.md#mutations-and-attribution).
+
+</details>
+
 ## Next
 
-- [110-retries.md](110-retries.md) — the automatic attempts that happen first
-- [330-retention.md](330-retention.md) — how long a failed task sticks around
-- [010-tasks-and-state.md](010-tasks-and-state.md) — why the failed task is still there at all
+- [110-retries.md](110-retries.md) — the automatic attempts before a task fails
+- [330-retention.md](330-retention.md) — how long Workhorse keeps a failed task
+- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — compare enqueue keys with redrive
+  request IDs
 
 ---
 
