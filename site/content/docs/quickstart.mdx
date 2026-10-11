@@ -1,15 +1,18 @@
 ---
 title: Quickstart
-description: Install the schema, run your first task, then kill the worker mid-task and watch it finish anyway.
+description: Install the schema, run your first task, then stop the worker while the task runs and see the task finish.
 ---
 
-In five minutes you will enqueue a task, run it, and then prove the interesting part: a task that
-survives its own worker being killed. Choose TypeScript, Python, Go, Rust, or Ruby for the
-application code.
-Schema installation uses the Workhorse CLI, which runs on Node.js. Every path also needs a
-PostgreSQL connection string.
+This quickstart shows the main property of Workhorse: a task continues after its worker stops. In
+about five minutes, you enqueue a task and run it. Then you stop the worker while a task runs, and
+another run finishes the task.
 
-## 1. Install
+Choose TypeScript, Python, Go, Rust, or Ruby for the application code. The schema installation uses
+the Workhorse CLI, which runs on Node.js. Each language also needs a PostgreSQL connection string.
+
+## 1. Install the SDK
+
+Install the package for the language of your application.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -66,27 +69,26 @@ PostgreSQL connection string.
 
 ## 2. Install the schema
 
-Workhorse lives entirely inside your database: tables for tasks and versioned SQL functions for
-every lifecycle transition. Install them once through the TypeScript package's deployment CLI,
-regardless of which application SDK you use.
+Workhorse keeps all its data in your database. The schema has tables for tasks and versioned SQL
+functions for each lifecycle change. Install the schema one time with the deployment CLI of the
+TypeScript package. Do this for each SDK.
 
-A TypeScript project runs the binary it already depends on:
+A TypeScript project runs the binary that it already has as a dependency:
 
 ```bash
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, or Ruby project has no `node_modules` to resolve that binary from, so it names the
-version instead — the same version as the SDK it installed above:
+A Python, Go, Rust, or Ruby project has no `node_modules` that holds the binary. Thus, the command
+gives the version. Use the same version as the SDK that you installed in step 1:
 
 ```bash
 npx --package @stablemates/workhorse@0.7.1 workhorse schema install
 ```
 
-That step runs on Node.js, even when the application is written in Python, Go, Rust, or
-Ruby.
-[Installation](/docs/installation) explains why the two forms differ, and
-[Compatibility](/docs/compatibility) names the version.
+This step runs on Node.js, also when the application uses Python, Go, Rust, or Ruby.
+[Installation](/docs/installation) tells why the two commands are different.
+[Compatibility](/docs/compatibility) gives the supported versions.
 
 TypeScript deployment code can call the same installer directly.
 
@@ -97,13 +99,13 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
 ```
 
-Run this once, as a deployment step. Runtime code should call `assertSchemaCompatible` instead of
-installing anything.
+Run this one time, as a deployment step. Runtime code must not install the schema. It calls
+`assertSchemaCompatible` to check the schema.
 
 ## 3. Enqueue a task and run it
 
-A `Queue` accepts work; a `Worker` with a matching handler runs it. This example keeps both in one
-file so you can watch the whole lifecycle.
+A `Queue` accepts work. A `Worker` runs the work with the handler for its task type. This example
+puts the two in one file, so you can see the full lifecycle.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -277,21 +279,22 @@ file so you can watch the whole lifecycle.
   </Tab>
 </Tabs>
 
-Each example reads the durable outcome after the worker records state `succeeded`. That record is
-queryable evidence, not a log line — it stays after the process exits. The Python and Go examples
-read the shared projection directly to keep the quickstart to one dependency; both languages also
-ship `Admin` clients for the same operator reads. The Rust and Ruby examples read the outcome
-through their `Admin` clients.
+The worker records the state `succeeded`. Then each example reads the durable outcome. The outcome is
+a record in the database, not a log line, and it stays after the process stops. The Python and Go
+examples read the table `workhorse.task_outcome` directly, so the quickstart needs only one
+dependency. These two languages also have `Admin` clients for the same reads. The Rust and Ruby
+examples read the outcome through their `Admin` clients.
 
-## 4. Kill the worker. The task finishes anyway.
+## 4. Stop the worker, and see the task finish
 
-Now the part that makes Workhorse worth installing. This handler does two stages of work, each
-wrapped in a named `checkpoint`, with a deliberate crash between them.
+This step shows that a task continues after its worker stops. The handler does two parts of work.
+Each part is in a named `checkpoint`. A checkpoint stores the result of its code for the task. A
+later run gets the stored result and does not run the code again. The handler stops the process
+between the two parts.
 
-This crash walkthrough uses TypeScript so the two shell commands stay concrete. Python exposes the
-same boundary as `context.checkpoint`, and Go exposes it as `handler.Checkpoint`.
-Complete runnable lifecycle examples live under `python/examples/` and `go/examples/` in the
-repository.
+This example uses TypeScript, so that the two shell commands are clear. Python has the same
+checkpoint as `context.checkpoint`, and Go has it as `HandlerContext.Checkpoint`. The repository has
+runnable examples in `python/examples/` and `go/examples/`.
 
 ```ts title="crash-demo.ts"
 import { Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -331,26 +334,29 @@ await queue.enqueue(
 await worker.run();
 ```
 
-Run it twice:
+Run the file two times:
 
 ```bash
 node crash-demo.ts             # charges the card, then dies
 SURVIVED=1 node crash-demo.ts  # finishes the task
 ```
 
-The first run prints `charging card…` and exits. Nothing is lost: the checkpoint committed, the
-lease expires, and the task becomes claimable again.
+**Example.** You run the two commands.
 
-The second run picks the task up once the expired lease is recovered — within a few seconds — and
-this time `charging card…` does **not** print. The completed
-checkpoint replays its stored result instead of running again — the customer was charged exactly
-once across the crash. That is the whole model: handlers restart from the top after any
-interruption, and the boundaries you name are the parts that never repeat.
+1. The first run prints `charging card…`. The `charge` checkpoint commits, and the process stops.
+2. The lease of 5 s expires. A worker makes the task available again.
+3. The second run enqueues with the same idempotency key, so it gets the same task.
+4. The worker of the second run claims the task. The `charge` checkpoint returns its stored result,
+   so `charging card…` does not print.
+5. The handler prints the label and finishes the task.
+
+The card is charged one time, also after the crash. This is the full model. After an interruption,
+a handler starts again from the top. The checkpoints that you name do not run again.
 
 ## 5. Enqueue with your data
 
-In a real application, enqueue rarely stands alone. Pass your open transaction as the last
-argument and the task commits — or rolls back — with your business write.
+In a real application, you usually enqueue a task together with a business write. Give your open
+transaction as the last argument. The task then commits or rolls back with your business write.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -450,8 +456,8 @@ argument and the task commits — or rolls back — with your business write.
 
 ## Next
 
-- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run twice
-- [Enqueue and transactions](/docs/enqueue) — everything an enqueue can carry
+- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run two times
+- [Enqueue and transactions](/docs/enqueue) — all the options of an enqueue
 - [Durable execution](/docs/durable-execution) — checkpoints, durable sleeps, and their rules
 
 ---
