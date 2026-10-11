@@ -18,6 +18,7 @@ mod queue;
 mod sql_catalogue_generated;
 #[cfg(feature = "sqlx")]
 mod sqlx_transport;
+mod task_groups;
 mod telemetry;
 mod types;
 mod waits;
@@ -34,6 +35,7 @@ pub use enqueue::{
 pub use error::{
     CancelReason, DependencyCycleDetails, DependencyLimitDetails, Error,
     IdempotencyConflictDetails, Operation, PurgeConflictDetails, RedriveConflictDetails,
+    TaskGroupClosedDetails, TaskGroupLimitDetails, TaskGroupMembershipConflictDetails,
 };
 pub use queue::{Executor, Queue};
 pub use sql_catalogue_generated::{
@@ -42,6 +44,7 @@ pub use sql_catalogue_generated::{
 };
 #[cfg(feature = "sqlx")]
 pub use sqlx;
+pub use task_groups::*;
 pub use types::*;
 pub use waits::{HumanOutcome, SignalOutcome};
 pub use worker::{

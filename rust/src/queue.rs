@@ -130,6 +130,11 @@ impl<E: Executor> Queue<E> {
         &self.executor
     }
 
+    /// The enqueue preparation and contract cache this client shares with its task group calls.
+    pub(crate) fn enqueue_client(&self) -> &EnqueueClient {
+        &self.enqueue
+    }
+
     /// Returns the executor, for example to commit a transaction.
     pub fn into_inner(self) -> E {
         self.executor

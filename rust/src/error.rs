@@ -33,6 +33,7 @@ pub enum Operation {
     RunChild,
     RunChildren,
     Progress,
+    AddToTaskGroup,
 }
 
 impl fmt::Display for Operation {
@@ -60,6 +61,7 @@ impl fmt::Display for Operation {
             Self::RunChild => "run child",
             Self::RunChildren => "run children",
             Self::Progress => "progress",
+            Self::AddToTaskGroup => "add to task group",
         })
     }
 }
@@ -146,6 +148,62 @@ pub struct PurgeConflictDetails {
     pub rejected_request_digest: String,
 }
 
+/// PostgreSQL's refusal of a task group add, SQLSTATE `P1008`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskGroupClosedDetails {
+    pub group_id: String,
+    /// `open`, `sealed`, or `finished`.
+    pub state: String,
+    /// `sealed`, `finished`, `canceled`, or `not_running_member`.
+    pub reason: String,
+}
+
+/// A DETAIL that does not parse still names the refusal, as in the TypeScript SDK.
+impl Default for TaskGroupClosedDetails {
+    fn default() -> Self {
+        Self { group_id: "unknown".into(), state: "finished".into(), reason: "finished".into() }
+    }
+}
+
+/// PostgreSQL's task group member limit diagnosis, SQLSTATE `P1009`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskGroupLimitDetails {
+    pub group_id: String,
+    pub limit: i64,
+    pub total: i64,
+    pub requested: i64,
+}
+
+impl Default for TaskGroupLimitDetails {
+    fn default() -> Self {
+        Self {
+            group_id: "unknown".into(),
+            limit: crate::task_groups::MAX_TASK_GROUP_MEMBERS.into(),
+            total: 0,
+            requested: 0,
+        }
+    }
+}
+
+/// PostgreSQL's diagnosis of an enqueue idempotency hit outside the group, SQLSTATE `P1010`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskGroupMembershipConflictDetails {
+    pub group_id: String,
+    pub task_id: String,
+    pub ordinal: i64,
+    /// The group the existing task belongs to, or `None`.
+    pub member_of: Option<String>,
+}
+
+impl Default for TaskGroupMembershipConflictDetails {
+    fn default() -> Self {
+        Self { group_id: "unknown".into(), task_id: "unknown".into(), ordinal: 0, member_of: None }
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -178,6 +236,14 @@ pub enum Error {
     /// `ordinal` is the 1-based position of the rejected request in an enqueue batch.
     #[error("Fast-tier queue {queue} does not support {feature}")]
     FastTierUnsupported { queue: String, feature: String, ordinal: Option<i64> },
+    /// The task group does not accept tasks: it is sealed, finished, or canceled, or the caller is
+    /// not a running member task (ADR 0095).
+    #[error("Task group {} does not accept tasks ({})", details.group_id, details.reason)]
+    TaskGroupClosed { details: Box<TaskGroupClosedDetails> },
+    #[error("Task group {} holds {} tasks and accepts at most {}", details.group_id, details.total, details.limit)]
+    TaskGroupLimitExceeded { details: Box<TaskGroupLimitDetails> },
+    #[error("Enqueue idempotency returned task {}, which is not a member of task group {}", details.task_id, details.group_id)]
+    TaskGroupMembershipConflict { details: Box<TaskGroupMembershipConflictDetails> },
     #[error("{task_type} payload does not satisfy contract version {version}")]
     ContractValidation { task_type: String, version: String },
     #[error("{task_type} contract version {version} is unavailable")]
@@ -312,7 +378,8 @@ impl Error {
         }
     }
 
-    /// Maps SQLSTATE `P1001`, `P1003`, `P1005` and `P1007` to their structured variants.
+    /// Maps SQLSTATE `P1001`, `P1003`, `P1005`, `P1007` and the task group refusals `P1008`,
+    /// `P1009` and `P1010` to their structured variants.
     pub(crate) fn translate_enqueue_error(self) -> Self {
         let diagnostics = match &self {
             Self::Database { sqlstate: Some(code), detail, .. } => {
@@ -337,6 +404,15 @@ impl Error {
                 details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
             },
             "P1007" => Self::fast_tier(detail),
+            "P1008" => Self::TaskGroupClosed {
+                details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
+            },
+            "P1009" => Self::TaskGroupLimitExceeded {
+                details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
+            },
+            "P1010" => Self::TaskGroupMembershipConflict {
+                details: Box::new(serde_json::from_str(detail).unwrap_or_default()),
+            },
             _ => self,
         }
     }

@@ -38,8 +38,21 @@ callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not acc
 (member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
 member of the group).
 
-This SDK does not add a task group API yet. It needs schema 65 because its statement catalogue
-names the new functions.
+### New features
+
+- Task groups (SM-1235, ADR 0095). `Queue` gains `create_task_group`, `add_to_task_group`,
+  `seal_task_group`, the block form `task_group`, `get_task_group`, `list_task_group_members`, and
+  `find_task_group`. `TaskGroupCallbacks` holds the `on_finish`, `on_success`, and `on_failure`
+  requests. The block form creates, adds, and seals in one statement. A `Queue` over a transaction
+  executor makes the other calls part of the caller's transaction.
+- A handler reads its group through `ctx.task_group().get()`, as a member task or as a callback
+  task. A running member task adds tasks through `ctx.task_group().add()`, under its fenced lease,
+  also after the seal. `BatchHandlerContext::task_group` gives a batch member the same calls.
+- `Admin` gains `get_task_group`, `list_task_group_members`, `list_task_group_events`,
+  `cancel_task_group`, `list_task_group_drift`, and `repair_task_group_drift`.
+- `Error` gains `TaskGroupClosed` (`P1008`), `TaskGroupLimitExceeded` (`P1009`), and
+  `TaskGroupMembershipConflict` (`P1010`), with their `DETAIL` documents. `Operation` gains
+  `AddToTaskGroup`.
 
 ## 0.7.1 — 2026-10-09
 

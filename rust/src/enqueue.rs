@@ -181,33 +181,32 @@ impl EnqueueClient {
         if requests.len() > sql::MAX_ENQUEUE_BATCH_SIZE {
             return Err(Error::invalid("enqueue batch exceeds the shared limit"));
         }
-        for attempt in 0.. {
-            let rows = self.enqueue_attempt(transport, &requests).await?;
-            let Some(task_types) = contract_mismatch(&rows)? else {
+        let known: Vec<&str> = requests.iter().map(|request| request.task_type.as_str()).collect();
+        for _ in 0..2 {
+            let document = self.prepare(transport, &requests).await?;
+            let rows = query(
+                transport,
+                EnqueueQuery {
+                    statement: sql::ENQUEUE_MANY_V1,
+                    binds: vec![EnqueueBind::Json(&document)],
+                    columns: ENQUEUE_COLUMNS,
+                },
+            )
+            .await
+            .map_err(Error::translate_enqueue_error)?;
+            if !self.reload_mismatched(transport, &rows, &known).await? {
                 return enqueue_results(&rows, requests.len());
-            };
-            if task_types
-                .iter()
-                .any(|task_type| !requests.iter().any(|request| &request.task_type == task_type))
-            {
-                return Err(invalid_result());
-            }
-            for task_type in task_types {
-                let contract = load_contract(transport, &task_type).await?;
-                self.contracts().definitions.insert(task_type, contract);
-            }
-            if attempt > 0 {
-                break;
             }
         }
         Err(Error::ContractPolicyChanged)
     }
 
-    async fn enqueue_attempt<T: EnqueueTransport>(
+    /// Serializes, validates and contract-stamps one batch into the JSON array PostgreSQL reads.
+    pub(crate) async fn prepare<T: EnqueueTransport>(
         &self,
         transport: &mut T,
         requests: &[EnqueueRequest],
-    ) -> Result<Vec<EnqueueRow>, Error> {
+    ) -> Result<Value, Error> {
         let now = Utc::now();
         let trace_context = trace_context();
         let mut inputs = requests
@@ -223,17 +222,53 @@ impl EnqueueClient {
         for (input, request) in inputs.iter_mut().zip(requests) {
             self.apply_contract(transport, input, request).await?;
         }
-        let document = Value::Array(inputs.into_iter().map(Value::Object).collect());
-        query(
-            transport,
-            EnqueueQuery {
-                statement: sql::ENQUEUE_MANY_V1,
-                binds: vec![EnqueueBind::Json(&document)],
-                columns: ENQUEUE_COLUMNS,
-            },
-        )
-        .await
-        .map_err(Error::translate_enqueue_error)
+        Ok(Value::Array(inputs.into_iter().map(Value::Object).collect()))
+    }
+
+    /// Serializes the request of a task group callback. Workhorse enqueues a callback later, so it
+    /// carries no run time unless the caller set one.
+    pub(crate) async fn prepare_callback<T: EnqueueTransport>(
+        &self,
+        transport: &mut T,
+        request: &EnqueueRequest,
+    ) -> Result<Value, Error> {
+        let options = &request.options;
+        if options.idempotency.is_some() || options.debounce.is_some() || options.throttle.is_some()
+        {
+            return Err(Error::invalid(
+                "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
+            ));
+        }
+        let mut input = self
+            .serialize_request(request, Utc::now(), trace_context().as_ref())
+            .map_err(Error::invalid)?;
+        if options.run_at.is_none() {
+            input.remove("runAt");
+        }
+        self.assert_compatible(transport).await?;
+        self.apply_contract(transport, &mut input, request).await?;
+        Ok(Value::Object(input))
+    }
+
+    /// On a contract mismatch PostgreSQL enqueued nothing: reloads the named contracts, which must
+    /// belong to `known` task types, and returns true so the caller submits the batch again.
+    pub(crate) async fn reload_mismatched<T: EnqueueTransport>(
+        &self,
+        transport: &mut T,
+        rows: &[EnqueueRow],
+        known: &[&str],
+    ) -> Result<bool, Error> {
+        let Some(task_types) = contract_mismatch(rows)? else {
+            return Ok(false);
+        };
+        if task_types.iter().any(|task_type| !known.contains(&task_type.as_str())) {
+            return Err(invalid_result());
+        }
+        for task_type in task_types {
+            let contract = load_contract(transport, &task_type).await?;
+            self.contracts().definitions.insert(task_type, contract);
+        }
+        Ok(true)
     }
 
     /// Stores contracts and enables payload validation for subsequent enqueues.
@@ -516,7 +551,10 @@ fn contract_mismatch(rows: &[EnqueueRow]) -> Result<Option<Vec<String>>, Error> 
     Ok(Some(task_types))
 }
 
-fn enqueue_results(rows: &[EnqueueRow], count: usize) -> Result<Vec<EnqueueResult>, Error> {
+pub(crate) fn enqueue_results(
+    rows: &[EnqueueRow],
+    count: usize,
+) -> Result<Vec<EnqueueResult>, Error> {
     if rows.len() != count {
         return Err(invalid_result());
     }

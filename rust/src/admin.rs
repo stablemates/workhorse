@@ -559,7 +559,7 @@ impl<E: Executor> Admin<E> {
         outcome.map_err(|code| Error::Compatibility { code })
     }
 
-    async fn query(
+    pub(crate) async fn query(
         &self,
         statement: &str,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
@@ -929,7 +929,7 @@ impl<E: Executor> Admin<E> {
     }
 }
 
-fn validate_audit(audit: &AdminAudit) -> Result<(), Error> {
+pub(crate) fn validate_audit(audit: &AdminAudit) -> Result<(), Error> {
     if !(1..=200).contains(&audit.actor.chars().count()) {
         return Err(Error::invalid("actor must contain between 1 and 200 characters"));
     }

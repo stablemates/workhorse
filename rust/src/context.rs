@@ -12,12 +12,14 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::{ser, Serialize};
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{watch, OnceCell};
 use tokio_postgres::Row;
 
+use crate::enqueue::EnqueueClient;
 use crate::fenced_write::fenced_rows;
 use crate::queue::{exactly_one, Executor};
 use crate::sql_catalogue_generated as sql;
+use crate::task_groups::{TaskGroupContext, TaskGroupLink};
 use crate::{CancelReason, CancellationToken, ClaimedTask, Error, HandlerError, Operation};
 
 /// The fenced task, its cancellation and its durable operations for one handler invocation.
@@ -36,6 +38,9 @@ struct Durable {
     suspended: AtomicBool,
     calls: InFlight<Error>,
     checkpoints: InFlight<HandlerError>,
+    task_group: OnceCell<Option<TaskGroupLink>>,
+    /// Prepares the requests a member task adds to its group, with this invocation's contracts.
+    group_enqueue: EnqueueClient,
 }
 
 impl fmt::Debug for HandlerContext {
@@ -63,6 +68,8 @@ impl HandlerContext {
             suspended: AtomicBool::new(false),
             calls: InFlight::default(),
             checkpoints: InFlight::default(),
+            task_group: OnceCell::new(),
+            group_enqueue: EnqueueClient::new("default"),
         };
         Self { inner: Arc::new(inner) }
     }
@@ -78,6 +85,19 @@ impl HandlerContext {
     /// The pool unfenced reads go through.
     pub(crate) fn pool(&self) -> &deadpool_postgres::Pool {
         &self.inner.pool
+    }
+
+    pub(crate) fn worker_id(&self) -> &str {
+        &self.inner.worker_id
+    }
+
+    /// The task group of this task, read at most once per invocation.
+    pub(crate) fn task_group_link(&self) -> &OnceCell<Option<TaskGroupLink>> {
+        &self.inner.task_group
+    }
+
+    pub(crate) fn group_enqueue(&self) -> &EnqueueClient {
+        &self.inner.group_enqueue
     }
 
     /// Whether a durable call suspended the task, which PostgreSQL has then already settled.
@@ -270,6 +290,12 @@ impl BatchHandlerContext {
     /// See [`HandlerContext::set_progress`].
     pub async fn set_progress<T: Serialize>(&self, progress: &T) -> Result<(), Error> {
         self.0.set_progress(progress).await
+    }
+
+    /// See [`HandlerContext::task_group`]. A task group add does not suspend, so a batch member
+    /// can read its group and add tasks to it.
+    pub fn task_group(&self) -> TaskGroupContext<'_> {
+        self.0.task_group()
     }
 }
 
