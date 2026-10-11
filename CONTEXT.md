@@ -17,6 +17,16 @@ The unit of work Workhorse enqueues, claims, retries, and records: one row in `w
 with an identity that survives retries, waits, and worker changes.
 _Avoid_: Job, message, work item, activity
 
+**Task group**:
+A set of full-tier tasks that Workhorse tracks as one unit. After the group is sealed and every
+member task is terminal, Workhorse enqueues the group's callback tasks. A task joins at most one
+group, and only when it is enqueued.
+_Avoid_: Job batch, task batch, task cohort
+
+**Member task**:
+A task that belongs to a task group. A task that redrive creates from a member task is not a member.
+_Avoid_: Batch job, group item
+
 **Tier**:
 The per-queue setting that decides how much Workhorse records for each of the queue's tasks. It
 belongs to the queue, never to a task or a worker, and changes only while the queue holds no live
