@@ -162,6 +162,10 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       pruneLimit: 100,
       checkpointCounts: [0, 10, 100],
       checkpointReplayPasses: 3,
+      hotGroupTasks: 200,
+      hotGroupWorkers: [2],
+      hotGroupConcurrency: 4,
+      hotGroupRounds: 1,
     },
   },
   default: {
@@ -191,6 +195,10 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       pruneLimit: 1_000,
       checkpointCounts: [0, 10, 100, 1_000],
       checkpointReplayPasses: 5,
+      hotGroupTasks: 10_000,
+      hotGroupWorkers: [4, 16],
+      hotGroupConcurrency: 8,
+      hotGroupRounds: 1,
     },
   },
   full: {
@@ -220,6 +228,10 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       pruneLimit: 10_000,
       checkpointCounts: [0, 10, 100, 300, 1_000, 3_000, 10_000],
       checkpointReplayPasses: 5,
+      hotGroupTasks: 100_000,
+      hotGroupWorkers: [4, 16, 32],
+      hotGroupConcurrency: 8,
+      hotGroupRounds: 2,
     },
   },
 };
@@ -238,6 +250,7 @@ function cloneOperationalOptions(options: OperationalScenarioOptions): Operation
   return {
     ...options,
     checkpointCounts: options.checkpointCounts ? [...options.checkpointCounts] : undefined,
+    hotGroupWorkers: options.hotGroupWorkers ? [...options.hotGroupWorkers] : undefined,
     scenarios: options.scenarios ? [...options.scenarios] : undefined,
   };
 }

@@ -4,6 +4,8 @@ import {
   createHistoryDayV1Sql,
   MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES,
   MAX_BENCHMARK_CHECKPOINTS_PER_TASK,
+  MAX_BENCHMARK_HOT_GROUP_ROUNDS,
+  MAX_BENCHMARK_HOT_GROUP_WORKERS,
   mean,
   operationalScenarioContracts,
   operationalScenarioNames,
@@ -359,6 +361,24 @@ describe("checkpoint replay contract", () => {
   });
 });
 
+describe("hot task group contract", () => {
+  it("compares one group with the same tasks without a group and records the group row wait", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "hot-task-group",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.purpose).toMatch(/without a group/);
+    expect(contract!.invariants.join("\n")).toMatch(/counts every member task once/);
+    expect(contract!.invariants.join("\n")).toMatch(/onFinish callback task exactly once/);
+    expect(contract!.invariants.join("\n")).toMatch(/never waits on a group row/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining(["hotGroupTasks", "hotGroupWorkers", "hotGroupConcurrency"]),
+    );
+    expect(contract!.metrics.join("\n")).toMatch(/lock wait on it/);
+  });
+});
+
 describe("resolveOperationalScenarioOptions", () => {
   it("provides smoke-safe defaults and canonical scenario ordering", () => {
     const resolved = resolveOperationalScenarioOptions();
@@ -385,6 +405,10 @@ describe("resolveOperationalScenarioOptions", () => {
         scheduleSamples: 3,
         checkpointCounts: [0, 5],
         checkpointReplayPasses: 2,
+        hotGroupTasks: 9,
+        hotGroupWorkers: [1, 3],
+        hotGroupConcurrency: 2,
+        hotGroupRounds: 2,
         queuePrefix: " smoke ",
         scenarios: ["health-snapshot", "heartbeat-fencing"],
       }),
@@ -399,6 +423,10 @@ describe("resolveOperationalScenarioOptions", () => {
       scheduleSamples: 3,
       checkpointCounts: [0, 5],
       checkpointReplayPasses: 2,
+      hotGroupTasks: 9,
+      hotGroupWorkers: [1, 3],
+      hotGroupConcurrency: 2,
+      hotGroupRounds: 2,
       queuePrefix: "smoke",
       scenarios: ["heartbeat-fencing", "health-snapshot"],
     });
@@ -445,6 +473,51 @@ describe("resolveOperationalScenarioOptions", () => {
         checkpointReplayPasses: MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES + 1,
       }),
     ).toThrow(RangeError);
+  });
+
+  it("bounds the hot task group options and copies the worker counts", () => {
+    expect(resolveOperationalScenarioOptions()).toMatchObject({
+      hotGroupTasks: 200,
+      hotGroupWorkers: [2],
+      hotGroupConcurrency: 4,
+      hotGroupRounds: 1,
+    });
+    expect(
+      resolveOperationalScenarioOptions({
+        hotGroupTasks: 100_000,
+        hotGroupWorkers: [1, MAX_BENCHMARK_HOT_GROUP_WORKERS],
+        hotGroupConcurrency: 100,
+        hotGroupRounds: MAX_BENCHMARK_HOT_GROUP_ROUNDS,
+      }),
+    ).toMatchObject({
+      hotGroupTasks: 100_000,
+      hotGroupWorkers: [1, MAX_BENCHMARK_HOT_GROUP_WORKERS],
+      hotGroupConcurrency: 100,
+      hotGroupRounds: MAX_BENCHMARK_HOT_GROUP_ROUNDS,
+    });
+    for (const hotGroupWorkers of [
+      [],
+      [0],
+      [1.5],
+      [4, 4],
+      [16, 4],
+      [MAX_BENCHMARK_HOT_GROUP_WORKERS + 1],
+    ]) {
+      expect(() => resolveOperationalScenarioOptions({ hotGroupWorkers })).toThrow(RangeError);
+    }
+    expect(() => resolveOperationalScenarioOptions({ hotGroupTasks: 0 })).toThrow(RangeError);
+    expect(() => resolveOperationalScenarioOptions({ hotGroupTasks: 100_001 })).toThrow(RangeError);
+    expect(() => resolveOperationalScenarioOptions({ hotGroupConcurrency: 101 })).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      resolveOperationalScenarioOptions({ hotGroupRounds: MAX_BENCHMARK_HOT_GROUP_ROUNDS + 1 }),
+    ).toThrow(RangeError);
+
+    const hotGroupWorkers = [1, 2];
+    const resolved = resolveOperationalScenarioOptions({ hotGroupWorkers });
+    hotGroupWorkers.push(3);
+    expect(resolved.hotGroupWorkers).toEqual([1, 2]);
   });
 
   it("copies the checkpoint counts so a caller cannot change a resolved run", () => {
