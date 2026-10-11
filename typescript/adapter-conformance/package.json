@@ -15,7 +15,7 @@
     "@stablemates/workhorse-kysely": "workspace:*",
     "@stablemates/workhorse-prisma": "workspace:*",
     "@stablemates/workhorse-typeorm": "workspace:*",
-    "drizzle-orm": "^0.45.3",
+    "drizzle-orm": "^0.45.4",
     "knex": "3.3.0",
     "kysely": "0.29.6",
     "magicast": "0.5.5",

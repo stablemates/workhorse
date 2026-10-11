@@ -57,9 +57,9 @@
     "typecheck": "tsc -b tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@opentelemetry/api-logs": "0.222.0",
-    "@orpc/client": "1.15.4",
-    "@orpc/server": "1.15.4",
+    "@opentelemetry/api-logs": "0.223.0",
+    "@orpc/client": "1.15.5",
+    "@orpc/server": "1.15.5",
     "@stablemates/workhorse-dashboard-contract": "workspace:*",
     "zod": "4.6.5"
   },

@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/api-logs": "0.222.0",
+    "@opentelemetry/api-logs": "0.223.0",
     "@stablemates/workhorse-dashboard": "workspace:*",
     "@stablemates/workhorse-otel": "workspace:*",
     "@types/node": "^26.6.4",
