@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-10-11 checkpoint replay analysis](benchmarks/2026-10-11-checkpoint-replay-analysis.md): what a full-tier handler pays to replay 0 to 10,000 stored checkpoints on each pass after a durable wait, for SM-1209.
+- [`results/2026-10-11-checkpoint-replay.json`](benchmarks/results/2026-10-11-checkpoint-replay.json): three sequential `full`-profile invocations of the `checkpoint-replay` scenario, with load averages.
 - [2026-09-27 dependency release guard analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md): what the pending-edge probe before a zero-counter release costs `resolve_dependents_many_v1` on PostgreSQL 18 and 15, for SM-937.
 - [`results/2026-09-27-dependency-release-guard.json`](benchmarks/results/2026-09-27-dependency-release-guard.json): three alternating invocations per PostgreSQL version, with per-round load averages.
 - [2026-09-27 fast claim backlog analysis](benchmarks/2026-09-27-fast-claim-backlog-analysis.md): fast-tier claim latency with up to a million delayed rows above due work on PostgreSQL 18, 17, and 15, interpreted in [ADR 0080](decisions/0080-keep-delayed-fast-tier-tasks-in-the-ready-index.md).
@@ -80,6 +82,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `dead-letter-redrive-lifecycle` | cold failure cursor paging, side-effect-free preview, audited redrive, exact replay, immutable sources, and retained lineage                                                                           |
 | `query-listing-lifecycle`       | dedicated routing projection, immutable cursor continuation, default payload omission, redaction before byte bounds, lifecycle-write independence, merged timeline, and operator-index storage         |
 | `progress-lifecycle`            | fenced latest-value updates, identical-value no-op, frequency limit, stale-fence rejection, lookup provenance, terminal retention, and bounded event evidence                                          |
+| `checkpoint-replay`             | save, list-query, and pass timings for each checkpoints-per-task count, replay share of the pass, list execution time, stored bytes, and one-list-per-replay invariants                                |
 | `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                      |
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                                    |
 | `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion; versioned contract validation and redaction timings                                      |
@@ -107,6 +110,11 @@ ceiling, lifecycle transitions do not rewrite routing rows, and retained events 
 no-op, frequency-limit rejection, second accepted revision, and latest-value lookup. Its invariants prove
 stale-fence rejection, terminal retention, and one value-free lifecycle event per accepted change. These
 small-run observations are diagnostics, not an update-latency or throughput claim.
+
+`checkpoint-replay` runs one full-tier task for each count in `checkpointCounts`. Its handler saves
+that many checkpoints, suspends on a durable wait, and replays them on each of
+`checkpointReplayPasses` later passes. The `smoke` profile measures 0, 10, and 100 checkpoints, and
+the `full` profile measures up to 10,000. Its timings describe the host that ran it, not a limit.
 
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
 client-observed duration of each failure transition and their total. It also records enqueue, claim,

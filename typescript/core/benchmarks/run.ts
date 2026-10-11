@@ -160,6 +160,8 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       leaseMs: 100,
       retryDelayMs: 30,
       pruneLimit: 100,
+      checkpointCounts: [0, 10, 100],
+      checkpointReplayPasses: 3,
     },
   },
   default: {
@@ -187,6 +189,8 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       leaseMs: 150,
       retryDelayMs: 75,
       pruneLimit: 1_000,
+      checkpointCounts: [0, 10, 100, 1_000],
+      checkpointReplayPasses: 5,
     },
   },
   full: {
@@ -214,6 +218,8 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       leaseMs: 200,
       retryDelayMs: 100,
       pruneLimit: 10_000,
+      checkpointCounts: [0, 10, 100, 300, 1_000, 3_000, 10_000],
+      checkpointReplayPasses: 5,
     },
   },
 };
@@ -231,6 +237,7 @@ function cloneComparativeOptions(
 function cloneOperationalOptions(options: OperationalScenarioOptions): OperationalScenarioOptions {
   return {
     ...options,
+    checkpointCounts: options.checkpointCounts ? [...options.checkpointCounts] : undefined,
     scenarios: options.scenarios ? [...options.scenarios] : undefined,
   };
 }

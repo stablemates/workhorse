@@ -2,6 +2,8 @@ import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import {
   createHistoryDayV1Sql,
+  MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES,
+  MAX_BENCHMARK_CHECKPOINTS_PER_TASK,
   mean,
   operationalScenarioContracts,
   operationalScenarioNames,
@@ -340,6 +342,23 @@ describe("operational scenario contracts", () => {
   });
 });
 
+describe("checkpoint replay contract", () => {
+  it("defines replay cost evidence by checkpoint count without a performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "checkpoint-replay",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/one logical attempt/);
+    expect(contract!.invariants.join("\n")).toMatch(/one row and one checkpoint_saved event/);
+    expect(contract!.invariants.join("\n")).toMatch(/exactly one list query/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining(["checkpointCounts", "replayPasses", "replayKneeCheckpoints"]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
+  });
+});
+
 describe("resolveOperationalScenarioOptions", () => {
   it("provides smoke-safe defaults and canonical scenario ordering", () => {
     const resolved = resolveOperationalScenarioOptions();
@@ -364,6 +383,8 @@ describe("resolveOperationalScenarioOptions", () => {
         retryDelayMs: 7,
         pruneLimit: 8,
         scheduleSamples: 3,
+        checkpointCounts: [0, 5],
+        checkpointReplayPasses: 2,
         queuePrefix: " smoke ",
         scenarios: ["health-snapshot", "heartbeat-fencing"],
       }),
@@ -376,6 +397,8 @@ describe("resolveOperationalScenarioOptions", () => {
       retryDelayMs: 7,
       pruneLimit: 8,
       scheduleSamples: 3,
+      checkpointCounts: [0, 5],
+      checkpointReplayPasses: 2,
       queuePrefix: "smoke",
       scenarios: ["heartbeat-fencing", "health-snapshot"],
     });
@@ -390,6 +413,45 @@ describe("resolveOperationalScenarioOptions", () => {
         scenarios: ["retry-paths", "retry-paths"],
       }),
     ).toThrow("must not contain duplicates");
+  });
+
+  it("accepts ascending checkpoint counts from zero and rejects every other list", () => {
+    expect(resolveOperationalScenarioOptions().checkpointCounts).toEqual([0, 10, 100]);
+    expect(
+      resolveOperationalScenarioOptions({
+        checkpointCounts: [0, MAX_BENCHMARK_CHECKPOINTS_PER_TASK],
+      }).checkpointCounts,
+    ).toEqual([0, MAX_BENCHMARK_CHECKPOINTS_PER_TASK]);
+    for (const checkpointCounts of [
+      [],
+      [-1],
+      [1.5],
+      [10, 10],
+      [100, 10],
+      [MAX_BENCHMARK_CHECKPOINTS_PER_TASK + 1],
+    ]) {
+      expect(() => resolveOperationalScenarioOptions({ checkpointCounts })).toThrow(RangeError);
+    }
+    expect(() => resolveOperationalScenarioOptions({ checkpointReplayPasses: 0 })).toThrow(
+      RangeError,
+    );
+    expect(
+      resolveOperationalScenarioOptions({
+        checkpointReplayPasses: MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES,
+      }).checkpointReplayPasses,
+    ).toBe(MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES);
+    expect(() =>
+      resolveOperationalScenarioOptions({
+        checkpointReplayPasses: MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES + 1,
+      }),
+    ).toThrow(RangeError);
+  });
+
+  it("copies the checkpoint counts so a caller cannot change a resolved run", () => {
+    const checkpointCounts = [0, 10];
+    const resolved = resolveOperationalScenarioOptions({ checkpointCounts });
+    checkpointCounts.push(20);
+    expect(resolved.checkpointCounts).toEqual([0, 10]);
   });
 });
 
