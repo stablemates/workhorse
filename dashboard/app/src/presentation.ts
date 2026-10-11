@@ -146,6 +146,7 @@ const demoFeatures = [
   "priority-lanes",
   "batch-handlers",
   "payload-contracts",
+  "task-groups",
 ] as const;
 const checkedDemoFeatures: CompleteDashboardOptions<DashboardDemoFeature, typeof demoFeatures> =
   demoFeatures;
@@ -174,6 +175,7 @@ const demoFeatureLabels: Record<DashboardDemoFeature, string> = {
   "priority-lanes": "Priority · three lanes claimed by rank",
   "batch-handlers": "Batch · three members in one digest",
   "payload-contracts": "Contract · validated v1 acceptance",
+  "task-groups": "Task group · four members and three callbacks",
 };
 
 export const dashboardDemoFeatureExamples: ReadonlyArray<{

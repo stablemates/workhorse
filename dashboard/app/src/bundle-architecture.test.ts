@@ -11,7 +11,7 @@ const appShell = readFileSync(new URL("./shell/AppShell.tsx", import.meta.url), 
 
 describe("dashboard bundle boundaries", () => {
   it("keeps route pages and the activity chart behind dynamic imports", () => {
-    expect(controller.match(/lazy\(\(\) =>\s*import\(/g)).toHaveLength(7);
+    expect(controller.match(/lazy\(\(\) =>\s*import\(/g)).toHaveLength(8);
     expect(taskList).not.toContain("@mantine/charts");
     expect(activityChart).toContain('from "@mantine/charts"');
   });

@@ -11,6 +11,8 @@ import type {
   DashboardTasksCursorPage,
   DashboardWorkersPage,
   DashboardSettingsPage,
+  DashboardTaskGroupDetail,
+  DashboardTaskGroupsPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { formatCount } from "./count-format.js";
 import {
@@ -28,6 +30,7 @@ import {
 import { dashboardTaskFilters } from "@stablemates/workhorse-dashboard-server/wire";
 import { parseEventsLocation, type EventsLocationState } from "./events-location.js";
 import { parseTaskLocation, taskLocationHref, type TaskLocationState } from "./task-location.js";
+import { parseTaskGroupsLocation, type TaskGroupsLocationState } from "./task-groups-location.js";
 
 export const DashboardClientContext = createContext<DashboardClient | null>(null);
 export function useDashboardClient(): DashboardClient {
@@ -159,6 +162,7 @@ export const activitySeriesColors = [
 export type PageRoute =
   | "/tasks"
   | "/events"
+  | "/groups"
   | "/cron"
   | "/queues"
   | "/system"
@@ -181,11 +185,16 @@ export type DurableDemoScenario =
 export type PageData =
   | { route: "/tasks"; value: DashboardTasksPage | DashboardTasksCursorPage }
   | { route: "/events"; value: DashboardEventsPage }
+  | { route: "/groups"; value: TaskGroupsPageData }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/queues"; value: DashboardQueuesPage }
   | { route: "/system"; value: DashboardSystemPage }
   | { route: "/workers"; value: DashboardWorkersPage }
   | { route: "/settings"; value: DashboardSettingsPage };
+/** The task groups page shows the group list or the detail of one group. */
+export type TaskGroupsPageData =
+  | { kind: "list"; list: DashboardTaskGroupsPage }
+  | { kind: "detail"; detail: DashboardTaskGroupDetail };
 export type LoadState =
   | { status: "loading"; data: PageData | null; error: null }
   | { status: "ready"; data: PageData; error: null }
@@ -193,6 +202,7 @@ export type LoadState =
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
   "/events",
+  "/groups",
   "/cron",
   "/queues",
   "/system",
@@ -243,6 +253,7 @@ export function mountedHref(basePath: string, href: string): string {
 export function readLocation(basePath = ""): {
   route: PageRoute;
   events: EventsLocationState;
+  groups: TaskGroupsLocationState;
 } & TaskLocationState {
   const pathname =
     basePath && window.location.pathname.startsWith(`${basePath}/`)
@@ -256,7 +267,8 @@ export function readLocation(basePath = ""): {
   return {
     route,
     events: parseEventsLocation(window.location.search),
-    ...parseTaskLocation(route === "/events" ? "" : window.location.search, {
+    groups: parseTaskGroupsLocation(route === "/groups" ? window.location.search : ""),
+    ...parseTaskLocation(route === "/events" || route === "/groups" ? "" : window.location.search, {
       period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
       group:
         storedGroup && activityGroupings.some(({ value }) => value === storedGroup)

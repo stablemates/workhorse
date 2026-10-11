@@ -243,6 +243,23 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Redrives up to limit dead letters matching queue, taskType, and tags, resuming from cursor. Every result is reported, including the sources PostgreSQL refused; nextCursor continues from where this page stopped.",
   },
+  taskGroups: {
+    summary: "List task groups",
+    description:
+      "Returns one page of task groups, newest first, with the state, the result, the counts, the times, and the requested callbacks of each group. state filters by open, sealed, or finished; hasMore is true when a later page has a group.",
+  },
+  taskGroupDetail: {
+    summary: "Read one task group",
+    description:
+      "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. eventsTruncated is true when the group has more events than the response carries.",
+    notFound: "Task group not found",
+  },
+  cancelTaskGroup: {
+    summary: "Cancel a task group",
+    description:
+      "Seals the group and cancels each member task that is not terminal, then returns the group snapshot. The canceled members count as not succeeded, so the onFinish and onFailure callbacks run when the group finishes. A finished group does not change. audit.reason is required.",
+    notFound: "Task group not found",
+  },
 };
 
 const errorEnvelopeName = "ErrorEnvelope";
@@ -332,6 +349,7 @@ function concreteExample(value: unknown, location: string): unknown {
 function capturePlaceholder(name: string, location: string): unknown {
   if (name.endsWith("Task")) return placeholderUuid;
   if (name.endsWith("Fence")) return 1;
+  if (name.endsWith("Group")) return placeholderUuid;
   // The one non-task capture is an event id, `event:<uuid>`, taken from the events page.
   if (name === "eventDetailId") return `event:${placeholderUuid}`;
   throw new Error(`${location} cites capture ${name}, whose placeholder is unknown`);

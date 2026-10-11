@@ -115,6 +115,12 @@
     "humanWaits": {
       "mutation": false
     },
+    "taskGroups": {
+      "mutation": false
+    },
+    "taskGroupDetail": {
+      "mutation": false
+    },
     "enqueueTest": {
       "mutation": true
     },
@@ -158,6 +164,9 @@
       "mutation": true
     },
     "redriveDeadLetters": {
+      "mutation": true
+    },
+    "cancelTaskGroup": {
       "mutation": true
     }
   }

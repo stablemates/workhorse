@@ -139,9 +139,10 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 65 and newer inside the major line, and client protocol 5 only. Schema version 65
-is the floor because it adds the task group functions that every SDK catalogue calls. Earlier, the
-floor was 54, because earlier schemas treat the terminal failure override as an immediate retry.
+schema versions 66 and newer inside the major line, and client protocol 5 only. Schema version 66
+is the floor because it adds `dashboard_task_groups_v1`, which the dashboard of each SDK calls.
+Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor
+was 54, because earlier schemas treat the terminal failure override as an immediate retry.
 
 `MINIMUM_SCHEMA_VERSION` holds the `schema.minimumVersion` value of `protocol/v1/manifest.json`.
 That value is derived, not written by hand. It is the newest schema version that added an
@@ -217,7 +218,7 @@ executor that only counts empty polls fails on every run instead of once under l
 All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 65, includes it.
+Thus workers require schema version 54 or newer. The current floor, 66, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -500,7 +501,7 @@ Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
 
-`python/src/workhorse/_protocol.py` accepts schema version 65 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 66 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and

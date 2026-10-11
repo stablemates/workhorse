@@ -56,7 +56,9 @@ module Stablemates
             "revertRetentionPolicy" => method(:revert_retention_policy),
             "runTaskNow" => method(:run_task_now), "cancelTask" => method(:cancel_task),
             "signalTask" => method(:signal_task), "completeHumanWait" => method(:complete_human_wait),
-            "redriveTask" => method(:redrive_task), "redriveDeadLetters" => method(:redrive_dead_letters)
+            "redriveTask" => method(:redrive_task), "redriveDeadLetters" => method(:redrive_dead_letters),
+            "taskGroups" => method(:task_groups), "taskGroupDetail" => method(:task_group_detail),
+            "cancelTaskGroup" => method(:cancel_task_group)
           }
         end
 
@@ -250,6 +252,23 @@ module Stablemates
             "results" => page.results.map { |result| redrive_result(result) },
             "nextCursor" => next_cursor && {"finishedAt" => next_cursor.finished_at, "taskId" => next_cursor.task_id}
           }
+        end
+
+        # The task group procedures (ADR 0095) run the statements that generate-bindings.ts copies
+        # from the TypeScript server, so every backend answers them with the same JSON.
+        def task_groups(input, _actor) = result(V1::TASK_GROUPS, input)
+
+        def task_group_detail(input, _actor)
+          found(result(V1::TASK_GROUP_DETAIL, input.merge("canCancel" => !@read_only)), "Task group not found")
+        end
+
+        # Seals the group and cancels each member task that is not terminal. The authenticated
+        # actor is the actor of the cancel.
+        def cancel_task_group(input, actor)
+          audit = audit(input, actor)
+          request = {"id" => input.fetch("id"), "actor" => audit.actor, "reason" => audit.reason,
+                     "requestId" => audit.request_id}
+          found(result(V1::CANCEL_TASK_GROUP, request), "Task group not found")
         end
 
         private

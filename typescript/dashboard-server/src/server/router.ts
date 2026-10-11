@@ -25,6 +25,8 @@ import {
   dashboardTaskValueKinds,
   dashboardTaskPriorityMax,
   dashboardTaskSorts,
+  dashboardTaskGroupPageSizes,
+  dashboardTaskGroupStateFilters,
 } from "../wire.js";
 import { z } from "zod";
 import type {
@@ -55,6 +57,8 @@ import {
   readDashboardTasksCursor,
   readDashboardWorkers,
   readDashboardSettings,
+  readDashboardTaskGroups,
+  readDashboardTaskGroupDetail,
 } from "./read-model.js";
 
 export interface DashboardRpcContext {
@@ -250,6 +254,7 @@ const demoFeatureValues = [
   "priority-lanes",
   "batch-handlers",
   "payload-contracts",
+  "task-groups",
 ] as const;
 const checkedDemoFeatureValues: CompleteDashboardOptions<
   DashboardDemoFeature,
@@ -453,6 +458,40 @@ const completeHumanWaitInput = z.object({
   audit: auditSchema,
 });
 
+const taskGroupPageSizeValues: CompleteDashboardOptions<
+  (typeof dashboardTaskGroupPageSizes)[number],
+  readonly [25, 50, 100]
+> = [25, 50, 100];
+const taskGroupPageSize = z
+  .union([
+    z.literal(taskGroupPageSizeValues[0]),
+    z.literal(taskGroupPageSizeValues[1]),
+    z.literal(taskGroupPageSizeValues[2]),
+  ])
+  .default(50);
+/** One page of the task group list, newest first. */
+const taskGroupsInput = z.object({
+  state: z.enum(dashboardTaskGroupStateFilters).default("all"),
+  page: dashboardPage,
+  pageSize: taskGroupPageSize,
+});
+/**
+ * One task group and one page of its member tasks.
+ *
+ * `after` is the position of the last member of the previous page, as `nextAfter` reported it.
+ * Members are numbered from 1, so null and 0 both start at the first member.
+ */
+const taskGroupDetailInput = z.object({
+  id: z.uuid(),
+  after: z.number().int().min(0).max(100_000).nullable().default(null),
+  pageSize: taskGroupPageSize,
+});
+/** One task group cancellation. `cancel_task_group_v1` requires a reason. */
+const cancelTaskGroupInput = z.object({
+  id: z.uuid(),
+  audit: auditSchema,
+});
+
 function auditWithOccurredAt<
   TAudit extends { actor: string; reason: string | null; requestId: string },
 >(audit: TAudit, authenticatedActor: string): TAudit & { occurredAt: string } {
@@ -592,6 +631,23 @@ export const dashboardRouter = {
         context.readQueueHealth,
       ),
     ),
+    /** One page of task groups (ADR 0095), newest first, with an optional state filter. */
+    taskGroups: procedure
+      .input(taskGroupsInput)
+      .handler(({ context, input }) => readDashboardTaskGroups(context.database, input)),
+    /**
+     * One task group with its progress counts, one page of its member tasks, its callbacks, and
+     * its newest events.
+     */
+    taskGroupDetail: procedure.input(taskGroupDetailInput).handler(async ({ context, input }) => {
+      const detail = await readDashboardTaskGroupDetail(context.database, {
+        ...input,
+        canCancel:
+          context.operator.mode === "writable" && Boolean(context.taskController?.cancelTaskGroup),
+      });
+      if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task group not found" });
+      return detail;
+    }),
     enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {
       if (!context.operator.enqueueTest) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
@@ -797,6 +853,26 @@ export const dashboardRouter = {
           input.cursor,
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
+      }),
+    /**
+     * Cancel one task group through `Admin.cancelTaskGroup`.
+     *
+     * Workhorse seals the group and cancels each member task that is not terminal. The canceled
+     * members count as not succeeded, so the group finishes as usual and its `onFinish` and
+     * `onFailure` callbacks run. A finished group does not change.
+     */
+    cancelTaskGroup: mutationProcedure
+      .input(cancelTaskGroupInput)
+      .handler(async ({ context, input }) => {
+        if (!context.taskController?.cancelTaskGroup) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        const group = await context.taskController.cancelTaskGroup(
+          input.id,
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
+        if (!group) throw new ORPCError("NOT_FOUND", { message: "Task group not found" });
+        return group;
       }),
   },
 };

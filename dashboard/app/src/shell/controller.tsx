@@ -71,6 +71,7 @@ import { readyLoadState, readyTaskCounts } from "../render-identity.js";
 import { subscribeTimeZone } from "../preferences.js";
 import type { DemoTaskOptions } from "../pages/tasks.js";
 import { seekDashboardTaskPage } from "../task-page-seek.js";
+import { taskGroupsListingKey } from "../task-groups-location.js";
 import { createDashboardRouter } from "../dashboard-routing.js";
 import { createDashboardRefreshController } from "../dashboard-refresh-controller.js";
 import { useMutationInFlight } from "../mutation-in-flight.js";
@@ -81,6 +82,9 @@ const TasksPage = lazy(() =>
 );
 const EventsPage = lazy(() =>
   import("../pages/events.js").then((module) => ({ default: module.EventsPage })),
+);
+const TaskGroupsPage = lazy(() =>
+  import("../pages/task-groups.js").then((module) => ({ default: module.TaskGroupsPage })),
 );
 const CronPage = lazy(() =>
   import("../pages/schedules.js").then((module) => ({ default: module.CronPage })),
@@ -110,6 +114,7 @@ export function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
 }
 export function routeTitle(route: PageRoute): string {
   if (route === "/events") return "events";
+  if (route === "/groups") return "task groups";
   if (route === "/cron") return "schedules";
   if (route === "/queues") return "queues";
   if (route === "/system") return "system health";
@@ -292,6 +297,11 @@ export function useDashboardController(
   const eventsKey = eventsListingKey(eventsQuery);
   const eventsRef = useRef(eventsQuery);
   eventsRef.current = eventsQuery;
+  // The task groups page follows the same shape: the list filters or the open group and its
+  // member page key the request.
+  const groupsKey = taskGroupsListingKey(location.groups);
+  const groupsRef = useRef(location.groups);
+  groupsRef.current = location.groups;
 
   /**
    * Fetch one page and hand back what applying its answer would do.
@@ -303,7 +313,7 @@ export function useDashboardController(
   const preparePageLoad = useCallback(
     async ({ background = false }: { background?: boolean } = {}): Promise<() => void> => {
       if (shouldDiscardBackgroundRefresh(background)) return applyNothing;
-      const key = JSON.stringify([route, listingKey, systemWindow, eventsKey]);
+      const key = JSON.stringify([route, listingKey, systemWindow, eventsKey, groupsKey]);
       if (background && refreshRequests.has(key)) return applyNothing;
       const activeRequest = ++requestId.current;
       // The answer is judged against the listing that asked for it. While a pager click is in
@@ -364,6 +374,29 @@ export function useDashboardController(
                   search: events.search,
                   taskId: events.taskId,
                 }),
+              };
+            } else if (route === "/groups") {
+              const groups = groupsRef.current;
+              pageData = {
+                route: "/groups",
+                value:
+                  groups.groupId === null
+                    ? {
+                        kind: "list",
+                        list: await client.taskGroups({
+                          state: groups.state,
+                          page: groups.page,
+                          pageSize: groups.pageSize,
+                        }),
+                      }
+                    : {
+                        kind: "detail",
+                        detail: await client.taskGroupDetail({
+                          id: groups.groupId,
+                          after: groups.after,
+                          pageSize: groups.pageSize,
+                        }),
+                      },
               };
             } else if (route === "/cron") {
               pageData = { route: "/cron", value: await client.cron() };
@@ -433,6 +466,7 @@ export function useDashboardController(
       listingKey,
       systemWindow,
       eventsKey,
+      groupsKey,
       replace,
       shouldDiscardBackgroundRefresh,
       refreshRequests,
@@ -976,6 +1010,21 @@ export function useDashboardController(
         query={eventsQuery}
         setQuery={setEventsQuery}
         inspectEvent={inspectEvent}
+      />
+    );
+  } else if (loadState.data?.route === "/groups") {
+    content = (
+      <TaskGroupsPage
+        data={loadState.data.value}
+        location={location.groups}
+        navigation={{
+          href: (path) => mountedHref(basePath, path),
+          followLink: handleLink,
+          taskPath: (taskId) => taskLocationHref({ ...parseTaskLocation(""), taskId }),
+        }}
+        navigate={navigate}
+        auditActor={auditActor}
+        reload={loadPage}
       />
     );
   } else if (loadState.data?.route === "/cron") {

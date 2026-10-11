@@ -28,8 +28,15 @@ import {
   DashboardWorkersPage,
   DashboardSettingsPage,
   DashboardMaintenanceLoopCadences,
+  DashboardTaskGroupDetail,
+  DashboardTaskGroupsPage,
+  DashboardTaskGroupStateFilter,
 } from "../wire.js";
-import { sql, type DashboardDatabase } from "./sql.js";
+import { sharedDashboardStatement, sql, type DashboardDatabase } from "./sql.js";
+import {
+  dashboardTaskGroupDetailStatement,
+  dashboardTaskGroupsStatement,
+} from "./task-group-statements.js";
 import type { DashboardDurabilityProjector } from "./types.js";
 
 /**
@@ -504,4 +511,26 @@ export async function readDashboardEventDetail(
     error: redactErrorStack(detail.error),
     details: redactEventDetailsErrorStack(detail.details),
   };
+}
+
+/** One page of task groups, newest first, with an optional state filter. */
+export async function readDashboardTaskGroups(
+  database: DashboardDatabase,
+  input: { state: DashboardTaskGroupStateFilter; page: number; pageSize: number },
+): Promise<DashboardTaskGroupsPage> {
+  const rows = await database.execute<{ result: DashboardTaskGroupsPage }>(
+    sharedDashboardStatement(dashboardTaskGroupsStatement, [JSON.stringify(input)]),
+  );
+  return expectOneRow(rows, "the dashboard task groups read").result;
+}
+
+/** One task group with one page of its member tasks, or null when the group does not exist. */
+export async function readDashboardTaskGroupDetail(
+  database: DashboardDatabase,
+  input: { id: string; after: number | null; pageSize: number; canCancel: boolean },
+): Promise<DashboardTaskGroupDetail | null> {
+  const rows = await database.execute<{ result: DashboardTaskGroupDetail | null }>(
+    sharedDashboardStatement(dashboardTaskGroupDetailStatement, [JSON.stringify(input)]),
+  );
+  return expectOneRow(rows, "the dashboard task group detail read").result;
 }

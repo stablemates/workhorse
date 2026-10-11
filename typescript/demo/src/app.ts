@@ -335,6 +335,12 @@ interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
   reason: string | null;
 }
 
+/**
+ * The families the dashboard "Enqueue test task" menu offers: the showcase catalog and the task
+ * group example. A task group is not a showcase family, because it has no task type of its own.
+ */
+type DemoMenuFeature = DemoFeatureFamily | "task-groups";
+
 export interface DashboardOperator {
   mode: "read-only" | "writable";
   enqueueTest?: (
@@ -351,7 +357,7 @@ export interface DashboardOperator {
     audit: AuditContext,
     scenario?: DurableDemoScenario,
     priority?: number,
-    feature?: DemoFeatureFamily,
+    feature?: DemoMenuFeature,
   ) => Promise<{ taskId: string; outcome?: "accepted" | "replayed" }>;
 }
 
@@ -1185,6 +1191,59 @@ async function enqueueFeatureMenuExample(
   };
 }
 
+/** The member tasks of the task group menu example: three that succeed and one that fails. */
+const DEMO_TASK_GROUP_MEMBERS = [
+  ["ingress-routing", DEMO_FEATURE_MENU_EXAMPLES["ingress-routing"]],
+  ["ingress-routing", DEMO_FEATURE_MENU_EXAMPLES["ingress-routing"]],
+  ["timing-controls", DEMO_FEATURE_MENU_EXAMPLES["timing-controls"]],
+  ["dead-letters-redrive", DEMO_FEATURE_MENU_EXAMPLES["dead-letters-redrive"]],
+] as const satisfies ReadonlyArray<readonly [DemoFeatureFamily, DemoFeatureExample]>;
+
+/**
+ * Create one sealed task group (ADR 0095) with four member tasks and all three callbacks.
+ *
+ * One member always fails, so the group finishes with the result `failed`: Workhorse enqueues the
+ * `onFinish` and `onFailure` callbacks, and the `onSuccess` callback stays requested but not
+ * enqueued. The task groups page then shows each callback state.
+ */
+async function enqueueTaskGroupExample(
+  queue: Queue,
+  priority: number,
+): Promise<{ taskId: string; outcome: "accepted"; record: unknown }> {
+  const request = (family: DemoFeatureFamily, example: DemoFeatureExample, label?: string) => ({
+    type: demoFeatureShowcaseFamily(family).taskType,
+    payload: {
+      ...showcaseSeedPayload(
+        demoFeatureShowcaseFamily(family),
+        example,
+        DEMO_FEATURE_OPERATOR_SOURCE,
+      ),
+      ...(label === undefined ? {} : { label }),
+    },
+    options: {
+      maxAttempts: example.maxAttempts,
+      tags: [...example.tags, "task-group"],
+      priority,
+    },
+  });
+  const callback = (label: string) =>
+    request("ingress-routing", DEMO_FEATURE_MENU_EXAMPLES["ingress-routing"], label);
+  const { group, tasks } = await queue.taskGroup(
+    {
+      onFinish: callback("Task group finished"),
+      onSuccess: callback("Every member task of the group succeeded"),
+      onFailure: callback("A member task of the group did not succeed"),
+    },
+    (builder) =>
+      builder.add(DEMO_TASK_GROUP_MEMBERS.map(([family, example]) => request(family, example))),
+  );
+  return {
+    taskId: tasks[0]!.taskId,
+    outcome: "accepted",
+    record: { groupId: group.id, memberTaskIds: tasks.map((task) => task.taskId), priority },
+  };
+}
+
 async function enqueueOutcomeTestTask(
   queue: Queue,
   kind: Parameters<typeof demoTestTask>[0],
@@ -1213,21 +1272,26 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = kind === "feature" ? `task:feature:${feature}` : `task:${kind}`;
       return runOperatorTransaction(database, async (transaction) => {
-        // A batch feature example accepts its whole member group at once, so it needs room for all.
+        // A batch feature example and the task group example accept several tasks at once, so
+        // they need room for all of them.
         await assertDemoOperatorWorkBudget(
           transaction,
-          kind === "feature" && feature !== undefined
-            ? (DEMO_FEATURE_MENU_EXAMPLES[feature].seedCount ?? 1)
-            : 1,
+          kind !== "feature" || feature === undefined
+            ? 1
+            : feature === "task-groups"
+              ? DEMO_TASK_GROUP_MEMBERS.length
+              : (DEMO_FEATURE_MENU_EXAMPLES[feature].seedCount ?? 1),
         );
         const workhorse = createDrizzleAdapter(transaction, {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
         const { taskId, outcome, record } =
-          kind === "feature"
-            ? await enqueueFeatureMenuExample(workhorse.queue, feature, priority)
-            : await enqueueOutcomeTestTask(workhorse.queue, kind, scenario, priority);
+          kind !== "feature"
+            ? await enqueueOutcomeTestTask(workhorse.queue, kind, scenario, priority)
+            : feature === "task-groups"
+              ? await enqueueTaskGroupExample(workhorse.queue, priority)
+              : await enqueueFeatureMenuExample(workhorse.queue, feature, priority);
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
@@ -1416,6 +1480,17 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
               continued: action.cursor !== null,
             };
             target = `dead-letters:${queue ?? "*"}/${taskType ?? "*"}`;
+            break;
+          }
+          case "cancelTaskGroup": {
+            // The task_group row keeps its counts at 0 until the group finishes (ADR 0096), so
+            // the live total comes from the snapshot.
+            const rows = await transaction.execute<{ state: string; total: number }>(sql`
+              SELECT state, total FROM workhorse.get_task_group_v1(${action.groupId}::uuid)
+            `);
+            const row = rows.rows[0];
+            before = { state: row?.state ?? null, total: row?.total ?? null };
+            target = `task-group:${action.groupId}`;
             break;
           }
           case "setWorkerPaused": {

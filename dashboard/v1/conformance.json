@@ -910,6 +910,176 @@
               }
             ]
           }
+        },
+        {
+          "id": "create-task-group",
+          "sql": "SELECT jsonb_build_object('groupId', min(group_id::text), 'members', count(task_id)) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+          "parameters": [
+            {
+              "onFinish": {
+                "queue": "conformance-groups",
+                "type": "conformance.group-callback",
+                "payload": {
+                  "callback": "finish"
+                }
+              },
+              "onSuccess": {
+                "queue": "conformance-groups",
+                "type": "conformance.group-callback",
+                "payload": {
+                  "callback": "success"
+                }
+              },
+              "onFailure": {
+                "queue": "conformance-groups",
+                "type": "conformance.group-callback",
+                "payload": {
+                  "callback": "failure"
+                }
+              }
+            },
+            [
+              {
+                "queue": "conformance-groups",
+                "type": "conformance.group-member",
+                "payload": {
+                  "member": 1
+                },
+                "tags": [
+                  "conformance"
+                ]
+              },
+              {
+                "queue": "conformance-groups",
+                "type": "conformance.group-member",
+                "payload": {
+                  "member": 2
+                },
+                "tags": [
+                  "conformance"
+                ]
+              },
+              {
+                "queue": "conformance-groups",
+                "type": "conformance.group-member",
+                "payload": {
+                  "member": 3
+                },
+                "tags": [
+                  "conformance"
+                ]
+              }
+            ],
+            true
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "groupId": {
+                    "$type": "uuid"
+                  },
+                  "members": 3
+                }
+              }
+            ]
+          },
+          "capture": {
+            "taskGroup": "0.value.groupId"
+          }
+        },
+        {
+          "id": "claim-task-group-member",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-groups",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "groupMemberTask": "0.value.taskId",
+            "groupMemberFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "complete-task-group-member",
+          "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "groupMemberTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "groupMemberFence"
+            },
+            {
+              "ok": true
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "create-cancel-task-group",
+          "sql": "SELECT jsonb_build_object('groupId', min(group_id::text), 'members', count(task_id)) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+          "parameters": [
+            {
+              "onFinish": {
+                "queue": "conformance-groups",
+                "type": "conformance.group-callback",
+                "payload": {
+                  "callback": "finish"
+                }
+              }
+            },
+            [
+              {
+                "queue": "conformance-groups",
+                "type": "conformance.group-member",
+                "payload": {
+                  "member": 4
+                },
+                "tags": [
+                  "conformance"
+                ]
+              }
+            ],
+            false
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "groupId": {
+                    "$type": "uuid"
+                  },
+                  "members": 1
+                }
+              }
+            ]
+          },
+          "capture": {
+            "cancelTaskGroup": "0.value.groupId"
+          }
         }
       ]
     },
@@ -937,14 +1107,14 @@
             "status": 200,
             "body": {
               "json": {
-                "all": 11,
-                "queued": 3,
+                "all": 15,
+                "queued": 6,
                 "blocked": 0,
                 "retried": 0,
                 "running": 0,
                 "waiting": 2,
                 "canceled": 0,
-                "completed": 2,
+                "completed": 3,
                 "discarded": 3,
                 "scheduled": 3
               }
@@ -967,6 +1137,164 @@
                 "count": "none",
                 "queue": null,
                 "tasks": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
                   {
                     "id": {
                       "$ref": "redriveBatchTask"
@@ -1396,7 +1724,7 @@
                     "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 11,
+                "total": 15,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -1465,6 +1793,7 @@
                 ],
                 "queues": [
                   "conformance",
+                  "conformance-groups",
                   "conformance-preserved",
                   "conformance-purge",
                   "conformance-redrive"
@@ -1475,6 +1804,7 @@
                 "taskTypes": [
                   "conformance.cancel-target",
                   "conformance.fail",
+                  "conformance.group-member",
                   "conformance.human",
                   "conformance.preserve",
                   "conformance.purge",
@@ -1506,6 +1836,7 @@
                 "groups": [
                   "conformance.cancel-target",
                   "conformance.fail",
+                  "conformance.group-member",
                   "conformance.human",
                   "conformance.preserve",
                   "conformance.purge",
@@ -1789,6 +2120,216 @@
                 "count": "none",
                 "total": 26,
                 "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "succeeded",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "attempt": 1,
+                    "details": {
+                      "fence_token": "8"
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": "conformance-worker",
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "attempt",
+                    "type": "succeeded",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "attempt": 1,
+                    "details": null,
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": "conformance-worker",
+                    "durationMs": {
+                      "$type": "integer"
+                    },
+                    "fenceToken": "8",
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "claimed",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "8"
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": "conformance-worker",
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "queue": "conformance-groups",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "taskType": "conformance.group-member",
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
                   {
                     "id": {
                       "$type": "string"
@@ -2329,202 +2870,6 @@
                       "$type": "timestamp"
                     },
                     "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "failed",
-                    "queue": "conformance",
-                    "taskId": {
-                      "$ref": "failedTask"
-                    },
-                    "attempt": 1,
-                    "details": {
-                      "error": {
-                        "name": "Error",
-                        "message": "conformance.fail failed"
-                      }
-                    },
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.fail",
-                    "workerId": "conformance-worker",
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "attempt",
-                    "type": "failed",
-                    "queue": "conformance",
-                    "taskId": {
-                      "$ref": "failedTask"
-                    },
-                    "attempt": 1,
-                    "details": null,
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.fail",
-                    "workerId": "conformance-worker",
-                    "durationMs": {
-                      "$type": "integer"
-                    },
-                    "fenceToken": "3",
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": "conformance.fail failed"
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "claimed",
-                    "queue": "conformance",
-                    "taskId": {
-                      "$ref": "failedTask"
-                    },
-                    "attempt": 1,
-                    "details": {
-                      "worker_id": "conformance-worker",
-                      "expires_at": {
-                        "$type": "timestamp"
-                      },
-                      "fence_token": "3"
-                    },
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.fail",
-                    "workerId": "conformance-worker",
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "enqueued",
-                    "queue": "conformance",
-                    "taskId": {
-                      "$ref": "failedTask"
-                    },
-                    "attempt": null,
-                    "details": {
-                      "state": "ready",
-                      "run_at": {
-                        "$type": "timestamp"
-                      },
-                      "priority": 0,
-                      "deadline_at": null,
-                      "execution_timeout_ms": null
-                    },
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.fail",
-                    "workerId": null,
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "succeeded",
-                    "queue": "conformance-preserved",
-                    "taskId": {
-                      "$ref": "preservedTask"
-                    },
-                    "attempt": 1,
-                    "details": {
-                      "fence_token": "2"
-                    },
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.preserve",
-                    "workerId": "conformance-worker",
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "attempt",
-                    "type": "succeeded",
-                    "queue": "conformance-preserved",
-                    "taskId": {
-                      "$ref": "preservedTask"
-                    },
-                    "attempt": 1,
-                    "details": null,
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.preserve",
-                    "workerId": "conformance-worker",
-                    "durationMs": {
-                      "$type": "integer"
-                    },
-                    "fenceToken": "2",
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "checkpoint_saved",
-                    "queue": "conformance-preserved",
-                    "taskId": {
-                      "$ref": "preservedTask"
-                    },
-                    "attempt": 1,
-                    "details": {
-                      "name": "preserved-step",
-                      "fence_token": "2"
-                    },
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "taskType": "conformance.preserve",
-                    "workerId": "conformance-worker",
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
                   }
                 ],
                 "window": "1h",
@@ -2574,24 +2919,27 @@
                   "$ref": "eventDetailId"
                 },
                 "kind": "event",
-                "type": "failed",
+                "type": "enqueued",
                 "error": null,
-                "queue": "conformance-redrive",
+                "queue": "conformance-groups",
                 "taskId": {
-                  "$ref": "redriveBatchTask"
+                  "$type": "uuid"
                 },
-                "attempt": 1,
+                "attempt": null,
                 "details": {
-                  "error": {
-                    "name": "Error",
-                    "message": "conformance.redrive.batch failed"
-                  }
+                  "state": "ready",
+                  "run_at": {
+                    "$type": "timestamp"
+                  },
+                  "priority": 0,
+                  "deadline_at": null,
+                  "execution_timeout_ms": null
                 },
                 "recordId": {
                   "$type": "uuid"
                 },
-                "taskType": "conformance.redrive.batch",
-                "workerId": "conformance-worker",
+                "taskType": "conformance.group-member",
+                "workerId": null,
                 "claimedAt": null,
                 "startedAt": null,
                 "durationMs": null,
@@ -2736,6 +3084,22 @@
                   },
                   {
                     "tier": "full",
+                    "queue": "conformance-groups",
+                    "ready": 3,
+                    "active": 0,
+                    "failed": 0,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 1,
+                    "recordClaims": false,
+                    "recordAttempts": false,
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "terminalCountsApproximate": false
+                  },
+                  {
+                    "tier": "full",
                     "queue": "conformance-preserved",
                     "ready": 0,
                     "active": 0,
@@ -2808,9 +3172,9 @@
               "json": {
                 "kpis": {
                   "drain": {
-                    "netPerMinute": -0.1,
-                    "enqueuedPerMinute": 0.18333333333333332,
-                    "completedPerMinute": 0.08333333333333333
+                    "netPerMinute": -0.15,
+                    "enqueuedPerMinute": 0.25,
+                    "completedPerMinute": 0.1
                   },
                   "lease": {
                     "active": 0,
@@ -2845,7 +3209,7 @@
                     "dueSoon": 0
                   },
                   "backlog": {
-                    "ready": 3,
+                    "ready": 6,
                     "oldestReadyMs": {
                       "$type": "string"
                     }
@@ -2869,8 +3233,8 @@
                     "overdueTimeouts": 0
                   },
                   "errorRate": {
-                    "delta": 0.6,
-                    "current": 0.6,
+                    "delta": 0.5,
+                    "current": 0.5,
                     "previous": 0
                   },
                   "queueWait": {
@@ -2933,6 +3297,30 @@
                     "concurrencyPolicy": null,
                     "enqueuedPerMinute": 0.11666666666666667,
                     "completedPerMinute": 0.03333333333333333
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "ready": 3,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": {
+                      "$type": "string"
+                    },
+                    "priorityBacklog": [
+                      {
+                        "ready": 3,
+                        "priority": 0,
+                        "oldestReadyMs": {
+                          "$type": "string"
+                        }
+                      }
+                    ],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.06666666666666667,
+                    "completedPerMinute": 0.016666666666666666
                   },
                   {
                     "queue": "conformance-preserved",
@@ -4853,7 +5241,7 @@
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 5,
+                    "completedAttempts": 6,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -5026,7 +5414,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "tasks": 11,
+                    "tasks": 15,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -5440,6 +5828,164 @@
                 "count": "none",
                 "queue": null,
                 "tasks": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
                   {
                     "id": {
                       "$ref": "redriveBatchTask"
@@ -5885,6 +6431,395 @@
               }
             }
           }
+        },
+        {
+          "id": "task-groups",
+          "procedure": "taskGroups",
+          "request": {
+            "json": {}
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "state": "all",
+                "groups": [
+                  {
+                    "id": {
+                      "$ref": "cancelTaskGroup"
+                    },
+                    "state": "open",
+                    "counts": {
+                      "total": 1,
+                      "failed": 0,
+                      "pending": 1,
+                      "canceled": 0,
+                      "succeeded": 0
+                    },
+                    "result": null,
+                    "sealedAt": null,
+                    "callbacks": [
+                      {
+                        "kind": "onFinish",
+                        "taskId": null
+                      }
+                    ],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  },
+                  {
+                    "id": {
+                      "$ref": "taskGroup"
+                    },
+                    "state": "sealed",
+                    "counts": {
+                      "total": 3,
+                      "failed": 0,
+                      "pending": 2,
+                      "canceled": 0,
+                      "succeeded": 1
+                    },
+                    "result": null,
+                    "sealedAt": {
+                      "$type": "timestamp"
+                    },
+                    "callbacks": [
+                      {
+                        "kind": "onFinish",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onSuccess",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onFailure",
+                        "taskId": null
+                      }
+                    ],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  }
+                ],
+                "hasMore": false,
+                "pageSize": 50
+              }
+            }
+          }
+        },
+        {
+          "id": "task-groups-sealed",
+          "procedure": "taskGroups",
+          "request": {
+            "json": {
+              "state": "sealed",
+              "pageSize": 25
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "state": "sealed",
+                "groups": [
+                  {
+                    "id": {
+                      "$ref": "taskGroup"
+                    },
+                    "state": "sealed",
+                    "counts": {
+                      "total": 3,
+                      "failed": 0,
+                      "pending": 2,
+                      "canceled": 0,
+                      "succeeded": 1
+                    },
+                    "result": null,
+                    "sealedAt": {
+                      "$type": "timestamp"
+                    },
+                    "callbacks": [
+                      {
+                        "kind": "onFinish",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onSuccess",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onFailure",
+                        "taskId": null
+                      }
+                    ],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  }
+                ],
+                "hasMore": false,
+                "pageSize": 25
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "taskGroup"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "taskGroup"
+                  },
+                  "state": "sealed",
+                  "counts": {
+                    "total": 3,
+                    "failed": 0,
+                    "pending": 2,
+                    "canceled": 0,
+                    "succeeded": 1
+                  },
+                  "result": null,
+                  "sealedAt": {
+                    "$type": "timestamp"
+                  },
+                  "callbacks": [
+                    {
+                      "kind": "onFinish",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onSuccess",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onFailure",
+                      "taskId": null
+                    }
+                  ],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": null,
+                  "canceledBy": null,
+                  "finishedAt": null,
+                  "cancelReason": null
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "sealed",
+                    "details": {
+                      "total": 3
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "created",
+                    "details": {
+                      "callbacks": [
+                        "onFailure",
+                        "onFinish",
+                        "onSuccess"
+                      ]
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [
+                  {
+                    "queue": "conformance-groups",
+                    "state": "succeeded",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": "succeeded",
+                    "position": 1,
+                    "taskType": "conformance.group-member",
+                    "countedAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "state": "ready",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": null,
+                    "position": 2,
+                    "taskType": "conformance.group-member",
+                    "countedAt": null
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "state": "ready",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": null,
+                    "position": 3,
+                    "taskType": "conformance.group-member",
+                    "countedAt": null
+                  }
+                ],
+                "canCancel": true,
+                "nextAfter": null,
+                "eventsTruncated": false
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-after",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "taskGroup"
+              },
+              "after": 2,
+              "pageSize": 25
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "taskGroup"
+                  },
+                  "state": "sealed",
+                  "counts": {
+                    "total": 3,
+                    "failed": 0,
+                    "pending": 2,
+                    "canceled": 0,
+                    "succeeded": 1
+                  },
+                  "result": null,
+                  "sealedAt": {
+                    "$type": "timestamp"
+                  },
+                  "callbacks": [
+                    {
+                      "kind": "onFinish",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onSuccess",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onFailure",
+                      "taskId": null
+                    }
+                  ],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": null,
+                  "canceledBy": null,
+                  "finishedAt": null,
+                  "cancelReason": null
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "sealed",
+                    "details": {
+                      "total": 3
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "created",
+                    "details": {
+                      "callbacks": [
+                        "onFailure",
+                        "onFinish",
+                        "onSuccess"
+                      ]
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [
+                  {
+                    "queue": "conformance-groups",
+                    "state": "ready",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": null,
+                    "position": 3,
+                    "taskType": "conformance.group-member",
+                    "countedAt": null
+                  }
+                ],
+                "canCancel": true,
+                "nextAfter": null,
+                "eventsTruncated": false
+              }
+            }
+          }
         }
       ]
     },
@@ -6148,6 +7083,51 @@
                 "code": "NOT_FOUND",
                 "status": 404,
                 "message": "Task not found"
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-not-found",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead"
+            }
+          },
+          "expect": {
+            "status": 404,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "NOT_FOUND",
+                "status": 404,
+                "message": "Task group not found"
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-not-found",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 404,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "NOT_FOUND",
+                "status": 404,
+                "message": "Task group not found"
               }
             }
           }
@@ -6511,6 +7491,27 @@
                 "actor": "browser-operator",
                 "reason": "conformance redrive",
                 "requestId": "conformance-redrive-batch"
+              }
+            }
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin mutation request is required"
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-cross-origin",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "conformance-request"
               }
             }
           },
@@ -6948,6 +7949,164 @@
                 "tasks": [
                   {
                     "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
                       "$ref": "redriveBatchTask"
                     },
                     "tags": [],
@@ -7375,7 +8534,7 @@
                     "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 11,
+                "total": 15,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -7426,7 +8585,7 @@
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 5,
+                    "completedAttempts": 6,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -7600,7 +8759,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "tasks": 11,
+                    "tasks": 15,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -7757,6 +8916,164 @@
                 "count": "none",
                 "queue": null,
                 "tasks": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.group-member",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-groups",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
                   {
                     "id": {
                       "$ref": "redriveBatchTask"
@@ -8199,6 +9516,255 @@
                 "nextCursor": null,
                 "previousCursor": null,
                 "canCompleteHumanWait": false
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-read-only",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 403,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "FORBIDDEN",
+                "status": 403,
+                "message": "This dashboard is read-only"
+              }
+            }
+          }
+        },
+        {
+          "id": "task-groups-read-only",
+          "procedure": "taskGroups",
+          "request": {
+            "json": {}
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "state": "all",
+                "groups": [
+                  {
+                    "id": {
+                      "$ref": "cancelTaskGroup"
+                    },
+                    "state": "open",
+                    "counts": {
+                      "total": 1,
+                      "failed": 0,
+                      "pending": 1,
+                      "canceled": 0,
+                      "succeeded": 0
+                    },
+                    "result": null,
+                    "sealedAt": null,
+                    "callbacks": [
+                      {
+                        "kind": "onFinish",
+                        "taskId": null
+                      }
+                    ],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  },
+                  {
+                    "id": {
+                      "$ref": "taskGroup"
+                    },
+                    "state": "sealed",
+                    "counts": {
+                      "total": 3,
+                      "failed": 0,
+                      "pending": 2,
+                      "canceled": 0,
+                      "succeeded": 1
+                    },
+                    "result": null,
+                    "sealedAt": {
+                      "$type": "timestamp"
+                    },
+                    "callbacks": [
+                      {
+                        "kind": "onFinish",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onSuccess",
+                        "taskId": null
+                      },
+                      {
+                        "kind": "onFailure",
+                        "taskId": null
+                      }
+                    ],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  }
+                ],
+                "hasMore": false,
+                "pageSize": 50
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-read-only",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "taskGroup"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "taskGroup"
+                  },
+                  "state": "sealed",
+                  "counts": {
+                    "total": 3,
+                    "failed": 0,
+                    "pending": 2,
+                    "canceled": 0,
+                    "succeeded": 1
+                  },
+                  "result": null,
+                  "sealedAt": {
+                    "$type": "timestamp"
+                  },
+                  "callbacks": [
+                    {
+                      "kind": "onFinish",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onSuccess",
+                      "taskId": null
+                    },
+                    {
+                      "kind": "onFailure",
+                      "taskId": null
+                    }
+                  ],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": null,
+                  "canceledBy": null,
+                  "finishedAt": null,
+                  "cancelReason": null
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "sealed",
+                    "details": {
+                      "total": 3
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "created",
+                    "details": {
+                      "callbacks": [
+                        "onFailure",
+                        "onFinish",
+                        "onSuccess"
+                      ]
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [
+                  {
+                    "queue": "conformance-groups",
+                    "state": "succeeded",
+                    "taskId": {
+                      "$ref": "groupMemberTask"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": "succeeded",
+                    "position": 1,
+                    "taskType": "conformance.group-member",
+                    "countedAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "state": "ready",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": null,
+                    "position": 2,
+                    "taskType": "conformance.group-member",
+                    "countedAt": null
+                  },
+                  {
+                    "queue": "conformance-groups",
+                    "state": "ready",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": null,
+                    "position": 3,
+                    "taskType": "conformance.group-member",
+                    "countedAt": null
+                  }
+                ],
+                "canCancel": false,
+                "nextAfter": null,
+                "eventsTruncated": false
               }
             }
           }
@@ -8855,6 +10421,271 @@
                   }
                 ],
                 "nextCursor": null
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "cancelTaskGroup"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "cancelTaskGroup"
+                },
+                "state": "finished",
+                "result": "failed",
+                "counts": {
+                  "total": 1,
+                  "succeeded": 0,
+                  "failed": 0,
+                  "canceled": 1,
+                  "pending": 0
+                },
+                "createdAt": {
+                  "$type": "timestamp"
+                },
+                "sealedAt": {
+                  "$type": "timestamp"
+                },
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "canceledAt": {
+                  "$type": "timestamp"
+                },
+                "canceledBy": "conformance",
+                "cancelReason": "conformance group cancel",
+                "callbacks": [
+                  {
+                    "kind": "onFinish",
+                    "taskId": {
+                      "$type": "uuid"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-repeat",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "cancelTaskGroup"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "id": {
+                  "$ref": "cancelTaskGroup"
+                },
+                "state": "finished",
+                "result": "failed",
+                "counts": {
+                  "total": 1,
+                  "succeeded": 0,
+                  "failed": 0,
+                  "canceled": 1,
+                  "pending": 0
+                },
+                "createdAt": {
+                  "$type": "timestamp"
+                },
+                "sealedAt": {
+                  "$type": "timestamp"
+                },
+                "finishedAt": {
+                  "$type": "timestamp"
+                },
+                "canceledAt": {
+                  "$type": "timestamp"
+                },
+                "canceledBy": "conformance",
+                "cancelReason": "conformance group cancel",
+                "callbacks": [
+                  {
+                    "kind": "onFinish",
+                    "taskId": {
+                      "$type": "uuid"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "canceled-task-group-detail",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "cancelTaskGroup"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "cancelTaskGroup"
+                  },
+                  "state": "finished",
+                  "counts": {
+                    "total": 1,
+                    "failed": 0,
+                    "pending": 0,
+                    "canceled": 1,
+                    "succeeded": 0
+                  },
+                  "result": "failed",
+                  "sealedAt": {
+                    "$type": "timestamp"
+                  },
+                  "callbacks": [
+                    {
+                      "kind": "onFinish",
+                      "taskId": {
+                        "$type": "uuid"
+                      }
+                    }
+                  ],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledBy": "conformance",
+                  "finishedAt": {
+                    "$type": "timestamp"
+                  },
+                  "cancelReason": "conformance group cancel"
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "canceled",
+                    "details": {
+                      "members": 1,
+                      "requested_by": "conformance",
+                      "request_reason": "conformance group cancel",
+                      "request_id_digest": "d4e9bf8d68c9",
+                      "request_id_length": 19,
+                      "request_id_preview": "conforma…uest"
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "callback_enqueued",
+                    "details": {
+                      "kind": "on_finish",
+                      "taskId": {
+                        "$type": "uuid"
+                      }
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "finished",
+                    "details": {
+                      "total": 1,
+                      "failed": 0,
+                      "result": "failed",
+                      "canceled": 1,
+                      "succeeded": 0
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "sealed",
+                    "details": {
+                      "total": 1
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "created",
+                    "details": {
+                      "callbacks": [
+                        "onFinish"
+                      ]
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [
+                  {
+                    "queue": "conformance-groups",
+                    "state": "canceled",
+                    "taskId": {
+                      "$type": "uuid"
+                    },
+                    "addedAt": {
+                      "$type": "timestamp"
+                    },
+                    "outcome": "canceled",
+                    "position": 1,
+                    "taskType": "conformance.group-member",
+                    "countedAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "canCancel": true,
+                "nextAfter": null,
+                "eventsTruncated": false
               }
             }
           }

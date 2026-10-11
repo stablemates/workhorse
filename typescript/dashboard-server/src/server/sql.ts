@@ -80,6 +80,16 @@ export const sql: DashboardSqlTag = Object.assign(
   },
 );
 
+/**
+ * Bind values to a statement text that other dashboard backends share verbatim.
+ *
+ * The text must be a module constant, such as the task group reads in `task-group-statements.ts`,
+ * never a value that comes from a request. Every value still becomes a bind parameter.
+ */
+export function sharedDashboardStatement(text: string, values: readonly unknown[]): DashboardSql {
+  return brand(text, values);
+}
+
 export interface DashboardDatabase {
   execute<Row extends Record<string, unknown>>(query: DashboardSql): Promise<{ rows: Row[] }>;
 }

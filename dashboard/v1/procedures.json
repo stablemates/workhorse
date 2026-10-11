@@ -909,6 +909,103 @@
         "$ref": "#/$defs/DashboardHumanWaitPage"
       }
     },
+    "taskGroups": {
+      "path": "/rpc/dashboard/taskGroups",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "state": {
+            "default": "all",
+            "type": "string",
+            "enum": [
+              "all",
+              "open",
+              "sealed",
+              "finished"
+            ]
+          },
+          "page": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "pageSize": {
+            "default": 50,
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 25
+              },
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardTaskGroupsPage"
+      }
+    },
+    "taskGroupDetail": {
+      "path": "/rpc/dashboard/taskGroupDetail",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "after": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pageSize": {
+            "default": 50,
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 25
+              },
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardTaskGroupDetail"
+      }
+    },
     "enqueueTest": {
       "path": "/rpc/dashboard/enqueueTest",
       "mutation": true,
@@ -957,7 +1054,8 @@
               "keyed-throttle",
               "priority-lanes",
               "batch-handlers",
-              "payload-contracts"
+              "payload-contracts",
+              "task-groups"
             ]
           },
           "priority": {
@@ -1991,6 +2089,51 @@
       },
       "output": {
         "$ref": "#/$defs/DashboardRedriveBatch"
+      }
+    },
+    "cancelTaskGroup": {
+      "path": "/rpc/dashboard/cancelTaskGroup",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardTaskGroup"
       }
     }
   },
@@ -6984,6 +7127,360 @@
         "workers",
         "taskTypes",
         "tags"
+      ]
+    },
+    "DashboardTaskGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "const": "failed"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "counts": {
+          "$ref": "#/$defs/DashboardTaskGroupCounts"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "sealedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "canceledAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "canceledBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "cancelReason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "callbacks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardTaskGroupCallback"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "result",
+        "counts",
+        "createdAt",
+        "sealedAt",
+        "finishedAt",
+        "canceledAt",
+        "canceledBy",
+        "cancelReason",
+        "callbacks"
+      ]
+    },
+    "DashboardTaskGroupCallback": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "onFailure",
+            "onFinish",
+            "onSuccess"
+          ]
+        },
+        "taskId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "taskId"
+      ]
+    },
+    "DashboardTaskGroupCounts": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "succeeded": {
+          "type": "number"
+        },
+        "failed": {
+          "type": "number"
+        },
+        "canceled": {
+          "type": "number"
+        },
+        "pending": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "total",
+        "succeeded",
+        "failed",
+        "canceled",
+        "pending"
+      ]
+    },
+    "DashboardTaskGroupDetail": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/DashboardTaskGroup"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardTaskGroupMember"
+          }
+        },
+        "nextAfter": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardTaskGroupEvent"
+          }
+        },
+        "eventsTruncated": {
+          "type": "boolean"
+        },
+        "canCancel": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "group",
+        "members",
+        "nextAfter",
+        "events",
+        "eventsTruncated",
+        "canCancel"
+      ]
+    },
+    "DashboardTaskGroupEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "details": {},
+        "occurredAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "details",
+        "occurredAt"
+      ]
+    },
+    "DashboardTaskGroupMember": {
+      "type": "object",
+      "properties": {
+        "position": {
+          "type": "number"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "queue": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "taskType": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "const": "active"
+            },
+            {
+              "const": "blocked"
+            },
+            {
+              "const": "canceled"
+            },
+            {
+              "const": "failed"
+            },
+            {
+              "const": "ready"
+            },
+            {
+              "const": "scheduled"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "const": "canceled"
+            },
+            {
+              "const": "failed"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "addedAt": {
+          "type": "string"
+        },
+        "countedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "position",
+        "taskId",
+        "queue",
+        "taskType",
+        "state",
+        "outcome",
+        "addedAt",
+        "countedAt"
+      ]
+    },
+    "DashboardTaskGroupsPage": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "all",
+            "finished",
+            "open",
+            "sealed"
+          ]
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardTaskGroup"
+          }
+        }
+      },
+      "required": [
+        "state",
+        "page",
+        "pageSize",
+        "hasMore",
+        "groups"
       ]
     },
     "DashboardTaskRow": {

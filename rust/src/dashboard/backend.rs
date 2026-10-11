@@ -9,6 +9,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::v1_generated as statements;
 use super::{ProcedureError, RpcError};
 use crate::queue::exactly_one;
 use crate::sql_catalogue_generated as sql;
@@ -53,6 +54,9 @@ pub(super) const BUILT_INS: &[&str] = &[
     "completeHumanWait",
     "redriveTask",
     "redriveDeadLetters",
+    "taskGroups",
+    "taskGroupDetail",
+    "cancelTaskGroup",
 ];
 
 /// How long one health document serves nearby reads. It matches the TypeScript, Go and Python
@@ -197,6 +201,16 @@ impl<E: Executor> Backend<E> {
             "completeHumanWait" => self.deliver(input, actor, Delivery::HumanWait).await,
             "redriveTask" => self.redrive_task(input, actor).await,
             "redriveDeadLetters" => self.redrive_dead_letters(input, actor).await,
+            // The task group procedures (ADR 0095) run the statements that generate-bindings.ts
+            // copies from the TypeScript server, so every backend answers with the same JSON.
+            "taskGroups" => self.json_query(statements::TASK_GROUPS, Some(input)).await,
+            "taskGroupDetail" => {
+                let mut value = document(input);
+                value.insert("canCancel".into(), writable.into());
+                let result = self.optional_query(statements::TASK_GROUP_DETAIL, value.into());
+                found(result.await, "Task group not found")
+            }
+            "cancelTaskGroup" => self.cancel_task_group(input, actor).await,
             _ => return None,
         })
     }
@@ -315,6 +329,23 @@ impl<E: Executor> Backend<E> {
             capped.insert(name.into(), (count > PREVIEW_CAP).into());
         }
         Ok(json!({ "eligible": eligible, "capped": capped }))
+    }
+
+    /// Seals the group and cancels each member task that is not terminal. The authenticated
+    /// actor is the actor of the cancel.
+    async fn cancel_task_group(&self, input: Value, actor: &str) -> Procedure {
+        let value = document(input);
+        let audit = audit(&value, actor);
+        let request = json!({
+            "id": value.get("id"),
+            "actor": audit.actor,
+            "reason": audit.reason,
+            "requestId": audit.request_id,
+        });
+        found(
+            self.optional_query(statements::CANCEL_TASK_GROUP, request).await,
+            "Task group not found",
+        )
     }
 
     async fn set_queue_paused(&self, input: Value, actor: &str) -> Procedure {

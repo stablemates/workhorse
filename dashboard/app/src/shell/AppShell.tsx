@@ -31,6 +31,7 @@ import {
   Lightning,
   ListDashes,
   Pulse,
+  Stack as StackIcon,
   Robot,
   UserFocus,
   WarningCircle,
@@ -514,6 +515,15 @@ export function DashboardContent({
               leftSection={<Lightning size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/events")}
+            />
+            <NavLink
+              component="a"
+              href={mountedHref(basePath, "/groups")}
+              active={location.route === "/groups"}
+              label="Task groups"
+              leftSection={<StackIcon size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/groups")}
             />
             <NavLink
               component="a"

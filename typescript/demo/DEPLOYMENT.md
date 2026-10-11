@@ -554,8 +554,8 @@ The current build ships Workhorse schema version 66; its packaged migrations car
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
 66 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
-this build refuses mutations against a schema below 65, because its statement catalogues call the
-task group functions that version 65 introduces. Run `workhorse schema migrate` before any process
+this build refuses mutations against a schema below 66, because its dashboard calls
+`dashboard_task_groups_v1`, which version 66 introduces. Run `workhorse schema migrate` before any process
 from this build starts. Migration 0067, which produces version 66, locks `workhorse.task_group` in
 `EXCLUSIVE` mode while it moves the group counts into counter shards. A task group change waits for
 that lock, and a member outcome that started before the migration and continues after it rolls

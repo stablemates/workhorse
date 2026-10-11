@@ -17,6 +17,7 @@ import type {
   DashboardRedriveCursor,
   DashboardRedriveStatus,
   DashboardRunNowStatus,
+  DashboardTaskGroup,
 } from "../wire.js";
 
 export interface DashboardAuditContext {
@@ -182,6 +183,14 @@ export interface DashboardTaskController {
     cursor: DashboardRedriveCursor | null,
     audit: DashboardAuditContext,
   ) => Promise<DashboardRedriveBatch>;
+  /**
+   * Cancel one task group through `Admin.cancelTaskGroup`: seal it and cancel each member task that
+   * is not terminal. Returns the group snapshot, or null when the group does not exist.
+   */
+  cancelTaskGroup?: (
+    groupId: string,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardTaskGroup | null>;
 }
 
 /**

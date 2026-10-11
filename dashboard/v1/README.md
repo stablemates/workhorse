@@ -52,7 +52,11 @@ concurrent contract versions, so `Deprecation` and `Sunset` response headers do 
   text.
 
 `pnpm dashboard-bindings:generate` reads `procedures.json` and writes the Go and Python request
-validators and wire types. `pnpm dashboard-bindings:check` fails when either committed binding is
+validators and wire types. It also copies the task group statements of
+`typescript/dashboard-server/src/server/task-group-statements.ts` into the Go, Python, Rust, and
+Ruby bindings. The schema has no dashboard function for task groups, so each backend runs these
+statements unchanged and returns the same JSON for `taskGroups`, `taskGroupDetail`, and
+`cancelTaskGroup`. `pnpm dashboard-bindings:check` fails when either committed binding is
 stale. The dashboard spec commands run the matching bindings command, so one generation command
 updates the router artifact and both language bindings in order.
 
@@ -97,7 +101,7 @@ A failed call answers the error envelope with a matching HTTP status:
 Codes the reference implementation uses: `BAD_REQUEST` (400, malformed envelope or input rejected
 by the request schema), `FORBIDDEN` (403, mutation on a read-only dashboard), `NOT_FOUND` (404,
 `eventDetail`, `taskDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`,
-`redriveTask`),
+`redriveTask`, `taskGroupDetail`, `cancelTaskGroup`),
 `METHOD_NOT_SUPPORTED` (405), and `INTERNAL_SERVER_ERROR` (500). Input constraints beyond JSON
 Schema — for example `enqueueTest` requiring `feature` when `kind` is `"feature"` — are enforced
 server-side and answer `BAD_REQUEST`.

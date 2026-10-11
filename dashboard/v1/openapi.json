@@ -200,14 +200,14 @@
                     "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-counts.",
                     "value": {
                       "json": {
-                        "all": 11,
-                        "queued": 3,
+                        "all": 15,
+                        "queued": 6,
                         "blocked": 0,
                         "retried": 0,
                         "running": 0,
                         "waiting": 2,
                         "canceled": 0,
-                        "completed": 2,
+                        "completed": 3,
                         "discarded": 3,
                         "scheduled": 3
                       }
@@ -701,6 +701,130 @@
                         "tasks": [
                           {
                             "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.group-member",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-groups",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.group-member",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-groups",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "succeeded",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.group-member",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-groups",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.group-member",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-groups",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
                             "tags": [],
                             "type": "conformance.redrive.batch",
                             "wait": null,
@@ -1129,6 +1253,7 @@
                         ],
                         "queues": [
                           "conformance",
+                          "conformance-groups",
                           "conformance-preserved",
                           "conformance-purge",
                           "conformance-redrive"
@@ -1139,6 +1264,7 @@
                         "taskTypes": [
                           "conformance.cancel-target",
                           "conformance.fail",
+                          "conformance.group-member",
                           "conformance.human",
                           "conformance.preserve",
                           "conformance.purge",
@@ -1320,6 +1446,7 @@
                         "groups": [
                           "conformance.cancel-target",
                           "conformance.fail",
+                          "conformance.group-member",
                           "conformance.human",
                           "conformance.preserve",
                           "conformance.purge",
@@ -1890,20 +2017,21 @@
                       "json": {
                         "id": "event:00000000-0000-7000-8000-000000000000",
                         "kind": "event",
-                        "type": "failed",
+                        "type": "enqueued",
                         "error": null,
-                        "queue": "conformance-redrive",
+                        "queue": "conformance-groups",
                         "taskId": "00000000-0000-7000-8000-000000000000",
-                        "attempt": 1,
+                        "attempt": null,
                         "details": {
-                          "error": {
-                            "name": "Error",
-                            "message": "conformance.redrive.batch failed"
-                          }
+                          "state": "ready",
+                          "run_at": "2026-01-01T00:00:00.000Z",
+                          "priority": 0,
+                          "deadline_at": null,
+                          "execution_timeout_ms": null
                         },
                         "recordId": "00000000-0000-7000-8000-000000000000",
-                        "taskType": "conformance.redrive.batch",
-                        "workerId": "conformance-worker",
+                        "taskType": "conformance.group-member",
+                        "workerId": null,
                         "claimedAt": null,
                         "startedAt": null,
                         "durationMs": null,
@@ -2172,6 +2300,22 @@
                           },
                           {
                             "tier": "full",
+                            "queue": "conformance-groups",
+                            "ready": 3,
+                            "active": 0,
+                            "failed": 0,
+                            "paused": false,
+                            "canceled": 0,
+                            "scheduled": 0,
+                            "succeeded": 1,
+                            "recordClaims": false,
+                            "recordAttempts": false,
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "terminalCountsApproximate": false
+                          },
+                          {
+                            "tier": "full",
                             "queue": "conformance-preserved",
                             "ready": 0,
                             "active": 0,
@@ -2328,9 +2472,9 @@
                       "json": {
                         "kpis": {
                           "drain": {
-                            "netPerMinute": -0.1,
-                            "enqueuedPerMinute": 0.18333333333333332,
-                            "completedPerMinute": 0.08333333333333333
+                            "netPerMinute": -0.15,
+                            "enqueuedPerMinute": 0.25,
+                            "completedPerMinute": 0.1
                           },
                           "lease": {
                             "active": 0,
@@ -2365,7 +2509,7 @@
                             "dueSoon": 0
                           },
                           "backlog": {
-                            "ready": 3,
+                            "ready": 6,
                             "oldestReadyMs": "string"
                           },
                           "children": {
@@ -2385,8 +2529,8 @@
                             "overdueTimeouts": 0
                           },
                           "errorRate": {
-                            "delta": 0.6,
-                            "current": 0.6,
+                            "delta": 0.5,
+                            "current": 0.5,
                             "previous": 0
                           },
                           "queueWait": {
@@ -2435,6 +2579,26 @@
                             "concurrencyPolicy": null,
                             "enqueuedPerMinute": 0.11666666666666667,
                             "completedPerMinute": 0.03333333333333333
+                          },
+                          {
+                            "queue": "conformance-groups",
+                            "ready": 3,
+                            "active": 0,
+                            "paused": false,
+                            "dueSoon": 0,
+                            "retrying": 0,
+                            "oldestReadyMs": "string",
+                            "priorityBacklog": [
+                              {
+                                "ready": 3,
+                                "priority": 0,
+                                "oldestReadyMs": "string"
+                              }
+                            ],
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "enqueuedPerMinute": 0.06666666666666667,
+                            "completedPerMinute": 0.016666666666666666
                           },
                           {
                             "queue": "conformance-preserved",
@@ -3409,7 +3573,7 @@
                             "sdkLanguage": "conformance-sdk",
                             "failedAttempts": 3,
                             "lastHeartbeatAt": "2026-01-01T00:00:00.000Z",
-                            "completedAttempts": 5,
+                            "completedAttempts": 6,
                             "averageExecutionMs": 0,
                             "scheduleNamespaces": [
                               "conformance"
@@ -3633,7 +3797,7 @@
                             "rolledUpThrough": "2026-01-01T00:00:00.000Z"
                           },
                           "enqueueRate": {
-                            "tasks": 11,
+                            "tasks": 15,
                             "windowMs": 3600000
                           },
                           "defaultHistoryRows": {
@@ -4482,6 +4646,373 @@
         }
       }
     },
+    "/rpc/dashboard/taskGroups": {
+      "post": {
+        "operationId": "dashboard_taskGroups",
+        "summary": "List task groups",
+        "description": "Returns one page of task groups, newest first, with the state, the result, the counts, the times, and the requested callbacks of each group. state filters by open, sealed, or finished; hasMore is true when a later page has a group.",
+        "tags": [
+          "reads"
+        ],
+        "x-workhorse-mutation": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "default": "all",
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "open",
+                          "sealed",
+                          "finished"
+                        ]
+                      },
+                      "page": {
+                        "default": 1,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
+                      "pageSize": {
+                        "default": 50,
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "const": 25
+                          },
+                          {
+                            "type": "number",
+                            "const": 50
+                          },
+                          {
+                            "type": "number",
+                            "const": 100
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-groups-sealed.",
+                  "value": {
+                    "json": {
+                      "state": "sealed",
+                      "pageSize": 25
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardTaskGroupsPage"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-groups-sealed.",
+                    "value": {
+                      "json": {
+                        "page": 1,
+                        "state": "sealed",
+                        "groups": [
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "state": "sealed",
+                            "counts": {
+                              "total": 3,
+                              "failed": 0,
+                              "pending": 2,
+                              "canceled": 0,
+                              "succeeded": 1
+                            },
+                            "result": null,
+                            "sealedAt": "2026-01-01T00:00:00.000Z",
+                            "callbacks": [
+                              {
+                                "kind": "onFinish",
+                                "taskId": null
+                              },
+                              {
+                                "kind": "onSuccess",
+                                "taskId": null
+                              },
+                              {
+                                "kind": "onFailure",
+                                "taskId": null
+                              }
+                            ],
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "canceledAt": null,
+                            "canceledBy": null,
+                            "finishedAt": null,
+                            "cancelReason": null
+                          }
+                        ],
+                        "hasMore": false,
+                        "pageSize": 25
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UnknownWorkspace"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
+    "/rpc/dashboard/taskGroupDetail": {
+      "post": {
+        "operationId": "dashboard_taskGroupDetail",
+        "summary": "Read one task group",
+        "description": "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. eventsTruncated is true when the group has more events than the response carries. Answers NOT_FOUND with the message \"Task group not found\" when the id matches nothing.",
+        "tags": [
+          "reads"
+        ],
+        "x-workhorse-mutation": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "after": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "pageSize": {
+                        "default": 50,
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "const": 25
+                          },
+                          {
+                            "type": "number",
+                            "const": 50
+                          },
+                          {
+                            "type": "number",
+                            "const": 100
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-group-detail-after.",
+                  "value": {
+                    "json": {
+                      "id": "00000000-0000-7000-8000-000000000000",
+                      "after": 2,
+                      "pageSize": 25
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardTaskGroupDetail"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-group-detail-after.",
+                    "value": {
+                      "json": {
+                        "group": {
+                          "id": "00000000-0000-7000-8000-000000000000",
+                          "state": "sealed",
+                          "counts": {
+                            "total": 3,
+                            "failed": 0,
+                            "pending": 2,
+                            "canceled": 0,
+                            "succeeded": 1
+                          },
+                          "result": null,
+                          "sealedAt": "2026-01-01T00:00:00.000Z",
+                          "callbacks": [
+                            {
+                              "kind": "onFinish",
+                              "taskId": null
+                            },
+                            {
+                              "kind": "onSuccess",
+                              "taskId": null
+                            },
+                            {
+                              "kind": "onFailure",
+                              "taskId": null
+                            }
+                          ],
+                          "createdAt": "2026-01-01T00:00:00.000Z",
+                          "canceledAt": null,
+                          "canceledBy": null,
+                          "finishedAt": null,
+                          "cancelReason": null
+                        },
+                        "events": [
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "type": "sealed",
+                            "details": {
+                              "total": 3
+                            },
+                            "occurredAt": "2026-01-01T00:00:00.000Z"
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "type": "created",
+                            "details": {
+                              "callbacks": [
+                                "onFailure",
+                                "onFinish",
+                                "onSuccess"
+                              ]
+                            },
+                            "occurredAt": "2026-01-01T00:00:00.000Z"
+                          }
+                        ],
+                        "members": [
+                          {
+                            "queue": "conformance-groups",
+                            "state": "ready",
+                            "taskId": "00000000-0000-7000-8000-000000000000",
+                            "addedAt": "2026-01-01T00:00:00.000Z",
+                            "outcome": null,
+                            "position": 3,
+                            "taskType": "conformance.group-member",
+                            "countedAt": null
+                          }
+                        ],
+                        "canCancel": true,
+                        "nextAfter": null,
+                        "eventsTruncated": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
     "/rpc/dashboard/enqueueTest": {
       "post": {
         "operationId": "dashboard_enqueueTest",
@@ -4542,7 +5073,8 @@
                           "keyed-throttle",
                           "priority-lanes",
                           "batch-handlers",
-                          "payload-contracts"
+                          "payload-contracts",
+                          "task-groups"
                         ]
                       },
                       "priority": {
@@ -6816,6 +7348,158 @@
           },
           "404": {
             "$ref": "#/components/responses/UnknownWorkspace"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
+    "/rpc/dashboard/cancelTaskGroup": {
+      "post": {
+        "operationId": "dashboard_cancelTaskGroup",
+        "summary": "Cancel a task group",
+        "description": "Seals the group and cancels each member task that is not terminal, then returns the group snapshot. The canceled members count as not succeeded, so the onFinish and onFailure callbacks run when the group finishes. A finished group does not change. audit.reason is required. Answers NOT_FOUND with the message \"Task group not found\" when the id matches nothing.",
+        "tags": [
+          "mutations"
+        ],
+        "x-workhorse-mutation": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "audit": {
+                        "type": "object",
+                        "properties": {
+                          "actor": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "requestId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "actor",
+                          "reason",
+                          "requestId"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "audit"
+                    ]
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: cancel-task-group.",
+                  "value": {
+                    "json": {
+                      "id": "00000000-0000-7000-8000-000000000000",
+                      "audit": {
+                        "actor": "browser-operator",
+                        "reason": "conformance group cancel",
+                        "requestId": "conformance-request"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardTaskGroup"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: cancel-task-group.",
+                    "value": {
+                      "json": {
+                        "id": "00000000-0000-7000-8000-000000000000",
+                        "state": "finished",
+                        "result": "failed",
+                        "counts": {
+                          "total": 1,
+                          "succeeded": 0,
+                          "failed": 0,
+                          "canceled": 1,
+                          "pending": 0
+                        },
+                        "createdAt": "2026-01-01T00:00:00.000Z",
+                        "sealedAt": "2026-01-01T00:00:00.000Z",
+                        "finishedAt": "2026-01-01T00:00:00.000Z",
+                        "canceledAt": "2026-01-01T00:00:00.000Z",
+                        "canceledBy": "conformance",
+                        "cancelReason": "conformance group cancel",
+                        "callbacks": [
+                          {
+                            "kind": "onFinish",
+                            "taskId": "00000000-0000-7000-8000-000000000000"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/MutationForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "405": {
             "$ref": "#/components/responses/MethodNotSupported"
@@ -11730,6 +12414,360 @@
           "workers",
           "taskTypes",
           "tags"
+        ]
+      },
+      "DashboardTaskGroup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "finished",
+              "open",
+              "sealed"
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "const": "failed"
+              },
+              {
+                "const": "succeeded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DashboardTaskGroupCounts"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "sealedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "canceledAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "canceledBy": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "cancelReason": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "callbacks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskGroupCallback"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "result",
+          "counts",
+          "createdAt",
+          "sealedAt",
+          "finishedAt",
+          "canceledAt",
+          "canceledBy",
+          "cancelReason",
+          "callbacks"
+        ]
+      },
+      "DashboardTaskGroupCallback": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "onFailure",
+              "onFinish",
+              "onSuccess"
+            ]
+          },
+          "taskId": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "taskId"
+        ]
+      },
+      "DashboardTaskGroupCounts": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "succeeded": {
+            "type": "number"
+          },
+          "failed": {
+            "type": "number"
+          },
+          "canceled": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "succeeded",
+          "failed",
+          "canceled",
+          "pending"
+        ]
+      },
+      "DashboardTaskGroupDetail": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/DashboardTaskGroup"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskGroupMember"
+            }
+          },
+          "nextAfter": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskGroupEvent"
+            }
+          },
+          "eventsTruncated": {
+            "type": "boolean"
+          },
+          "canCancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "group",
+          "members",
+          "nextAfter",
+          "events",
+          "eventsTruncated",
+          "canCancel"
+        ]
+      },
+      "DashboardTaskGroupEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "details": {},
+          "occurredAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "details",
+          "occurredAt"
+        ]
+      },
+      "DashboardTaskGroupMember": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "number"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "taskType": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "const": "active"
+              },
+              {
+                "const": "blocked"
+              },
+              {
+                "const": "canceled"
+              },
+              {
+                "const": "failed"
+              },
+              {
+                "const": "ready"
+              },
+              {
+                "const": "scheduled"
+              },
+              {
+                "const": "succeeded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "const": "canceled"
+              },
+              {
+                "const": "failed"
+              },
+              {
+                "const": "succeeded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "addedAt": {
+            "type": "string"
+          },
+          "countedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "position",
+          "taskId",
+          "queue",
+          "taskType",
+          "state",
+          "outcome",
+          "addedAt",
+          "countedAt"
+        ]
+      },
+      "DashboardTaskGroupsPage": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "all",
+              "finished",
+              "open",
+              "sealed"
+            ]
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskGroup"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "page",
+          "pageSize",
+          "hasMore",
+          "groups"
         ]
       },
       "DashboardTaskRow": {

@@ -268,4 +268,57 @@ describe("shared dashboard operator controllers", () => {
       }),
     ).rejects.toThrow("Worker gone is not registered");
   });
+
+  it("cancels a task group through Admin and projects the snapshot onto the wire", async () => {
+    const cancelTaskGroup = vi.fn<() => Promise<unknown>>().mockResolvedValueOnce({
+      id: "group-1",
+      state: "finished",
+      result: "failed",
+      counts: { total: 2, succeeded: 1, failed: 0, canceled: 1, pending: 0 },
+      createdAt: new Date("2026-10-11T10:00:00.000Z"),
+      sealedAt: new Date("2026-10-11T10:00:01.000Z"),
+      finishedAt: new Date("2026-10-11T10:00:02.000Z"),
+      canceledAt: new Date("2026-10-11T10:00:02.000Z"),
+      canceledBy: "configured-operator",
+      cancelReason: "stuck import",
+      // Admin may list the callbacks in any order; the wire order is finish, success, failure.
+      callbacks: [
+        { kind: "onFailure", taskId: "task-9" },
+        { kind: "onFinish", taskId: "task-8" },
+      ],
+    });
+    cancelTaskGroup.mockResolvedValueOnce(null);
+    const actions: string[] = [];
+    const controllers = createDashboardOperatorControllers({
+      requestedBy: "configured-operator",
+      run: (action, operation) => {
+        actions.push(action.kind);
+        return operation({ queue: {} as Queue, admin: { cancelTaskGroup } as unknown as Admin });
+      },
+    });
+    const audit = { actor: "browser-actor", reason: "stuck import", requestId: "request-3" };
+
+    await expect(controllers.taskController.cancelTaskGroup?.("group-1", audit)).resolves.toEqual({
+      id: "group-1",
+      state: "finished",
+      result: "failed",
+      counts: { total: 2, succeeded: 1, failed: 0, canceled: 1, pending: 0 },
+      createdAt: "2026-10-11T10:00:00.000Z",
+      sealedAt: "2026-10-11T10:00:01.000Z",
+      finishedAt: "2026-10-11T10:00:02.000Z",
+      canceledAt: "2026-10-11T10:00:02.000Z",
+      canceledBy: "configured-operator",
+      cancelReason: "stuck import",
+      callbacks: [
+        { kind: "onFinish", taskId: "task-8" },
+        { kind: "onFailure", taskId: "task-9" },
+      ],
+    });
+    await expect(controllers.taskController.cancelTaskGroup?.("gone", audit)).resolves.toBeNull();
+    expect(cancelTaskGroup).toHaveBeenCalledWith("group-1", {
+      ...audit,
+      actor: "configured-operator",
+    });
+    expect(actions).toEqual(["cancelTaskGroup", "cancelTaskGroup"]);
+  });
 });
