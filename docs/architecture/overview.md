@@ -5,10 +5,11 @@ objective, the system context and adapter contract, errors, and tenancy.
 
 ## Design objective
 
-Dispatch cost should scale with live work, not lifetime completed work. Schema version 1 stores:
+The design objective is that the dispatch cost scales with live work, not with lifetime completed
+work. Schema version 1 stores:
 
-- stable identity and the current accepted definition in `task`; pending keyed debounce may replace
-  the definition before dispatch
+- stable identity and the current accepted definition in `task`. A pending keyed debounce can
+  replace the definition before dispatch.
 - exactly one mutable `task_runtime` row only while a task is scheduled, blocked, ready, or active
 - exactly one immutable `task_outcome` row after success or terminal failure
 - at most one bounded mutable `task_progress` projection, separate from payload and outcome
@@ -44,8 +45,8 @@ matches its worker ID and fence token and has not expired.
 
 `@stablemates/workhorse` exports node-postgres `Pool` as its default connection implementation.
 
-- `Queue`, `Admin`, and schema operations accept that pool or another `Queryable` supplied by an
-  adapter.
+- `Queue`, `Admin`, and schema operations accept that pool or another `Queryable` that an adapter
+  supplies.
 - `Worker` accepts a `Queue` or another `WorkerQueueApi`.
 
 ### Worker processes
@@ -59,47 +60,47 @@ Workers run in dedicated processes. Each process owns:
 - bounded drain
 - final resource close
 
-Web frameworks do not participate in worker lifecycle. See
+Web frameworks have no part in the worker lifecycle. See
 [`worker-processes.md`](../worker-processes.md) and
 [ADR 0012](../decisions/0012-dedicated-worker-processes.md).
 
 ### ORM adapters
 
 `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
-`@stablemates/workhorse-kysely`, and `@stablemates/workhorse-knex` convert provider database and transaction objects into
-`Queryable`.
+`@stablemates/workhorse-kysely`, and `@stablemates/workhorse-knex` convert the database objects and
+transaction objects of a provider into `Queryable`.
 
 Each adapter finds the node-postgres pool differently:
 
-| Factory                | How it finds the pool                                                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createDrizzleAdapter` | Discovers the retained node-postgres pool through `$client`.                                                                                                  |
-| `createTypeOrmAdapter` | Discovers it as `dataSource.driver.master`, which TypeORM's `PostgresDriver` creates on `initialize()`. The adapter looks it up when a worker is constructed. |
-| `createPrismaAdapter`  | Accepts the option `pool`.                                                                                                                                    |
-| `createKyselyAdapter`  | Accepts the option `pool`. Kysely callers can pass the pool used by `PostgresDialect`.                                                                        |
+| Factory                | How it finds the pool                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createDrizzleAdapter` | Discovers the retained node-postgres pool through `$client`.                                                                                         |
+| `createTypeOrmAdapter` | Discovers it as `dataSource.driver.master`, which TypeORM's `PostgresDriver` creates on `initialize()`. The adapter finds it at worker construction. |
+| `createPrismaAdapter`  | Accepts the option `pool`.                                                                                                                           |
+| `createKyselyAdapter`  | Accepts the option `pool`. Kysely callers can pass the pool that `PostgresDialect` uses.                                                             |
 
 Each adapter exposes `queue` and `admin`. `forTransaction` and `adminForTransaction` bind the
-corresponding client to a caller-owned transaction. Neither method commits, rolls back,
+related client to a caller-owned transaction. Neither method commits, rolls back,
 disconnects, or destroys that transaction.
 
 Each adapter closes resources only through its configured `close` callback.
-`WorkhorseAdapter.close()` invokes that callback once.
+`WorkhorseAdapter.close()` calls that callback once.
 
 #### Prisma and TypeORM queryables
 
 `prismaQueryable` sends the statement and positional values through `$queryRawUnsafe`.
 `typeOrmQueryable` sends them through `query`.
 
-Both require a row array. Both synthesize the `QueryResult` metadata that core does not inspect:
+Both require a row array. Both create the `QueryResult` metadata that core does not read:
 
 - an empty `command`
 - the row-array length as `rowCount`
 - zero as `oid`
 - an empty `fields` array
 
-`PrismaQueryError` and `TypeOrmQueryError` retain the statement and original `cause`. Neither copies
-parameter values into the message. Their error-code searches process at most 16 queued entries.
-They accept only five-character uppercase alphanumeric codes.
+`PrismaQueryError` and `TypeOrmQueryError` keep the statement and the original `cause`. Neither
+copies parameter values into the message. Their error-code searches process at most 16 queued
+entries. They accept only five-character uppercase alphanumeric codes.
 
 - `PrismaQueryError` prefers `meta.code` over Prisma's outer raw-query code.
 - `TypeOrmQueryError` follows `driverError` and `cause`.
@@ -125,13 +126,14 @@ The scan follows PostgreSQL's lexer. A `$N` stays text inside any of these:
 Comment and continuation rules:
 
 - A line comment ends at a line feed or a carriage return.
-- Literals separated by whitespace that contains a newline form one constant. The continuation
-  keeps the first segment's escape rules.
-- A line comment counts as that whitespace, so a quote inside it never starts a continuation.
+- If whitespace that contains a newline separates two literals, the literals form one constant.
+  The continuation keeps the escape rules of the first segment.
+- A line comment counts as that whitespace. Thus a quote in a line comment never starts a
+  continuation.
 - A block comment between two literals keeps them separate.
 
-A schema script's plpgsql bodies therefore reach PostgreSQL unchanged. A genuine `$N` with no
-matching value raises `RangeError`.
+Thus the plpgsql bodies of a schema script get to PostgreSQL with no change. If a real `$N` has no
+matching value, the result is a `RangeError`.
 
 For a parameter-free script with several statements, node-postgres returns one result per
 statement. `executeDrizzle` returns the rows of the last one.
@@ -144,128 +146,143 @@ the same synthetic node-postgres metadata as the Prisma and TypeORM queryables.
 
 `KyselyQueryError`:
 
-- retains the statement and original `cause`
+- keeps the statement and the original `cause`
 - follows at most 16 nested causes
 - accepts only five-character uppercase alphanumeric codes
 - copies the discovered code to its wrapper
 
 #### Knex queryable and Objection recipe
 
-`knexQueryable` in `@stablemates/workhorse-knex` accepts a Knex database or transaction with `client: "pg"`.
-It sends each statement through `raw(statement).options({ text: statement, values: [...values] })`.
-The released fixture pins Knex 3.3.0, pg 8.23.1, and Objection 3.1.5; other versions are not certified.
-The native `text` option restores SQL after Knex rewrites question marks, including those in literals, comments, dollar quotes, and JSON operators.
-Repeated and out-of-order `$N` parameters retain native PostgreSQL semantics.
-`postProcessResponse` is rejected at adaptation and before every execution. Only one native result with object `rows` is accepted.
-Multi-statement result arrays and transformed rows fail. Custom clients and query-mutating listeners are outside the verified boundary.
-Rows retain pg's native values and order; the shared provider synthesizes the same metadata described above.
-`KnexQueryError` preserves `statement`, original `cause`, and SQLSTATE `code` through the shared `QueryError` implementation.
-The adapter neither extracts connections nor bypasses Knex's completed-transaction guard.
-Callers own transactions, savepoints, and Knex destruction. The adapter does not validate a transaction's database against its base executor.
-Objection's `Model.query(transaction)` uses that same Knex transaction; it needs no additional package.
-Workers use separately configured compatible pg pools. A Knex adapter accepts an explicit `pool` for dedicated heartbeat and listener sessions.
-It never extracts Knex's internal pool. Without `pool`, a worker requires the explicit `sharedHeartbeats` opt-out.
+`knexQueryable` in `@stablemates/workhorse-knex` accepts a Knex database or transaction with
+`client: "pg"`. It sends each statement through
+`raw(statement).options({ text: statement, values: [...values] })`. The released fixture pins Knex
+3.3.0, pg 8.23.1, and Objection 3.1.5. Other versions are not certified.
+
+Knex rewrites question marks, also those in literals, comments, dollar quotes, and JSON operators.
+The native `text` option restores the SQL after that rewrite. Repeated and out-of-order `$N`
+parameters keep the native PostgreSQL semantics.
+
+The adapter rejects `postProcessResponse` at adaptation and before every execution. It accepts only
+one native result with object `rows`. Result arrays from multi-statement scripts fail, and
+transformed rows also fail. Custom clients and listeners that change queries are outside the
+verified boundary.
+
+Rows keep the native values and order of pg. The shared provider creates the same metadata that the
+earlier sections describe. `KnexQueryError` keeps `statement`, the original `cause`, and the
+SQLSTATE `code` through the shared `QueryError` implementation.
+
+The adapter does not extract connections. It does not bypass the Knex guard against completed
+transactions. Callers own transactions, savepoints, and Knex destruction. The adapter does not
+validate the database of a transaction against its base executor. The Objection call
+`Model.query(transaction)` uses that same Knex transaction. It needs no additional package.
+
+Workers use compatible pg pools that are configured separately. A Knex adapter accepts an explicit
+`pool` for dedicated heartbeat sessions and listener sessions. It never extracts the internal pool
+of Knex. Without `pool`, a worker requires the explicit `sharedHeartbeats` opt-out.
 
 ### What an adapter must guarantee
 
-`typescript/core/src/adapter.ts` owns the shared implementation of every guarantee below. It is
-exported from `@stablemates/workhorse` as `QueryError`, `rowsToQueryResult`,
-`attachConnectionPool`, `createProviderQueryable`, `createProviderAdapter`, and
-`createWorkhorseAdapter`. An adapter that uses them supplies only how its ORM runs a statement. An
-adapter that does not use them still owes the same guarantees.
+`typescript/core/src/adapter.ts` owns the shared implementation of every guarantee below.
+`@stablemates/workhorse` exports it as `QueryError`, `rowsToQueryResult`, `attachConnectionPool`,
+`createProviderQueryable`, `createProviderAdapter`, and `createWorkhorseAdapter`. If an adapter uses
+them, it supplies only the way that its ORM runs a statement. If an adapter does not use them, it
+must still give the same guarantees.
 
 1. **Statement execution.**
    - `query(text, values)` sends `text` unmodified with `values` as positional parameters.
    - It returns a `QueryResult` whose `rows` preserve result order.
    - `rowsToQueryResult` sets `rowCount` to the row-array length, `command` to the empty string,
      `oid` to zero, and `fields` to an empty array. Core reads only `rows` and `rowCount`.
-   - A provider that answers with anything other than a row array is a failed query, not an empty
-     result.
+   - If a provider answers with a value that is not a row array, the query fails. The result is not
+     an empty result.
 2. **Transaction adaptation.**
    - `forTransaction(transaction)` returns a `Queue` bound to the caller's transaction.
    - `adminForTransaction(transaction)` returns the matching `Admin`.
    - Neither client commits, rolls back, disconnects, or destroys the transaction.
-   - A claim through either client requires that transaction to run at read committed; see
+   - A claim through either client requires that the transaction runs at read committed. See
      [Claim](lifecycle.md#claim).
 3. **Error translation.**
    - A failed statement throws an error extending `QueryError`. The error retains `statement` and
      the original `cause`, and copies the SQLSTATE to `code`.
    - The code comes from `databaseErrorCode` in `typescript/core/src/errors.ts`. It searches
-     breadth-first over `cause`, `driverError`, and `meta`, at most 16 objects, and is cycle-safe.
+     breadth-first over `cause`, `driverError`, and `meta`. It visits at most 16 objects, and it is
+     cycle-safe.
    - It accepts only five-character uppercase alphanumeric codes. It prefers a nested SQLSTATE over
      a Prisma `P\d{4}` code that carries `meta`.
-   - Core depends on this through any ORM wrapper to raise these errors:
+   - Core uses this code through any ORM wrapper to raise these errors:
      - `EnqueueIdempotencyConflictError` for SQLSTATE `P1001`
      - `RedriveIdempotencyConflictError` for `P1002`
      - `DependencyCycleError` for `P1003`
      - `DependencyLimitExceededError` for `P1005`
    - Messages never copy parameter values.
 4. **Failures that pass through untranslated.**
-   - A `QueryError` is already translated. It is rethrown as-is rather than nested again.
-   - A `RangeError` states that the statement itself was malformed: a placeholder with no
-     matching value. That is the caller's error rather than the database's.
+   - A `QueryError` is already translated. The adapter rethrows it as-is and does not nest it
+     again.
+   - A `RangeError` states that the statement itself is malformed. It has a placeholder with no
+     matching value. That is an error of the caller, not of the database.
 5. **Connection pool.**
-   - An adapter lends workers a node-postgres pool through `attachConnectionPool`. It stores the
-     pool, or a function that finds it, on the queryable under an internal symbol.
+   - An adapter gives workers a node-postgres pool through `attachConnectionPool`. It stores the
+     pool, or a function that finds the pool, on the queryable under an internal symbol.
    - A value counts as a pool only if it has `connect()`. `options.max` gives its capacity.
    - The pool object is the sharing identity. Queryables built from one pool share one listener and
      one heartbeat connection.
    - Transaction queryables never carry a pool, because that session ends.
-   - Without a pool, a worker refuses to start unless `sharedHeartbeats` is set. With it set, the
-     worker dispatches by bounded polling.
-   - `connectionPoolOf(database)` resolves that pool for any caller. It is exported from
-     `@stablemates/workhorse` with its `ConnectionPool` type. It checks in this order:
+   - Without a pool, a worker refuses to start unless `sharedHeartbeats` is set. If that option is
+     set, the worker dispatches by bounded polling.
+   - `connectionPoolOf(database)` resolves that pool for any caller. `@stablemates/workhorse`
+     exports it with its `ConnectionPool` type. It checks in this order:
      1. an attached pool, calling the function when the adapter attached one
      2. the queryable itself, when it has `connect()`
      3. otherwise `undefined`
-   - The function form lets TypeORM attach its driver's pool before the data source connects. A
-     caller therefore resolves the pool at use, not once.
+   - With the function form, TypeORM can attach the pool of its driver before the data source
+     connects. Thus a caller resolves the pool at use, not once.
 6. **Resource ownership.**
    - An adapter closes nothing it did not create.
-   - `WorkhorseAdapter.close()` invokes the configured `close` callback at most once, however many
-     times it is called.
+   - `WorkhorseAdapter.close()` calls the configured `close` callback at most once, for any number
+     of calls.
 
 ### Connection poolers
 
 Every production statement is self-contained. No code path issues `SET`, holds a cursor, or takes a
-session-level advisory lock, so `pool_mode = transaction` serves every queue operation.
+session-level advisory lock. Thus `pool_mode = transaction` serves every queue operation.
 
 Two kinds of session state are the exceptions. `integration-pooling.test.ts` runs each pooler and
 pool mode as a separate lane to prove the boundary.
 
 #### `LISTEN` notifications
 
-`LISTEN workhorse_tasks` is session state. Behavior by pooler:
+`LISTEN workhorse_tasks` is session state. The table gives the behavior of each pooler:
 
-| Pooler and mode               | Behavior                                                                                                                                                                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PgBouncer session mode        | Delivers `NOTIFY` normally.                                                                                                                                                                                                                       |
-| PgBouncer in transaction mode | Accepts `LISTEN`, returns success, then releases the server connection. No notification is ever delivered and no error reaches `onNotificationError`. The subscription reports listening while the `Worker.run()` fallback poll carries dispatch. |
-| PgCat, either pool mode       | Relays a buffered notification only with the client's next query result, so an idle `LISTEN`ing worker hears nothing.                                                                                                                             |
+| Pooler and mode               | Behavior                                                                                                                                                                                                                                                              |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PgBouncer session mode        | Delivers `NOTIFY` normally.                                                                                                                                                                                                                                           |
+| PgBouncer in transaction mode | Accepts `LISTEN`, returns success, and then releases the server connection. The pooler never delivers a notification, and no error gets to `onNotificationError`. The subscription reports that it listens, while the `Worker.run()` fallback poll does the dispatch. |
+| PgCat, either pool mode       | Relays a buffered notification only with the next query result of the client. Thus an idle `LISTEN`ing worker gets no notification.                                                                                                                                   |
 
-Restoring wake hints takes a worker pool that reaches PostgreSQL without those poolers, such as the
-Prisma or Kysely adapter's `pool`. The alternative is a `Queue` whose queryable has no `connect()`.
-It stays polling-only, and its workers need `sharedHeartbeats`.
+To restore wake hints, use a worker pool that connects to PostgreSQL without those poolers. An
+example is the `pool` of the Prisma or Kysely adapter. The alternative is a `Queue` whose queryable
+has no `connect()`. That `Queue` uses only polling, and its workers need `sharedHeartbeats`.
 
 #### Advisory locks
 
-Session advisory locks (`pg_advisory_lock`, `pg_advisory_unlock`, `pg_try_advisory_lock`) pin to
-whichever server session ran them. They outlive the client checkout. Under transaction pooling, a
-second client can acquire a held key, and grants leak onto pooled backends.
+Session advisory locks (`pg_advisory_lock`, `pg_advisory_unlock`, `pg_try_advisory_lock`) stay
+with the server session that ran them. They continue after the client checkout ends. Under
+transaction pooling, a second client can acquire a key that the first client holds. Also, grants
+leak onto pooled backends.
 
 Every Workhorse advisory lock is transaction-scoped (`pg_advisory_xact_lock`,
-`pg_try_advisory_xact_lock`, `pg_advisory_xact_lock_shared`), including the schema-migration lock.
-No production path is affected. The session forms exist only in test harnesses.
+`pg_try_advisory_xact_lock`, `pg_advisory_xact_lock_shared`). This includes the schema-migration
+lock. No production path is affected. The session forms exist only in test harnesses.
 
 #### Heartbeat connection
 
-The TypeScript worker's reserved heartbeat connection holds no session state. It runs only
-`heartbeat_many_v1`, bounds each round on the client, and never issues `SET`. It works in every
-pool mode.
+The reserved heartbeat connection of the TypeScript worker holds no session state. It runs only
+`heartbeat_many_v1`, and it bounds each round on the client. It never issues `SET`. It works in
+every pool mode.
 
 #### Connection budgets per language
 
-Each language holds these connections before handlers and cohorts take anything:
+Before handlers and cohorts take connections, each language holds these connections:
 
 | Language   | Listener connection                                                                                                                                | Heartbeat connection                                                                  |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -278,7 +295,7 @@ Each language holds these connections before handlers and cohorts take anything:
 TypeScript keys both its listener and its heartbeat connection by the pool object. Go follows the
 same pattern.
 
-A dedicated heartbeat connection needs a pool of at least 3 connections in every language, unless
+In every language, a dedicated heartbeat connection needs a pool of at least 3 connections, unless
 the opt-out is set:
 
 - `sharedHeartbeats` in TypeScript
@@ -296,12 +313,12 @@ Schema operations run under transaction pooling.
 ### Queue module seams
 
 `Queue` is the application and worker facade. `Admin` is the operator facade. Both constructors
-call `createQueueModuleContext` and `createQueueModules`. Neither factory is exported from
-`typescript/core/src/index.ts`, so both clients share modules without exposing the module graph.
+call `createQueueModuleContext` and `createQueueModules`. `typescript/core/src/index.ts` exports
+neither factory. Thus both clients share modules and do not expose the module graph.
 
 `createQueueModuleContext` returns an immutable `QueueModuleContext`. The context contains the
-`Queryable`, default queue name, and validated `QueueOptions`. Every internal module extends
-`QueueModule`, which retains that context for relocated behavior.
+`Queryable`, the default queue name, and the validated `QueueOptions`. Every internal module extends
+`QueueModule`. `QueueModule` keeps the context for relocated behavior.
 
 `createQueueModules` constructs nine receivers:
 
@@ -326,8 +343,8 @@ call `createQueueModuleContext` and `createQueueModules`. Neither factory is exp
   context.
 
 `Queue.enqueue`, `enqueueMany`, `syncSchedules`, and `complete` delegate these operations without
-changing their public signatures. `typescript/core/src/queue.ts` continues to re-export the four
-public error classes.
+changing their public signatures. `typescript/core/src/queue.ts` still re-exports the four public
+error classes.
 
 #### `ClaimLeaseFenceModule`
 
@@ -337,9 +354,10 @@ its public signatures.
 
 - `FencedLease` converts a `ClaimedTask` and worker ID into the exact task ID, worker ID, and
   decimal fence token tuple. Every owned SQL transition in that module uses that tuple.
-- `complete` invokes the enqueue module's result-contract validation before the fenced transition.
-- `recordRecoveryTelemetry` remains shared with `Queue.tick`. `Queue.tick` reports the same
-  recovery counters from the combined maintenance function.
+- `complete` calls the result-contract validation of the enqueue module before the fenced
+  transition.
+- `recordRecoveryTelemetry` stays shared with `Queue.tick`. `Queue.tick` reports the same recovery
+  counters from the combined maintenance function.
 - `rowTimestamp` and `nullableRowTimestamp` own PostgreSQL timestamp mapping for this module and
   for the row mappers that remain in `Queue`.
 
@@ -376,12 +394,12 @@ through `from_psycopg` or `from_asyncpg`. Both clients expose these methods:
 and row mappers for Psycopg and asyncpg. Neither client commits, rolls back, or closes the caller's
 connection.
 
-The Python dashboard backend creates `Admin` from its existing `SyncExecutor`. Shared wait reads and
-audited queue or worker controls therefore use the public client rather than a dashboard-only SQL
-path.
+The Python dashboard backend creates `Admin` from its existing `SyncExecutor`. Thus shared wait
+reads and audited queue or worker controls use the public client. They do not use a SQL path that
+only the dashboard has.
 
 The Go module exports `NewAdmin(Executor)` beside `NewQueue`. `Admin` uses the caller-owned pgx or
-`database/sql` executor and checks schema compatibility for every operation. It maps the same
+`database/sql` executor. It checks schema compatibility for every operation. It maps the same
 versioned protocols:
 
 - task, timeline, and dead-letter reads
@@ -390,26 +408,26 @@ versioned protocols:
 - queue pause, queue resume, and queue purge
 
 `AdminAudit` carries `Actor`, `Reason`, and `RequestID` for every mutation. `go/dashboard`
-constructs one `Admin` and routes queue and worker controls through it.
+constructs one `Admin` and sends queue and worker controls through it.
 
 ### Operator dashboard
 
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
 request host. It reads everything it shows from PostgreSQL, including worker identity, runtime
-state, and policy provenance. It can therefore be mounted in a process that runs no workers at all.
+state, and policy provenance. Thus a caller can mount it in a process that runs no workers.
 
 - Mounting requires only a database connection.
 - Policy mutation additionally requires `operator.mode
 === "writable"` and a `DashboardSettingsController`.
-- Every policy mutation call carries actor, reason, request ID, and server-assigned occurrence
-  time.
+- Every call that mutates a policy carries an actor, a reason, a request ID, and an occurrence time
+  that the server assigns.
 
 #### Workspaces
 
 `createDashboardHost` accepts exactly one of `database` and `workspaces`.
 
-`workspaces` maps a name to `DashboardWorkspaceOptions`. Each entry carries its own `Queryable`
-plus optional overrides for:
+`workspaces` maps a name to `DashboardWorkspaceOptions`. Each entry carries its own `Queryable` and
+optional overrides for:
 
 - `environment`
 - `configuredWorkers`
@@ -418,11 +436,11 @@ plus optional overrides for:
 - the five controllers
 - `projectDurability`
 
-An omitted override falls back to the host-level option.
+If an entry omits an override, the host-level option applies.
 
 `DashboardWorkspaceOptions.databaseHost` and `DashboardWorkspaceOptions.databaseName` are optional
-display-only labels of the backing database's host and name. The host never derives them from the
-connection, because a `Queryable` carries no address.
+labels for display only. They give the host and the name of the backing database. The dashboard
+host never derives them from the connection, because a `Queryable` carries no address.
 
 The demo derives its labels from `DATABASE_URL_PRIMARY` and `DATABASE_URL_SECONDARY`:
 
@@ -437,7 +455,7 @@ Each workspace gets its own `Admin`, `Queue`, schema-compatibility probe, and RP
 - A workspace mounts at `{path}/{name}`, with its endpoint at `{path}/{name}/rpc`.
 - The mount path answers a 302 redirect to `{path}/{defaultWorkspace}/tasks`. `defaultWorkspace`
   defaults to the first configured workspace.
-- A first segment naming no workspace answers 404.
+- If the first segment names no workspace, the response is 404.
 - A workspace name matches `/^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/i`. It is never `rpc`,
   `assets`, `login`, or `logout`.
 - `authorize(request, workspace)` receives the resolved workspace name. It receives null in
@@ -446,15 +464,15 @@ Each workspace gets its own `Admin`, `Queue`, schema-compatibility probe, and RP
 
 #### Workspace switcher
 
-`DashboardRuntimeConfig` carries two fields so the browser renders its switcher:
+`DashboardRuntimeConfig` carries two fields so that the browser renders its switcher:
 
 - `workspaces`: one `{ name, url, databaseHost?, databaseName? }` for each workspace that
   `authorize(request, workspace)` grants for this request. The database labels appear only when
   configured.
 - `workspace`: the rendered one.
 
-Both are `[]` and `null` in single-workspace mode. The switcher menu shows `databaseHost` and
-`databaseName` joined by `·` as a dimmed line under the workspace name.
+In single-workspace mode, the two fields are `[]` and `null`. The switcher menu shows
+`databaseHost` and `databaseName` joined by `·` as a dimmed line under the workspace name.
 
 #### Standalone entry point
 
@@ -470,11 +488,11 @@ database or `{ workspaces, defaultWorkspace }`.
 
 ### Error hierarchy
 
-Every error Workhorse raises deliberately extends `WorkhorseError`
+Every error that Workhorse raises on purpose extends `WorkhorseError`
 (`typescript/core/src/errors.ts`). `WorkhorseError` extends `Error`, and each subclass sets `name`.
 
 `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed".
-These propagate unchanged and do not carry the base:
+These errors propagate with no change and do not carry the base:
 
 - a PostgreSQL error
 - a handler's own throw
@@ -490,52 +508,56 @@ The exported subclasses include:
 
 ### Reading database error codes
 
-Recognizing a PostgreSQL failure means reading through whatever an ORM wrapped it in.
+An ORM can wrap a PostgreSQL failure. To recognize the failure, the code reads through each
+wrapper.
 
 - `databaseErrorCode(error)` returns the SQLSTATE.
 - `databaseErrorDetails(error)` returns every `DETAIL` string along the chain.
 
 Both walk breadth-first over `cause`, `driverError`, and `meta`. Both visit at most 16 objects.
-Both track visited objects, so a cyclic `cause` terminates.
+Both record visited objects. Thus the walk stops on a cyclic `cause`.
 
-A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`. A Prisma code matching `/^P\d{4}$/` on an object
-that also carries `meta` is held back. It is returned only when nothing nested supplies a real
-SQLSTATE. Prisma reports `P2010` on the same field and retains the true SQLSTATE under `meta`.
+A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`. If an object carries `meta` and a Prisma code
+that matches `/^P\d{4}$/`, the walk holds back that code. The walk returns it only when no nested
+object supplies a real SQLSTATE. Prisma reports `P2010` on the same field and keeps the true
+SQLSTATE under `meta`.
 
 ### SQLSTATE registry
 
 Workhorse owns the following SQLSTATE registry. `schema-sqlstates.test.ts` scans every declaration
 and fails if a code gains an unregistered meaning.
 
-| SQLSTATE | Meaning                              | TypeScript result                                       |
-| -------- | ------------------------------------ | ------------------------------------------------------- |
-| `P1001`  | Enqueue idempotency conflict         | `EnqueueIdempotencyConflictError`                       |
-| `P1002`  | Redrive idempotency conflict         | `RedriveIdempotencyConflictError`                       |
-| `P1003`  | Dependency cycle                     | `DependencyCycleError`                                  |
-| `P1004`  | Child creation lost the parent lease | SQL converts it to the child operation's `stale` status |
-| `P1005`  | Dependency graph bound exceeded      | `DependencyLimitExceededError`                          |
-| `P1006`  | Purge idempotency conflict           | `PurgeIdempotencyConflictError`                         |
-| `P1007`  | Fast-tier queue rejects a feature    | `FastTierUnsupportedError`                              |
+| SQLSTATE | Meaning                              | TypeScript result                                           |
+| -------- | ------------------------------------ | ----------------------------------------------------------- |
+| `P1001`  | Enqueue idempotency conflict         | `EnqueueIdempotencyConflictError`                           |
+| `P1002`  | Redrive idempotency conflict         | `RedriveIdempotencyConflictError`                           |
+| `P1003`  | Dependency cycle                     | `DependencyCycleError`                                      |
+| `P1004`  | Child creation lost the parent lease | SQL changes it to the `stale` status of the child operation |
+| `P1005`  | Dependency graph bound exceeded      | `DependencyLimitExceededError`                              |
+| `P1006`  | Purge idempotency conflict           | `PurgeIdempotencyConflictError`                             |
+| `P1007`  | Fast-tier queue rejects a feature    | `FastTierUnsupportedError`                                  |
 
-`Queue` decodes each exposed error's diagnostics from `DETAIL`.
+`Queue` decodes the diagnostics of each exposed error from `DETAIL`.
 [Rejected features and `P1007`](fast-tier.md#rejected-features-and-p1007) lists every feature text
 and the matching Python, Go, and Rust errors.
 
-A payload failing shape validation is discarded in favor of sanitized placeholder details rather
-than propagated. `DETAIL` is diagnostic text that an operator or an ORM can also write.
+If a payload fails shape validation, Workhorse discards it and uses sanitized placeholder details.
+Workhorse does not propagate that payload. `DETAIL` is diagnostic text that an operator or an ORM
+can also write.
 
 ### Missing rows
 
-`expectOneRow(result, source)` takes the single row a statement is defined to return. When the
-result is empty, it throws `MissingRowError` naming `source`.
+`expectOneRow(result, source)` takes the single row that a statement returns by definition. If the
+result is empty, it throws `MissingRowError` with the name `source`.
 
-An empty result from a set-returning function that declares one row means the installed schema and
+If a set-returning function declares one row and returns an empty result, the installed schema and
 this client disagree.
 
 ## Tenancy
 
-Workhorse has no tenant object and documents two tiers. The decision is recorded in [ADR
-0069](../decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md).
+Workhorse has no tenant object. It documents two tiers. [ADR
+0069](../decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md)
+records the decision.
 
 ### Isolated tenancy
 
@@ -543,7 +565,7 @@ _Isolated tenancy_ installs the schema into one database per tenant. PostgreSQL 
 boundary.
 
 - Every table, policy, budget, schedule, retention window, and dashboard session is separate,
-  because the databases are.
+  because each tenant has a separate database.
 - Each database runs `workhorse schema migrate` independently.
 - Each `Worker` binds to one database.
 
@@ -551,11 +573,11 @@ boundary.
 
 _Shared tenancy_ carries the tenant on three task fields that already exist:
 
-| Field                                    | Bounds                                                           | Role                                                                                                                                                                                                                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task.concurrency_key`                   | 1 through 256 UTF-8 bytes, queue-scoped                          | `concurrency_policy.max_active_per_key` and the `rate_limit_policy` per-key bucket give the tenant fair share inside one queue.                                                                                                                                        |
-| `task.budget_name`                       | 1 through 256 UTF-8 bytes                                        | One `budget` row per tenant caps that tenant's active tasks or start rate across every queue. `sync_budgets_v1` accepts at most 10,000 definitions per call, so one budget per tenant is a deployment cost of about 130 microseconds per tenant on the benchmark host. |
-| One `tenant:<id>` element of `task.tags` | `task.tags` holds at most 20 tags of at most 100 characters each | `task_tags_gin_idx` serves the `&&` and `@>` filters in `list_dead_letters_v1`, `redrive_many_v1`, `dashboard_tasks_v1`, `dashboard_tasks_cursor_v1`, and `dashboard_activity_v1`. The dashboard wire validator accepts at most 20 selected tags.                      |
+| Field                                    | Bounds                                                           | Role                                                                                                                                                                                                                                                                            |
+| ---------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task.concurrency_key`                   | 1 through 256 UTF-8 bytes, queue-scoped                          | `concurrency_policy.max_active_per_key` and the `rate_limit_policy` per-key bucket give the tenant fair share inside one queue.                                                                                                                                                 |
+| `task.budget_name`                       | 1 through 256 UTF-8 bytes                                        | One `budget` row per tenant limits the active tasks or the start rate of that tenant across every queue. `sync_budgets_v1` accepts at most 10,000 definitions per call. On the benchmark host, one budget per tenant is a deployment cost of about 130 microseconds per tenant. |
+| One `tenant:<id>` element of `task.tags` | `task.tags` holds at most 20 tags of at most 100 characters each | `task_tags_gin_idx` serves the `&&` and `@>` filters in `list_dead_letters_v1`, `redrive_many_v1`, `dashboard_tasks_v1`, `dashboard_tasks_cursor_v1`, and `dashboard_activity_v1`. The dashboard wire validator accepts at most 20 selected tags.                               |
 
 What shared tenancy does not scope:
 
@@ -564,15 +586,15 @@ What shared tenancy does not scope:
 - `retention_policy` is a singleton, so retention windows are per installation.
 - Metric attributes never include a key or tag.
 - Spans carry `workhorse.task.id` and `workhorse.task.type` rather than the key or tags.
-- No function scopes a read or an operator action to a tenant. Tag filters narrow a result without
-  enforcing a boundary.
+- No function scopes a read or an operator action to a tenant. Tag filters narrow a result, but
+  they do not enforce a boundary.
 
 ### Admission cost
 
 Admission cost is independent of tenant count. `claim_v1` counts one key through
 `task_runtime_active_queue_key_expiry_idx` and one budget through
-`task_runtime_active_budget_expiry_idx`. When a per-key limit or budget can pass over saturated
-work, it inspects at most 100 ready rows.
+`task_runtime_active_budget_expiry_idx`. If a per-key limit or budget can skip saturated work, the
+claim inspects at most 100 ready rows.
 
 `pnpm benchmark:tenant-cardinality` loads one queue with 100 through 100,000 tenants. Each tenant
 has a key, a tag, and optionally its own budget. The queue has 80 saturated rows at the head of the
@@ -582,9 +604,9 @@ Results across the whole ladder:
 
 - Median claim latency measured 2.2 through 3.5 ms without budgets.
 - Median claim latency measured 3.7 through 4.4 ms with budgets.
-- Each admission count took three buffer hits.
+- Each admission count used three buffer hits.
 - The dashboard task list filtered by tag grew from 1 ms to 94 ms. It materializes the whole task
-  projection before filtering.
+  projection before it filters.
 - `queue_health_v1` reached 2.7 s at 200,000 ready rows.
 
 Both of the last two track total rows, not tenants

@@ -10,17 +10,17 @@ A full-tier task pays for durable execution on every transition:
 - Its claim, completion, and retry each write a `task_runtime` change and a `task_event` row.
 - Completion and retry also close the attempt into an `attempt_history` row.
 
-A queue whose handlers never use durable execution pays that cost for nothing. The fast tier
-removes it. A fast-tier task lives in one `fast_task_runtime` row and closes into one
-`fast_task_outcome` row. It writes history only when the queue opts in ([ADR
+If the handlers of a queue never use durable execution, the queue pays that cost for no benefit.
+The fast tier removes that cost. A fast-tier task lives in one `fast_task_runtime` row and closes
+into one `fast_task_outcome` row. It writes history only when the queue enables history ([ADR
 0077](../decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
 
 The tier belongs to the queue, never to a task or a worker. PostgreSQL routes every transition by
-the queue's current tier, so a client calls the same public functions for both tiers.
+the current tier of the queue. Thus a client calls the same public functions for both tiers.
 
-For every accepted fast-tier task, exactly one of `fast_task_runtime` and `fast_task_outcome` exists
-after a committed transition, and neither `task_runtime` nor `task_outcome` exists. The stable
-`task` identity row is shared by both tiers.
+After a committed transition, exactly one of `fast_task_runtime` and `fast_task_outcome` exists for
+every accepted fast-tier task. Neither `task_runtime` nor `task_outcome` exists for that task. Both
+tiers share the stable `task` identity row.
 
 ```mermaid
 flowchart LR
@@ -56,33 +56,34 @@ after migration 0025. `dashboard_queue_control_v1` exposes `tier`, `record_attem
 
 #### Changing the tier
 
-`set_queue_tier_v1(p_queue_name, p_tier, p_requested_by, p_reason)` changes the tier and returns
-the tier now in force. `p_requested_by` contains 1 through 200 characters and `p_reason` 1 through
-2,000. The function takes the queue's exclusive tier lock, then:
+`set_queue_tier_v1(p_queue_name, p_tier, p_requested_by, p_reason)` changes the tier and returns the
+tier now in force. `p_requested_by` contains 1 through 200 characters. `p_reason` contains 1 through
+2,000 characters. The function takes the exclusive tier lock of the queue. Then it does one of these
+actions:
 
-- returns at once when the tier is unchanged;
-- raises `P1007` with feature `tier change` when the queue holds any live task in either runtime
-  table, with the message `queue <name> has live tasks, so its tier cannot change`;
-- raises `P1007` with feature `concurrency policies` or `rate-limit policies` when moving to `fast`
-  while a `concurrency_policy` or `rate_limit_policy` row names the queue;
-- otherwise upserts `queue_control.tier`, `updated_by`, `reason`, and `updated_at`.
+- If the tier is unchanged, it returns at once.
+- If the queue holds any live task in either runtime table, it raises `P1007` with feature
+  `tier change`, with the message `queue <name> has live tasks, so its tier cannot change`.
+- If the new tier is `fast` and a `concurrency_policy` or `rate_limit_policy` row names the queue,
+  it raises `P1007` with feature `concurrency policies` or `rate-limit policies`.
+- Otherwise, it upserts `queue_control.tier`, `updated_by`, `reason`, and `updated_at`.
 
-A queue must therefore be empty to switch tier. Terminal outcomes stay in the table they closed
-into, so a switched queue's old tasks stay readable. `set_queue_tier_v1` does not change `paused`
-or the history switches.
+Thus a queue must be empty before its tier can change. A terminal outcome stays in the table that it
+closed into. Thus the old tasks of a queue stay readable after a tier change. `set_queue_tier_v1`
+does not change `paused` or the history switches.
 
 #### Changing the history switches
 
 `set_queue_history_v1(p_queue_name, p_record_attempts, p_record_claims)` sets the history switches
-and returns both. A null argument keeps the current value. The function does not check the tier,
-so a full-tier queue may hold settings that take effect once it moves to fast. A change applies to
-claims and completions that start after it commits.
+and returns both. A null argument keeps the current value. The function does not check the tier.
+Thus a full-tier queue can hold settings that take effect when it moves to fast. A change applies to
+claims and completions that start after the change commits.
 
-- With `record_attempts`, each closed fast-tier attempt writes one `attempt_history` row instead of
-  an entry in the row's `errors` list. `started_at` equals `claimed_at`, because a fast-tier attempt
-  never suspends.
-- With `record_claims`, each fast claim writes one `claimed` `task_event` carrying `worker_id`,
-  `fence_token` as text, and `expires_at`.
+- If `record_attempts` is true, each closed fast-tier attempt writes one `attempt_history` row. It
+  does not write an entry in the `errors` list of the row. `started_at` equals `claimed_at`, because
+  a fast-tier attempt never suspends.
+- If `record_claims` is true, each fast claim writes one `claimed` `task_event`. The event carries
+  `worker_id`, `fence_token` as text, and `expires_at`.
 
 #### SDK methods
 
@@ -106,7 +107,7 @@ and returns the full settings.
 
 ### Tier locking
 
-Tier locks keep a tier change from interleaving with a write that read the old tier.
+Tier locks prevent the interleaving of a tier change with a write that read the old tier.
 
 `lock_queue_tiers_v1(p_queue_names text[])` takes a shared transaction advisory lock on
 `'workhorse:queue-tier:' || name` for each distinct queue, in `"C"` collation order. It returns the
@@ -116,13 +117,14 @@ names that are fast-tier.
   read the tier.
 - `set_queue_tier_v1` takes the exclusive form of the same lock.
 
-A tier change and an enqueue into that queue therefore serialize, and a tier change never observes a
+Thus a tier change and an enqueue into the same queue serialize. A tier change never observes a
 half-written batch.
 
 ### `fast_task_runtime`
 
-One row per live fast-tier task. It copies every field a claim returns, so a claim reads and writes
-this table alone. A retry returns the row to `ready`; any close deletes it.
+The table holds one row for each live fast-tier task. The row copies every field that a claim
+returns. Thus a claim reads and writes only this table. A retry returns the row to `ready`. Each
+close deletes the row.
 
 | Column                                                        | Constraint                                                 |
 | ------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -152,8 +154,8 @@ this table alone. A retry returns the row to `ready`; any close deletes it.
 - An `active` row has `worker_id`, `claimed_at`, and `expires_at` set and `fence_token` above 0. Its
   cancellation actor and reason require `cancel_requested_at`.
 
-A ready row with a future `run_at` plays the role of a full-tier `scheduled` row. The tier has no
-separate scheduled state and no promotion pass.
+A ready row with a future `run_at` has the same function as a full-tier `scheduled` row. The tier
+has no separate scheduled state and no promotion pass.
 
 #### Indexes
 
@@ -172,8 +174,8 @@ scheduled state.
 
 #### The `errors` list
 
-A task's attempt history lives in `errors` unless the queue records attempts. `fast_retry_v1`
-appends one entry per closed attempt with these fields:
+Unless the queue records attempts, the attempt history of a task is in `errors`. `fast_retry_v1`
+appends one entry for each closed attempt. The entry has these fields:
 
 - `attempt`
 - `fence_token` as text
@@ -183,12 +185,12 @@ appends one entry per closed attempt with these fields:
 - `outcome`: `retry`, `timeout`, or `lease_expired`
 - `error`
 
-The list holds at most 10 entries. At the cap, `fast_retry_v1` drops the oldest entry and
-increments `errors_dropped`, so a reader can tell the list is incomplete.
+The list holds at most 10 entries. If the list is full, `fast_retry_v1` drops the oldest entry and
+increments `errors_dropped`. Thus a reader can see that the list is incomplete.
 
 ### `fast_task_outcome`
 
-One row per closed fast-tier task.
+The table holds one row for each closed fast-tier task.
 
 | Column                                   | Constraint                                                           |
 | ---------------------------------------- | -------------------------------------------------------------------- |
@@ -214,8 +216,8 @@ expired deadline before any claim.
 - `failed`: a non-null `error`;
 - `canceled`: a non-null `error` and `closed_as = 'canceled'`.
 
-`closed_as` names the boundary that closed a task when the handler did not. A handler's own
-terminal failure leaves it null.
+If the handler did not close a task, `closed_as` names the boundary that closed it. If the handler
+itself fails the task terminally, `closed_as` stays null.
 
 #### Outcome indexes
 
@@ -236,14 +238,14 @@ A fast-tier queue supports these features:
 - heartbeats and cancellation;
 - redrive, pause, purge, and run-now.
 
-It rejects every feature that needs durable execution or per-task coordination state. PostgreSQL
-raises the rejection through
+It rejects every feature that needs durable execution or coordination state for each task.
+PostgreSQL raises the rejection through
 `reject_fast_feature_v1(p_queue_name, p_feature, p_ordinal DEFAULT NULL)`:
 
 - SQLSTATE `P1007`;
 - message `fast-tier queue <name> does not support <feature>`;
-- `DETAIL` JSON `{ queue, feature, ordinal? }`, where `ordinal` names the offending request's
-  position in a batch.
+- `DETAIL` JSON `{ queue, feature, ordinal? }`, where `ordinal` names the position of the
+  offending request in a batch.
 
 | Feature text                                  | Raised by                                                       |
 | --------------------------------------------- | --------------------------------------------------------------- |
@@ -257,9 +259,9 @@ raises the rejection through
 
 Two rejections differ from that shape:
 
-- A full-tier task that names a fast-tier task as a prerequisite is also rejected. That rejection
-  carries `{ feature: "dependencies", taskId, ordinal }` and no `queue` key, because the offending
-  queue is the prerequisite's.
+- Workhorse also rejects a full-tier task that names a fast-tier task as a prerequisite. That
+  rejection carries `{ feature: "dependencies", taskId, ordinal }` and no `queue` key. The reason is
+  that the offending queue is the queue of the prerequisite.
 - The `batched completion` message is `queue <name> is not a fast-tier queue`.
 
 The full tier has no fused completion call.
@@ -279,7 +281,7 @@ Every SDK maps `P1007` to one error:
 
 TypeScript raises `FastTierUnsupportedError(queue, feature, ordinal?)
 ` with the message `Fast-tier queue <queue> does not support <feature>`; `fastTierRejection`
-decodes `DETAIL` and falls back to `unknown` for a missing field.
+decodes `DETAIL`. If a field is missing, it uses `unknown` for that field.
 
 ### Fast enqueue
 
@@ -287,13 +289,14 @@ decodes `DETAIL` and falls back to `unknown` for a missing field.
 
 1. It calls `lock_queue_tiers_v1` for the batch's queues.
 2. It applies the rejections above.
-3. It inserts fast-tier requests set-based: one `INSERT` into `task` and one into
-   `fast_task_runtime` for all of them.
+3. It inserts all fast-tier requests in one set-based operation: one `INSERT` into `task` and one
+   into `fast_task_runtime`.
 
 It writes no `task_runtime` row and no `enqueued` event. Idempotency keys work as on the full tier.
 
-A request whose deadline has already passed closes at once through `fast_terminalize_deadline_v1`.
-The batch notifies `workhorse_tasks` once per ready queue, as a full-tier batch does.
+If the deadline of a request has already passed, the request closes at once through
+`fast_terminalize_deadline_v1`. The batch notifies `workhorse_tasks` once per ready queue, as a
+full-tier batch does.
 
 ### Fast claim
 
@@ -307,13 +310,13 @@ It sets `expires_at` from the lease and `attempt_timeout_at` from `execution_tim
 
 The timeout restarts on every claim, because the tier keeps no execution budget.
 
-`fast_claim_v1` picks one of two statements, so a queue that does not record claims pays for no
+`fast_claim_v1` selects one of two statements. Thus a queue that does not record claims pays for no
 `task_event` write.
 
 #### Lock waits and deadlock avoidance
 
 `FOR UPDATE SKIP LOCKED` skips a row that another transaction holds, but it can still wait. The
-deadlock arises in these steps:
+deadlock occurs in these steps:
 
 1. The claim locks a candidate whose ready version another worker has just leased and committed.
 2. PostgreSQL follows the update chain and waits there without a wait policy.
@@ -337,9 +340,9 @@ In that cycle, PostgreSQL rolled one statement back with SQLSTATE `40P01` (SM-93
 
 In `complete_many_and_claim_v1` the completion is outside that block and still commits.
 
-The timeout is far below PostgreSQL's default `deadlock_timeout` of 1 s, so the claim leaves the
-cycle before the deadlock detector runs. A server whose `deadlock_timeout` is below 50 ms can still
-detect the cycle first.
+The timeout is far below the PostgreSQL default `deadlock_timeout` of 1 s. Thus the claim leaves
+the cycle before the deadlock detector runs. If the `deadlock_timeout` of a server is below 50 ms,
+that server can still detect the cycle first.
 
 Migration `0040-release-a-fused-claim-lock-before-it-can-deadlock.sql` (schema 39) replaced
 `fast_claim_v1` in place. A claim that returns fewer rows than its limit stays within its contract.
@@ -348,12 +351,12 @@ choice and its measurement.
 
 #### Delayed rows in the ready index
 
-A delayed row stays in `fast_task_runtime_ready_idx`, and `run_at <= now` is an index condition, not
-a bound on the scan. The claim therefore reads past every delayed row whose priority is above the
-highest due row. When nothing is due, it reads past the whole queue's backlog.
+A delayed row stays in `fast_task_runtime_ready_idx`. `run_at <= now` is an index condition, not a
+bound on the scan. Thus the claim reads past every delayed row whose priority is above the highest
+due row. If no row is due, the claim reads past the backlog of the whole queue.
 
-- On PostgreSQL 18 a btree skip scan makes one index descent per such priority, so the read is
-  bounded by the 101 priorities.
+- On PostgreSQL 18, a btree skip scan makes one index descent for each such priority. Thus the 101
+  priorities bound the read.
 - PostgreSQL 15 through 17 have no skip scan and read every such entry.
 
 `pnpm benchmark:fast-claim-backlog` measured a million delayed rows above the due work
@@ -381,9 +384,9 @@ p_task_ids, p_fence_tokens, p_results)` with one task.
 - one `fast_task_outcome` insert;
 - one `attempt_history` insert per task when the queue records attempts.
 
-It returns the accepted task IDs. It leaves an attempt alone, and out of the result, when the
-attempt's fence, worker, lease, deadline, or attempt timeout no longer matches. It does the same
-when the attempt carries a pending cancellation.
+It returns the accepted task IDs. If the fence, worker, lease, deadline, or attempt timeout of an
+attempt no longer matches, the function does not change the attempt. It also leaves that attempt
+out of the result. It does the same if the attempt carries a pending cancellation.
 
 Implementation details:
 
@@ -396,7 +399,7 @@ Implementation details:
 
 #### Oversized results
 
-An oversized result fails only its own attempt. After taking its locks, `fast_complete_many_v1`
+An oversized result fails only its own attempt. After it takes its locks, `fast_complete_many_v1`
 handles oversized results in these steps:
 
 1. It selects each input whose `octet_length(COALESCE(result, 'null')::text)` exceeds the row's
@@ -412,7 +415,7 @@ limit", "stack": null}`.
 
 `complete_many_and_claim_v1` still runs its claim.
 
-The blast radius therefore differs by tier:
+Thus the effect of an oversized result differs by tier:
 
 - On the full tier, `complete_v1` raises for an oversized result, and the caller's statement or
   transaction rolls back.
@@ -438,36 +441,36 @@ The `DELETE` plan locks rows in input order. The heartbeat plan can lock them in
 own heartbeat round could each hold a row the other waits for. PostgreSQL rolled one back with
 SQLSTATE `40P01`. The fused claim held the completion's locks longer and made that more likely.
 
-A caller may therefore name its tasks and leases in any order.
+Thus a caller can name its tasks and leases in any order.
 
 #### Clock sample after the lock
 
 Since migration 0051 (schema version 50), a completion or heartbeat that waited for a row lock
 checks expiry against a clock sample taken after that lock.
 
-- A lease that expired during the wait is rejected rather than accepted or renewed.
+- Workhorse rejects a lease that expired during the wait. It does not accept or renew that lease.
 - An accepted completion records the post-lock time as `finished_at`.
 - A renewal counts from the post-lock time.
 
-Recovery and reclaim skip locked rows and change the fence, so the earlier pre-lock time could not
-duplicate or lose a task.
+Recovery and reclaim skip locked rows and change the fence. Thus the earlier pre-lock time could
+not duplicate or lose a task.
 
-`fast_complete_many_v1`, `fast_heartbeat_many_v1`, and the single-tier paths of
-`heartbeat_many_v1` sample `clock_timestamp()` after every row lock of the call is held, not before
-the first. In such a batch, a lease that was live when its own row was locked is still rejected if it
-expired while the call waited for a later row. A mixed-tier `heartbeat_many_v1` batch validates each
-lease separately, as the next section describes.
+`fast_complete_many_v1`, `fast_heartbeat_many_v1`, and the single-tier paths of `heartbeat_many_v1`
+sample `clock_timestamp()` after every row lock of the call is held, not before the first. In such a
+batch, if a lease expired while the call waited for a later row, the call rejects that lease. This
+is true also if the lease was live when the call locked its own row. A mixed-tier
+`heartbeat_many_v1` batch validates each lease separately, as the next section describes.
 
 Since migration 0060 (schema version 59), `fast_complete_many_v1` samples the clock a second time.
 That sample follows the oversized failures and precedes the completion `DELETE`.
-Failing one writes an outcome row, and that write can wait, for example behind partition
-maintenance. The `DELETE` and `finished_at` use the later sample, so a member whose lease expired
-during that wait is rejected.
+The failure of an oversized result writes an outcome row. That write can wait, for example behind
+partition maintenance. The `DELETE` and `finished_at` use the later sample. Thus the function
+rejects a member whose lease expired during that wait.
 
 Since the same migration, `fast_acknowledge_cancel_v1` checks the lease after its row lock, as
-`acknowledge_cancel_v1` does on the full tier. It used to filter on `expires_at` in the locking
-`SELECT`. Another transaction can hold the row lock without changing the row. PostgreSQL then
-does not evaluate that filter again after the wait. A lease that expired during the wait was
+`acknowledge_cancel_v1` does on the full tier. Before that migration, it filtered on `expires_at` in
+the locking `SELECT`. Another transaction can hold the row lock without changing the row. PostgreSQL
+then does not evaluate that filter again after the wait. A lease that expired during the wait was
 therefore still accepted.
 
 #### Heartbeat batch routing
@@ -480,8 +483,8 @@ therefore still accepted.
 | No fast-tier task                                              | The full-tier `UPDATE ... FROM`, unchanged                                   |
 | Both tiers                                                     | `heartbeat_v1` once per lease in `task_id` order; rows return in input order |
 
-A named task in neither table counts as neither. A heartbeat round that races its worker's own
-completion therefore keeps the ordered path and reports that task `stale`.
+A named task in neither table counts as neither. Thus a heartbeat round that runs at the same time
+as the completion of its own worker keeps the ordered path and reports that task `stale`.
 
 In a mixed batch, each `heartbeat_v1` call samples the clock after its own row lock. The sample of
 one lease follows only the locks of the leases before it. An earlier lease can therefore
@@ -507,8 +510,8 @@ queue in one round trip.
 
 `Queue.completeAndClaim(task, workerId, result, { queue, limit, leaseMs? })` returns
 `CompletionClaimResult { accepted, claimed }`. Concurrent calls from one worker for one queue and
-lease fuse into one statement at `setImmediate`. The fused statement is chunked at 100 completions
-and a total claim limit of 100.
+lease fuse into one statement at `setImmediate`. The method divides the fused statement into chunks
+of 100 completions and a total claim limit of 100.
 
 `Queue.claimFast(workerId, limit, { queue?, leaseMs? })` claims through the same function with
 empty arrays. It rejects with `FastTierUnsupportedError` for a full-tier queue.
@@ -518,8 +521,8 @@ again through `queryFencedWrite`. It tries up to `FENCED_WRITE_DEADLOCK_ATTEMPTS
 total, because nothing in it committed.
 
 Since schema 39 the fused claim leaves a lock wait before it can deadlock
-([Fast claim](#fast-claim)). The Go, Python, Rust, and TypeScript workers therefore keep this resend
-only as a safety net. It still covers:
+([Fast claim](#fast-claim)). Thus the Go, Python, Rust, and TypeScript workers keep this resend only
+as a second protection. It still covers:
 
 - a server whose `deadlock_timeout` is below the claim's `lock_timeout`;
 - a cycle through the completion half of the statement;
@@ -595,9 +598,10 @@ expired" }`.
 #### Retention
 
 `prune_terminal_tasks_v1(p_identity_before, p_outcome_before, p_history_before, p_limit)` splits
-`p_limit` between the full and fast tiers. The tier that goes first gets half of it, rounded up, and
-alternates on every call. A share that one tier cannot use goes to the other tier, so neither tier's
-backlog starves the other. A fast outcome is deletable when:
+`p_limit` between the full and fast tiers. The tier that goes first gets half of it, rounded up. The
+first tier alternates on every call. If one tier cannot use its share, the other tier gets that
+share. Thus the backlog of one tier cannot starve the other tier. The pass can delete a fast outcome
+when all of these conditions are true:
 
 - `finished_at` is earlier than `p_outcome_before`;
 - `finished_at` is earlier than the fast history cutoff, which is `p_history_before`, clamped to
@@ -612,8 +616,8 @@ the `task` identity, which cascades to the outcome.
 
 #### Cold export
 
-Cold export has a third dataset, `fast_task_outcome`, admitted by the `cold_export_dataset` and
-`cold_export_segment` checks.
+Cold export has a third dataset, `fast_task_outcome`. The `cold_export_dataset` and
+`cold_export_segment` checks admit it.
 
 - Its oldest day is the UTC day of `min(finished_at)`.
 - `read_cold_export_rows_v1` returns `(finished_at, task_id, to_jsonb(outcome))` for it, keyed on
@@ -622,8 +626,8 @@ Cold export has a third dataset, `fast_task_outcome`, admitted by the `cold_expo
 
 ### Fast read models
 
-The dashboard views union both tiers, so a fast-tier task appears with the same columns as a
-full-tier one.
+The dashboard views union both tiers. Thus a fast-tier task appears with the same columns as a
+full-tier task.
 
 - `dashboard_task_runtime_v1` shows a ready row with a future `run_at` as `scheduled`. It reports
   null `heartbeat_at` and the last `errors` entry as `error`.
@@ -665,11 +669,11 @@ A stale belief is safe, because PostgreSQL routes each claim by the current tier
 
 #### Fused completion
 
-A fast-tier completion uses the fused statement. A `batched completion` rejection means the queue
-left the fast tier, so the worker falls back to `complete_v1`.
+A fast-tier completion uses the fused statement. A `batched completion` rejection means that the
+queue left the fast tier. The worker then uses `complete_v1`.
 
 Every SDK worker fuses a completion with a refill claim, for `freeSlots() + 1` tasks under the
-refill-batch rule, and hands the slot over directly.
+refill-batch rule. It transfers the slot directly.
 
 #### Dispatch cohorts
 
@@ -723,8 +727,8 @@ Fused completion works in these steps:
 
 1. `Worker._reserve_completion_claim` reserves the refill slots.
 2. `Worker._send_batched_completion` sends one statement per queue and cohort at a time.
-3. Completions that arrive while it is in flight share the next statement. It is split into chunks
-   of at most 100 tasks and 100 claimed slots.
+3. Completions that arrive while a statement is in flight share the next statement. The worker
+   splits that statement into chunks of at most 100 tasks and 100 claimed slots.
 4. `Worker._send_completion_chunk` names each chunk's tasks in task ID order.
 
 When PostgreSQL rolls the chunk back with SQLSTATE `40P01`, `fenced_write_rows` sends the chunk
@@ -796,8 +800,8 @@ Claims and fused completion work as follows:
 - `reserve_completion_claim` asks for the free slots of the completing task's cohort plus one.
 - `send_batched_completion` keeps one `complete_many_and_claim_v1` statement in flight per queue and
   cohort.
-- Completions that arrive meanwhile share the next statement. It is split into chunks of at most
-  `COMPLETION_BATCH_LIMIT` (100) tasks and 100 claimed slots.
+- Completions that arrive during that time share the next statement. The worker splits that
+  statement into chunks of at most `COMPLETION_BATCH_LIMIT` (100) tasks and 100 claimed slots.
 - `send_completion_chunk` names each chunk's tasks in task ID order.
 - When PostgreSQL rolls a chunk back with SQLSTATE `40P01`, `fenced_rows` sends it again, up to
   `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total.
@@ -824,7 +828,8 @@ The rejection is a handler failure, so the attempt follows the task's retry poli
 The Ruby `HandlerContext` rejects its snake_case counterparts with the same feature text, before any
 durable write.
 
-Only step names, and a child set's type, size, and name uniqueness, are validated first:
+The context first validates only step names, and the type, size, and name uniqueness of a child
+set:
 
 - An invalid checkpoint, wait, signal, human wait, or child name raises `ArgumentError` before a
   block runs or any statement reaches PostgreSQL, including the deferred tier read.
@@ -833,8 +838,8 @@ Only step names, and a child set's type, size, and name uniqueness, are validate
 - A set of more than 100 children raises `LimitExceededError`.
 - Repeated child names raise `ArgumentError`, also before the tier check.
 
-Every other argument is validated after the tier check. That includes a checkpoint's block, a
-sleep's duration or time, a wait's timeout, and a human wait's context.
+The context validates every other argument after the tier check. That includes a checkpoint's block,
+a sleep's duration or time, a wait's timeout, and a human wait's context.
 
 `get_checkpoint` and `get_progress` stay reads and still answer. A Ruby batch member's
 `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and `set_progress`
@@ -871,7 +876,7 @@ The TypeScript worker does the same:
 The read runs inside the handler, where the heartbeat already renews the lease.
 
 - A slow read therefore cannot expire a lease that `claim_many_v1` committed.
-- A failed read is not cached. It raises from the durable call before any durable write, and the
-  next durable call retries it.
+- The worker does not cache a failed read. It raises from the durable call before any durable
+  write, and the next durable call retries it.
 - A handler that makes no durable call never reads the tier, and its task completes through
   `complete_v1` or `fail_v1`.
