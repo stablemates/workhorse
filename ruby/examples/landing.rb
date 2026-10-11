@@ -50,7 +50,7 @@ module LandingExamples
 
     def self.register_invoice(worker)
       worker.handle("invoice.issue") do |invoice, context|
-        # Runs once. Every later activation replays the stored result.
+        # After Workhorse stores a checkpoint result, later runs return it.
         charge = context.checkpoint("charge") { charge_card(invoice.fetch("amount")) }
 
         pdf = context.checkpoint("render") { render_invoice(charge["id"]) }
