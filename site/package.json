@@ -30,13 +30,13 @@
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^6.1.2",
     "fumadocs-mdx": "15.4.6",
     "parse5": "8.0.1",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
-    "vite": "^8.3.2"
+    "vite": "^8.3.4"
   },
   "engines": {
     "node": ">=22"
