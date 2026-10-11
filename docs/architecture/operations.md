@@ -6,29 +6,32 @@ administrative CLI and TUI, and operational limits.
 
 ## Deployment synchronization
 
+A deployment synchronizes schedule definitions and concurrency policies into the target database.
+
 ### Schedule definitions
 
 `Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
 
-1. It validates stable namespace and schedule names plus queue task definitions, including
-   optional retry policies.
-2. It atomically upserts deployment intent through `sync_schedule_definitions_v2`. By default it
-   deactivates omitted names. It does not change the durable operator pause.
+1. It validates the stable namespace and schedule names. It also validates the queue task
+   definitions, including optional retry policies.
+2. It upserts the deployment intent atomically through `sync_schedule_definitions_v2`. By default,
+   it deactivates the names that the deployment omits. It does not change a schedule pause.
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
-Because definitions live only in the target database, a deployment is one transaction. There is no
-second metadata database to converge.
+The definitions are only in the target database. Thus a deployment is one transaction. No second
+metadata database exists that must converge.
 
-Every material definition change increments a revision, and worker fires pass the revision they
-loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at
-an old cadence.
+Each material change to a definition increments a revision. When a worker fires a schedule, it
+passes the revision that it loaded. Thus a stale in-process schedule becomes a no-op. It does not
+run a new payload at an old cadence.
 
-Before a disable deployment returns, definition row locking makes it wait for a fire that already
-began.
+A deployment can deactivate a schedule while a fire of that schedule already runs. In that case,
+definition row locking makes the deployment wait for the fire before the deployment returns.
 
 ### Contract stamping
 
-Before the write, every SDK applies each task type's current contract to the definitions:
+Before the write, every SDK applies the current payload contract of each task type to the
+definitions:
 
 | SDK        | How it applies the contract                                                                                     |
 | ---------- | --------------------------------------------------------------------------------------------------------------- |
@@ -38,50 +41,52 @@ Before the write, every SDK applies each task type's current contract to the def
 | Rust       | `Queue::sync_schedules` reads `get_contract_definition_v1` once per distinct type                               |
 | Ruby       | `Queue#sync_schedules` reads `get_contract_definition_v1` once per distinct type                                |
 
-The four SDKs other than TypeScript bypass their contract cache. The reason is that
-`fire_schedule_v1` never checks `contract_policy`, so a stale version would persist on every
+The four SDKs other than TypeScript skip their contract cache. The reason is that
+`fire_schedule_v1` never checks `contract_policy`. Thus a stale version would stay on every
 occurrence.
 
-A payload that fails the schema raises the SDK's contract validation error and writes nothing.
-`protocol/v1/schedules.json` fixture `contracted-schedule-definition` covers the stamped fields.
+If a payload fails the schema, the SDK raises its contract validation error and writes nothing.
+The fixture `contracted-schedule-definition` in `protocol/v1/schedules.json` covers the stamped
+fields.
 
 ### Concurrency policies
 
-`Queue.syncConcurrencyPolicies(namespace, definitions, { prune })` reconciles queue dispatch
-budgets in the same target database.
+`Queue.syncConcurrencyPolicies(namespace, definitions, { prune })` reconciles the dispatch budgets
+of queues in the same target database.
 
 - A queue has one namespace owner.
-- Concurrent synchronization serializes before ownership checks.
+- Workhorse serializes concurrent synchronizations before it checks ownership.
 - A second namespace cannot replace the owner silently.
-- Scheduled definitions retain their `concurrencyKey`. `fire_schedule_v1` sends it through
-  ordinary enqueue admission metadata.
+- Scheduled definitions keep their `concurrencyKey`. `fire_schedule_v1` sends it in the ordinary
+  admission metadata of an enqueue.
 
 ## Worker process lifecycle
 
 Three layers build a worker process:
 
 - `defineWorkerProcess()` declares a process-owned adapter and one or more worker configurations.
-- `startWorkerProcess()` provides framework-neutral orchestration without global signals.
+- `startWorkerProcess()` gives framework-neutral orchestration that does not use global signals.
 - `runWorkerProcess()` and `workhorse worker --config` add the standalone Node lifecycle.
 
 ### Graceful shutdown
 
-The first `SIGINT` or `SIGTERM` marks readiness false and calls `stop()` on every Worker. Then:
+When the process gets the first `SIGINT` or `SIGTERM`, it sets readiness to false. It then calls
+`stop()` on every Worker. After that:
 
-- Later claim requests stop.
-- Active handlers and their worker-level heartbeat batch continue.
-- Adapter resources close only after every run loop settles.
+- The workers send no more claim requests.
+- Active handlers continue. Their worker-level heartbeat batch also continues.
+- The adapter resources close only after every run loop finishes.
 
-A claim transaction already in flight may commit after shutdown begins. The worker drains that
-committed lease rather than abandoning it.
+A claim transaction that is already in progress can commit after the shutdown starts. The worker
+drains that committed lease. It does not abandon the lease.
 
-Process termination does not synthesize durable task cancellation or abort a handler.
+Process termination does not create a durable task cancellation. It also does not abort a handler.
 
 ### Shutdown deadline and failure
 
-A configurable deadline, 25 seconds by default, prevents an uncooperative handler from blocking
-termination forever. `shutdownTimeoutMs` sets it: a safe integer from 1 through 3,600,000, with a
-default of 25,000 ms.
+A configurable deadline prevents an uncooperative handler from blocking termination forever. The
+default deadline is 25 seconds. `shutdownTimeoutMs` sets the deadline. Its value is a safe integer
+from 1 through 3,600,000, and its default is 25,000 ms.
 
 | Event                          | Exit                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
@@ -89,26 +94,29 @@ default of 25,000 ms.
 | Missed deadline                | Code 1                                                                   |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, fails the process |
 
-Hard termination leaves active leases for ordinary fenced expiry recovery. A failed process lets an
-external supervisor restart it.
+Hard termination leaves active leases to ordinary fenced expiry recovery. If the process fails, an
+external supervisor can restart it.
 
 ### Probe listener
 
-The optional probe-only listener reports liveness while running or draining. It reports readiness
-only while accepting claims. It does not expose application HTTP ingress, queue data, or mutations.
+The optional probe-only listener reports liveness while the process runs or drains. It reports
+readiness only while the process accepts claims. It does not expose application HTTP ingress,
+queue data, or mutations.
 
 ## Command-line entry points
 
+Workhorse has one command-line dispatcher. The repository also has scripts outside that dispatcher.
+
 ### Dispatcher and exit codes
 
-The published `@stablemates/workhorse` package declares one `bin`, `workhorse`, which resolves to
+The published `@stablemates/workhorse` package declares one `bin`, `workhorse`. It resolves to
 `dist/src/cli/workhorse.js`.
 
 That dispatcher owns every documented command: `init`, `schema`, `worker`, `dashboard`, `admin`,
-`tui`, and `health`. `workhorse --help` lists them, and `workhorse --version` prints the package
+`tui`, and `health`. `workhorse --help` lists them. `workhorse --version` prints the package
 version.
 
-Exit codes are shared across commands:
+All commands use the same exit codes:
 
 | Code | Meaning                                                                        |
 | ---- | ------------------------------------------------------------------------------ |
@@ -120,26 +128,26 @@ Exit codes are shared across commands:
 ### Repository scripts outside the dispatcher
 
 `typescript/core/src/cli/benchmark.ts` and `typescript/core/src/cli/reset-db.ts` are repository
-scripts rather than commands of that dispatcher.
+scripts. They are not commands of that dispatcher.
 
-- `tsconfig.build.json` excludes both, so neither module reaches `dist` or the npm tarball.
-- That exclusion also drops `typescript/core/benchmarks/`. The benchmark script is its only
+- `tsconfig.build.json` excludes both. Thus neither module gets into `dist` or the npm tarball.
+- That exclusion also removes `typescript/core/benchmarks/`. The benchmark script is its only
   importer.
-- Both files stay under `typescript/core/src/cli/` and stay typechecked by
-  `typescript/core/tsconfig.source.json`.
+- Both files stay under `typescript/core/src/cli/`. `typescript/core/tsconfig.source.json` still
+  typechecks them.
 
-A contributor runs the two from source through the root package scripts `pnpm benchmark` and
-`pnpm db:reset:*`. That is why `docs/benchmarking.md` spells the benchmark invocation
-`pnpm benchmark -- --help` and never `workhorse benchmark`.
+A contributor runs the two scripts from source through the root package scripts `pnpm benchmark`
+and `pnpm db:reset:*`. For this reason, `docs/benchmarking.md` writes the benchmark command as
+`pnpm benchmark -- --help`. It never writes `workhorse benchmark`.
 
 ### `workhorse init`
 
-`workhorse init` scaffolds a worker configuration for an existing project.
+`workhorse init` creates a worker configuration for an existing project.
 
 #### Project detection
 
-The command reads the target directory's `package.json`. `detectProject` in
-`typescript/core/src/cli/init.ts` derives three facts from its dependencies:
+The command reads the `package.json` file in the target directory. `detectProject` in
+`typescript/core/src/cli/init.ts` gets three facts from its dependencies:
 
 - **ORM:** `drizzle`, `prisma`, `typeorm`, `kysely`, or plain `pg`.
 - **Web framework:** `hono`, `express`, `fastify`, `next`, or `none`.
@@ -148,42 +156,46 @@ The command reads the target directory's `package.json`. `detectProject` in
 `detectPackageManager` decides the package manager in this order:
 
 1. The `packageManager` field.
-2. The directory's lockfile, checked in this order: `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`,
-   `yarn.lock`, `package-lock.json`, `npm-shrinkwrap.json`. Bun's own lockfile therefore decides
-   before the `yarn.lock` it may also write.
+2. The lockfile in the directory. `detectPackageManager` checks the lockfiles in this order:
+   `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `yarn.lock`, `package-lock.json`,
+   `npm-shrinkwrap.json`. Thus Bun's own lockfile decides before the `yarn.lock` that Bun can also
+   write.
 3. `pnpm`, only when the project declares neither.
 
 #### Output
 
-The command writes `workhorse.config.ts`. When the project declares no TypeScript dependency, it
+The command writes `workhorse.config.ts`. If the project declares no TypeScript dependency, it
 writes `workhorse.config.js` instead.
 
 It then prints three things:
 
 - the schema install command;
 - the worker command;
-- a framework-shaped dashboard mount snippet.
+- a dashboard mount snippet in the shape of the framework.
 
-For an `npm` project, the commands are printed as `npm exec --no --`. That form runs the local
-binary or fails. Bare `npx` would fetch an unrelated registry package of that name.
+For an `npm` project, the command prints the commands in the form `npm exec --no --`. That form
+runs the local binary or fails. Bare `npx` would fetch an unrelated registry package with that
+name.
 
-The snippet is printed only. `init` writes no route file and edits no existing file.
+The command only prints the snippet. `init` writes no route file and edits no existing file.
 
 #### Options
 
-`workhorse init` takes two options besides `--help`:
+`workhorse init` takes two options in addition to `--help`:
 
-- `--dir <path>` names the project directory, resolved against the current working directory. The
-  default is the current directory.
-- `--force` rewrites the generated configuration when one already exists. Without it, an existing
-  `workhorse.config.ts` or `workhorse.config.js` is left untouched. The command says so, and it
-  still prints the detection result and the next steps.
+- `--dir <path>` names the project directory. The command resolves the path against the current
+  working directory. The default is the current directory.
+- If a generated configuration already exists, `--force` writes it again. Without it, the command
+  does not change an existing `workhorse.config.ts` or `workhorse.config.js`. The command reports
+  this. It still prints the detection result and the next steps.
 
 ## Administrative CLI and TUI
 
+Operators inspect and change Workhorse state through the administrative CLI and the TUI.
+
 ### Shared admin client
 
-`workhorse admin` and `workhorse tui` are thin fronts over one shared client,
+`workhorse admin` and `workhorse tui` are thin front ends over one shared client. That client is
 `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`.
 
 | Backing API | Client operations                                                                                                                                                                                                                                                                                                                |
@@ -210,16 +222,17 @@ The inspection commands are:
 - `admin workers`
 - `admin maintenance`
 
-By default, each renders an aligned text table or key/value listing. With `--json`, each emits the
-underlying API result. Bigint fence tokens and schedule revisions serialize as strings.
-`adminJsonReplacer` in `typescript/core/src/cli/admin-format.ts` does that serialization. That file
-owns all row projection shared by the CLI and the TUI.
+By default, each command renders an aligned text table or a key/value list. With `--json`, each
+command emits the result of the API call that it makes. The JSON output gives bigint fence tokens
+and schedule revisions as strings. `adminJsonReplacer` in `typescript/core/src/cli/admin-format.ts`
+does that serialization. That file owns all the row projection that the CLI and the TUI share.
 
-Listing filters:
+The list commands accept these filters:
 
 - `--queue`
 - `--type`
-- `--state`, repeatable or comma-separated, validated against the `TaskState` union
+- `--state`, which you can repeat or separate with commas. The CLI validates it against the
+  `TaskState` union.
 - `--limit`
 - `--namespace`, for schedules
 
@@ -228,36 +241,36 @@ Listing filters:
 `admin checkpoints <task-id>` renders `Admin.listCheckpoints`. `admin waits <task-id>` renders
 `Admin.listWaits` over `workhorse.task_wait`.
 
-Both accept `--name <name>` to render the single `Admin.getCheckpoint` or `Admin.getWait` read
-instead of the list. A name the task never recorded prints to stderr and exits 1, matching
-`admin task`.
+Both accept `--name <name>`. With this option, the command renders the single `Admin.getCheckpoint`
+or `Admin.getWait` read instead of the list. If the task never recorded the name, the command prints
+to stderr and exits 1. `admin task` does the same.
 
 #### External waits
 
-`admin external-waits` is the fleet-wide read. It lists boundaries only; `admin signal` and
+`admin external-waits` is the fleet-wide read. It only lists boundaries. `admin signal` and
 `admin complete-human` answer them.
 
 It runs `Admin.listHumanWaits` and `Admin.listSignalWaits` concurrently through
-`WorkhorseAdminClient.externalWaits`. Under `--json` it emits
+`WorkhorseAdminClient.externalWaits`. With `--json`, it emits
 `{"human": {"items", "nextCursor"}, "signal": {"items", "nextCursor"}}`.
 
-The table merges both lists oldest-first with a `KIND` column. Only a human decision carries
-`CONTEXT`.
+The table merges both lists, oldest first, and adds a `KIND` column. Only a human decision has a
+`CONTEXT` value.
 
-`--limit` applies to both lists and is capped at `MAX_EXTERNAL_WAIT_LIST_SIZE` (1,000).
+`--limit` applies to both lists. Its maximum is `MAX_EXTERNAL_WAIT_LIST_SIZE` (1,000).
 
-Each list pages independently, because `ExternalWaitCursor` is scoped to one list.
-`--human-cursor` and `--signal-cursor` each take back the exact JSON `nextCursor` object the
-previous page printed. A value that is not an object with string `createdAt`, `taskId`, and `name`
-fields is a usage error exiting 64.
+Each list has its own pages, because the scope of `ExternalWaitCursor` is one list.
+`--human-cursor` and `--signal-cursor` each take the exact JSON `nextCursor` object that the
+previous page printed. If the value is not an object with string `createdAt`, `taskId`, and `name`
+fields, the command reports a usage error and exits 64.
 
 ### Pagination and range filters
 
-`admin tasks`, `admin timeline`, and `admin failures` accept `--cursor` containing their exact JSON
-`nextCursor`. Text output prints the continuation too. `parseCursor` preserves timestamp strings
-without converting them to JavaScript dates.
+`admin tasks`, `admin timeline`, and `admin failures` accept `--cursor` with their exact JSON
+`nextCursor`. The text output also prints the continuation. `parseCursor` keeps timestamp strings
+as strings. It does not convert them to JavaScript dates.
 
-Required cursor fields:
+Each cursor must have these fields:
 
 | Command          | Required fields                            |
 | ---------------- | ------------------------------------------ |
@@ -265,11 +278,11 @@ Required cursor fields:
 | `admin failures` | `finishedAt`, `taskId`                     |
 | `admin timeline` | `taskId`, `occurredAt`, `kind`, `recordId` |
 
-For timelines, `kind` must be `event` or `attempt`, and the task must match. Malformed cursor
-shapes exit 64.
+For a timeline cursor, `kind` must be `event` or `attempt`, and the task must match. If a cursor
+has a malformed shape, the command exits 64.
 
-PostgreSQL still verifies task-list signatures against the normalized filters. These pages remain
-weakly consistent; CLI continuation adds no snapshot guarantee.
+PostgreSQL still verifies the task-list signatures against the normalized filters. These pages stay
+weakly consistent. CLI continuation adds no snapshot guarantee.
 
 Range filters:
 
@@ -277,12 +290,14 @@ Range filters:
 - Failure listings and bulk recovery accept `--finished-after`, `--finished-before`, repeated
   `--tag` (all required), and `--error-name`.
 
-`parseDateRange` requires finite ISO timestamps with explicit timezones and increasing bounds.
-Lower bounds are inclusive and upper bounds exclusive.
+`parseDateRange` requires finite ISO timestamps with explicit timezones. It also requires
+increasing bounds. Lower bounds are inclusive, and upper bounds are exclusive.
 
-Tasks, timelines, failures, and bulk recovery cap `--limit` at 1,000. The default is 100.
+For tasks, timelines, failures, and bulk recovery, the maximum `--limit` is 1,000. Its default
+value is 100.
 
-Inapplicable selection, delivery, or dry-run flags exit 64 rather than being ignored.
+If a command gets a selection, delivery, or dry-run flag that does not apply to it, the command
+exits 64. It does not ignore the flag.
 
 ### Guarded commands
 
@@ -304,83 +319,88 @@ The guarded commands are:
 
 #### Safety checks
 
-Two independent checks gate every mutation:
+Two independent checks protect every mutation:
 
 1. **Explicit target environment.** The command requires `--env <database>`.
-   `WorkhorseAdminClient.confirmEnvironment` compares it against `current_database()` on the live
+   `WorkhorseAdminClient.confirmEnvironment` compares it with `current_database()` on the live
    connection.
    - A mismatch throws `AdminSafetyError`. The CLI reports `Refused:` and exits 1.
-   - The check exists because ambient `WORKHORSE_DATABASE_URL`/`DATABASE_URL` values can point a
-     shell at a database the operator did not intend.
-   - Success returns a `ConfirmedEnvironment` token. Every mutation method on the client requires
-     that token as its first parameter, so no front end can reach a destructive operation around
-     the check.
-2. **Confirmation.** Without `--yes`, an interactive session must retype the exact target — task
-   id, queue name, or worker id — at a prompt written to stderr. `admin repair-dependencies` asks
-   for the literal target `dependencies`.
+   - The check is necessary because ambient `WORKHORSE_DATABASE_URL`/`DATABASE_URL` values can
+     connect a shell to a database that the operator did not intend.
+   - If the check succeeds, it returns a `ConfirmedEnvironment` token. Every mutation method on the
+     client requires that token as its first parameter. Thus no front end can get to a destructive
+     operation without the check.
+2. **Confirmation.** Without `--yes`, an interactive session must type the exact target again at a
+   prompt on stderr. The target is a task id, a queue name, or a worker id.
+   `admin repair-dependencies` asks for the literal target `dependencies`.
    - A mismatched answer changes nothing and exits 1.
    - A non-interactive session without `--yes` is a usage error.
 
 #### Audit fields and request identity
 
 Every guarded command except `admin cancel`, `admin signal`, `admin complete-human`, and
-`admin set-history` requires `--reason`. They record `--actor` (default `workhorse-admin`).
+`admin set-history` requires `--reason`. These commands record `--actor` (default
+`workhorse-admin`).
 
-Existing controls default `--request-id` to a random UUID. Bulk recovery execution and
-external-wait delivery require it explicitly.
+For the existing controls, `--request-id` defaults to a random UUID. Bulk recovery execution and
+external-wait delivery require an explicit value.
 
-Redrive and purge use the request identity for idempotency. Scripts must preserve it on retries.
+Redrive and purge use the request identity for idempotency. Scripts must keep it the same when they
+retry.
 
-Queue and worker pause retain a safe request preview, digest, and length with the actor and reason.
+Queue pause and worker pause keep a safe request preview, digest, and length, together with the
+actor and the reason.
 
-`admin cancel` records attribution optionally.
+For `admin cancel`, attribution is optional.
 
 #### Purge
 
-`admin purge` prints the deleted row count. Under `--json` it emits it as `deletedCount` beside
-`queue`.
+`admin purge` prints the number of deleted rows. With `--json`, it emits that number as
+`deletedCount` next to `queue`.
 
-A reused request identity carrying different audit fields raises
+If a reused request identity has different audit fields, Workhorse raises
 `PurgeIdempotencyConflictError`. The CLI reports it as `Refused:` and exits 1.
 
 #### Bulk redrive
 
-`admin redrive-many` calls `Admin.redriveMany` once per invocation and emits `BulkRedrivePage`
-under `--json`. It selects sources oldest-first through PostgreSQL, with the same filters as
-failure listing.
+`admin redrive-many` calls `Admin.redriveMany` once per invocation. With `--json`, it emits
+`BulkRedrivePage`. It selects sources oldest first through PostgreSQL. It uses the same filters as
+the failure listing.
 
-`Admin.redriveMany` accepts a `limit` from 1 through 1,000 (`MAX_REDRIVE_BATCH_SIZE`) and defaults
-it to 100. `redrive_many_v1` rejects any other limit.
+`Admin.redriveMany` accepts a `limit` from 1 through 1,000 (`MAX_REDRIVE_BATCH_SIZE`). The default
+is 100. `redrive_many_v1` rejects any other limit.
 
-Preview and execution differ:
+Preview and execution are different:
 
 | Mode                  | Behavior                                                                                                                                                                                                                            |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Preview (`--dry-run`) | Calls `WorkhorseAdminClient.previewRedrive`, which always passes `dryRun: true` and writes no database state. Requires `--reason` but no `--env`, confirmation, or request ID. The default request ID is `workhorse-admin-preview`. |
 | Execution             | Requires an explicit `--request-id` and the usual environment and confirmation checks.                                                                                                                                              |
 
-For an unfiltered queue selection, interactive confirmation requires typing `all queues`.
+If the selection has no queue filter, the interactive confirmation requires the text `all queues`.
 
-Use only a previous bulk page's cursor. Failure listing orders the same cursor fields
-newest-first.
+Use only the cursor of a previous bulk page. The failure listing orders the same cursor fields
+newest first.
 
-Preserving request identity and audit fields replays each selected source's original target.
+If you keep the same request identity and audit fields, the command replays the original target of
+each selected source.
 
 A preview does not reserve candidates. Each execution processes only its bounded page.
 
 #### Dependency drift repair
 
-`admin repair-dependencies` examines at most `--limit` drifted dependents, default 1,000 and at
-most `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000).
+`admin repair-dependencies` examines at most `--limit` drifted dependents. The default is 1,000.
+The limit is at most `MAX_DEPENDENCY_DRIFT_LIMIT` (100,000).
 
 | Mode                  | Behavior                                                                                                                   |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Preview (`--dry-run`) | Calls `WorkhorseAdminClient.listDependencyDrift` and writes nothing. Requires no `--reason`, `--env`, or confirmation.     |
 | Execution             | Calls `WorkhorseAdminClient.repairDependencyDrift`. Requires `--reason` and the usual environment and confirmation checks. |
 
-Execution defaults `--request-id` to a random UUID. The request id correlates the repair and is not
-an idempotency key. [Data model: Governed drift repair](data-model.md#governed-drift-repair-schema-version-40)
-owns the functions and audit fields.
+During execution, `--request-id` defaults to a random UUID. The request id correlates the repair.
+It is not an idempotency key.
+[Data model: Governed drift repair](data-model.md#governed-drift-repair-schema-version-40) owns the
+functions and audit fields.
 
 #### Signal and human-wait delivery
 
@@ -390,17 +410,17 @@ owns the functions and audit fields.
 - `--request-id`;
 - exactly one of `--payload-json` or `--payload-file`. The latter reads UTF-8 JSON from a file.
 
-`readDeliveryPayload` accepts every JSON shape, including `null`. It reports malformed input
-without echoing payload content.
+`readDeliveryPayload` accepts every JSON shape, including `null`. It reports malformed input, but
+it does not show the payload content.
 
-Before confirmation, the CLI validates existing external-wait name, value-size, actor, and
-idempotency bounds.
+Before the confirmation, the CLI validates the existing external-wait bounds for the name, the
+value size, the actor, and the idempotency key.
 
 The CLI passes the actor as `requestedBy` and the request ID as `idempotencyKey` to
-`Queue.sendSignal` or `Queue.completeHumanWait`. The database records delivery attribution; these
-commands do not record a reason.
+`Queue.sendSignal` or `Queue.completeHumanWait`. The database records the delivery attribution.
+These commands do not record a reason.
 
-JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`, with dates serialized as ISO
+The JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`. It gives dates as ISO
 strings.
 
 | Outcome                                                                       | Exit    |
@@ -408,18 +428,18 @@ strings.
 | `delivered`, `completed`, `duplicate`                                         | Success |
 | `not_found`, `not_waiting`, `already_delivered`, `already_completed`, `stale` | 1       |
 
-Conflicts also fail without replacing the accepted answer.
+A conflict also fails. It does not replace the accepted answer.
 
 #### Queue tier
 
 `admin set-tier <queue> --tier <fast|full>` calls `Admin.setQueueTier` with `--actor` and
-`--reason`. Under `--json` it emits `{queue, tier}`.
+`--reason`. With `--json`, it emits `{queue, tier}`.
 
-It rejects `--request-id` with exit 64, because `set_queue_tier_v1` records none.
+It rejects `--request-id` with exit 64, because `set_queue_tier_v1` records no request id.
 
-A `P1007` refusal from `set_queue_tier_v1` prints `Refused:` and exits 1. The command words the
-refusal itself instead of printing the `FastTierUnsupportedError` message, which calls every
-refused queue fast-tier:
+If `set_queue_tier_v1` refuses with `P1007`, the command prints `Refused:` and exits 1. The command
+writes its own text for the refusal. It does not print the `FastTierUnsupportedError` message,
+because the `FastTierUnsupportedError` message calls every refused queue fast-tier. The text depends on the feature:
 
 - Feature `tier change`: the queue has live tasks.
 - A policy feature: the queue cannot move to the fast tier.
@@ -427,19 +447,20 @@ refused queue fast-tier:
 #### Queue history
 
 `admin set-history <queue>` takes `--record-attempts <on|off>`, `--record-claims <on|off>`, or
-both, and calls `Admin.setQueueHistory`. An omitted flag keeps its setting. Under `--json` it emits
+both. It calls `Admin.setQueueHistory`. An omitted flag keeps its setting. With `--json`, it emits
 `{queue, tier, recordAttempts, recordClaims}`.
 
-Because `set_queue_history_v1` records no audit, the command rejects `--actor`, `--reason`, and
+`set_queue_history_v1` records no audit. Thus the command rejects `--actor`, `--reason`, and
 `--request-id` with exit 64.
 
-`set_queue_history_v1` accepts any queue name and upserts its `queue_control` row. The command
-therefore reads `queue_control` and `Admin.queueMetricSnapshot` before the change, and writes to
+`set_queue_history_v1` accepts any queue name and upserts its `queue_control` row. Thus the command
+reads `queue_control` and `Admin.queueMetricSnapshot` before the change. Then it writes to
 stderr:
 
-- a `Note:` when the queue is on the full tier, whose history the switches do not change;
-- a `Warning:` when the queue had neither a control row nor a live task, which usually means a
-  misspelled name.
+- a `Note:` if the queue is on the full tier. The switches do not change the history of a full-tier
+  queue.
+- a `Warning:` if the queue had no control row and no live task. This usually means a misspelled
+  name.
 
 Neither message changes the exit code.
 
@@ -448,13 +469,14 @@ Neither message changes the exit code.
 `admin queues` reads `tier`, `record_attempts`, and `record_claims` from `queue_control` into
 `AdminQueueStatus`. A queue without a control row reports `full` with both switches off.
 
-Its table adds `TIER` and `HISTORY` columns, which the TUI queues view shares. `HISTORY` is `all`
-for a full-tier queue. Otherwise it is `none` or the enabled switches, such as `attempts,claims`.
+Its table adds the `TIER` and `HISTORY` columns. The TUI queues view shows the same columns.
+`HISTORY` is `all` for a full-tier queue. For other queues, it is `none` or the enabled switches,
+such as `attempts,claims`.
 
 #### Worker pause
 
 `admin pause-worker` and `admin resume-worker` write `workhorse.worker_registry.paused` through
-`Admin.setWorkerPaused`. Under `--json` they emit the stored `WorkerPauseResult`:
+`Admin.setWorkerPaused`. With `--json`, they emit the stored `WorkerPauseResult`:
 
 - `workerId`
 - `paused`
@@ -463,17 +485,17 @@ for a full-tier queue. Otherwise it is `none` or the enabled switches, such as `
 - `pausedAt`
 - `lastHeartbeatAt`
 
-A worker id carrying no registration row exits 1 with `is not registered`.
+If a worker id has no registration row, the command exits 1 with `is not registered`.
 
-The pause is the registry row rather than a message to a live process. A worker reads it on its
-next `register_worker_v1` call. That same function clears the pause when a different
-`instance_id` claims the worker id, so a restarted worker starts unpaused.
+The pause is the registry row. It is not a message to a live process. A worker reads the pause on
+its next `register_worker_v1` call. If a different `instance_id` claims the worker id, that same
+function clears the pause. Thus a restarted worker starts unpaused.
 
 #### Non-mutating outcomes
 
-Outcome statuses that did not mutate — `not_found`, `already_terminal`, `not_failed` — exit 1.
-Malformed usage exits 64, matching the CLI-wide convention in
-`typescript/core/src/cli/arguments.ts`.
+The outcome statuses `not_found`, `already_terminal`, and `not_failed` mean that the command
+changed nothing. These statuses exit 1. Malformed usage exits 64. This agrees with the CLI-wide
+convention in `typescript/core/src/cli/arguments.ts`.
 
 ### TUI
 
@@ -486,76 +508,82 @@ workers, and health.
 | `r`     | Refresh      |
 | `q`     | Quit         |
 
-The current view re-fetches every `TUI_REFRESH_INTERVAL_MS` (5,000 ms). List views fetch
-`TUI_PAGE_SIZE` (50) rows.
+The current view fetches its data again every `TUI_REFRESH_INTERVAL_MS` (5,000 ms). List views
+fetch `TUI_PAGE_SIZE` (50) rows.
 
-The session is read-only unless launched with `--env <database>`. That flag runs the same
+The session is read-only unless you start it with `--env <database>`. That flag runs the same
 `confirmEnvironment` check at startup. Only then can the queues view stage a pause or resume of the
-selected queue, applied only after an explicit `y` confirmation.
+selected queue. The TUI applies the staged change only after an explicit `y` confirmation.
 
 Frame rendering (`renderTuiFrame`) and key handling (`handleTuiKey`) in
-`typescript/core/src/cli/tui.ts` are pure functions over `TuiState`. Both are therefore
-unit-tested without a terminal.
+`typescript/core/src/cli/tui.ts` are pure functions over `TuiState`. Thus the unit tests test both
+without a terminal.
 
-Launching without an interactive stdin and stdout is refused with exit 1.
+If stdin or stdout is not interactive, the TUI refuses to start and exits 1.
 
 ## Operational limits
+
+This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
 - The canonical artifact installs version 64, the whole current schema.
-- Version 6 is the migration baseline and is frozen as `sql/releases/0006.sql`.
-- A schema change is an upgrade rather than a reinstall: `migrateSchema` applies the ordered steps
-  under `sql/migrations/`, which run from 6 to 64.
-- A database below 6 is not carried forward
+- Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
+- A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
+  `sql/migrations/`, which run from 6 to 64.
+- Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
-- Only plain PostgreSQL 15+ is required. No extension beyond the default `plpgsql` is installed.
-- `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.
-- Runtime updates centralize churn in one relation. They require vacuum and HOT-update validation
-  under sustained heartbeat load.
+- Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default
+  `plpgsql`.
+- `uuid_v7_v1()` uses core UUID and byte functions. It does not use `pgcrypto` or `uuid-ossp`.
+- Runtime updates put their churn in one relation. They require validation of vacuum and HOT
+  updates under sustained heartbeat load.
 
 ### Schedules
 
 - Schedules fire only while one worker has matching `scheduleNamespaces` or
   `schedule_namespaces`.
-- `maintenanceIntervalMs` or `maintenance_interval_ms` bounds drift.
-- `scheduleCatchupLimit` or `schedule_catchup_limit` bounds each `all` catch-up pass after
+- `maintenanceIntervalMs` or `maintenance_interval_ms` limits the drift.
+- `scheduleCatchupLimit` or `schedule_catchup_limit` limits each `all` catch-up pass after
   downtime.
-- Definitions default to `skip`. `latest` coalesces missed occurrences to one task.
+- Definitions default to `skip`. `latest` combines missed occurrences into one task.
 - Schedules have one-second precision.
-- Cron expressions are evaluated in the definition's validated IANA timezone.
+- Workhorse evaluates cron expressions in the validated IANA timezone of the definition.
 
 ### Retention and cold export
 
-- Task, outcome, event, attempt, and schedule-occurrence retention default to 14 days. Each remains
-  independently configurable.
-- Enqueue-idempotency bindings expire by their request TTL. They are cleaned before terminal
-  identity pruning.
-- Retention operates on minimum windows. Daily granularity, bounded passes, and retained
-  attribution can extend actual storage beyond a configured cutoff.
-- Terminal cleanup repeats its batch while each batch fills, for up to one second per pass. The
-  full and fast tiers share every batch, so neither tier starves the other.
-- A terminal cleanup pass that ends with a full batch makes its follow-up due after the 5,000 ms
-  that `terminal_cleanup_follow_up_delay_ms_v1()` returns, not after `terminal_cleanup_interval_ms`. With one worker's 60-second offers and the default
-  limit, cleanup removes at least 1,000 tasks a minute while a backlog remains.
+- The retention of tasks, outcomes, events, attempts, and schedule occurrences defaults to 14
+  days. You can configure each one independently.
+- Enqueue-idempotency bindings expire after their request TTL. Workhorse removes them before it
+  prunes terminal identities.
+- Retention uses minimum windows. Daily granularity, bounded passes, and retained attribution can
+  keep data in storage after a configured cutoff.
+- Terminal cleanup repeats its batch while each batch is full, for up to one second per pass. The
+  full and fast tiers share every batch. Thus neither tier starves the other.
+- If a terminal cleanup pass ends with a full batch, its follow-up is due after 5,000 ms.
+  `terminal_cleanup_follow_up_delay_ms_v1()` returns that delay. The follow-up does not wait for
+  `terminal_cleanup_interval_ms`. With 60-second offers from one worker and the default limit,
+  cleanup removes at least 1,000 tasks a minute while a backlog remains.
 - `terminal_cleanup_backlog_since` in the `queue_health_v1` document shows when a terminal cleanup
-  backlog began. It is null while cleanup keeps pace. A backlog older than
-  `terminal_cleanup_backlog_ms` raises the degraded health reason `terminal-cleanup-backlog`.
-- `terminal_cleanup_backlog_ms` defaults to 21,600,000 ms (6 h) and is independent of
-  `row_retention_lag_ms` from schema 64. `sync_queue_health_policy_v2` sets it with the other five
-  budgets. A five-value `sync_queue_health_policy_v1` call no longer moves it, so a deployment that
-  tunes row retention through v1 sets the backlog budget through v2 or
+  backlog started. It is null while cleanup has no backlog. If a backlog is older than
+  `terminal_cleanup_backlog_ms`, Workhorse raises the degraded health reason
+  `terminal-cleanup-backlog`.
+- `terminal_cleanup_backlog_ms` defaults to 21,600,000 ms (6 h). From schema 64, it is independent
+  of `row_retention_lag_ms`. `sync_queue_health_policy_v2` sets it together with the other five
+  budgets. A five-value `sync_queue_health_policy_v1` call no longer changes it. Thus a deployment
+  that tunes row retention through v1 sets the backlog budget through v2 or
   `override_queue_health_policy_v1`.
 - Cold export is off by default. While it is on:
-  - Event and attempt retention never pass that dataset's `cold_export_dataset.exported_through`.
-  - A day is exportable only after it closed and the minute rollup passed it.
+  - Event and attempt retention never go past the `cold_export_dataset.exported_through` value of
+    that dataset.
+  - A day is exportable only after the day ends and the minute rollup passes it.
   - One exporter claim covers one UTC day of one dataset.
-  - A claim lease is 1,000 through 86,400,000 ms. `claim_cold_export_segment_v1` requires
+  - A claim lease is from 1,000 through 86,400,000 ms. `claim_cold_export_segment_v1` requires
     `p_lease_ms` and has no default.
 
 ### Maintenance and health bounds
 
-Default work bounds:
+The default work bounds are:
 
 | Work                   | Default bound               |
 | ---------------------- | --------------------------- |
@@ -564,32 +592,34 @@ Default work bounds:
 | Default-partition rows | 10,000 per category         |
 | Schedule occurrences   | 10,000 per maintenance pass |
 
-When counting, health snapshots scan at most 100,001 terminal outcomes and 100,001 statistic
-buckets. Capped counts are flagged; they are exact-until-the-cap lower bounds.
+When a health snapshot counts, it scans at most 100,001 terminal outcomes and 100,001 statistic
+buckets. The snapshot flags a capped count. A capped count is exact until the cap, and it is a
+lower bound.
 
-The health snapshot and the dashboard reads that embed it disable JIT for themselves. Compiling
-their plan costs far more than executing them. Their remaining cost tracks live `task_runtime`
-depth: roughly tens of milliseconds at a few thousand ready rows and a few hundred at 200,000.
+The health snapshot and the dashboard reads that embed it disable JIT for themselves. The reason
+is that compiling their plan costs much more than executing them. Their remaining cost follows the
+live depth of `task_runtime`. It is approximately tens of milliseconds at a few thousand ready
+rows. It is a few hundred milliseconds at 200,000 ready rows.
 
-`dashboard_task_detail_v1` disables JIT for the same reason; it reads one task.
+`dashboard_task_detail_v1` disables JIT for the same reason. It reads one task.
 
 ### Task notifications
 
-`NOTIFY` is a wake hint. Polling remains the correctness mechanism.
+`NOTIFY` is a wake hint. Polling stays the mechanism that gives correctness.
 
 #### Shared listener
 
-`Worker.run()` subscribes through a process-local `TaskNotificationHub` keyed by the exact
-notification connection identity.
+`Worker.run()` subscribes through a process-local `TaskNotificationHub`. The key of the hub is the
+exact identity of the notification connection.
 
 - `Queue.supportsTaskNotifications()` checks that capability.
 - `Queue.subscribeToTaskNotifications()` returns a `TaskNotificationSubscription`.
-- Its `close()` removes that worker and closes the hub after the final subscriber.
+- Its `close()` removes that worker. After the final subscriber closes, it also closes the hub.
 
-A node-postgres pool therefore reserves one shared connection for `LISTEN workhorse_tasks`. That
-holds regardless of the number of subscribing `Queue` or `Worker` objects.
+Thus a node-postgres pool reserves one shared connection for `LISTEN workhorse_tasks`. This is
+true for any number of subscribing `Queue` or `Worker` objects.
 
-The hub takes its connection from the queryable's pool:
+The hub takes its connection from the pool of the queryable:
 
 | Adapter        | Pool source     |
 | -------------- | --------------- |
@@ -597,45 +627,48 @@ The hub takes its connection from the queryable's pool:
 | TypeORM        | `driver.master` |
 | Prisma, Kysely | `pool` option   |
 
-The hub is keyed by that pool object, and its capacity is `options.max`.
+The key of the hub is that pool object. Its capacity is `options.max`.
 
 #### Polling-only cases
 
-- Without a pool, the queryable remains polling-only.
-- A pool whose capacity is 1 also remains polling-only. This prevents its sole connection from
-  being held away from claims.
-- When `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
-  once.
+- If the queryable has no pool, it stays polling-only.
+- A pool with a capacity of 1 also stays polling-only. Thus its only connection stays available
+  for claims.
+- If `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
+  level once.
 
-The capability check sees the pool's shape, not its pooling mode. A transaction-mode pooler accepts
-`LISTEN` without ever delivering a notification. Capability then stays reported while the fallback
-poll does the work (see [Connection poolers](overview.md#connection-poolers)).
+The capability check sees the shape of the pool, not its pooling mode. A transaction-mode pooler
+accepts `LISTEN` but never delivers a notification. In that case, the check still reports the
+capability, and the fallback poll does the work (see
+[Connection poolers](overview.md#connection-poolers)).
 
 #### Wake routing
 
-- Queue-name payloads wake matching subscribers, and `*` wakes all subscribers.
+- A queue-name payload wakes the matching subscribers. `*` wakes all subscribers.
 - `promote_v1`, `run_task_now_v1`, `recover_expired_v1`, `sync_concurrency_policies_v1`, and
   `sync_rate_limit_policies_v1` notify once per distinct affected queue.
-- Task notifications abort only the dispatch loop's `dispatchWakeController`.
-- Maintenance and registration retain their configured sleep cadence through `wakeController`.
+- Task notifications abort only the `dispatchWakeController` of the dispatch loop.
+- Maintenance and registration keep their configured sleep cadence through `wakeController`.
 - Lifecycle changes abort both controllers.
 - Repeated notifications never create concurrent claim loops.
 
 #### Listener failure and reconnect
 
-On an error or end event, the listener releases the failed client and wakes all subscribers. It
-then reconnects after exponential delays from 100 ms through 5,000 ms with ±10% jitter.
+If the listener gets an error or end event, it releases the failed client and wakes all
+subscribers. It then connects again after exponential delays from 100 ms through 5,000 ms with
+±10% jitter.
 
-Initial connection and every reconnect also wake all subscribers. Work committed during the gap
-therefore gets an immediate claim.
+The initial connection and every reconnect also wake all subscribers. Thus work that commits
+during the gap gets an immediate claim.
 
-`WorkerOptions.onNotificationError` observes failures; they never fail dispatch. A throwing
-`onNotificationError` never stops the listener.
+`WorkerOptions.onNotificationError` observes failures. These failures never cause dispatch to fail.
+If `onNotificationError` throws, that never stops the listener.
 
-The final subscriber issues `UNLISTEN`, releases the shared connection, and lets normal worker
-drain finish. That subscriber still observes an `UNLISTEN` failure. The listener keeps its `error`
-handler until release. `UNLISTEN` has 1,000 ms to finish. Past that deadline the listener reports a
-failure and releases the client with the error, which destroys the connection.
+The final subscriber sends `UNLISTEN` and releases the shared connection. Then the normal worker
+drain can finish. That subscriber still observes an `UNLISTEN` failure. The listener keeps its
+`error` handler until the release. `UNLISTEN` has 1,000 ms to finish. After that deadline, the
+listener reports a failure and releases the client with the error. This release destroys the
+connection.
 
 ### Polling cadence
 
@@ -652,6 +685,9 @@ Every pass uses authoritative `claim_many_v1` transitions.
 
 ### Dashboard refresh and build reuse
 
+The dashboard SPA shares reads and pauses auto refresh in some cases. The build records
+fingerprints so that tests can reuse it.
+
 #### Request sharing
 
 The SPA shares identical in-flight reads by route and filter.
@@ -659,33 +695,35 @@ The SPA shares identical in-flight reads by route and filter.
 - Background refreshes skip an identical pending page request.
 - After a mutation, a foreground refresh waits for an older read and then fetches the committed
   result.
-- Failures release the pending entry so a later refresh can retry.
+- A failure releases the pending entry, so a later refresh can try again.
 
 #### Auto refresh on pinned pages
 
-Auto refresh pauses while a task listing is pinned to a cursor or to a page beyond the first.
-Update-time ordering moves exactly the tasks a refresh would report out of the pinned window.
+Auto refresh pauses while a task listing is pinned to a cursor or to a page after the first page.
+Update-time ordering moves tasks out of the pinned window. These are exactly the tasks that a
+refresh would report.
 
-Manual refresh is unaffected. Returning to the first page resumes the configured cadence through
-the usual resume countdown.
+This pause does not affect manual refresh. If you go back to the first page, auto refresh resumes
+the configured cadence through the usual resume countdown.
 
 #### `dashboard_system_v1`
 
-`dashboard_system_v1` captures one timestamp for its window bounds and response timestamp.
+`dashboard_system_v1` captures one timestamp. It uses that timestamp for its window bounds and for
+its response timestamp.
 
-A materialized CTE reads the current statistics window once for outcomes, summaries, queue-wait
-percentiles, queue rates, and failing types. The previous comparison window is read separately.
+A materialized CTE reads the current statistics window once. That read gives the outcomes,
+summaries, queue-wait percentiles, queue rates, and failing types. A separate read gets the
+previous comparison window.
 
-The retained `dashboard_system_v1` remains callable by older clients.
+Older clients can still call the retained `dashboard_system_v1`.
 
 #### Build fingerprints
 
-`pnpm build` records source and output fingerprints after completing the full build.
+After `pnpm build` completes the full build, it records source and output fingerprints.
 
 - `pnpm build:check` rejects missing or stale artifacts.
 - The `test:packed:built`, `test:site-smoke:built`, and `test:demo-smoke:built` commands check
-  those fingerprints before testing.
+  those fingerprints before they run tests.
 - Standalone test commands build first. `pnpm check` and smoke CI reuse one full build.
-- When passed `--reuse-build`, the demo smoke harness copies those verified outputs into its
-  isolated source checkout. It preserves its clean dependency installation without compiling
-  again.
+- If you pass `--reuse-build`, the demo smoke harness copies those verified outputs into its
+  isolated source checkout. It keeps its clean dependency installation and does not compile again.

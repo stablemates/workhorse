@@ -38,21 +38,21 @@ The contract version belongs to these artifacts, not the HTTP path.
   pair at its configured mount path.
 - A release that moves to `dashboard/v2` ships its matching pair. Its release notes give operators
   the transition steps.
-- Existing installations keep their bound pair until they are upgraded.
+- Existing installations keep their bound pair until their operators upgrade them.
 - The host does not negotiate concurrent contract versions. It therefore sends no `Deprecation` or
   `Sunset` response headers.
 
 ### Shared type names
 
-Every `$defs` key carries the `Dashboard` prefix, whether or not the TypeScript symbol it was
-resolved from does. `dashboardDefinitionName` in
+Every `$defs` key carries the `Dashboard` prefix. This rule applies also when the TypeScript symbol
+that the key comes from has no prefix. `dashboardDefinitionName` in
 `typescript/dashboard-server/spec/response-schemas.ts` applies that rule. The
 `names every shared wire type with the Dashboard prefix` test in
 `typescript/dashboard-server/test/dashboard-spec.test.ts` pins it to the committed artifact.
 
-The rule prevents a duplicate type in generated bindings. Without it, a core type that reaches a
-dashboard response would name a second copy of itself, beside the core one the same SDK already
-exports. These core types are all keyed with the prefix:
+The rule prevents a duplicate type in generated bindings. Without the rule, a core type that
+reaches a dashboard response gets a second copy. That copy is beside the core type that the same
+SDK already exports. The contract keys all of these core types with the prefix:
 
 - `CancelStatus`
 - `SignalDeliveryStatus`
@@ -62,15 +62,15 @@ exports. These core types are all keyed with the prefix:
 - `QueueHealthReasonCode`
 - `RetentionPolicyImpact`
 
-The prefix names the contract's schema, not the TypeScript symbol, so the core type stays the one
-source of the shape. `generate-bindings.ts` resolves a procedure input's local `__schema0` to the
+The prefix names the contract's schema, not the TypeScript symbol. Thus the core type stays the
+one source of the shape. `generate-bindings.ts` resolves a procedure input's local `__schema0` to the
 shared `DashboardJson`. `z.toJSONSchema` names `__schema0` inside that input document.
 
 ### Artifact generation
 
 The committed dashboard artifacts are the authority, and `dashboardRouter` is their generator. The
-SQL flow has the opposite ownership: `sql/schema/current.sql` is the tracked authority, and the
-build generates `sql/schema.sql` from it.
+SQL flow has the opposite ownership. There, `sql/schema/current.sql` is the tracked authority, and
+the build generates `sql/schema.sql` from it.
 
 `typescript/dashboard-server/spec/generate.ts` derives the schemas from two sources:
 
@@ -79,8 +79,8 @@ build generates `sql/schema.sql` from it.
   `typescript/dashboard-server/spec/responses.ts`.
 
 `pnpm dashboard-spec:generate` rewrites the artifacts. `pnpm dashboard-spec:check` and
-`typescript/dashboard-server/test/dashboard-spec.test.ts` fail on any divergence. A router change
-that alters the wire contract therefore lands only with regenerated, reviewed artifacts. The spec
+`typescript/dashboard-server/test/dashboard-spec.test.ts` fail on any divergence. Thus a router change
+that changes the wire contract can merge only with regenerated, reviewed artifacts. The spec
 commands run `dashboard-bindings:generate` or `dashboard-bindings:check` after the artifact step.
 
 #### Go and Python bindings
@@ -101,15 +101,15 @@ request and response types and `DashboardRuntimeConfig`.
 
 The internal `dashboardRuntimeConfigSchema` in `typescript/dashboard-server/src/server/html.ts` is
 the source of the exported `DashboardRuntimeConfig` through `z.infer`. `z.toJSONSchema` writes the
-same schema to `procedures.json.html.runtimeConfig`. The server type and versioned schema therefore
-cannot drift.
+same schema to `procedures.json.html.runtimeConfig`. Thus the server type and the versioned schema
+cannot differ.
 
 ### Conformance fixtures
 
-`dashboard/v1/conformance.json` adds executable HTTP-level conformance fixtures analogous to
+`dashboard/v1/conformance.json` adds executable HTTP-level conformance fixtures similar to
 `protocol/v1/scenarios.json`:
 
-1. SQL seed steps bring a freshly installed schema to a known state.
+1. SQL seed steps put a newly installed schema in a known state.
 2. Golden request/response exchanges cover every procedure, the error envelope, the same-origin
    mutation rejection, and read-only `FORBIDDEN` behavior.
 
@@ -128,12 +128,12 @@ caller-owned Psycopg connection plus these arguments:
 - `browser_modules`, `configured_workers`, `maintenance_loops`, `allowed_hosts`;
 - the optional `enqueue_test` extension.
 
-The connection must have `autocommit=True`. The host rejects transactional connections so a WSGI
-request cannot leave locks or an idle transaction behind.
+The connection must have `autocommit=True`. The host rejects transactional connections. Thus a WSGI
+request cannot leave locks or an idle transaction open.
 
 `DashboardPrincipal.actor` is the authenticated identity. `DashboardResponse` lets the authorization
 hook return a complete denial or redirect response. `audit_actor` names the actor only when
-`authorize` returns `True`, and defaults to `dashboard`.
+`authorize` returns `True`. Its default is `dashboard`.
 
 The host handles a request in this order:
 
@@ -146,8 +146,8 @@ The host handles a request in this order:
 7. It calls the private `workhorse.dashboard._backend.DashboardBackend`.
 
 The backend's `procedures()` implements every database-owned contract procedure through versioned
-dashboard views and lifecycle functions. The host supplies `enqueueTest` and `setSchedulePaused`,
-whose behavior belongs to the embedding runtime.
+dashboard views and lifecycle functions. The host supplies `enqueueTest` and `setSchedulePaused`.
+The behavior of these two procedures belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six scenarios and all 81 exchanges
 against both writable and read-only hosts.
 
@@ -172,9 +172,9 @@ Two functions return one document or SQL `NULL`:
   It returns SQL `NULL` when the stable event identity does not exist.
 
 TypeScript, Python, and Go validate the wire input, call the matching function, and decode its
-single `jsonb` result. The TypeScript host may add its application-owned durability summary after
+single `jsonb` result. The TypeScript host can add its application-owned durability summary after
 `dashboard_tasks_v1` or `dashboard_task_detail_v1` returns. `DashboardDurabilityProjector` is an
-in-process callback rather than database state.
+in-process callback, not database state.
 
 ### Go backend
 
@@ -267,21 +267,22 @@ The version 1 views expose these exact columns:
 
 Three views carry extra rules:
 
-- `dashboard_task_outcome_v1`: `result` is absent; read it through `dashboard_task_result_v1`.
-- `dashboard_task_query_v1`: the routing projection is indexed on `queue_name` and on `task_type`.
+- `dashboard_task_outcome_v1`: `result` is absent. Read it through `dashboard_task_result_v1`.
+- `dashboard_task_query_v1`: the routing projection has an index on `queue_name` and an index on
+  `task_type`.
   A facet list therefore seeks one row per distinct value. A task list filtered by queue or task
   type prunes on the same indexes.
 - `dashboard_task_v1`: `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`. The
-  key arrays are projected so a reader can report how many keys were withheld.
+  view projects the key arrays, so a reader can report how many keys the view withheld.
 
 ### Task result and estimate
 
 `dashboard_task_result_v1(p_task_id uuid)` returns one task's terminal result with the
 operator-declared `result_redact_keys` removed.
 
-It is a function rather than a view column because the two inputs live apart. The redaction keys
-live on `task`, while the result lives on `task_outcome`. Projecting a redacted `result` from
-`dashboard_task_outcome_v1` would join every reader of that view to `task`. Those readers include
+It is a function, not a view column, because the two inputs are in different relations. The
+redaction keys are on `task`, and the result is on `task_outcome`. If `dashboard_task_outcome_v1`
+projected a redacted `result`, every reader of that view would join to `task`. Those readers include
 the task list and the activity chart, which never read a result.
 `docs/benchmarks/results/2026-08-22-dashboard-read-surface.json` records both plans.
 
@@ -308,21 +309,23 @@ Before the backend calls the function, the wire validator applies these limits:
 #### Human decisions in rows
 
 `dashboard_tasks_v1` and `dashboard_tasks_cursor_v1` return a pending human decision as
-`humanWait: { name, deadlineAt, quickAction }`, with no `context`. A listing is polled, and one
+`humanWait: { name, deadlineAt, quickAction }`, with no `context`. Clients poll a listing, and one
 context can hold 65,536 bytes. `dashboard_human_wait_quick_action_v1` derives `quickAction`:
 
 1. `context.dashboard.quickAction.label` is a string.
 2. `context.dashboard.quickAction` has a `result` key, whatever its value.
 3. The label is not empty after trimming whitespace.
 
-Trimming removes the characters JavaScript's `String.prototype.trim` removes, so a label a row
-offers is one the SPA accepts from the full context. When all three hold, `quickAction` is
-`{ label }`, with the trimmed label cut to 200 characters.
-Otherwise it is `null`. When an operator picks the quick action from a row, the SPA reads
-`dashboard.taskDetail`, whose `humanWait` keeps the full context. It confirms the result from that
-context. If the task no longer waits on that decision, it reports that and sends nothing.
+Trimming removes the same characters as JavaScript's `String.prototype.trim`. Thus each label that
+a row offers is a label that the SPA accepts from the full context. When all three conditions are
+true, `quickAction` is `{ label }`. The label is trimmed and cut to 200 characters. Otherwise
+`quickAction` is `null`.
 
-Removing `context` from listed rows was an in-place `dashboard/v1` break under the ADR 0064
+If an operator selects the quick action in a row, the SPA reads `dashboard.taskDetail`. Its
+`humanWait` keeps the full context. The SPA confirms the result from that context. If the task no
+longer waits on that decision, the SPA reports this and sends nothing.
+
+The removal of `context` from listed rows was an in-place `dashboard/v1` break under the ADR 0064
 exception in [compatibility.md](../compatibility.md).
 
 #### Total and `hasMore`
@@ -332,41 +335,41 @@ exception in [compatibility.md](../compatibility.md).
 - With `none`, the function reads `page * pageSize + 1` matching identities. It reports how many it
   read as `total`, and sets `hasMore` when it read the extra row.
 - `total` is exact whenever it is at most `page * pageSize`. Otherwise it is one more than the page
-  bound, and the caller knows only that more exist.
-- With `count: exact`, `total` counts every matching task. That count reads the whole selection
-  rather than one page of it.
+  bound, and the caller knows only that more tasks exist.
+- With `count: exact`, `total` counts every matching task. That count reads the whole selection,
+  not only one page of it.
 
 #### Query composition
 
-The function is PL/pgSQL and composes its query, so it names which tasks the request can reach
-before the runtime and outcome joins read a row. It picks the first matching scope:
+The function is PL/pgSQL and composes its query. Thus it names the tasks that the request can
+reach before the runtime and outcome joins read a row. It selects the first scope that matches:
 
 1. A `tags` request adds a `task_scope` CTE that seeks `task_tags_gin_idx`.
 2. Otherwise, a `queue` or `taskType` request adds one that seeks `task_query_queue_created_idx` or
    `task_query_type_created_idx`.
-3. Otherwise, no scope is added, and `task_rows` reads `dashboard_task_v1` directly.
+3. Otherwise, the function adds no scope, and `task_rows` reads `dashboard_task_v1` directly.
 
-Only fixed SQL fragments are composed. The request stays in the bound JSON parameter, so the
+The function composes only fixed SQL fragments. The request stays in the bound JSON parameter, so the
 planner sees each filter as a value it can seek. The filter list below the scope still applies
 every predicate. A request that names both a tag and a queue therefore seeks the tag index and
 filters on the queue.
 
 The tag array reaches the scan through `dashboard_tag_filter_v1(p_tags jsonb)`. That immutable
 function returns the request's `tags` as `text[]`. An inline
-`ARRAY(SELECT jsonb_array_elements_text(...))` would not work. It is a subquery, which the planner
-evaluates once per execution and never folds into the scan. `task_tags_gin_idx` would stay
-unreachable behind it.
+`ARRAY(SELECT jsonb_array_elements_text(...))` would not work. It is a subquery. The planner
+evaluates it once per execution and never folds it into the scan. The scan then could not reach
+`task_tags_gin_idx`.
 
 #### Enqueued event lookup
 
 Both task listings constrain their page-scoped `enqueued` event lookup to the interval from
-`task.created_at` through `statement_timestamp()`. An enqueued event is committed before a
+`task.created_at` through `statement_timestamp()`. Workhorse commits an enqueued event before a
 dashboard read statement can observe it. The bounds prune daily partitions before the task existed
 and prepared partitions after the read began. Both functions disable JIT for input-specific plans.
 
 ### Cursor task listing
 
-`dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
+`dashboard_tasks_cursor_v1(p_input jsonb)` implements the additive `tasksCursor` procedure.
 
 #### Inputs and response
 
@@ -386,28 +389,29 @@ requests.
 - The query reads one extra candidate before enriching the requested page.
 - Updated ordering uses `(updated_at, task_id)`. Priority ordering prefixes that tuple with
   `priority`.
-- Live and terminal rows use separate query branches, preserving the terminal update-time index.
-- No update-time index is added to live rows, because heartbeats must retain HOT eligibility.
+- Live and terminal rows use separate query branches. This preserves the terminal update-time
+  index.
+- Workhorse adds no update-time index to live rows, because heartbeats must keep HOT eligibility.
 - It reads the tag filter through `dashboard_tag_filter_v1` for the same reason `tasks` does.
 - A `queue` or `taskType` request adds a join to `dashboard_task_query_v1`. That projection's index
   then prunes before the ordering walk reads a task.
-- Absent both, no join enters the query. The walk stays on the update-time indexes, which already
+- If the request has neither, the query has no join. The walk stays on the update-time indexes, which already
   return the page in order.
 
 #### SPA cursor navigation
 
 The SPA uses cursor navigation.
 
-- It preserves a legacy page-number link by walking `tasksCursor` from the first page. The walk
-  stops at the requested page or the last available page.
-- It carries the cursor in the URL. Its pager offers a first-page control that drops the cursor. The
+- It keeps a legacy page-number link working. It walks `tasksCursor` from the first page. The
+  walk stops at the requested page or the last available page.
+- It carries the cursor in the URL. Its pager offers a first-page control that removes the cursor. The
   control keeps every filter, the sort, the page size, the chart settings, and the open drawer.
 - While a page is pinned, the SPA offers a link back to the first page after the refresh control.
   The paused indicator alone names neither the cause nor the way back.
 - A narrow viewport states the same fact at the pager instead, where that row has room for it.
-- A cursor request answered with `previousCursor: null` was answered from the first page. The SPA
-  then replaces the URL to drop the anchor it no longer needs.
-- That judgement pairs each answer with the request that asked for it. During a pager click, the
+- If the answer to a cursor request has `previousCursor: null`, the answer came from the first
+  page. The SPA then replaces the URL to remove the anchor that it no longer needs.
+- This check pairs each answer with the request that asked for it. During a pager click, the
   page still on screen reports the same thing about the page the operator left.
 
 ### Sidebar counts
@@ -449,11 +453,11 @@ distinct value and stops at 1,000 values.
 
 The worker list also reads `dashboard_attempt_history_v1` through the same recursive scan over
 `attempt_history_worker_idx`. That index exists on every partition, so each distinct worker costs
-one seek per partition. The list also stops at 1,000 values. A worker that ran tasks and then left
-the registry is therefore still offered as a filter while its history is retained.
+one seek per partition. The list also stops at 1,000 values. Thus, if a worker ran tasks and then
+left the registry, the list still offers it as a filter while Workhorse retains its history.
 
 The tag sample walks `task_created_retention_idx` newest first and returns at most 1,000 distinct
-values. No index supports a distinct array scan, so the bound keeps facet latency independent of
+values. No index supports a distinct array scan. Thus the bound keeps facet latency independent of
 the full task table.
 
 <a id="activity"></a>
@@ -467,8 +471,8 @@ the full task table.
 3. It applies `filter`, `groupBy`, `tags`, `queue`, and `worker`.
 
 It probes `dashboard_attempt_history_v1` for the latest worker only when worker grouping or
-filtering requires that value. It returns the complete version 1 activity JSON document. UTC
-bucket timestamps are rendered by `dashboard_iso_v1`. The wire validator limits each string filter
+filtering requires that value. It returns the complete version 1 activity JSON document.
+`dashboard_iso_v1` renders the UTC bucket timestamps. The wire validator limits each string filter
 to 200 characters before the backend calls the function.
 
 #### Activity chart states
@@ -484,8 +488,8 @@ what the chart shows for the query its controls name:
 | present                      | none                          | the bars                               |
 | present                      | present                       | the bars with a stale alert and Retry  |
 
-A success clears the failure. A result for a different query is never drawn under the current
-controls. Series keys come from `activityChartModel`, so a group named `a.b`, `bucket`, or `other`
+A success clears the failure. The chart never draws a result for a different query under the
+current controls. Series keys come from `activityChartModel`, so a group named `a.b`, `bucket`, or `other`
 cannot collide with another series or with the axis key.
 
 ### Event feed
@@ -496,7 +500,7 @@ document includes the effective range and the retention days from `dashboard_ret
 #### Time range and filters
 
 The function accepts a fixed `window`, or an inclusive `rangeStart` and exclusive `rangeEnd`.
-Callers must supply both ISO-8601 range instants, and `rangeEnd` must be later than `rangeStart`.
+Callers must supply both ISO-8601 range instants. `rangeEnd` must be later than `rangeStart`.
 
 It applies the time bound, `kind`, `queue`, `taskType`, `types`, and `taskId` before merging
 `dashboard_task_event_v1` with `dashboard_attempt_history_v1`. Each source reads at most
@@ -504,11 +508,11 @@ It applies the time bound, `kind`, `queue`, `taskType`, `types`, and `taskId` be
 validator limits `page` to `dashboardPageMax`, 100, and each string filter to 200 characters.
 
 The event listing also accepts `worker` and `search`. Both filters apply before source limits and
-in the exact count. Both strings are limited to 200 characters.
+in the exact count. The limit for both strings is 200 characters.
 
 - `worker` matches the recorded attempt worker, including lifecycle records linked to that
-  attempt. An event's explicit `details.worker_id` takes precedence over the linked attempt worker.
-- `search` performs a case-insensitive literal substring match. It covers task ID, queue, type,
+  attempt. An event's explicit `details.worker_id` has priority over the linked attempt worker.
+- `search` does a case-insensitive literal substring match. It covers task ID, queue, type,
   event name, worker, and recorded details or error message.
 
 #### Total and `hasMore`
@@ -527,10 +531,10 @@ bounded reads.
 #### Page limit in the SPA
 
 `dashboardPageMax` in `typescript/dashboard-server/src/wire.ts` is the one page limit. The router's
-`page` validator and the Events pager both read it. The pager offers at most that many pages. When
-`total` exceeds `dashboardPageMax * pageSize`, the page says how many events the pager reaches.
-`parseEventsLocation` and `eventsLocationHref` read a `page` above `dashboardPageMax` as
-`dashboardPageMax`, so a bookmarked URL cannot ask for a page the router rejects.
+`page` validator and the Events pager both read it. The pager offers at most that many pages. If
+`total` is more than `dashboardPageMax * pageSize`, the page says how many events the pager
+reaches. `parseEventsLocation` and `eventsLocationHref` read a `page` above `dashboardPageMax` as
+`dashboardPageMax`. Thus a bookmarked URL cannot ask for a page that the router rejects.
 
 On the last page, Continue with older events sets a custom range. `continueEventsRange` keeps the
 current `rangeStart` and ends the range 1 millisecond after the oldest event shown, because
@@ -539,7 +543,7 @@ events it did reach at that instant appear again.
 
 When that end would not move the range back, every page shares the oldest instant. The range then
 ends at that instant, and the page says that continuing skips the rest of its events. When the
-oldest event shown sits at `rangeStart`, the range holds nothing older, and the page offers no
+oldest event shown is at `rangeStart`, the range holds nothing older, and the page offers no
 Continue.
 
 #### Event rows
@@ -585,8 +589,8 @@ cron-page JSON document.
 
 The function returns at most 50 schedule definitions ordered by `namespace` and `schedule_name`.
 Occurrence counts and last-fired times come from `dashboard_schedule_occurrence_v1`.
-`scheduleCount` counts every definition. When it exceeds the rows returned, the Schedules page
-says `Showing 50 of <scheduleCount> schedules`.
+`scheduleCount` counts every definition. If it is more than the number of rows returned, the
+Schedules page says `Showing 50 of <scheduleCount> schedules`.
 
 Each definition includes `evaluatorCount`. It counts registrations that meet both conditions:
 
@@ -599,8 +603,8 @@ effective `active`.
 On the Schedules page:
 
 - Each application schedule's occurrence count links to `/tasks?queue=<queue>&type=<task type>` in
-  a new browser tab. The task listing has no schedule filter. The link therefore narrows by the
-  schedule's destination queue as well as its task type.
+  a new browser tab. The task listing has no schedule filter. Thus the link filters by the
+  schedule's destination queue and by its task type.
 - Compact rows show the queue, evaluator count, and Pause or Resume action.
 - A deployment-disabled definition shows `Config off`.
 - Focusable tooltips carry the task type, priority, worker wording, pause durability, and full
@@ -619,14 +623,14 @@ from these inputs:
 
 While `terminal_cleanup_backlog_since` is set, `terminal_storage` is due after
 `terminal_cleanup_follow_up_delay_ms_v1()` or `terminal_cleanup_interval_ms`, whichever is shorter.
-`prune_terminal_storage_v1` gates its follow-up pass on the same delay.
+`prune_terminal_storage_v1` uses the same delay to gate its follow-up pass.
 
 The Schedules page uses the tick state's completion time as the built-in tick row's last run.
 
 Each routine includes `recordedRunCount` for its retained total and its five newest recorded
 `maintenance_run` rows. The Schedules page shows:
 
-- the retained total, labelled as such;
+- the retained total, with a label that says so;
 - which five-row display subset it shows;
 - the tick sampling policy;
 - the run outcome, duration, affected-row total, phase timings, and phase errors.
@@ -661,7 +665,7 @@ strings that look like timestamps.
 - It projects the `externalWaits` diagnostics from the `health` document into the wire document.
 
 A caller that already read a `health` document for this request supplies it as `health`. Without
-it, the function calls `queue_health_v1()` itself. Every backend supplies it, each caching one
+it, the function calls `queue_health_v1()` itself. Every backend supplies it. Each backend caches one
 document for three seconds:
 
 | Backend    | Reader                             |
@@ -699,8 +703,8 @@ Go, and Rust leave it null.
 #### Current state and result
 
 `current` carries the terminal result once, under `current.outcome.result`. A result exists only
-once a task finishes. A second copy beside it doubled what a large result cost to open and named no
-new fact. `current.error` stays, because a live runtime carries one. A reader needs the latest
+after a task finishes. A second copy beside it doubled the cost to open a large result, and it gave
+no new fact. `current.error` stays, because a live runtime carries one. A reader needs the latest
 error without choosing between two branches.
 
 #### Section bounds and truncation
@@ -718,7 +722,7 @@ returned oldest first. Each section reads one row beyond its bound, and the `tru
 reports which of the four were cut.
 
 A checkpoint always reports `valueBytes`. It carries `value` only when the stored value is at most
-`dashboard_inline_value_bytes_v1()` bytes, and sets `valueOmitted` otherwise.
+`dashboard_inline_value_bytes_v1()` bytes. Otherwise it sets `valueOmitted`.
 `dashboard_checkpoint_value_v1(p_input jsonb)` accepts `id` and `name`. It returns that one
 checkpoint with its value, whatever its size.
 
@@ -731,7 +735,7 @@ The final select cross joins every section with the task row. The `task` CTE the
 
 Before schema version 42, the planner estimated nine task rows and multiplied that estimate through
 the joins. The plan then cost about 1.2 billion, and PostgreSQL compiled it with JIT on every call.
-Compiling took two to five seconds on a loaded host; executing took about one millisecond.
+Compiling took two to five seconds on a loaded host. Executing took about one millisecond.
 
 The function also disables JIT for itself, because its attempt, checkpoint, and event reads still
 grow their estimates with history.
@@ -755,7 +759,7 @@ The due-but-unpromoted count uses a 10-second grace period.
 #### Page layout
 
 The SPA places the window selector in the Activity over time section. Its `Full + fast tiers`
-label makes the aggregation's queue-tier coverage explicit. That section shows these measures for
+label states which queue tiers the aggregation covers. That section shows these measures for
 the selected window:
 
 - `SystemWindowKpis` shows `kpis.drain`, `kpis.errorRate`, `kpis.queueWait`, and
@@ -763,12 +767,12 @@ the selected window:
 - `QueueActivity` shows each queue's `enqueuedPerMinute` and `completedPerMinute`.
 - The `outcomes` chart and `failingTypes` table use the same window.
 
-Health checks remain above that section, with a `Now` label.
+Health checks stay above that section, with a `Now` label.
 
 Current operations contains `SystemKpiList`, `QueuePressure`, shared budgets, upcoming retries,
 background maintenance, and storage. Those measures do not use the selected window.
-External-wait rejected deliveries retain their fixed trailing-day scope. Changing `window` reloads
-the page document, so current measures can also change as the snapshot refreshes.
+Rejected external-wait deliveries keep their fixed trailing-day scope. A change to `window` reloads
+the page document. Thus current measures can also change when the snapshot refreshes.
 
 ### Settings page
 
@@ -804,13 +808,13 @@ smaller response a prefix of a larger response. It returns:
 ### Other versioned core surfaces
 
 `stat_buckets_v1`, `redact_top_level_keys_v1`, and the maintenance functions remain the other
-versioned core surfaces used by the dashboard server. A core migration may change private tables
-without a dashboard release when it preserves these view and function contracts.
+versioned core surfaces that the dashboard server uses. If a core migration preserves these view
+and function contracts, it can change private tables without a dashboard release.
 
 ### Task event vocabulary
 
 `DashboardTaskEventType`, the router's `eventTypeValues`, and the wire package's
-`dashboardTaskEventTypes` enumerate every lifecycle event written by `schema.sql`. That includes
+`dashboardTaskEventTypes` enumerate every lifecycle event that `schema.sql` writes. That includes
 coalescing, dependency, child, signal, human-wait, progress, and cancellation events.
 
 - The Events feed exposes that vocabulary as filter values.
@@ -829,21 +833,21 @@ second Idempotency section for them.
 `debounced`, and `throttled` events.
 
 - Debounce uses the latest accepted settings.
-- Throttle preserves its initial acceptance window when that event remains available.
+- If that event is still available, throttle preserves its initial acceptance window.
 - The section counts `debounced` or `throttled` events. For debounce tasks, it also counts
   `debounce_rejected` events.
-- Rejected proposals remain visible in Task history and never establish the task's accepted mode.
+- Rejected proposals stay visible in Task history. They never establish the task's accepted mode.
 - The initial request digest comes from safe idempotency metadata. Neither section reads
   `key_preview` or a raw key.
 
 #### Listing enqueue mode
 
-The listing's optional `enqueueMode` is `idempotency`, `debounce`, `throttle`, or null. It is
-derived from the initial `enqueued` event. `dashboard_tasks_v1` and `dashboard_tasks_cursor_v1`
-expose this field using the existing page-scoped event lookup.
+The listing's optional `enqueueMode` is `idempotency`, `debounce`, `throttle`, or null. Workhorse
+derives it from the initial `enqueued` event. `dashboard_tasks_v1` and `dashboard_tasks_cursor_v1`
+expose this field through the existing page-scoped event lookup.
 
-The UI labels each accepted mode explicitly. It falls back to Keyed for older hosts that only
-supply `keyed`. The enqueue menu groups Idempotency, Debounce, and Throttle under Enqueue behavior.
+The UI labels each accepted mode explicitly. For older hosts that supply only `keyed`, it shows
+Keyed. The enqueue menu groups Idempotency, Debounce, and Throttle under Enqueue behavior.
 
 ### Packages
 
@@ -864,7 +868,7 @@ this contract, so neither copies the standalone API from the other.
 
 Its private workspace package is `@stablemates/workhorse-dashboard-app`.
 
-The dashboard application retains its build-time dependency on
+The dashboard application keeps its build-time dependency on
 `@stablemates/workhorse-dashboard-server`. Vite uses `renderDashboardHtml` for the development
 transform, and the browser imports shared wire types. The compiled static archive contains no
 Node.js module, so the dependency does not cross the language-neutral delivery boundary.
@@ -916,7 +920,7 @@ A consumer builds no fragment, because `dashboardDatabase(database)` returns the
 `DashboardDatabase` that `createDashboardHost` accepts.
 
 The dashboard application's `.` subpath drops `TaskActivityGroup` and `TaskActivityPeriod`. They
-restated `DashboardActivityGroupBy` and `DashboardActivityPeriod` member for member.
+repeated `DashboardActivityGroupBy` and `DashboardActivityPeriod` member for member.
 
 ### Controller types
 
@@ -930,7 +934,7 @@ A host implements the five controllers, so `./server` exports every type their m
 - `DashboardCancelTaskResult`.
 
 Python and Go already generate the first three. `cancelTask` receives
-`DashboardCancellationAuditContext`. Its `reason` is nullable, because an operator may cancel
+`DashboardCancellationAuditContext`. Its `reason` is nullable, because an operator can cancel
 without stating one.
 
 Each result field resolves from a subpath too:
@@ -947,15 +951,16 @@ Each result field resolves from a subpath too:
 | `redriveDeadLetters` | `DashboardRedriveBatch`   | a `DashboardRedriveFilter` of `queue`, `taskType`, and `tags`; a `limit`; and a `DashboardRedriveCursor` or null |
 
 `DashboardRedriveStatus` and `DashboardRedriveCursor` resolve from `./wire`. The status is
-`RedriveStatus` itself rather than a hand-copied union.
+`RedriveStatus` itself, not a hand-copied union.
 
 The `redriveDeadLetters` procedure accepts a `limit` from 1 through `dashboardRedriveBatchMax`,
 1,000, which is `MAX_REDRIVE_BATCH_SIZE`. It defaults the limit to
 `dashboardRedriveBatchDefault`, 100. Its `cursor` is the `nextCursor` a previous page returned.
-`redrive_v1` leaves the source failed, so an uncursored repeat would select the same page again.
+`redrive_v1` leaves the source failed. Thus a repeat without a cursor would select the same page
+again.
 
-The controllers apply `options.requestedBy` to both methods. A host with a configured trusted actor
-therefore owns the `task_redrive` attribution rather than the browser.
+The controllers apply `options.requestedBy` to both methods. Thus a host with a configured trusted actor
+owns the `task_redrive` attribution, not the browser.
 
 ### Internal read model
 
@@ -966,8 +971,8 @@ covers:
 - `createDashboardQueueHealthReader`;
 - the `DashboardTasksQuery` and `DashboardEventsQuery` argument types.
 
-The read model is the implementation of `dashboardRouter`, not a second way in. The router is where
-the read-only mode, the `canManageWorkers` decision, and the error-stack redaction live.
+The read model is the implementation of `dashboardRouter`, not a second entry point. The read-only
+mode, the `canManageWorkers` decision, and the error-stack redaction are in the router.
 
 A host reads through the procedure it already mounts. `readDashboardEvents`,
 `readDashboardEventDetail`, `readDashboardWorkers`, and `DashboardEventsQuery` therefore leave
@@ -1001,12 +1006,12 @@ withholds it from every event record that carries a copy.
 - any listener whose `publicOrigin` names a non-loopback host.
 
 `DashboardCommandOptions.revealErrorStacks`, which the CLI maps from `--reveal-error-stacks`,
-turns that default off. A loopback or Unix-socket listener without a remote public origin keeps
+disables that default. A loopback or Unix-socket listener without a remote public origin keeps
 stacks.
 
 ### Read timeouts
 
-Every dashboard read is bounded. `dashboardDatabase(database, timeoutMs)` handles each read in
+Workhorse bounds every dashboard read. `dashboardDatabase(database, timeoutMs)` handles each read in
 these steps:
 
 1. It resolves the pool with `connectionPoolOf`.
@@ -1015,8 +1020,8 @@ these steps:
 ONLY` after `set_config('statement_timeout', timeoutMs, true)`, so the bound ends with the
    transaction.
 
-A read PostgreSQL cancels with SQLSTATE `57014` throws `DashboardReadTimeoutError`, which carries
-`timeoutMs`. The connection is already released.
+If PostgreSQL cancels a read with SQLSTATE `57014`, the read throws `DashboardReadTimeoutError`.
+That error carries `timeoutMs`. The connection is already released.
 
 The bound defaults to `DASHBOARD_STATEMENT_TIMEOUT_MS`, 15,000 ms. `createDashboardHost` takes the
 first value set from this order:
@@ -1028,8 +1033,8 @@ first value set from this order:
 Each workspace's `Admin` reads through `boundedQueryable` over the same `DashboardDatabase`, so the
 retention preview runs under the bound too.
 
-A `Queryable` with no pool — neither `connect()` nor an attached pool — is read directly and
-unbounded. Sending `BEGIN` and the read separately through a shared entry point could leave another
+A `Queryable` with no pool has neither `connect()` nor an attached pool. The dashboard reads it
+directly and with no bound. Sending `BEGIN` and the read separately through a shared entry point could leave another
 caller's connection inside a transaction. Drizzle over a node-postgres pool and TypeORM attach a
 pool. The Prisma and Kysely adapters attach one only through their `pool` option.
 
@@ -1042,14 +1047,14 @@ The idempotency wire family carries the `Dashboard` prefix every other wire name
 - `hasDashboardIdempotencyEvidence`
 - `dashboardIdempotencyEventDetailKeys`
 
-Each unprefixed name remains an exported `@deprecated` alias for the rest of the `0.x` line. It is
-removed in `1.0.0`.
+Each unprefixed name remains an exported `@deprecated` alias for the rest of the `0.x` line.
+Version `1.0.0` removes it.
 
-`MaintenanceLoopCadences` becomes `DashboardMaintenanceLoopCadences`, keeping the name Python and
-Go share, because every `dashboard/v1` `$defs` key now carries that prefix.
+`MaintenanceLoopCadences` becomes `DashboardMaintenanceLoopCadences`. This keeps the name that
+Python and Go share, because every `dashboard/v1` `$defs` key now carries that prefix.
 
-`DashboardCancelStatus` is `CancelStatus` itself rather than a hand-copied union. The dashboard
-vocabulary and the one `Queue.cancel` reports therefore cannot drift.
+`DashboardCancelStatus` is `CancelStatus` itself, not a hand-copied union. Thus the dashboard
+vocabulary and the vocabulary that `Queue.cancel` reports cannot differ.
 
 ### Static bundle
 
@@ -1062,13 +1067,13 @@ records the archive name, read-surface version, and SHA-256 digest.
 - `pnpm dashboard-bundle:check` rebuilds the application and rejects a stale artifact or language
   copy.
 - `go/dashboard.Files` embeds the Go copy.
-- Python distributions retain their copy as package data for `importlib.resources`.
+- Python distributions keep their copy as package data for `importlib.resources`.
 
 #### Version injection
 
 The archive contains no Workhorse package version. Each TypeScript, Python, or Go host adds its own
 published version to `DashboardRuntimeConfig.workhorseVersion` when it renders `app/index.html`.
-The browser passes that value to `DashboardProps.workhorseVersion`. A direct React embed may supply
+The browser passes that value to `DashboardProps.workhorseVersion`. A direct React embed can supply
 the same prop or omit the version display. A package-only version change therefore leaves the
 archive digest unchanged.
 
@@ -1090,7 +1095,7 @@ until `pnpm dashboard-bundle:generate` updates the canonical, Go, and Python cop
 ### HTML assembly
 
 `dashboard/app/browser/index.html` is the authoritative document template for production and
-development. `renderDashboardHtml` is the sole assembler:
+development. `renderDashboardHtml` is the only assembler:
 
 1. It serializes `DashboardRuntimeConfig` with `JSON.stringify` and escapes each `<` as `\u003c`.
 2. It fills the runtime-config placeholder with a replacement callback.
@@ -1100,7 +1105,7 @@ development. `renderDashboardHtml` is the sole assembler:
 The Python, Ruby, and Rust hosts write their own runtime configuration and escape each `<` the
 same way. Python and Ruby also escape `>` and `&`.
 
-Dollar patterns in either input remain literal data rather than `String.prototype.replace` syntax.
+Dollar patterns in either input stay literal data, not `String.prototype.replace` syntax.
 `typescript/dashboard-server/test/html.test.ts` exercises both substitutions against the packaged
 template. It requires one runtime assignment with no remaining placeholder.
 
@@ -1158,15 +1163,15 @@ The server stores only a random 32-byte session token and its expiry. The browse
 token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, and
 `SameSite=Strict`.
 
-- A request without a valid session gets `302` to `{basePath}/login` when it is a `GET` outside
-  `rpc` and `assets/`. Any other request gets `401` with `{ "error": "Unauthorized" }`.
+- If a request without a valid session is a `GET` outside `rpc` and `assets/`, it gets `302` to
+  `{basePath}/login`. Any other request gets `401` with `{ "error": "Unauthorized" }`.
 - `POST /logout` deletes the server record, expires the cookie, and answers `303` to the login path.
   Another method on the logout path answers `405` with `Allow: POST`.
 - An expired server record never authorizes a request, even if a client retains its cookie.
 - A successful login answers `303` to the mount path. The mount path is the login path without its
   trailing `/login`, or `/` for a root mount.
-- Each process retains at most 16 sessions. Login removes expired records and evicts the oldest
-  record before exceeding that bound.
+- Each process retains at most 16 sessions. Login removes expired records. Before the count
+  exceeds that bound, login evicts the oldest record.
 
 #### Login page and client
 
@@ -1195,7 +1200,7 @@ Single-admin authentication retains at most five login reservations per client i
    `DashboardRequestContext.clientAddress`. An IPv4 address, or an IPv4-mapped IPv6 address, is its
    own key. An IPv6 address shares one key with its /64 prefix. A request without a parseable
    address uses the shared key `unidentified`.
-2. Each form submission reserves capacity for its client before scrypt begins, so concurrent
+2. Each form submission reserves capacity for its client before scrypt starts. Thus concurrent
    requests cannot bypass the bound.
 3. Invalid submissions retain their reservations and return the generic `401` response.
 4. Further submissions from that client return `429` with `Retry-After` until its oldest
@@ -1211,7 +1216,7 @@ A submission that finds both slots busy returns `429` with `Retry-After: 1`. It 
 
 `dashboardNodeMiddleware` passes `request.socket.remoteAddress` as `clientAddress` by default. A
 host that calls `handle(request, context)` itself supplies an address it established. Behind a
-reverse proxy the socket peer is the proxy, so every client of that proxy shares one key unless
+reverse proxy, the socket peer is the proxy. Thus every client of that proxy shares one key, unless
 the operator names the proxy in `DashboardNodeMiddlewareOptions.trustedProxies`.
 
 `trustedProxyCheck()` parses that list when the middleware is created. A malformed entry throws a
@@ -1226,8 +1231,8 @@ the operator names the proxy in `DashboardNodeMiddlewareOptions.trustedProxies`.
 
 `forwardedClientAddress()` then derives `clientAddress` for each request:
 
-1. With an empty list, or when the socket peer is not listed, the answer is the peer. No header is
-   read.
+1. If the list is empty, or if the list does not contain the socket peer, the answer is the peer.
+   The middleware reads no header.
 2. A listed peer's request must carry exactly one of `X-Forwarded-For` and `Forwarded`. With both
    or neither, the answer is the peer.
 3. The hops are the comma-separated entries of that header. For `Forwarded`, each hop is the single
@@ -1277,7 +1282,7 @@ The authenticated actor comes from one of these sources:
 
 - The single-admin session contributes its configured username as
   `DashboardRpcContext.authenticatedActor`.
-- An embedded `authorize` callback may return a `DashboardPrincipal` with an `actor`.
+- An embedded `authorize` callback can return a `DashboardPrincipal` with an `actor`.
 - A compatible boolean `true` result uses the server-owned `auditActor`, which defaults to
   `dashboard`.
 
@@ -1340,7 +1345,7 @@ options. It maps the repeatable `--trusted-proxy` and the comma-separated
   value must be a safe integer no greater than that bound.
 - A malformed, unsafe, or oversized declared length receives `413` before the form is read.
 - If the header is absent, `readLoginBody` treats the length as unknown and counts the request
-  stream. It retains at most 4,096 bytes, cancels the stream as soon as it crosses the bound, and
+  stream. It keeps at most 4,096 bytes. It cancels the stream when the count crosses the bound, and
   returns `413`.
 - A `content-type` that does not start with `application/x-www-form-urlencoded` receives `415`.
 
@@ -1361,7 +1366,7 @@ port. Two listeners set no list:
 - A Unix socket has no host name to check.
 - A configured `publicOrigin` replaces the inbound host.
 
-An embedded host that leaves it unset relies on its application to validate `Host`.
+If an embedded host does not set it, that host relies on its application to validate `Host`.
 
 ### Browser security headers
 
@@ -1467,7 +1472,7 @@ The status command exits 1 when `schema.compatible` is false or `postgres.suppor
 
 #### Database failure reporting
 
-A database the command could not use is reported as one sentence rather than a stack.
+If the command cannot use a database, it reports the failure as one sentence, not as a stack.
 `describeDatabaseFailure()` in `typescript/core/src/cli/database-failure.ts` recognises:
 
 - the socket and DNS codes `ECONNREFUSED`, `ECONNRESET`, `EHOSTUNREACH`, `ENETUNREACH`,
@@ -1484,5 +1489,5 @@ The sentence names:
 - which of `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL` supplied the value, read
   from `resolvedDatabaseUrlSource()`.
 
-It never prints the URL, which may carry a password. Anything unrecognised keeps its stack, and both
+It never prints the URL, which can carry a password. Anything unrecognised keeps its stack, and both
 exit 1.

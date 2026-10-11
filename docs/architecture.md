@@ -1,9 +1,9 @@
 # Workhorse architecture
 
-This is the precise reference for Workhorse. Each page under [`architecture/`](architecture/) owns
-one area. It names that area's functions, columns, and limits, so it can answer whether observed
-behavior is a bug. For an explanation of a concept, read the [guides](guides/000-start-here.md)
-first.
+This is the precise reference for Workhorse. Use it to find out whether observed behavior is a bug.
+Each page under [`architecture/`](architecture/) owns one area. The page names the functions,
+columns, and limits of that area. For an explanation of a concept, read the
+[guides](guides/000-start-here.md) first.
 
 ## Pages
 

@@ -210,12 +210,13 @@ fast-tier queue uses `fast_task_runtime` and `fast_task_outcome` in their place,
 
 ### `task`
 
-Stable identity and the current accepted definition. `id` and `created_at` do not change.
+This table stores the stable identity and the current accepted definition of a task. `id` and
+`created_at` do not change.
 
 #### Definition replacement under debounce
 
 An ordinary enqueue inserts the row once. Keyed debounce is the exception. While it owns a
-`scheduled` or `ready` runtime inside its replacement window, `enqueue_debounce_v1` may update these
+`scheduled` or `ready` runtime inside its replacement window, `enqueue_debounce_v1` can update these
 fields on the same identity:
 
 - `queue_name`, `task_type`, `concurrency_key`, and `payload`
@@ -234,7 +235,7 @@ or an elapsed replacement window makes the accepted definition non-replaceable.
 #### Priority, payload reads, and retry policy
 
 - `priority` is an integer from 0 through 100 and defaults to 0. Higher values dispatch first.
-- Dispatch reads the raw payload only after a runtime row has been claimed.
+- Dispatch reads the raw payload only after it claims a runtime row.
 - The retry policy takes one of three shapes:
   - fixed: `{delayMs}`
   - exponential: `{initialDelayMs,multiplier,maxDelayMs}`
@@ -363,22 +364,24 @@ References and definitions follow a restricted grammar:
 
 - `$ref` must be `#`, which names the root schema, or `#/$defs/<name>`, where `<name>` is an own key
   of the root `$defs`.
-- Any other reference is rejected with `<path>.$ref must point at a subschema of the contract`, for
-  example `$.properties.a.$ref`. That includes a JSON pointer into `properties` or `items`, into a
-  definition, or into `default` or `examples`. It also includes a percent-encoded or `~1`-escaped
-  name, an anchor fragment, and a reference that does not resolve.
-- `$defs` may appear only on the root schema. Elsewhere it is rejected with
+- The profile rejects any other reference with
+  `<path>.$ref must point at a subschema of the contract`, for example `$.properties.a.$ref`. That
+  includes a JSON pointer into `properties` or `items`, into a definition, or into `default` or
+  `examples`. It also includes a percent-encoded or `~1`-escaped name, an anchor fragment, and a
+  reference that does not resolve.
+- `$defs` can appear only on the root schema. The profile rejects it elsewhere with
   `<path>.$defs must appear only on the root schema`, for example `$.items.$defs`.
-- Each `$defs` key must match `^[A-Za-z_][-A-Za-z0-9._]*$`. Otherwise the schema is rejected with
-  `<path>.<name> must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$`, for example
+- Each `$defs` key must match `^[A-Za-z_][-A-Za-z0-9._]*$`. Otherwise the profile rejects the schema
+  with `<path>.<name> must be a definition name matching ^[A-Za-z_][-A-Za-z0-9._]*$`, for example
   `$.$defs.a b`.
-- `$anchor` is rejected at any depth with `<path> is outside the Workhorse contract profile`, for
-  example `$.items.$anchor`. A property named `$anchor` stays valid.
+- The profile rejects `$anchor` at any depth with
+  `<path> is outside the Workhorse contract profile`, for example `$.items.$anchor`. A property
+  named `$anchor` stays valid.
 
 Because the grammar excludes `/`, `~` and `%`, no SDK decodes a reference before resolving it
 (ADR 0039).
 
-Other keywords are rejected before compilation:
+The profile rejects other keywords before compilation:
 
 - Remote references, custom keywords and vocabularies, `$dynamicRef`, `$dynamicAnchor`,
   `unevaluatedProperties`, and `unevaluatedItems`.
@@ -387,13 +390,13 @@ Other keywords are rejected before compilation:
   `$.items.patternProperties`. A property named `pattern` inside `properties` or `required` stays
   valid.
 
-The SDKs' regular expression engines differ in syntax and matching. String-shape checks therefore
-belong in handler code (ADR 0039).
+The regular expression engines of the SDKs differ in syntax and matching. Therefore, put
+string-shape checks in handler code (ADR 0039).
 
 TypeScript compiles with Ajv, Python with `Draft202012Validator`, and Go with
 `santhosh-tekuri/jsonschema`. `compileContractSchema` constructs Ajv with two options:
 
-- `strict: false` means Ajv-only lint rules such as `strictTypes`, `strictTuples`, and
+- With `strict: false`, Ajv-only lint rules such as `strictTypes`, `strictTuples`, and
   `strictRequired` cannot reject a profile schema. Ajv still validates each schema against the
   Draft 2020-12 meta-schema.
 - `strictNumbers: true` is an instance rule. It rejects NaN and the infinities, which JSON would
@@ -407,7 +410,7 @@ Enqueue validates with the policy's current version after explicit contract sync
 `EnqueueContractsModule` caches each current definition by `task_type`. `taskAcceptance` reads that
 cache instead of calling `get_contract_definition_v1` per request.
 
-A stale cache is handled in two ways:
+Workhorse handles a stale cache in two ways:
 
 1. If a cached `contractVersion` differs from `contract_policy.current_version`, `enqueue_many_v1`
    returns one internal row. The row has ordinal `0`, null `task_id`, outcome `contract_mismatch`,
@@ -438,13 +441,14 @@ changes.
 
 ### `enqueue_idempotency`
 
-PostgreSQL-owned scoped enqueue ownership, separate from stable task identity and dispatch.
+This table stores scoped enqueue ownership. PostgreSQL owns it. This ownership is separate from
+stable task identity and dispatch.
 
 #### Key and limits
 
 The primary key `(idempotency_scope, idempotency_key_hash)` serializes competing callers through one
-scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input. Raw keys are
-never persisted.
+scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input. Workhorse
+never persists raw keys.
 
 | Setting | Default                  | Range                                               |
 | ------- | ------------------------ | --------------------------------------------------- |
@@ -497,11 +501,13 @@ The ownership relation stores scope and full key hash, never the raw key.
 - Exact replay appends no event.
 - Structured conflicts additionally carry full SHA-256 stored and rejected request digests.
 
-Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before
+A new request can replace expired ownership. Housekeeping prunes expired bindings before
 terminal task identity. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
 and `scheduled` tasks it purges, and of purged ready fast-tier tasks.
 
 ### `task_dependency`
+
+This table stores the edges between a dependent task and its prerequisite tasks.
 
 #### Columns and bounds
 
@@ -515,9 +521,9 @@ and `scheduled` tasks it purges, and of purged ready fast-tier tasks.
 
 Edge bounds:
 
-- At most 100 prerequisite edges may enter one dependent task.
-- At most 100 dependent edges may leave one prerequisite task.
-- Each prerequisite may reach at most 100 distinct dependents through unresolved edges. The bound
+- At most 100 prerequisite edges can enter one dependent task.
+- At most 100 dependent edges can leave one prerequisite task.
+- Each prerequisite can reach at most 100 distinct dependents through unresolved edges. The bound
   includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
   touched-component advisory locks keep the pending graph stable.
 
@@ -554,14 +560,14 @@ Why this ordering is safe:
 - Every terminal transition deletes the runtime row before it inserts the outcome whose trigger
   resolves dependents. The runtime lock therefore makes a concurrent completion, failure, or
   cancellation wait until the enqueue commits, so its resolver sees the new edge.
-- A transition that committed first has already deleted the row. The enqueue's outcome reads then
-  see its outcome.
+- A transition that committed first has already deleted the row. The outcome reads of the enqueue
+  then see its outcome.
 - Key-share locks do not conflict with the non-key updates that claims and heartbeats make. An open
   dependent enqueue therefore does not delay dispatch of its prerequisite.
 - The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`. Neither side
   holds one row while it waits for the other.
 
-A request which declares no prerequisite runs none of that. `enqueue_batch_v1` guards these steps on
+A request that declares no prerequisite runs none of that. `enqueue_batch_v1` guards these steps on
 a prerequisite count above zero:
 
 - the prerequisite lock
@@ -698,8 +704,8 @@ resolved its edge.
 
 #### Settlement
 
-The resolver hands the rejected and released dependents to `settle_dependents_v1`. That function
-performs the settlement below and returns the number of dependents that left `blocked`.
+The resolver gives the rejected and released dependents to `settle_dependents_v1`. That function
+does the settlement below and returns the number of dependents that left `blocked`.
 
 1. One statement handles every dependent that fails or is canceled. It deletes their runtime rows
    and appends their `dependency_failed` or `dependency_canceled` events. It inserts their synthetic
@@ -765,8 +771,8 @@ orders. PostgreSQL then aborts one statement with SQLSTATE `40P01`. The integrat
 
 Every SDK sends a fenced write again when PostgreSQL rolls it back with `40P01`, up to 3
 attempts in total. A fenced write is a statement that names a task, its worker, and its fence token.
-Nothing in the rolled-back statement committed, and the fence decides again whether the resend may
-still act.
+Nothing in the rolled-back statement committed. The fence decides again whether the resend can still
+act.
 
 The retried statements are:
 
@@ -787,9 +793,9 @@ The retried statements are:
 
 - A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`.
   The helper then raises the original `40P01` instead.
-- Any other error is raised after one send.
+- The helper raises any other error after one send.
 
-Statements without a fence are sent once. `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`,
+Every SDK sends a statement without a fence once. `enqueue_batch_v1`, `cancel_v1`, `send_signal_v1`,
 `complete_human_wait_v1`, `claim_many_v1`, `recover_expired_v1`, and every administrative statement
 raise `40P01` to their caller.
 
@@ -817,7 +823,7 @@ Validation finds every pre-existing weakly connected component touched by either
 each task identity in those components in UUID order with a transaction advisory lock.
 
 - Inserts into disconnected components do not share a lock.
-- Inserts which join or mutate the same component serialize before validation.
+- Inserts that join or mutate the same component serialize before validation.
 - Per-task component locks remain stable when a concurrent transaction merges two components.
 
 The recursive cycle check starts from the inserted prerequisite identities and follows the primary
@@ -864,7 +870,7 @@ statement. The trigger therefore validates the batch's fan-in and fan-out once.
 ##### Edge updates
 
 Validation runs only on insert. The dependent's cached `pending_prerequisites` counter also counts
-each edge as inserted. An update may therefore only release an edge, by setting `released_at` and
+each edge as inserted. An update can therefore only release an edge, by setting `released_at` and
 `resolution`.
 
 Since schema version 58, the row trigger `task_dependency_reject_change` calls
@@ -885,12 +891,12 @@ could turn C→A into B→A without a cycle check.
 `Admin.getDependencyLineage(taskId, limit)` returns at most 1,000 edges where the identity is either
 the prerequisite or dependent. `limit` defaults to `MAX_TASK_QUERY_PAGE_SIZE`, 1,000. `truncated` is
 true when more edges exist. A task gains prerequisite edges only from its own enqueue request, at
-most 100, and from its children. One task creates at most one child through `create_child_v2`,
-or one non-empty set of at most 100 children through `create_children_v1`. An empty set records
+most 100, and from its children. One task creates at most one child through `create_child_v2`, or
+one non-empty set of at most 100 children through `create_children_v1`. An empty set records
 nothing. Once a task has a child or a non-empty set, a request for another child or another set
-creates no task. A prerequisite retains at most 100 dependent edges. One identity therefore holds at most 300 edges, and the default read returns its complete
-one-hop lineage without a continuation cursor. A caller-selected lower limit can still set
-`truncated`.
+creates no task. A prerequisite retains at most 100 dependent edges. One identity therefore holds at
+most 300 edges. The default read returns its complete one-hop lineage without a continuation cursor.
+A caller-selected lower limit can still set `truncated`.
 
 Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`,
 nullable `releasedAt`, and nullable `resolution`.
@@ -1007,7 +1013,7 @@ One immutable row links a parent identity to each named child.
 #### Columns and constraints
 
 - The primary key is `(parent_task_id, child_name)`, and `child_task_id` is unique.
-- One parent may own at most 100 children.
+- One parent can own at most 100 children.
 - Names contain 1 through 200 characters.
 - `request_fingerprint` stores the complete normalized child request for replay comparison.
 - `created_as_set` distinguishes `runChildren` edges from the compatible single-child contract.
@@ -1050,7 +1056,7 @@ A child whose `deadline` has already passed reaches its `task_outcome` inside `e
 before its edge exists. After the `parent_linked` event, the function therefore passes that outcome
 to `resolve_dependents_many_v1`. That call settles the blocked parent in the same transaction.
 
-Coalescing and additional dependency options are rejected for child requests.
+Workhorse rejects coalescing and additional dependency options for child requests.
 
 `create_single_child_v2` retains that implementation. The public `create_child_v2` wrapper rejects
 any `created_as_set` edge before it delegates. That keeps the single-child replay contract
@@ -1102,9 +1108,9 @@ unique named requests and mode `settled` or `all_success`.
 Replay requires the exact names, normalized requests, and mode. It returns only after every child
 reaches a terminal state.
 
-- The joined object may not exceed the parent task's `result_max_bytes`, which defaults to
-  1,048,576 bytes. An oversized join returns
-  `result_too_large` without copying the object to the client.
+- The joined object must not exceed the `result_max_bytes` of the parent task, which defaults to
+  1,048,576 bytes. An oversized join returns `result_too_large` without copying the object to the
+  client.
 - `children_created` and `children_joined` each append once per set.
 
 #### Join modes
@@ -1182,7 +1188,7 @@ value is a lower bound.
 
 ### `task_runtime`
 
-The only mutable lifecycle relation.
+This table is the only mutable lifecycle relation.
 
 #### State-specific fields
 
@@ -1200,13 +1206,13 @@ Its check constraint makes state-specific fields mutually exclusive:
 - `ready`
   - `ready_at` and FIFO `sequence` are populated.
   - Ownership fields and `wait_name` are null.
-  - A resumed timer may preserve `attempt_started_at`.
+  - A resumed timer can preserve `attempt_started_at`.
 - `active`
   - Worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are
     populated.
   - Ready placement and `wait_name` are null.
-  - The optional cancellation-request timestamp carries optional attribution and reason. Each may
-    stay null, and neither may appear without the timestamp.
+  - The optional cancellation-request timestamp carries optional attribution and reason. Each can
+    stay null. Neither can appear without the timestamp.
 
 #### Dependency counter and flag
 
@@ -1257,7 +1263,7 @@ and recounts their edges under the lock.
 - Both settlements go through `settle_dependents_v1`.
 - The repair returns `(task_id, recorded_pending_prerequisites,
 pending_edges, action)` with `action` `recounted`, `released`, or `rejected`.
-- No maintenance pass calls either function.
+- No routine calls either function.
 
 #### Governed drift repair (schema version 40)
 
@@ -1289,7 +1295,7 @@ through 2,000 characters, and a `request_id` outside 1 through 512 UTF-8 bytes.
 Each `dependency_counter_repaired` event it appends adds these to the version 38 details:
 `requested_by`, `request_reason`, `request_id_preview`, `request_id_digest`, and
 `request_id_length`. The digest is the first 12 hexadecimal characters of the SHA-256 of the request
-id. The raw id is not stored.
+id. Workhorse does not store the raw id.
 
 The request id correlates the repair and is not an idempotency key. A rerun finds only rows that
 drifted again.
@@ -1319,7 +1325,7 @@ promotion preserve the value while moving the same row between live states.
   flow rather than failure. Promotion and the next claim continue the same logical attempt with a
   new fence.
 - `previous_retry_delay_ms` stores only the previous decorrelated-jitter selection needed for the
-  next deterministic step. It is cleared for other policy types.
+  next deterministic step. Workhorse clears it for other policy types.
 
 #### Retry delay selection
 
@@ -1337,9 +1343,9 @@ and expired-lease recovery.
      `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds.
    - Lease recovery and execution timeout use a delay of 0.
 
-A worker callback may return `undefined` to omit the override, so step 2 or 3 applies. The worker
-validates any other result before `fail_v1`, because `fail_v1` reads `-1` as terminal failure. Retry-budget
-enforcement remains in SQL regardless of delay source.
+A worker callback can return `undefined` to omit the override, so step 2 or 3 applies. The worker
+validates any other result before `fail_v1`, because `fail_v1` reads `-1` as terminal failure.
+Retry-budget enforcement remains in SQL regardless of delay source.
 
 Policy bounds:
 
@@ -1365,13 +1371,13 @@ changes can still require index maintenance when rows enter or leave a partial i
 
 #### Ready index growth
 
-Both `state = 'ready'` indexes are keyed by a value that only increases:
+The key of both `state = 'ready'` indexes is a value that only increases:
 
 - `sequence` for `task_runtime_ready_idx`
 - `ready_at` for `task_runtime_ready_age_idx`
 
-Every insertion lands at the right edge, while the pages a completion emptied are refilled slowly.
-The two indexes therefore grow well past what their live rows need and then settle.
+Every insertion lands at the right edge. The pages that a completion emptied fill again slowly. The
+two indexes therefore grow well past what their live rows need and then settle.
 
 Measured on PostgreSQL 18 with a backlog held at 2,000 tasks, 200,000 claims produced this growth:
 
@@ -1385,10 +1391,10 @@ Vacuum returns index space for reuse and never to the operating system.
 
 A paired run at the same churn lowered `autovacuum_vacuum_scale_factor` to 0.01 and
 `autovacuum_vacuum_cost_delay` to 0 on the table. That did not change the outcome. At that rate both
-arms crossed their trigger within seconds, and `autovacuum_naptime` set the pace instead. So
+arms crossed their trigger within seconds, and `autovacuum_naptime` set the pace instead. Therefore,
 `task_runtime` carries only `fillfactor`.
 
-`REINDEX CONCURRENTLY` is what reclaims that space. It returns the index to 17 pages while claims
+`REINDEX CONCURRENTLY` reclaims that space. It returns the index to 17 pages while claims
 continue:
 
 ```sql
@@ -1406,8 +1412,8 @@ in each observation:
 - the autovacuum counters
 - the table's storage parameters
 
-`pnpm soak:report` derives the per-index growth across the series. An operator who sees that series
-climb rather than settle has the statement above as the lever.
+`pnpm soak:report` derives the per-index growth across the series. If an operator sees that series
+climb rather than settle, the operator can use the statement above.
 
 #### Concurrency key
 
@@ -1435,8 +1441,8 @@ Rows without a budget never enter them.
 
 ### `task_outcome`
 
-Semantically immutable terminal state. Completion, terminal failure, or cancellation deletes runtime
-and inserts the outcome in one transaction.
+This table stores the semantically immutable terminal state. Completion, terminal failure, or
+cancellation deletes runtime and inserts the outcome in one transaction.
 
 #### Columns
 
@@ -1463,8 +1469,8 @@ history rows remain.
 Failed outcomes additionally have one cold partial index ordered by immutable completion time and
 identity. `list_dead_letters_v1` uses it for bounded cursor pages. A page holds 1 through 1,000
 rows (`MAX_REDRIVE_BATCH_SIZE`) and defaults to 100. It joins the frozen accepted `task` definition
-only after selecting terminal candidates. This index is not a dispatch path, and
-claim never reads it.
+only after selecting terminal candidates. This index is not a dispatch path, and claim never reads
+it.
 
 `fast_task_outcome_failed_finished_idx` gives failed fast-tier outcomes the same order, and the
 listing reads both indexes. Since migration 0061 (schema version 60), a dead-letter page
@@ -1472,7 +1478,7 @@ therefore reads only failed outcomes in both tiers.
 
 ### `task_query`
 
-A bounded operator routing projection created with each task.
+This table is a bounded projection for operator routing. Workhorse creates it with each task.
 
 #### Columns and maintenance
 
@@ -1492,26 +1498,26 @@ A bounded operator routing projection created with each task.
    a state filter.
 3. It joins `task` for priority and optional payload projection.
 
-No broad query index is added to `task_runtime`. Pages use immutable `(created_at, task_id)` keys
-and a filter/projection-bound signature. Cross-page state membership is weakly consistent until
-snapshot pagination is implemented.
+Workhorse adds no broad query index to `task_runtime`. Pages use immutable `(created_at, task_id)`
+keys and a filter/projection-bound signature. Cross-page state membership is weakly consistent until
+Workhorse implements snapshot pagination.
 
 #### Payload projection
 
-Payload is omitted by default. When requested, PostgreSQL applies bounded top-level redaction before
-checking the response byte ceiling. It returns explicit omission status. These controls bound
-disclosure and returned size for selected rows. They do not bound accepted payload size or requested
-detoasting work.
+By default, the listing omits the payload. If a caller requests it, PostgreSQL applies bounded
+top-level redaction before checking the response byte ceiling. It returns explicit omission status.
+These controls bound disclosure and returned size for selected rows. They do not bound accepted
+payload size or requested detoasting work.
 
 ### `task_redrive`
 
-Insert-only source-to-target lineage and operator audit.
+This table stores insert-only lineage from source to target, and the operator audit.
 
 #### Keys and columns
 
 - The source/request hash primary key serializes exact replay.
 - Unique target identity gives every new execution one parent.
-- Raw request IDs are never stored.
+- Workhorse never stores raw request IDs.
 - The row retains safe request preview/digest/length, actor, reason, canonical request fingerprint,
   source and initial target states, and request time.
 
@@ -1534,21 +1540,21 @@ now and `current_attempt` 1.
 - It never copies dependency edges, child lineage, checkpoints, waits, signal deliveries, attempts,
   results, or cancellation state.
 
-Source and target events plus the lineage row commit atomically. The original outcome's semantic
-terminal columns are never updated. Its retention watermark follows the normal history-attribution
-rule.
+Source and target events plus the lineage row commit atomically. Workhorse never updates the
+semantic terminal columns of the original outcome. Its retention watermark follows the normal
+history-attribution rule.
 
 - Exact replay returns the existing target.
 - A changed actor or reason under the same source/request identity conflicts.
 
 `redrive_many_v1` applies the same transition to an oldest-first bounded candidate page. It accepts
-a keyset cursor for deterministic backlog progression. It performs no writes in dry-run mode.
+a keyset cursor for deterministic backlog progression. In dry-run mode, it does no writes.
 
 #### Lineage retention
 
 The source foreign key protects lineage. Terminal identity pruning skips any source with a retained
 descendant edge. It skips the source before it bounds the candidate window. Retained sources
-therefore never keep a pass from reaching younger eligible tasks.
+therefore never prevent a pass from reaching younger eligible tasks.
 
 Target deletion cascades its inbound edge. Ancestors can then become eligible later under the normal
 retention windows.
@@ -1558,7 +1564,7 @@ truncation flag. The bound is 1 through 1,000 records and defaults to 1,000.
 
 ### `task_checkpoint`
 
-Insert-only named JSON results at explicit handler restart boundaries.
+This table stores insert-only named JSON results at explicit restart boundaries of the handler.
 
 #### Key and write rules
 
@@ -1581,29 +1587,29 @@ In Go:
 - A panic in the operation reaches each duplicate as a `checkpoint <name> operation panicked` error.
   It saves nothing and continues to the worker as the task failure.
 - A duplicate also returns the handler context's cause once that context ends, because the operation
-  may ignore cancellation.
+  can ignore cancellation.
 
 A checkpoint does not make external effects exactly once. A process can disappear after an external
 system commits but before the checkpoint transaction commits.
 
 #### Size and lifetime
 
-Values are limited to 1 MiB (1,048,576 bytes) of PostgreSQL's canonical JSONB text representation.
-That gives every language client one authoritative definition.
+A checkpoint value can hold at most 1 MiB (1,048,576 bytes) of the canonical JSONB text
+representation of PostgreSQL. That gives every language client one authoritative definition.
 
 The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
 they write. TypeScript throws a `TypeError`, and Rust returns a `HandlerError`. `JSON.stringify` and
 `serde_json` would store such a number as `null`.
 
-Checkpoints intentionally have no independent retirement path. Deleting a completed name while
-retaining a retryable task could repeat that checkpoint's code. They cascade only when the stable
-parent task identity is deleted, so future task-retention policy must account for checkpoint
-storage.
+Checkpoints intentionally have no independent retirement path. If Workhorse deleted a completed
+name while it retained a retryable task, the code of that checkpoint could run again. Checkpoints
+cascade only when Workhorse deletes the stable parent task identity. Therefore, a future
+task-retention policy must account for checkpoint storage.
 
 ### `task_progress`
 
-One latest-value mutable projection for operational progress. It is kept separate from immutable
-payload, checkpoint, and outcome fields.
+This table is one mutable projection of the latest value for operational progress. Workhorse keeps
+it separate from immutable payload, checkpoint, and outcome fields.
 
 #### Writes
 
@@ -1611,7 +1617,7 @@ payload, checkpoint, and outcome fields.
   worker/fence generation.
 - Accepted changes increment a monotonic revision and replace attempt, fence, worker, and
   update-time provenance.
-- Identical values are no-ops.
+- An identical value changes nothing.
 - The TypeScript and Rust clients reject a value that holds `NaN` or an infinity at any depth before
   they write, as they do for checkpoints. TypeScript throws a `TypeError`, and Rust returns
   `Error::InvalidArgument`.
@@ -1629,9 +1635,9 @@ payload, checkpoint, and outcome fields.
 
 #### Limits and lifetime
 
-- Values are limited to 64 KiB of canonical JSONB text.
-- One fence may commit a changed value at most every 100 milliseconds. A new ownership generation
-  may report immediately.
+- A value can hold at most 64 KiB of canonical JSONB text.
+- One fence can commit a changed value at most every 100 milliseconds. A new ownership generation
+  can report immediately.
 - Each accepted change emits a bounded `progress_updated` event with revision and byte size but not
   the value.
 - The latest projection survives retry and terminal materialization. It cascades only with the
@@ -1639,12 +1645,12 @@ payload, checkpoint, and outcome fields.
 
 ### `task_wait`
 
-Insert-once named timer boundaries for a stable task identity.
+This table stores insert-once named timer boundaries for a stable task identity.
 
 #### Replay rules
 
-- Relative sleeps store the first PostgreSQL-computed wake timestamp and are first-write-wins by
-  name.
+- A relative sleep stores the first wake timestamp that PostgreSQL computes. For each name, the
+  first write wins.
 - Absolute waits conflict if replay supplies a different target or changes mode.
 
 `schedule_wait_v1` locks and revalidates the active generation. It then either returns an elapsed
@@ -1656,14 +1662,14 @@ itself be idempotent or checkpointed.
 
 #### Limits
 
-- Names are limited to 200 characters.
-- Durations are limited to 365 days.
-- One task may hold at most 1,000 timer names.
+- A name can hold at most 200 characters.
+- A duration can be at most 365 days.
+- One task can hold at most 1,000 timer names.
 - Waits cascade only with the stable parent task identity.
 
 ### `task_signal_wait`
 
-One named external-delivery boundary per stable task identity.
+This table stores one named external-delivery boundary per stable task identity.
 
 #### Declaring a signal wait
 
@@ -1677,8 +1683,8 @@ non-runnable scheduled row without closing the logical attempt.
 
 Declaration errors:
 
-- If the same pending boundary is declared concurrently, PostgreSQL returns `already_waiting`. The
-  client raises `SignalWaitConflictError`.
+- If callers declare the same pending boundary concurrently, PostgreSQL returns `already_waiting`.
+  The client raises `SignalWaitConflictError`.
 - `SignalWaitLeaseLostError` is reserved for a stale or expired ownership generation.
 - Both errors expose the boundary through `waitName`.
 
@@ -1699,7 +1705,7 @@ The TypeScript client counts name and actor characters in Unicode code points, a
 The function serializes delivery with declaration. It stores only a SHA-256 key hash and request
 fingerprint. `signal_received` and `signal_rejected` events record the first 12 hexadecimal
 characters of that hash as `idempotency_key_digest`. The same transaction makes the waiting runtime
-ready. The first accepted payload is retained.
+ready. The function retains the first accepted payload.
 
 | Request                        | Result                                   |
 | ------------------------------ | ---------------------------------------- |
@@ -1726,7 +1732,7 @@ payload.
 `MAX_EXTERNAL_WAIT_TIMEOUT_MS` is 604,800,000 (7 days). `timeoutMs` accepts an integer from 1
 through that bound.
 
-- A declaration which omits `timeoutMs` uses that same bound as its default. PostgreSQL then gives
+- A declaration that omits `timeoutMs` uses that same bound as its default. PostgreSQL then gives
   the undelivered signal a seven-day `timeout_at`, so an unanswered boundary closes 604,800,000
   milliseconds after its declaration.
 - The stored `task_signal_wait.timeout_at` is the earlier of that instant and the accepted task
@@ -1802,7 +1808,7 @@ can safely remove the parent `task`, after its outcome and required history are 
 
 ### `task_human_wait`
 
-One named human decision per stable task identity.
+This table stores one named human decision per stable task identity.
 
 #### Declaring a human wait
 
@@ -1810,8 +1816,8 @@ One named human decision per stable task identity.
 context. The shared bounds are `MAX_EXTERNAL_WAIT_NAME_CHARACTERS`, `MAX_EXTERNAL_WAIT_VALUE_BYTES`,
 and `MAX_EXTERNAL_WAITS_PER_TASK`:
 
-- Names are limited to 200 characters.
-- Context and completion results are each limited to 65,536 bytes of canonical JSONB text.
+- A name can hold at most 200 characters.
+- The context and the completion result can each hold at most 65,536 bytes of canonical JSONB text.
 - One task retains at most 1,000 human decisions.
 - Names cannot have leading or trailing whitespace.
 
@@ -1823,7 +1829,7 @@ Declaration errors expose the name as `waitName`:
 #### Completing a human wait
 
 `complete_human_wait_v1` accepts the task identity, token name, result, idempotency key, and trusted
-actor. Results are limited to 65,536 bytes of canonical JSONB text
+actor. A result can hold at most 65,536 bytes of canonical JSONB text
 (`MAX_EXTERNAL_WAIT_VALUE_BYTES`). Keys hold 1 through 512 UTF-8 bytes, and actors hold 1 through
 200 characters. The function retains only the SHA-256 key hash, request fingerprint, first result,
 actor, and completion time.
@@ -1911,7 +1917,7 @@ earlier accepted task deadline when one exists.
 
 ### `retention_policy`
 
-One singleton row is the target database's authoritative retention policy.
+One singleton row stores the authoritative retention policy of the target database.
 
 #### Columns
 
@@ -1950,7 +1956,7 @@ The row also holds five bounded work limits:
 
 Passing `{ force: true }` to synchronization copies every supplied value and clears all overrides.
 
-`Queue.previewRetentionPolicy` performs no writes. It counts at most 10,001 eligible rows per
+`Queue.previewRetentionPolicy` does no writes. It counts at most 10,001 eligible rows per
 category and reports 10,000 plus a capped flag. Its terminal-task count includes
 `fast_task_outcome` rows alongside `task_outcome` rows.
 
@@ -2010,7 +2016,7 @@ rows by default.
 
 - TypeScript `{ prune: false }`, Python `prune=False`, and Go `SyncPolicyOptions{Prune: false}`
   retain omitted rows.
-- When pruning is enabled, an empty desired set removes every policy owned by that namespace.
+- If pruning is enabled, an empty desired set removes every policy owned by that namespace.
 
 #### Listing
 
@@ -2025,7 +2031,7 @@ An omitted, nil, or empty array returns every policy. A non-empty array filters 
 This read has no implicit result cap.
 
 `Queue.concurrencyPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
-`0.x` line. It is removed in `1.0.0`.
+`0.x` line. Workhorse removes it in `1.0.0`.
 
 #### Capacity semantics
 
@@ -2101,7 +2107,7 @@ These reads return persisted definitions without an implicit result cap:
 An omitted or empty Python sequence and a nil or empty Go slice read every policy.
 
 `Queue.rateLimitPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
-`0.x` line. It is removed in `1.0.0`.
+`0.x` line. Workhorse removes it in `1.0.0`.
 
 #### Bucket state
 
@@ -2127,7 +2133,7 @@ Process clock skew cannot create capacity, because application time never enters
 - Admission probes do not create rows for keys that never start. The function inserts bucket state
   only when it consumes a token.
 - Each claim inspects the oldest 100 key buckets for its queue. It removes those whose tokens have
-  fully refilled. That bounds cleanup work while keeping inactive high-cardinality keys from
+  fully refilled. That bounds cleanup work. It also prevents inactive high-cardinality keys from
   accumulating forever.
 - Deleting a policy cascades its remaining bucket state. Recreating the policy therefore begins with
   a full burst.
@@ -2230,8 +2236,8 @@ queue-wide rule, and the next rebalance replaces them.
 #### Lock order
 
 A claim holds its shard locks until it commits. A claim that holds a shard waits for no other shard,
-so claims cannot deadlock on shards. The one exception holds every shard: a claim that rebalances
-took them in order.
+so claims cannot deadlock on shards. The one exception is a claim that rebalances. It holds every
+shard, and it took them in order.
 
 ### `budget` and `budget_bucket`
 
@@ -2248,10 +2254,10 @@ One `budget` row per name defines a deployment-owned limit that tasks in any que
 | `rate_limit`, `rate_interval_ms`, `rate_burst` | Nullable; appear together or remain null; same bounds as `rate_limit_policy`                                 |
 | `updated_at`                                   | Changes only when a limit changes                                                                            |
 
-`budget_limit_check` requires at least one limit. A budget has no per-key sub-limit; keys stay
+`budget_limit_check` requires at least one limit. A budget has no per-key sub-limit. Keys stay
 queue-scoped.
 
-`budget_rate_check` bounds the rate columns, and a CHECK that evaluates to null passes. Since schema
+`budget_rate_check` bounds the rate columns. A CHECK that evaluates to null passes. Since schema
 version 58, `budget_rate_complete_check` requires all three rate columns or none through
 `num_nulls`. Migration 0059 first clears an incomplete rate. It deletes a budget that the clearing
 would leave without a limit, because a missing budget row imposes no limit.
@@ -2281,7 +2287,7 @@ limit. Synchronization accepts at most 10,000 unique names. It runs these steps:
    affected budget.
 
 A claim holds the per-budget lock from admission to the bucket charge, so a definition cannot change
-between the two. The shared name order keeps a sync and a claim from deadlocking.
+between the two. The shared name order prevents a deadlock between a sync and a claim.
 
 #### Listing
 
@@ -2317,10 +2323,11 @@ claim. No claim path calls it since schema version 41. Its steps are:
 3. It inspects the 100-row priority window. It calls `budget_admission_v1(budget_name, now)` only
    for a candidate whose budget lock it holds.
 
-A candidate whose budget first appears after the sample is not admitted by that claim.
+That claim does not admit a candidate whose budget first appears after the sample.
 
 `budget_admission_v1` takes the same per-budget lock itself whenever the budget row exists. The
-count it reads therefore includes every start another claim committed before the lock was granted.
+count it reads therefore includes every start another claim committed before PostgreSQL granted the
+lock.
 
 `claim_many_v1` lets only its first round wait for a budget lock.
 
@@ -2425,8 +2432,8 @@ therefore cannot remain invisible or make health unbounded.
 
 #### Record identity
 
-`task_event.event_id` and `attempt_history.attempt_id` are UUIDv7 values generated by
-`uuid_v7_v1()`. PostgreSQL 15 through 18 does not need an extension.
+`task_event.event_id` and `attempt_history.attempt_id` are UUIDv7 values that `uuid_v7_v1()`
+generates. PostgreSQL 15 through 18 does not need an extension.
 
 1. The function starts with the core `gen_random_uuid()` value.
 2. It writes the low 48 bits of Unix epoch milliseconds into bytes 0 through 5.
@@ -2446,7 +2453,7 @@ cold-export lookups by UUID when the caller does not know the history day.
 #### Timeline reads
 
 `list_task_timeline_v1` merges retained rows from both history relations into one latest-first
-cursor stream. The stream is ordered by event/attempt time, kind rank, and immutable UUID record
+cursor stream. The stream orders entries by event/attempt time, kind rank, and immutable UUID record
 identity. Its cursor accepts the UUID as `p_cursor_record_id`.
 
 - Every entry exposes the task's accepted priority, which is frozen before any attempt begins.
@@ -2494,7 +2501,7 @@ PostgreSQL validates history attribution, so history inserts need no row trigger
 - Dropping a history partition removes its rows independently.
 
 A global retained-through watermark advances only after both history categories are completely
-cleared before their cutoffs. `prune_terminal_storage_v1` may delete a terminal identity only behind
+cleared before their cutoffs. `prune_terminal_storage_v1` can delete a terminal identity only behind
 that watermark.
 
 #### Queue purge
@@ -2547,8 +2554,8 @@ Measures are split by grain:
 | `stat_sketch_merge_v1(sketches)`       | Adds matching counts                                    |
 | `stat_sketch_percentile_v1(sketch, q)` | Returns `1.02^(bin + 0.5) - 1` for the nearest-rank bin |
 
-The midpoint estimate has roughly one percent relative error. It keeps zero and sub-millisecond
-waits representable and merges without retaining samples.
+The midpoint estimate has approximately one percent relative error. It keeps zero and
+sub-millisecond waits representable and merges without retaining samples.
 
 #### Aggregation and rollup
 
@@ -2584,7 +2591,7 @@ the aggregation therefore materializes only these fast rows:
 - a live row with `enqueued_at < p_to`, `attempt > 1`, and `run_at` at or after `p_from`;
 - an outcome row with `finished_at >= p_from` and `enqueued_at < p_to`.
 
-A fast-tier backlog enqueued before the window is not materialized.
+The aggregation does not materialize a fast-tier backlog that was enqueued before the window.
 
 #### JIT
 
@@ -2598,9 +2605,9 @@ crosses `jit_above_cost`, and often `jit_optimize_above_cost` and `jit_inline_ab
 100,000 ready rows and 400,000 fast outcomes, a three-bucket catch-up pass took about 1 s with JIT
 and 34 ms without.
 
-A function with a setting is never inlined, so a caller's statement plans the function as a
-function scan. PostgreSQL plans the body on its own and caches that plan per session, as it does
-for any SQL function that is not inlined.
+PostgreSQL never inlines a function with a setting, so the statement of a caller plans the function
+as a function scan. PostgreSQL plans the body on its own and caches that plan per session, as it
+does for any SQL function that is not inlined.
 
 #### UTC bin origin
 
@@ -2637,26 +2644,28 @@ A window is correct immediately. A lagging rollup costs a longer raw tail rather
 Each pass rewrites the last few closed minutes. A bucket is a pure function of the raw history in
 its minute.
 
-- A transaction that commits its history row after its own minute closed is absorbed by the rewrite
-  instead of being lost.
+- If a transaction commits its history row after its own minute closed, the rewrite absorbs that
+  row. The row is not lost.
 - Running the pass twice converges rather than double counting.
 
-Cardinality is bounded per bucket. Pairs beyond the group limit are folded into the `__other__` task
-type within their own queue. Generated task types therefore cannot make statistics grow without
+Cardinality is bounded per bucket. Workhorse folds pairs beyond the group limit into the `__other__`
+task type within their own queue. Generated task types therefore cannot make statistics grow without
 limit.
 
 #### Retention interlock
 
-The watermark is a retention interlock. Raw history is the only input a bucket can be rebuilt from,
-so `retain_history_v1` clamps its event and attempt cutoffs to `rolled_up_through`.
+The watermark is a retention interlock. Raw history is the only input from which Workhorse can
+rebuild a bucket, so `retain_history_v1` clamps its event and attempt cutoffs to
+`rolled_up_through`.
 
 A stalled rollup holds history. It surfaces as growing retention lag and a rising
 `QueueHealth.statistics.lagMs`. It never silently deletes the input to a window nobody has computed
 yet.
 
 While cold export is enabled, `retain_history_v1` applies a second clamp per dataset to
-`cold_export_dataset.exported_through`. That clamp is described under
-[`cold_export_policy`](#cold_export_policy-cold_export_dataset-and-cold_export_segment).
+`cold_export_dataset.exported_through`. The section
+[`cold_export_policy`](#cold_export_policy-cold_export_dataset-and-cold_export_segment) describes
+that clamp.
 
 #### Bucket retention
 
@@ -2692,14 +2701,14 @@ default, matching the bucket width.
 
 - `rollup_stats_v1` reads it, along with `statistics_group_limit` and
   `statistics_recompute_buckets`. It returns without work until the interval elapses.
-- Passes serialize on a transaction-scoped advisory lock, so every worker may run it.
+- Passes serialize on a transaction-scoped advisory lock, so every worker can run it.
 - Setting the interval to 0 opts the whole fleet out. Windows stay fully derived, and history
   retention holds at the current watermark.
 - `Queue.rollupStatistics({ force: true })` bypasses the cadence gate for an explicit operator pass,
   including while opted out.
 
-Full reference in [`rolling-statistics.md`](../rolling-statistics.md). The design tradeoffs are
-recorded in [ADR 0019](../decisions/0019-derived-rolling-statistics.md).
+[`rolling-statistics.md`](../rolling-statistics.md) gives the full reference.
+[ADR 0019](../decisions/0019-derived-rolling-statistics.md) records the design tradeoffs.
 
 ### `cold_export_policy`, `cold_export_dataset`, and `cold_export_segment`
 
@@ -2756,8 +2765,8 @@ No exporter can complete a damaged segment or claim the next one between the dam
 repair. An exporter waiting on a dataset row cannot deadlock with the later `ALTER TABLE`.
 
 The repair fences the ledger only. It cannot cancel an object or manifest upload already in flight,
-which would write the corrected day's key with the old range. Every exporter must therefore be
-stopped and its uploads drained before the upgrade. Leave `enabled` true so retention keeps waiting
+which would write the key of the corrected day with the old range. Therefore, before the upgrade,
+stop every exporter and let its uploads drain. Leave `enabled` true so retention keeps waiting
 for the export.
 
 #### Migration 0052 repair
@@ -2779,15 +2788,15 @@ each damaged dataset, the migration runs these steps:
    - the target moved past an under-count row
    - nothing is retained
 4. A damaged `complete` row at a UTC midnight on or after the rewound watermark returns to
-   `exporting`. It gets `segment_end` 86,400 seconds later and `attempts` incremented. Its exporter,
-   lease, keys, checksum, counts, error and `completed_at` are cleared. A completion fenced by the
-   old `attempts` therefore fails. A warning reports these per dataset.
-5. Every other row off a UTC midnight, or `complete` and not 86,400 seconds long, is deleted. A
-   warning per dataset gives the counts and the range. No claim recreates a deleted day below the
-   rewound watermark.
+   `exporting`. It gets `segment_end` 86,400 seconds later and `attempts` incremented. The migration
+   clears its exporter, lease, keys, checksum, counts, error and `completed_at`. A completion fenced
+   by the old `attempts` therefore fails. A warning reports these per dataset.
+5. The migration deletes every other row off a UTC midnight, or `complete` and not 86,400 seconds
+   long. A warning per dataset gives the counts and the range. No claim recreates a deleted day
+   below the rewound watermark.
 6. The rewound watermark then steps over any `complete` row at it, as completion would.
-7. Finally, an `exporting` row at a UTC midnight is extended to 86,400 seconds with `attempts`
-   incremented and its lease cleared.
+7. Finally, the migration extends an `exporting` row at a UTC midnight to 86,400 seconds. It
+   increments `attempts` and clears the lease.
 
 History retention reads `exported_through`, so it holds the rewound days until the export copies
 them again.
@@ -2838,10 +2847,10 @@ cases:
 - another exporter holds an unexpired lease
 - the next day ends after the gate
 
-Otherwise it first re-leases an `exporting` row whose lease lapsed, incrementing `attempts`. Failing
-that, it opens the day at `exported_through`. The day ends a fixed `interval '24 hours'` later, so a
-session `TimeZone` with daylight saving cannot make a segment 23 or 25 hours long. The lease is
-1,000 through 86,400,000 ms.
+Otherwise it first re-leases an `exporting` row whose lease lapsed, and increments `attempts`. If no
+such row exists, it opens the day at `exported_through`. The day ends a fixed `interval '24 hours'`
+later, so a session `TimeZone` with daylight saving cannot make a segment 23 or 25 hours long. The
+lease is 1,000 through 86,400,000 ms.
 
 The read function returns `(occurred_at, row_id, record)` pages:
 
@@ -2874,9 +2883,9 @@ While `cold_export_policy.enabled` is true, `retain_history_v1` clamps `v_event_
 `prune_terminal_tasks_v1` clamps its fast-tier cutoff to the `fast_task_outcome` watermark the same
 way ([Fast retention and cold export](fast-tier.md#fast-retention-and-cold-export)).
 
-- A dataset row that is unexpectedly missing clamps to the statistics epoch, `2000-01-01 UTC`, so
-  nothing is deleted.
-- With export off, the clamp is skipped entirely and every other retention rule is unchanged.
+- If a dataset row is unexpectedly missing, the clamp goes to the statistics epoch,
+  `2000-01-01 UTC`. Then retention deletes nothing.
+- If export is off, retention skips the clamp entirely. Every other retention rule stays the same.
 
 #### Exporter contract
 
@@ -2918,7 +2927,7 @@ The audited `set_queue_paused_v1` writes `paused`, `updated_by`, `reason`, `requ
 | Reason     | 1 through 2,000 characters |
 | Request ID | 1 through 512 UTF-8 bytes  |
 
-The request ID is never stored raw. PostgreSQL stores a safe preview, the first 12 hexadecimal hash
+PostgreSQL never stores the raw request ID. It stores a safe preview, the first 12 hexadecimal hash
 characters, and the character length.
 
 `set_queue_tier_v1` and `set_queue_history_v1` write the `tier`, `record_attempts`, and
@@ -2935,13 +2944,14 @@ characters, and the character length.
 
 ### `worker_registry`
 
-One row per live worker process, keyed by the durable `worker_id` used for leases and attempt
-history.
+This table stores one row per live worker process. Its key is the durable `worker_id` that leases
+and attempt history use.
 
 #### Purpose
 
-Process-local memory cannot answer "which workers exist" once workers are deployed independently of
-the web tier. The relation lets an operator surface report and control a fleet it does not host.
+Process-local memory cannot answer "which workers exist" after an operator deploys workers
+independently of the web tier. The relation lets an operator surface report and control a fleet it
+does not host.
 
 The claim path never reads it, and it holds one row per worker. It therefore cannot affect dispatch
 cost. Producers never register, so it is worker evidence and not a process inventory.
@@ -2977,7 +2987,7 @@ because changing them requires a deployment.
 
 `client_protocol_version`, `sdk_language`, and `sdk_version` record what the registering process is.
 
-- All three are nullable. The SQL protocol is callable directly, and a client that reports nothing
+- All three are nullable. A caller can call the SQL protocol directly. A client that reports nothing
   is a fact to record rather than a caller to reject.
 - Each SDK stamps its own values, and no caller supplies them. TypeScript reports `typescript`,
   Python reports `python`, Go reports `go`, Rust reports `rust`, and Ruby reports `ruby`, each with
@@ -3001,7 +3011,7 @@ That statement selects registry rows that meet both conditions:
 
 #### Pause ownership
 
-Ownership is deliberately split. A worker may not write `paused`, and an operator may not write the
+Ownership is deliberately split. A worker must not write `paused`. An operator must not write the
 runtime columns.
 
 The five-argument `set_worker_paused_v1` validates its audit fields:
@@ -3023,12 +3033,12 @@ The flag is scoped to a process incarnation. Each worker lifecycle start announc
 keeps refreshing. A new instance of the same worker id clears them.
 
 Without that column, PostgreSQL could not tell a routine heartbeat from a restart. The flag would
-then be either indefinitely sticky or cleared by the worker's own next heartbeat. Durable "stop this
-work" belongs to queue pause.
+then be either indefinitely sticky or cleared by the next heartbeat of the worker itself. For a
+durable "stop this work", use queue pause.
 
 #### Pause behavior
 
-Pause is cooperative in exactly the sense cancellation is. The worker stops claiming at its next
+Pause is cooperative in exactly the same way as cancellation. The worker stops claiming at its next
 refresh, and a handler already executing runs to completion.
 
 - TypeScript and Python keep local pause separate. A local `Worker.resume()` therefore cannot clear
@@ -3040,7 +3050,8 @@ refresh, and a handler already executing runs to completion.
 #### Deregistration and pruning
 
 - Graceful shutdown calls `deregister_worker_v1`.
-- A killed worker simply stops refreshing. It is reported offline once its registration goes stale.
+- A killed worker stops refreshing. Its status shows as offline after its registration becomes
+  stale.
 - `run_maintenance_v1` calls the bounded `prune_worker_registry_v1` with a one-minute maximum age.
 - `Queue.pruneWorkerRegistry` accepts an explicit window for operator calls.
 
@@ -3074,7 +3085,7 @@ policy.
 - `revert_maintenance_policy_v1` restores selected application defaults.
 
 A timezone or local-time change clears `maintenance_state.last_completed_local_date`. The new
-boundary may therefore run on the current local date.
+boundary can therefore run on the current local date.
 
 #### State
 
@@ -3090,14 +3101,15 @@ Two more columns belong to `terminal_storage` alone:
 
 - `terminal_prune_fast_first` names the tier that goes first in the next `prune_terminal_tasks_v1`
   call. Each call flips it.
-- `terminal_cleanup_backlog_since` is set while terminal storage passes end with a full batch. It
-  holds the start of the first such pass, and a successful pass without a backlog clears it.
+- Workhorse sets `terminal_cleanup_backlog_since` while terminal storage passes end with a full
+  batch. It holds the start of the first such pass. A successful pass without a backlog clears it.
 
 `lease_recovery_started_at` belongs to `tick` alone. It records the start of the last tick that ran
 the expired-lease scan, as [Tick](lifecycle.md#maintenance-cadence) describes.
 
-Workers poll all four database-scheduled routines — the statistics rollup included — on their SDK's
-maintenance interval. PostgreSQL performs the global due check and advisory-lock coordination.
+Workers poll all four database-scheduled routines, including the statistics rollup, on the
+maintenance interval of their SDK. PostgreSQL does the global due check and advisory-lock
+coordination.
 
 #### Run history
 
@@ -3126,7 +3138,8 @@ Scheduling metadata and occurrence evaluation live in the target database.
 
 #### `schedule_definition`
 
-`schedule_definition` is the target database's desired-state record for one deployment namespace.
+`schedule_definition` is the desired-state record of the target database for one deployment
+namespace.
 It stores validated cron text, a typed Workhorse task definition, and a monotonically increasing
 revision, never arbitrary SQL.
 
@@ -3134,8 +3147,9 @@ revision, never arbitrary SQL.
 - `paused`, `paused_by`, `paused_reason`, and `paused_at` store the durable operator override and
   attribution.
 - Synchronization updates `configured_enabled` without changing those pause columns.
-- Removed definitions set `configured_enabled = false` rather than deleting the row. Occurrence
-  history and a pause then remain attributable when a deployment later re-adds the definition.
+- A removed definition gets `configured_enabled = false`. Workhorse does not delete its row.
+  Occurrence history and a pause then remain attributable when a deployment later re-adds the
+  definition.
 
 #### Catch-up position
 
@@ -3153,9 +3167,8 @@ retain their prior position.
 `sync_schedule_definitions_internal_v1`.
 
 - It validates and stores `catchup_policy`.
-- It validates each task definition: `priority` is an integer from 0 through 100 and defaults to 0,
-  `maxAttempts` is 1 through 100 and defaults to 25, and `concurrencyKey` is 1 through 256 UTF-8
-  bytes.
+- It validates each task definition. `priority` is an integer from 0 through 100 and defaults to 0.
+  `maxAttempts` is 1 through 100 and defaults to 25. `concurrencyKey` is 1 through 256 UTF-8 bytes.
 - It updates `last_evaluated_at` when an evaluation boundary changes.
 - Any definition change increments the schedule revision once.
 
@@ -3209,13 +3222,13 @@ The worker supplies its `maintenanceIntervalMs`, `maintenance_interval_ms`, or
 `MaintenanceInterval` as the evaluation window.
 
 A null `now` means `clock_timestamp()`, and every SDK passes null. Schedule evaluation therefore
-reads the same clock budgets and rate limits read.
+reads the same clock that budgets and rate limits read.
 
 `fire_schedule_v1` repeats both state checks under the definition row lock.
 
 #### Busy occurrences
 
-`fire_schedule_v1` answers a null task id for an occurrence another transaction holds and for one
+`fire_schedule_v1` returns a null task id for an occurrence another transaction holds and for one
 already fired. `fire_due_schedules_v2` therefore takes that occurrence's advisory lock itself before
 it fires.
 
@@ -3255,8 +3268,8 @@ reads or writes any definition row.
 - A tick only tries that lock. It skips a namespace whose synchronization is open and never waits on
   one.
 - A synchronization waits for a running tick to commit.
-- Two synchronizations of one namespace therefore also run one after the other, whatever order their
-  definitions are listed in.
+- Two synchronizations of one namespace therefore also run one after the other, whatever the list
+  order of their definitions.
 
 Before schema version 52, the synchronization wrote rows in its argument order without that lock. A
 tick that had moved one row's evaluation position could then wait on a second row the
