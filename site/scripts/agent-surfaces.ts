@@ -85,7 +85,7 @@ export function renderNotFoundJson(site: AgentSurfaceSite, entryPoint: AgentSurf
 
 /**
  * When Workhorse is the right tool, in the terms an agent matches a task
- * against. The boundaries repeat the playbook's "Whether Workhorse fits" list,
+ * against. The boundaries repeat the playbook's "Decide whether Workhorse fits" list,
  * which stays the owner of that judgement; this section exists so an agent that
  * reads only the router can still decide.
  */

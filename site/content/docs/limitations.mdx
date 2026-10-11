@@ -3,107 +3,124 @@ title: Limitations
 description: What Workhorse does not do today — with the workaround for each boundary that has one.
 ---
 
-Choosing infrastructure means knowing what it will not do before it is load-bearing. Workhorse fits
-PostgreSQL-backed applications that accept at-least-once handlers and a schema that upgrades on a
-deployment step rather than on its own.
-This page lists every boundary honestly, with the workaround where one exists.
+Before infrastructure becomes important to your application, you must know what it does not do.
+This page lists each limit of Workhorse. If a limit has a workaround, the page gives it.
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
-release may change behaviour, so read the changelog before you upgrade. It will not ask you to
-recreate your database: migrations are ordered, and inside a major line a migration only adds, so a
-running deployment upgrades in place.
+Workhorse fits an application that uses PostgreSQL. The handlers of the application must accept
+that a task can run more than one time. The schema upgrades in a deployment step, not by itself.
 
-## Workflow orchestration lives in handlers
+Workhorse is a public beta. A public beta is a usable 0.x release for evaluation and early
+production use. A minor release can change behaviour, so read the changelog before you upgrade. You
+do not have to make your database again. Migrations are ordered, and inside a major line a migration
+only adds. Thus, a running deployment upgrades in place.
 
-Workhorse supports task prerequisites, fan-in policies, child tasks, external signals, and human
-decisions. It does not provide a separate workflow definition language or graph deployment model.
+## Write workflows in handler code
 
-Workaround: compose those durable boundaries in ordinary handler code. If a workflow must be
-defined and deployed independently of application code, use a workflow system on top or instead.
+Workhorse supports task dependencies, fan-in policies, child tasks, external signals, and human
+decisions. It does not have a separate language to define workflows, or a model to deploy a graph.
 
-## Cancellation is cooperative, never forced
+Workaround: write these durable steps in ordinary handler code. If you must define and deploy a
+workflow separately from the application code, use a separate workflow tool. You can use it together
+with Workhorse or in its place.
 
-JavaScript cannot be preempted safely, so Workhorse never kills a running handler. Cancellation,
-deadlines, and execution timeouts abort the handler's `AbortSignal`; the code runs until it
-observes that signal or loses its lease. Process shutdown likewise drains handlers rather than
-preempting them.
+## Make handlers stop when a cancellation arrives
 
-Workaround: pass `context.signal` into every cancelable operation and check it between units of
-work. If work truly requires forced termination, isolate it in a process you can kill and make its
+A worker never stops a running handler by force, because that is not safe. A cancellation, a
+deadline, or an execution timeout sends a request to the handler. The handler continues until it
+reads the request or until the worker loses the task. When a process shuts down, it also lets the
+handlers complete. It does not stop them by force.
+
+Each SDK gives the request to the handler in its own way:
+
+- TypeScript aborts `context.signal`.
+- Python cancels `context.cancellation`.
+- Go cancels the standard context of the handler.
+- Rust reports the request through `context.cancellation()`.
+- Ruby reports the request through `context.cancellation`.
+
+Workaround: give the cancellation signal to each operation that can stop. Check the signal between
+the units of work. If work must stop by force, run it in a process that you can stop. Make its
 effects recoverable.
 
-## External effects are at least once
+## Make external effects safe to repeat
 
-PostgreSQL cannot commit an HTTP call, email, or payment in the same transaction as task completion.
-A worker can perform the effect and die before recording success, so the effect can happen again.
-Enqueue idempotency keys deduplicate task identities; they cannot make one accepted handler execute
-exactly once. Redrive is another at-least-once execution.
+PostgreSQL cannot commit an HTTP call, an email, or a payment in the same transaction as the
+completion of a task. A worker can do the effect and stop before it records the success. Then the
+effect can occur again.
 
-Workaround: this is the designed model, not an accident. Wrap each effect in a named `checkpoint`
-so completed stages never rerun, and give the provider an idempotency key — the task ID or a domain
-ID — to close the final gap between effect and checkpoint commit.
+An idempotency key of the enqueue removes duplicate tasks. It cannot make one accepted handler run
+exactly one time. A redrive also runs the handler at least one time.
 
-## Schema and terminal tooling ship in TypeScript
+Workaround: this is the designed model. Put each effect in a named `checkpoint`, so that a completed
+step does not run again. Also give the provider an idempotency key, for example the task ID or a
+domain ID. The key covers the short time between the effect and the save of the checkpoint.
 
-Python, Go, Rust, and Ruby ship transactional queue clients, complete worker runtimes, and `Admin`
-operator clients over the shared SQL protocol. Schema installation and migration, and the
-`workhorse` admin CLI and TUI, ship only in the TypeScript package, so a polyglot deployment keeps
-that package available for those operations.
+## Run the schema tools from the TypeScript package
 
-This one is a decision rather than a missing feature. No component can migrate on its own start,
-because no component is a singleton: the dashboard and every worker deploy on many nodes, so a
-component that migrated itself would be many concurrent migrators instead of one deliberate step.
-And the migration runner is the most safety-critical code in the project, so it exists once.
+Python, Go, Rust, and Ruby have transactional queue clients, complete worker runtimes, and `Admin`
+operator clients. All of them use the shared SQL protocol. Schema installation and migration, the
+`workhorse` admin CLI, and the TUI are only in the TypeScript package. Thus, a deployment with many
+languages keeps that package available for these operations.
 
-The boundary holds at 1.0.0. Schema installation, migration, the `workhorse` CLI, and the TUI stay
-TypeScript-only in the stable line, so a polyglot deployment keeps that package for those
-operations at 1.0 exactly as it does today. The promise 1.0.0 makes is that every language reaches
-the same operator capability through its own `Admin` client and refuses to start against a schema
-it cannot speak — not that every language grows a second migration runner.
+This is a decision, not a missing feature. No component can migrate the schema when it starts,
+because no component runs as a single instance. The dashboard and each worker deploy on many nodes.
+If each component migrated itself, many migrations would run at the same time. Also, the migration
+runner is the code that has the most effect on safety, so it exists only one time.
 
-Workaround: run the CLI as a deployment step, pinned to the version of the SDK your application
-depends on, and verify with `workhorse schema status --json` before the first new process starts.
-See [Installation](/docs/installation) for both command forms. For a development database with no
-Node.js toolchain, every release attaches `schema.sql` for `psql -f`.
+This limit stays at 1.0.0. In the stable line, schema installation, migration, the `workhorse` CLI,
+and the TUI stay in the TypeScript package only. The 1.0.0 release makes two promises:
 
-## No public HTTP ingress
+- Each language gets the same operator capability through its own `Admin` client.
+- Each language refuses to start with a schema that it cannot use.
 
-Nothing accepts tasks over HTTP. Producers need a database connection and the SDK.
+The 1.0.0 release does not promise a second migration runner in each language.
 
-Workaround: enqueue from your own API routes — which is also where transactional enqueue with your
-business writes lives.
+Workaround: run the CLI as a deployment step. Pin it to the SDK version of your application. Before
+the first new process starts, check the schema with `workhorse schema status --json`.
+[Installation](/docs/installation) gives the two forms of the command. For a development database
+without Node.js, each release attaches `schema.sql`, which you can apply with `psql -f`.
 
-## Retired pre-release schemas have no upgrade source
+## Enqueue from your own API routes
 
-`migrateSchema` applies ordered, forward-only migrations from the supported baseline. Schemas at
-versions retired before that baseline have no migration history, so operators must reset those
-development schemas instead of upgrading them.
+Workhorse does not accept tasks over HTTP. A producer needs a database connection and the SDK.
 
-Workaround: keep schema changes in the deployment path and run `workhorse schema migrate` — the
-command every language uses — before starting a new runtime. TypeScript applications that prefer to
-drive it in code can call `migrateSchema` instead. The changelog records each release's required
-schema version.
+Workaround: enqueue from your own API routes. There, you can also enqueue in the same transaction
+as your business data.
 
-## Dashboard authentication has one built-in role
+## Reset a retired development schema
 
-The standalone dashboard provides one administrator login with expiring sessions, logout,
-credential rotation, and login throttling. It does not provide multiple users, roles, SSO, or
-tenant isolation.
+`migrateSchema` applies ordered, forward-only migrations from the supported baseline. A schema at a
+version that retired before that baseline has no migration history. Thus, an operator must reset
+such a development schema. It cannot upgrade.
 
-Workaround: mount the dashboard behind your application's existing authentication boundary and
-return its verified operator from `authorize`.
+Workaround: keep schema changes in the deployment path. Before you start a new runtime, run
+`workhorse schema migrate`. Each language uses this command. A TypeScript application can call
+`migrateSchema` in code. The changelog records the schema version that each release needs.
 
-## Tenant isolation is a database boundary
+## Put the dashboard behind your own authentication
 
-Workhorse enforces a tenant boundary only between databases. Inside one database, a task carries
-its tenant as a concurrency key, a budget name, and a tag, which give fair share, a per-tenant cap,
-and filterable reads. Nothing checks that those three agree, retention windows apply to every
-tenant alike, and an administrator sees and acts on every tenant's tasks. Workhorse does not yet
-scope operator access to a tenant, and has no roles to scope it with.
+The standalone dashboard has one administrator login. It has sessions that expire, logout,
+credential rotation, and a limit on login attempts. It does not have more than one user, roles,
+single sign-on (SSO), or tenant isolation.
 
-Workaround: give a tenant that needs data separation or its own retention windows its own
-database, and follow the [multi-tenancy](/docs/multi-tenancy) page for the shared-database
-convention.
+Workaround: put the dashboard behind the existing authentication of your application. Return the
+verified operator from `authorize`.
+
+## Give each isolated tenant its own database
+
+Workhorse keeps tenants apart only when they use different databases. In one database, a task
+identifies its tenant with three values: a concurrency key, a budget name, and a tag. These give a
+fair share, a limit for each tenant, and reads that you can filter.
+
+Inside one database, these limits apply:
+
+- Nothing checks that the three values agree.
+- The retention windows are the same for each tenant.
+- An administrator sees all tasks of all tenants and can act on them.
+- Workhorse cannot limit operator access to one tenant, and it has no roles for this.
+
+Workaround: if a tenant needs separate data or its own retention windows, give it its own database.
+For the shared database, follow the [multi-tenancy](/docs/multi-tenancy) page.
 
 ## Next
 

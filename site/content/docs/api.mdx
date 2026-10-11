@@ -3,185 +3,243 @@ title: API overview
 description: The public surface grouped by concern — Queue, Admin, Worker, HandlerContext, errors, schema tools, and the CLI.
 ---
 
-Workhorse's public surface is small: `Queue` produces and controls application work, `Admin`
-provides operator reads and controls, and `Worker` runs tasks. A handful of schema and process helpers surround them. This page
-maps that surface by concern so you can find the right method fast. It is an overview, not an
-exhaustive reference — the published TypeScript declarations carry the exact signatures, and
-[`typescript/core/src/index.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/core/src/index.ts) is the
-authoritative export list.
+This page is a map of the public surface of Workhorse. Use it to find the correct method quickly.
+The surface is small:
 
-## Queue
+- `Queue` makes and controls application work.
+- `Admin` gives operator reads and controls.
+- `Worker` runs tasks.
+- Some schema and process helpers support these three.
 
-`new Queue(database, defaultQueue?, options?)` takes any `Queryable` — a `pg` pool, a client, or an ORM adapter.
+This page is an overview, not a full reference. The published TypeScript declarations have the
+exact signatures.
+[`typescript/core/src/index.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/core/src/index.ts)
+is the authoritative export list.
 
-**Producing work.** `enqueue(type, payload, options?, transaction?)` accepts one task and returns
-its ID; pass an open transaction as the last argument to commit the task with your data.
-`enqueueMany(requests, transaction?)` accepts a bounded batch. `enqueueWithResult` and
-`enqueueManyWithResults` return each retained task ID with an `EnqueueOutcome` describing whether
-PostgreSQL accepted, replayed, replaced, could not replace, or coalesced the request.
-`EnqueueOptions` carries
-`queue`, `runAt`, `priority`, `deadline`, `executionTimeoutMs`, `maxAttempts`, `retryPolicy`,
-`concurrencyKey`, `tags`, `idempotency`, `debounce`, `throttle`, and dependency inputs.
+## Make and control work with Queue
 
-**Stopping work.** `cancel(taskId, { requestedBy, reason })` records an attributed cooperative
-cancellation. Queued work cancels immediately; active handlers observe it through their
+Your application uses `Queue` to enqueue tasks, cancel them, and sync policies during deployment.
+
+`new Queue(database, defaultQueue?, options?)` accepts any `Queryable`: a `pg` pool, a client, or
+an ORM adapter.
+
+**Make work.** `enqueue(type, payload, options?, transaction?)` accepts one task and returns its
+ID. To commit the task with your data, give an open transaction as the last argument.
+
+- `enqueueMany(requests, transaction?)` accepts a batch with a size limit.
+- `enqueueWithResult` and `enqueueManyWithResults` return each retained task ID with an
+  `EnqueueOutcome`. The outcome tells if PostgreSQL accepted, replayed, replaced, or coalesced the
+  request. A `non_replaceable` outcome tells that PostgreSQL could not replace a task.
+- `EnqueueOptions` has `queue`, `runAt`, `priority`, `deadline`, `executionTimeoutMs`,
+  `maxAttempts`, `retryPolicy`, `concurrencyKey`, `budget`, `tags`, `idempotency`, `debounce`,
+  `throttle`, and dependency inputs.
+
+**Stop work.** `cancel(taskId, { requestedBy, reason })` records a cooperative cancellation with
+its author. A queued task stops immediately. An active handler sees the cancellation through its
 `AbortSignal`.
 
-**Recurring work.** `syncSchedules(namespace, definitions, options?)` reconciles a namespace of
-cron definitions during deployment. `fireSchedule` exposes the revision-fenced firing operation.
+**Recurring work.** `syncSchedules(namespace, definitions, options?)` makes the cron definitions of
+one namespace agree with your code during deployment. `fireSchedule` gives the firing operation,
+which uses a revision fence.
 
-**Deployment-synchronized policies.** `syncConcurrencyPolicies`, `syncRateLimitPolicies`,
-`syncRetentionPolicy`, and `syncMaintenancePolicy` write desired state; each has a matching read —
-`listConcurrencyPolicies`, `listRateLimitPolicies` and `rateLimitStatuses`, `getRetentionPolicy`, and
-`getMaintenancePolicy`. Retention adds `overrideRetentionPolicy`, `revertRetentionPolicy`, and
-`previewRetentionPolicy` for operator changes with provenance.
+**Policies that a deployment syncs.** These methods write the desired state, and each one has a
+matching read:
 
-Go exposes concurrency and rate-limit desired state through `Queue.SyncConcurrencyPolicies` and
+| Write                     | Read                                            |
+| ------------------------- | ----------------------------------------------- |
+| `syncConcurrencyPolicies` | `listConcurrencyPolicies`                       |
+| `syncRateLimitPolicies`   | `listRateLimitPolicies` and `rateLimitStatuses` |
+| `syncBudgets`             | `listBudgets` and `budgetStatuses`              |
+| `syncRetentionPolicy`     | `getRetentionPolicy`                            |
+| `syncMaintenancePolicy`   | `getMaintenancePolicy`                          |
+
+An operator can change retention with `overrideRetentionPolicy` and `revertRetentionPolicy`, and
+check a change first with `previewRetentionPolicy`. Each change records its origin. Maintenance has
+the matching `overrideMaintenancePolicy` and `revertMaintenancePolicy`.
+
+Go gives the concurrency and rate-limit desired state through `Queue.SyncConcurrencyPolicies` and
 `Queue.SyncRateLimitPolicies`. `Queue.ListConcurrencyPolicies` and `Queue.ListRateLimitPolicies`
-return the persisted typed policies through the same caller-owned executor.
+return the stored typed policies. They use the same executor, which the caller owns.
 
-Python exposes the same boundary through synchronous and asynchronous
+Python gives the same methods in synchronous and asynchronous forms:
 `sync_concurrency_policies`, `sync_rate_limit_policies`, `list_concurrency_policies`, and
-`list_rate_limit_policies` methods. They use the caller-owned Psycopg or asyncpg transaction.
+`list_rate_limit_policies`. They use the Psycopg or asyncpg connection that the caller owns.
 
-**External waits and child work.** `sendSignal` and `completeHumanWait` deliver an attributed, idempotent result after the caller
-enforces authorization. Workers use the
-lower-level `scheduleWait`, `waitForSignal`, `waitForHuman`, `createChild`, and `createChildren`
-methods under a claimed task's fence; application code normally reaches those through
+**External waits and child work.** `sendSignal` and `completeHumanWait` deliver a result with its
+author, and a repeated delivery has no effect. The caller must check authorization first. Workers
+use the lower-level methods `scheduleWait`, `waitForSignal`, `waitForHuman`, `createChild`, and
+`createChildren` under the fence of a claimed task. Application code usually calls them through
 `HandlerContext`.
 
-**Health.** `health()` returns a database-evaluated `QueueHealth` verdict with reasons.
-`queueMetricSnapshot()` feeds metrics exporters.
+**Health.** `health()` returns a `QueueHealth` verdict with reasons, which the database calculates.
+`queueMetricSnapshot()` gives data to metrics exporters.
 
-**Maintenance.** Workers normally drive maintenance for you. The underlying operations —
-`promote`, `recoverExpired`, `tick`, `rollupStatistics`, `prepareHistoryPartitions`,
-`retainHistory`, and `pruneTerminalStorage` — are public for controlled setups and tests.
+**Maintenance.** Usually, workers do the maintenance for you. These operations are public for
+controlled setups and tests: `promote`, `recoverExpired`, `tick`, `rollupStatistics`,
+`prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage`.
 
-## Admin
+## Read and control operations with Admin
+
+An operator uses `Admin` to inspect tasks and to control queues, workers, and failed tasks.
 
 `new Admin(database, defaultQueue?, options?)` accepts the same `Queryable` and configuration as
-`Queue`, but exposes the operator boundary.
+`Queue`. It gives the operator surface.
 
-Go exposes the matching boundary through `workhorse.NewAdmin(executor)`. It uses the same pgx or
-`database/sql` executor as `NewQueue`, while the caller retains connection and transaction ownership.
+Go gives the matching surface through `workhorse.NewAdmin(executor)`. It uses the same pgx or
+`database/sql` executor as `NewQueue`. The caller keeps the ownership of the connection and the
+transaction.
 
-**Reading evidence.** `getTask`, `listTasks`, and `getTaskTimeline` inspect tasks.
-`listCheckpoints`, `listWaits`, `listSignalWaits`, `listHumanWaits`, and `getProgress` inspect
-durable boundaries. Dependency, child, and redrive lineage reads expose retained graph edges.
+**Read evidence.**
 
-**Failure and fleet controls.** `listDeadLetters`, `redrive`, and `redriveMany` inspect and replay
-terminal failures. `listWorkers` and `setWorkerPaused` inspect and steer worker processes.
-`pauseQueue`, `resumeQueue`, and `purgeQueue` control a whole queue. Every mutation takes
-`{ actor, reason, requestId }`; purge returns its deleted count and safely replays the same request.
-`schedules` reads recurring definitions, and `runTaskNow` releases one scheduled task early.
+- `getTask`, `listTasks`, and `getTaskTimeline` show tasks.
+- `listCheckpoints`, `listWaits`, `listSignalWaits`, `listHumanWaits`, and `getProgress` show the
+  durable steps of a task.
+- The dependency, child, and redrive lineage reads show the retained links between tasks.
 
-## Worker
+**Control failures and the fleet.**
 
-`new Worker(queue, options?)` claims and runs tasks with bounded concurrency.
+- `listDeadLetters`, `redrive`, and `redriveMany` show and run again the tasks that failed
+  permanently.
+- `listWorkers` and `setWorkerPaused` show and control worker processes.
+- `pauseQueue`, `resumeQueue`, and `purgeQueue` control a full queue.
+- `schedules` reads recurring definitions, and `runTaskNow` starts one scheduled task early.
 
-- `handle(type, handler)` registers a typed handler and returns the worker for chaining.
-- `handleBatch(type, options, handler)` groups tasks of one type while preserving a separate outcome
-  and fence for every member.
-- `run(signal?)` is the production loop; `runOnce()` performs one claim-and-run pass.
-- `stop()` drains: no new claims, active handlers finish. `pause()` and `resume()` toggle claiming
-  locally; `runtimeState()` and `maintenanceTelemetry()` expose what the worker is doing.
+Each of these mutations takes `{ actor, reason, requestId }`. A purge returns its deleted count. If
+you send the same purge request again, it has no new effect. `setQueueHistory` is a mutation that
+takes no such argument.
 
-`WorkerOptions` covers identity and capacity (`queue`, `workerId`, `concurrency`), ownership timing
-(`leaseMs`, `heartbeatMs`, `pollMs`), maintenance polling (`maintenanceIntervalMs`,
-`maintenanceRoutinePollMs`, `registryIntervalMs`), schedule evaluation (`scheduleNamespaces`,
-`scheduleCatchupLimit`), retry shaping (`retryDelayMs`), and error callbacks
-(`onRegistrationError`, `onNotificationError`, `onMaintenance`).
+## Run tasks with Worker
 
-## HandlerContext
+A worker process uses `Worker` to claim tasks and run their handlers.
 
-Every handler receives `(payload, context)`. The context is the durable-execution surface:
+`new Worker(queue, options?)` claims and runs tasks, with a limit on concurrency.
 
-- `task` — the `ClaimedTask` with ID, attempt, and metadata.
-- `signal` — an `AbortSignal` aborted on cancellation, deadline, or execution timeout.
-- `checkpoint(name, operation)` — run once, persist the JSON result, replay it on restart.
-- `sleep(name, durationMs)` and `sleepUntil(name, wakeAt)` — durable timers that release the
-  worker slot without consuming the attempt.
-- `waitForSignal(name, options?)` and `waitForHuman(name, context, options?)` — external boundaries
-  that restart the handler after an application or operator supplies a result.
-- `runChild(name, type, payload, options?)` and `runChildren(children)` — delegate durable work,
-  release the parent slot, and join tagged terminal outcomes.
-- `runChildrenAll(children)` — require every child to succeed and propagate a rejected outcome.
-- `setProgress(value)` and `getProgress()` — mutable operator-visible status.
-- `getCheckpoint(name)` and `getWait(name)` — read one durable boundary without executing code.
+- `handle(type, handler)` registers a typed handler and returns the worker, so you can chain calls.
+- `handleBatch(type, options, handler)` groups tasks of one type. Each task keeps its own outcome
+  and fence.
+- `run(signal?)` is the production loop. `runOnce()` does one pass of claim and run.
+- `stop()` drains the worker: it claims no new tasks, and the active handlers complete.
+- `pause()` and `resume()` stop and start claims in this worker only.
+- `runtimeState()` and `maintenanceTelemetry()` show what the worker does.
 
-## Errors
+`WorkerOptions` has these groups:
 
-All Workhorse errors extend `WorkhorseError`. The ones you are most likely to catch:
+| Group              | Options                                                                   |
+| ------------------ | ------------------------------------------------------------------------- |
+| Identity, capacity | `queue` or `queues`, `workerId`, `concurrency`                            |
+| Ownership timing   | `leaseMs`, `heartbeatMs`, `pollMs`                                        |
+| Maintenance        | `maintenanceIntervalMs`, `maintenanceRoutinePollMs`, `registryIntervalMs` |
+| Schedules          | `scheduleNamespaces`, `scheduleCatchupLimit`                              |
+| Retries            | `retryDelayMs`                                                            |
+| Error callbacks    | `onRegistrationError`, `onNotificationError`, `onMaintenance`             |
 
-- `EnqueueIdempotencyConflictError` and `RedriveIdempotencyConflictError` — a replay differed
-  materially from the original request.
-- `CheckpointConflictError` and `WaitConflictError` — a durable name was reused with different
-  content; `WaitLimitExceededError` bounds waits per task.
-- `ChildConflictError`, `ChildLimitExceededError`, and `ChildResultLimitExceededError` — child work
-  changed during replay or exceeded a bounded set or result.
-- `DependencyCycleError` and `DependencyLimitExceededError` — a dependency would create a cycle or
-  unbounded graph work.
-- `CheckpointLeaseLostError`, `ProgressLeaseLostError`, and `WaitLeaseLostError` — a stale worker
-  tried to write after losing ownership.
-- `CancellationRequestedError`, `DeadlineExceededError`, and `ExecutionTimeoutError` — the reasons
-  behind an aborted `context.signal`.
-- `TaskContractValidationError`, `TaskContractUnavailableError`, and `TaskValueSizeLimitError` —
-  payload contract and size enforcement.
+## Use the handler context
 
-Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES`, and
-`MAX_REDRIVE_BATCH_SIZE` expose every operational limit to tooling.
+Each handler gets `(payload, context)`. The context gives the durable execution features:
 
-## Schema and support
+- `task` is the `ClaimedTask`, with the ID, the attempt, and the metadata.
+- `signal` is an `AbortSignal`. It aborts on a cancellation, a deadline, or an execution timeout.
+- `checkpoint(name, operation)` runs the operation and stores its JSON result. After the save, a
+  later run returns the stored result. If the process stops before the save, the operation runs
+  again. Thus, give an external effect an idempotency key.
+- `sleep(name, durationMs)` and `sleepUntil(name, wakeAt)` are durable timers. They free the worker
+  slot and do not use an attempt.
+- `waitForSignal(name, options?)` and `waitForHuman(name, context, options?)` wait for an external
+  result. The handler starts again after an application or an operator gives the result.
+- `runChild(name, type, payload, options?)` and `runChildren(children)` give durable work to child
+  tasks. They free the slot of the parent and return the final outcome of each child.
+- `runChildrenAll(children)` requires each child to succeed. If a child fails, the parent gets the
+  failure.
+- `setProgress(value)` and `getProgress()` write and read a status that operators can see.
+- `getCheckpoint(name)` and `getWait(name)` read one durable step without running code.
 
-- `installSchema(database)` installs the full schema; run it as a deployment step.
-- `assertSchemaCompatible(database)` fails startup on a runtime/schema mismatch, throwing
-  `SchemaCompatibilityError` with the `code` Python, Go, Rust, and Ruby also report;
-  `readSchemaVersion` and `WORKHORSE_SCHEMA_VERSION` expose both sides of that check.
-- `protocol/v1/` publishes language-neutral fixtures for canonical enqueue requests, worker
-  transitions, result shapes, and SQLSTATE-backed structured errors.
+## Catch errors
+
+All Workhorse errors extend `WorkhorseError`. These are the errors that you most likely catch:
+
+- `EnqueueIdempotencyConflictError` and `RedriveIdempotencyConflictError`: a repeated request is
+  different from the first request.
+- `CheckpointConflictError` and `WaitConflictError`: a durable name has different content than
+  before. `WaitLimitExceededError` limits the number of waits for each task.
+- `ChildConflictError`, `ChildLimitExceededError`, and `ChildResultLimitExceededError`: child work
+  changed when the handler ran again, or a set or a result is too large.
+- `DependencyCycleError` and `DependencyLimitExceededError`: a dependency makes a cycle or too much
+  graph work.
+- `CheckpointLeaseLostError`, `ProgressLeaseLostError`, and `WaitLeaseLostError`: a worker that
+  lost the task tried to write.
+- `CancellationRequestedError`, `DeadlineExceededError`, and `ExecutionTimeoutError`: the reason
+  why `context.signal` aborted.
+- `TaskContractValidationError`, `TaskContractUnavailableError`, and `TaskValueSizeLimitError`:
+  the payload contract or a size limit refused a value.
+
+Exported constants give each operational limit to tools, for example `MAX_ENQUEUE_BATCH_SIZE`,
+`MAX_CHECKPOINT_VALUE_BYTES`, and `MAX_REDRIVE_BATCH_SIZE`.
+
+## Install and check the schema
+
+A deployment uses these helpers to install the schema. A process uses them at startup to check that
+it can use the schema and the server.
+
+- `installSchema(database)` installs the full schema. Run it as a deployment step.
+- `assertSchemaCompatible(database)` stops the startup if the runtime and the schema do not agree.
+  It throws `SchemaCompatibilityError` with a `code`. Python, Go, and Rust report the same codes.
+  Ruby reports them as symbols with underscores.
+- `readSchemaVersion` and `WORKHORSE_SCHEMA_VERSION` give the two sides of that check.
+- `protocol/v1/` publishes fixtures for all languages. They cover canonical enqueue requests,
+  worker transitions, result shapes, and structured errors with SQLSTATE codes.
 - `assertSupportedPostgres`, `readPostgresSupport`, and `describePostgresSupport` classify the
-  connected server; `MINIMUM_NODE_MAJOR`, `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_NODE_MAJORS`, and
-  `SUPPORTED_POSTGRES_MAJORS` publish the tested boundary.
+  connected server.
+- `MINIMUM_NODE_MAJOR`, `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_NODE_MAJORS`, and
+  `SUPPORTED_POSTGRES_MAJORS` publish the tested limits.
 
-## Worker processes and adapters
+## Run worker processes and adapters
 
-- `defineWorkerProcess(definition)` describes an owned runtime — adapter, workers, probes.
-- `startWorkerProcess` starts it under your control; `runWorkerProcess` adds the standalone
-  Node.js lifecycle with signal handling and bounded drain.
-- `createWorkhorseAdapter` builds a `WorkhorseAdapter` from any `Queryable`; the
+A worker process needs a lifecycle: start, signal handling, and drain. These helpers give that
+lifecycle, and the adapters connect Workhorse to an ORM.
+
+- `defineWorkerProcess(definition)` describes a runtime that you own: the adapter, the workers, and
+  the probes.
+- `startWorkerProcess` starts that runtime under your control.
+- `runWorkerProcess` also adds the standalone Node.js lifecycle, with signal handling and a drain
+  with a time limit.
+- `createWorkhorseAdapter` makes a `WorkhorseAdapter` from any `Queryable`. The
   [Drizzle](/docs/drizzle), [Prisma](/docs/prisma), [TypeORM](/docs/typeorm), and
-  [Kysely](/docs/kysely) packages wrap it for their ORMs.
+  [Kysely](/docs/kysely) packages use it for their ORMs.
 
-## CLI
+## Use the CLI
 
-The `workhorse` CLI covers setup and operations without writing code. In a project that depends on
-the package, every subcommand runs through the same invocation, shown here with `schema install`:
+The `workhorse` CLI does setup and operations without code. In a project that depends on the
+package, each subcommand uses the same command form. This example uses `schema install`:
 
 ```bash title="Terminal"
 npm exec --no -- workhorse schema install
 ```
 
-From a deployment step outside such a project — a Python, Go, Rust, or Ruby pipeline — name the
-package and the version instead:
+A deployment step outside such a project, for example a Python, Go, Rust, or Ruby pipeline, names
+the package and the version:
 
 ```bash title="Terminal"
 npx --package @stablemates/workhorse@0.7.1 workhorse schema install
 ```
 
-Substitute any of these subcommands:
+You can use each of these subcommands:
 
-- `init` scaffolds config and wiring.
+- `init` makes the configuration and the wiring.
 - `schema install` installs the schema into a clean database.
 - `schema migrate` applies ordered migrations to an installed schema.
-- `schema contract --yes` applies the pending contract step, retiring the protocols it names.
-- `schema status --json` reports where the installed schema sits and whether this build accepts it.
+- `schema contract --yes` applies the pending contract step and retires the protocols that it
+  names.
+- `schema status --json` reports the version of the installed schema, and if this build accepts it.
 - `worker --config workhorse.config.js` runs a supervised worker process.
 - `dashboard --port 3000` serves the operator dashboard.
-- `health --json` emits machine-readable queue health.
+- `admin` reads tasks, queues, schedules, failures, workers, and durable steps. It also runs guarded
+  cancel, redrive, pause, resume, purge, and worker-pause operations.
+- `tui` opens the terminal operator interface.
+- `health --json` gives queue health in a format that a machine can read.
 
-The package exposes only the `workhorse` binary, named through `--package` for the reason
-[Installation](/docs/installation) gives. Each command rejects unknown options and accepts both
-`--flag value` and `--flag=value`. Run `workhorse <command> --help` for its options.
+The package has only the `workhorse` binary. Name it through `--package`, for the reason that
+[Installation](/docs/installation) gives. Each command refuses unknown options. It accepts both
+`--flag value` and `--flag=value`. Run `workhorse <command> --help` to see its options.
 
 ## Next
 
