@@ -5,6 +5,16 @@
       "arguments": ["uuid", "text", "bigint"],
       "returns": "boolean"
     },
+    "add_task_group_members_v1": {
+      "arguments": ["uuid", "jsonb", "uuid?", "text?", "bigint?"],
+      "returns": "table",
+      "returnsColumns": {
+        "ordinal": "integer",
+        "outcome": "text",
+        "reason": "text",
+        "task_id": "uuid"
+      }
+    },
     "budget_status_v1": {
       "arguments": ["text[]"],
       "returns": "table",
@@ -23,6 +33,27 @@
         "sample_capped": "boolean",
         "saturated": "boolean",
         "updated_at": "timestamptz"
+      }
+    },
+    "cancel_task_group_v1": {
+      "arguments": ["uuid", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "callbacks": "jsonb",
+        "cancel_reason": "text",
+        "canceled": "integer",
+        "canceled_at": "timestamptz",
+        "canceled_by": "text",
+        "created_at": "timestamptz",
+        "failed": "integer",
+        "finished_at": "timestamptz",
+        "group_id": "uuid",
+        "pending": "integer",
+        "result": "text",
+        "sealed_at": "timestamptz",
+        "state": "text",
+        "succeeded": "integer",
+        "total": "integer"
       }
     },
     "cancel_v1": {
@@ -170,6 +201,17 @@
         "status": "text"
       }
     },
+    "create_task_group_v1": {
+      "arguments": ["jsonb?", "jsonb?", "boolean?"],
+      "returns": "table",
+      "returnsColumns": {
+        "group_id": "uuid",
+        "ordinal": "integer",
+        "outcome": "text",
+        "reason": "text",
+        "task_id": "uuid"
+      }
+    },
     "dashboard_activity_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"
@@ -309,6 +351,27 @@
       "arguments": [],
       "returns": "workhorse.retention_policy"
     },
+    "get_task_group_v1": {
+      "arguments": ["uuid"],
+      "returns": "table",
+      "returnsColumns": {
+        "callbacks": "jsonb",
+        "cancel_reason": "text",
+        "canceled": "integer",
+        "canceled_at": "timestamptz",
+        "canceled_by": "text",
+        "created_at": "timestamptz",
+        "failed": "integer",
+        "finished_at": "timestamptz",
+        "group_id": "uuid",
+        "pending": "integer",
+        "result": "text",
+        "sealed_at": "timestamptz",
+        "state": "text",
+        "succeeded": "integer",
+        "total": "integer"
+      }
+    },
     "heartbeat_many_v1": {
       "arguments": ["text", "jsonb"],
       "returns": "table",
@@ -356,6 +419,48 @@
         "queue_name": "text",
         "rejected_edges": "boolean",
         "task_id": "uuid"
+      }
+    },
+    "list_task_group_drift_v1": {
+      "arguments": ["integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "action": "text",
+        "canceled": "integer",
+        "failed": "integer",
+        "group_id": "uuid",
+        "pending": "integer",
+        "recorded_canceled": "integer",
+        "recorded_failed": "integer",
+        "recorded_succeeded": "integer",
+        "recorded_total": "integer",
+        "state": "text",
+        "succeeded": "integer",
+        "total": "integer"
+      }
+    },
+    "list_task_group_events_v1": {
+      "arguments": ["uuid", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "details": "jsonb",
+        "event_id": "uuid",
+        "event_type": "text",
+        "occurred_at": "timestamptz"
+      }
+    },
+    "list_task_group_members_v1": {
+      "arguments": ["uuid", "integer", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "added_at": "timestamptz",
+        "counted_at": "timestamptz",
+        "member_position": "integer",
+        "outcome": "text",
+        "queue_name": "text",
+        "state": "text",
+        "task_id": "uuid",
+        "task_type": "text"
       }
     },
     "list_task_timeline_v1": {
@@ -573,6 +678,16 @@
         "task_id": "uuid"
       }
     },
+    "repair_task_group_drift_v1": {
+      "arguments": ["integer", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "action": "text",
+        "group_id": "uuid",
+        "pending": "integer",
+        "recorded_pending": "integer"
+      }
+    },
     "retain_history_v1": {
       "arguments": ["boolean?", "timestamptz?"],
       "returns": "table",
@@ -649,6 +764,27 @@
         "wait_name": "text",
         "wake_at": "timestamptz",
         "worker_id": "text"
+      }
+    },
+    "seal_task_group_v1": {
+      "arguments": ["uuid"],
+      "returns": "table",
+      "returnsColumns": {
+        "callbacks": "jsonb",
+        "cancel_reason": "text",
+        "canceled": "integer",
+        "canceled_at": "timestamptz",
+        "canceled_by": "text",
+        "created_at": "timestamptz",
+        "failed": "integer",
+        "finished_at": "timestamptz",
+        "group_id": "uuid",
+        "pending": "integer",
+        "result": "text",
+        "sealed_at": "timestamptz",
+        "state": "text",
+        "succeeded": "integer",
+        "total": "integer"
       }
     },
     "send_signal_v1": {
@@ -808,6 +944,29 @@
     "sync_schedule_definitions_v2": {
       "arguments": ["text", "jsonb", "boolean?"],
       "returns": "void"
+    },
+    "task_group_for_task_v1": {
+      "arguments": ["uuid"],
+      "returns": "table",
+      "returnsColumns": {
+        "callback_kind": "text",
+        "callbacks": "jsonb",
+        "cancel_reason": "text",
+        "canceled": "integer",
+        "canceled_at": "timestamptz",
+        "canceled_by": "text",
+        "created_at": "timestamptz",
+        "failed": "integer",
+        "finished_at": "timestamptz",
+        "group_id": "uuid",
+        "pending": "integer",
+        "result": "text",
+        "role": "text",
+        "sealed_at": "timestamptz",
+        "state": "text",
+        "succeeded": "integer",
+        "total": "integer"
+      }
     },
     "tick_v1": {
       "arguments": ["integer?", "integer?"],
@@ -1424,6 +1583,7 @@
       "columns": {
         "attempt": "integer",
         "details": "jsonb",
+        "event_id": "uuid",
         "event_type": "text",
         "occurred_at": "timestamptz",
         "task_id": "uuid"
@@ -1603,6 +1763,7 @@
       "claim_policy_batch_v1",
       "cold_export_exportable_through_internal_v1",
       "cold_export_oldest_history_day_internal_v1",
+      "count_task_group_outcomes_internal_v1",
       "create_history_day_v1",
       "create_single_child_v1",
       "create_single_child_v2",
@@ -1641,12 +1802,14 @@
       "fast_retry_v1",
       "fast_terminalize_deadline_v1",
       "fast_timeout_owned_v1",
+      "finish_task_group_internal_v1",
       "get_queue_health_policy_v1",
       "history_partition_horizon_days_v1",
       "history_retention_complete_v1",
       "idempotency_key_hash_v1",
       "lock_enqueue_prerequisites_internal_v1",
       "lock_queue_tiers_v1",
+      "maintain_task_groups_v1",
       "normalize_retry_policy_v1",
       "notify_budget_capacity_v1",
       "notify_concurrency_capacity_v1",
@@ -1676,6 +1839,7 @@
       "release_own_dependencies_v1",
       "repair_dependency_counters_internal_v1",
       "repair_dependency_counters_v1",
+      "repair_task_group_internal_v1",
       "resolve_cron_wall_clock_v1",
       "resolve_dependents_many_v1",
       "resolve_dependents_v1",
@@ -1684,8 +1848,10 @@
       "retire_history_partitions_v1",
       "retry_delay_v1",
       "revert_queue_health_policy_v1",
+      "seal_task_group_internal_v1",
       "set_worker_paused_internal_v1",
       "settle_dependents_v1",
+      "settle_task_group_outcomes_v1",
       "sha256_hex_v1",
       "stat_overflow_type_v1",
       "stat_sketch_index_v1",
@@ -1695,6 +1861,7 @@
       "sync_queue_health_policy_v1",
       "sync_queue_health_policy_v2",
       "sync_schedule_definitions_internal_v1",
+      "task_group_member_limit_v1",
       "terminal_cleanup_follow_up_delay_ms_v1",
       "terminalize_deadline_v1",
       "timeout_envelope_v1",
@@ -1720,6 +1887,10 @@
       "queue_purge_request",
       "retention_policy",
       "schema_migration",
+      "task_group",
+      "task_group_callback",
+      "task_group_event",
+      "task_group_member",
       "task_redrive",
       "task_stat_state"
     ]

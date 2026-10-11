@@ -357,7 +357,7 @@ rest are optional TypeScript packages.
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 54 are their compatibility boundary instead. Their version numbers still match the npm
+5 and schema version 65 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
@@ -1051,7 +1051,7 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
-The unreleased SDKs require schema version 54 before workers start. Migration
-`0055-fail-durable-replay-conflicts-without-retrying.sql` reserves the `fail_v1` delay override `-1`
-for terminal replay conflicts. Migrate the database before upgrading workers, because older
-schemas treat that value as an immediate retry. Existing workers keep their ordinary retry policy.
+The unreleased SDKs require schema version 65 before workers start. Migration
+`0066-add-task-groups-with-completion-callbacks.sql` adds the task group functions that every SDK
+statement catalogue calls. Run `workhorse schema migrate` before you start updated processes. A
+0.7 process keeps working on version 65, because a migration inside a major line only adds.

@@ -49,6 +49,14 @@ import type { HumanWaitPage } from "./queue/human-waits.js";
 import type { SignalWaitPage } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
+import type {
+  TaskGroup,
+  TaskGroupDrift,
+  TaskGroupEvent,
+  TaskGroupMemberPage,
+  TaskGroupMemberQuery,
+  TaskGroupRepair,
+} from "./queue/task-groups.js";
 import {
   budget,
   concurrencyPolicy,
@@ -435,6 +443,52 @@ export class Admin {
       pendingEdges: row.pending_edges,
       action: row.action,
     }));
+  }
+
+  getTaskGroup(groupId: string): Promise<TaskGroup | null> {
+    return this.modules.taskGroups.get(groupId);
+  }
+
+  listTaskGroupMembers(
+    groupId: string,
+    query: TaskGroupMemberQuery = {},
+  ): Promise<TaskGroupMemberPage> {
+    return this.modules.taskGroups.listMembers(groupId, query);
+  }
+
+  /** Read a group's history in time order: create, seal, cancel, finish, callbacks, repairs. */
+  listTaskGroupEvents(groupId: string, limit = 1_000): Promise<TaskGroupEvent[]> {
+    return this.modules.taskGroups.listEvents(groupId, limit);
+  }
+
+  /**
+   * Seal an open group, so no task can join it after this call, not even from a running member
+   * task. Then cancel every member task that is not terminal. The canceled members count as not
+   * succeeded, so the group finishes as usual and `onFinish` and `onFailure` run. A finished group
+   * stays unchanged. Returns null for an unknown group.
+   */
+  async cancelTaskGroup(groupId: string, audit: AdminAudit): Promise<TaskGroup | null> {
+    validateAdminAudit(audit);
+    return this.modules.taskGroups.cancel(groupId, audit);
+  }
+
+  /**
+   * List groups that are not finished and whose counters disagree with their member outcomes, and
+   * sealed groups whose members are all finished. It writes nothing, so it is the dry run of
+   * {@link repairTaskGroupDrift}.
+   */
+  listTaskGroupDrift(limit = 1_000): Promise<TaskGroupDrift[]> {
+    return this.modules.taskGroups.listDrift(limit);
+  }
+
+  /**
+   * Recount each group {@link listTaskGroupDrift} reports from its member outcomes, and finish a
+   * sealed group with no pending member. Each repaired group's `counter_repaired` event records
+   * the audit.
+   */
+  async repairTaskGroupDrift(audit: AdminAudit, limit = 1_000): Promise<TaskGroupRepair[]> {
+    validateAdminAudit(audit);
+    return this.modules.taskGroups.repairDrift(audit, limit);
   }
 
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {

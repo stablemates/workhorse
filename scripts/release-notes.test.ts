@@ -176,10 +176,8 @@ describe("0.7.0 release notes", () => {
 
     it("states the current schema, compatibility floor, and migration before rollout", () => {
       expect(section).toMatch(/^Requires \*\*schema v54\*\*/m);
-      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
-      expect(section).toMatch(
-        phrase(`compatibility floor is schema version **${MINIMUM_SCHEMA_VERSION}**`),
-      );
+      expect(section).toMatch(phrase("final schema version is **64**"));
+      expect(section).toMatch(phrase("compatibility floor is schema version **54**"));
       expect(section).toMatch(phrase("Migration 0054"));
       expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
@@ -197,11 +195,15 @@ describe("0.7.0 release notes", () => {
   });
 
   it("names every migration added after 0.6.1 in the root notes", () => {
-    // 0.6.0 and 0.6.1 shipped schema version 52, so every migration after 0053 is new in 0.7.0.
+    // 0.6.0 and 0.6.1 shipped schema version 52, and 0.7.0 shipped 64, so migrations 0054 through
+    // 0065 are new in 0.7.0.
     const section = entry("CHANGELOG.md", minor);
     const added = readdirSync(join(root, "sql/migrations"))
       .map((name) => /^(\d{4})-/.exec(name)?.[1])
-      .filter((number): number is string => number !== undefined && Number(number) > 53);
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 53 && Number(number) <= 65,
+      );
     expect(added.length).toBeGreaterThan(0);
     for (const number of added) expect(section, `migration ${number}`).toContain(number);
   });
@@ -223,13 +225,9 @@ describe("0.7.1 release notes", () => {
 
     it("keep the schema version 0.7.0 shipped", () => {
       expect(section).toMatch(/^Requires \*\*schema v54\*\*/m);
-      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
-      expect(entry(path, minor)).toMatch(
-        phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`),
-      );
-      expect(section).toMatch(
-        phrase(`compatibility floor stays at schema version **${MINIMUM_SCHEMA_VERSION}**`),
-      );
+      expect(section).toMatch(phrase("final schema version is **64**"));
+      expect(entry(path, minor)).toMatch(phrase("final schema version is **64**"));
+      expect(section).toMatch(phrase("compatibility floor stays at schema version **54**"));
     });
 
     it("link only to files and headings that exist", () => {
@@ -241,6 +239,27 @@ describe("0.7.1 release notes", () => {
         })
         .map(({ target }) => target);
       expect(broken).toEqual([]);
+    });
+  });
+});
+
+/** The unreleased notes: migration 0066 adds task groups and raises the compatibility floor. */
+const unreleased = "## Unreleased";
+
+describe("unreleased notes", () => {
+  describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, unreleased);
+
+    it("states the current schema, compatibility floor, and migration before rollout", () => {
+      expect(section).toMatch(
+        new RegExp(`^Requires \\*\\*schema v${MINIMUM_SCHEMA_VERSION}\\*\\*`, "m"),
+      );
+      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
+      expect(section).toMatch(
+        phrase(`compatibility floor is schema version **${MINIMUM_SCHEMA_VERSION}**`),
+      );
+      expect(section).toMatch(phrase("Migration 0066"));
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
   });
 });

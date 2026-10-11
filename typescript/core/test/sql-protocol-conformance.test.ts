@@ -1321,12 +1321,13 @@ describe("SQL protocol conformance fixtures", () => {
         "retention-maintenance",
         "unknown-type-release",
         "terminal-replay-conflict",
+        "task-groups",
       ]),
     );
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(11);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(12);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint

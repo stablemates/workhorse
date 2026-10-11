@@ -429,9 +429,10 @@ Failure handling:
 - The orchestrator catches a failure of registry pruning separately. It reports that failure as
   `worker_registry` after the other phases.
 
-Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_tasks`.
-Released-edge compaction runs first. Thus the same pass can prune a prerequisite that compaction
-just unpinned.
+Terminal storage reports `enqueue_idempotency`, `released_dependencies`, `terminal_tasks`, then
+`task_groups`. Released-edge compaction runs first. Thus the same pass can prune a prerequisite that
+compaction just unpinned. The `task_groups` phase calls `maintain_task_groups_v1`.
+[Maintenance](task-groups.md#maintenance) on the task group page states what it does.
 
 Each phase deletes at most `retention_policy.terminal_task_prune_limit` rows per batch. The
 `terminal_tasks` phase repeats `prune_terminal_tasks_v1` while each batch fills, until the phase has
@@ -478,6 +479,10 @@ the other tier.
 limit of 1, the tiers alternate. A backlog in either tier cannot starve the other tier. Each of
 `prune_full_terminal_tasks_internal_v1` and `prune_fast_terminal_tasks_internal_v1` runs the share
 of one tier.
+
+Since migration 0066, the window also excludes a member task whose task group is not `finished`.
+Such a group needs the outcomes of its member tasks when it finishes. A sealed group can wait longer
+than the retention period.
 
 Since migration 0049, the window itself excludes a redrive source through
 `task_redrive_source_time_idx`. A source waits for its younger target. Without this exclusion, a

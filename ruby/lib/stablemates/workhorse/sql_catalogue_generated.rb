@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 54
-      MAXIMUM_SCHEMA_VERSION = 64
+      MINIMUM_SCHEMA_VERSION = 65
+      MAXIMUM_SCHEMA_VERSION = 65
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -1137,6 +1137,36 @@ module Stablemates
 
       # `current_database` (admin)
       CURRENT_DATABASE = 'SELECT current_database() AS database'
+
+      # `create_task_group_v1` (internal)
+      CREATE_TASK_GROUP_V1 = 'SELECT group_id, ordinal, task_id, outcome, reason FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)'
+
+      # `add_task_group_members_v1` (internal)
+      ADD_TASK_GROUP_MEMBERS_V1 = 'SELECT ordinal, task_id, outcome, reason FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb, $3::uuid, $4::text, $5::bigint) ORDER BY ordinal'
+
+      # `seal_task_group_v1` (internal)
+      SEAL_TASK_GROUP_V1 = 'SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.seal_task_group_v1($1::uuid)'
+
+      # `get_task_group_v1` (internal, admin)
+      GET_TASK_GROUP_V1 = 'SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.get_task_group_v1($1::uuid)'
+
+      # `task_group_for_task_v1` (internal)
+      TASK_GROUP_FOR_TASK_V1 = 'SELECT role, callback_kind, group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.task_group_for_task_v1($1::uuid)'
+
+      # `list_task_group_members_v1` (internal, admin)
+      LIST_TASK_GROUP_MEMBERS_V1 = 'SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)'
+
+      # `list_task_group_events_v1` (admin)
+      LIST_TASK_GROUP_EVENTS_V1 = 'SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)'
+
+      # `cancel_task_group_v1` (admin)
+      CANCEL_TASK_GROUP_V1 = 'SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)'
+
+      # `list_task_group_drift_v1` (admin)
+      LIST_TASK_GROUP_DRIFT_V1 = 'SELECT group_id, state, recorded_total, recorded_succeeded, recorded_failed, recorded_canceled, total, succeeded, failed, canceled, pending, action FROM workhorse.list_task_group_drift_v1($1::integer)'
+
+      # `repair_task_group_drift_v1` (admin)
+      REPAIR_TASK_GROUP_DRIFT_V1 = 'SELECT group_id, recorded_pending, pending, action FROM workhorse.repair_task_group_drift_v1($1::integer, $2::text, $3::text, $4::text)'
     end
   end
 end

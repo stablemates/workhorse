@@ -543,6 +543,25 @@ interface ContractDefinitionRow {
   result_redact_keys: string[];
 }
 
+/** One row an enqueue statement returns. */
+export interface EnqueueRow {
+  ordinal: number;
+  task_id: string | null;
+  outcome: EnqueueOutcome | "contract_mismatch";
+  reason: string | null;
+}
+
+/** One enqueue request in the JSON shape PostgreSQL reads, with its payload already serialized. */
+type SerializedEnqueueRequest = { serializedPayload: string; runAt?: string } & Record<
+  string,
+  unknown
+>;
+
+function serializedRequest(request: Record<string, unknown>, serializedPayload: string): string {
+  const serialized = JSON.stringify(request);
+  return `${serialized.slice(0, -1)},"payload":${serializedPayload}}`;
+}
+
 /** Owns enqueue serialization and process-local task contract validation behind the Queue facade. */
 export class EnqueueContractsModule extends QueueModule {
   constructor(
@@ -793,19 +812,182 @@ export class EnqueueContractsModule extends QueueModule {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.context.database,
   ): Promise<EnqueueResult[]> {
-    return this.enqueueManyWithResultsAttempt(requests, transaction, true);
+    if (requests.length === 0) return [];
+    if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
+      throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
+    }
+    return this.submitEnqueueRequests(requests, transaction, async (serializedInput) => {
+      const result = await transaction.query<EnqueueRow>(SQL_STATEMENTS["enqueue_many_v1"], [
+        serializedInput,
+      ]);
+      return result.rows;
+    });
+  }
+
+  /**
+   * Serialize one enqueue request for a callback of a task group. A callback is enqueued later, so
+   * it carries no run time unless the caller set one.
+   */
+  async serializeCallbackRequest(
+    request: EnqueueRequest,
+    transaction: Queryable = this.context.database,
+  ): Promise<string> {
+    const options = request.options ?? {};
+    if (
+      options.idempotency !== undefined ||
+      options.debounce !== undefined ||
+      options.throttle !== undefined
+    ) {
+      throw new TypeError(
+        "task group callbacks cannot use enqueue idempotency, debounce, or throttle",
+      );
+    }
+    const [input] = await this.serializeEnqueueRequests([request], transaction);
+    const { serializedPayload, ...serialized } = input!;
+    if (options.runAt === undefined) delete serialized.runAt;
+    return serializedRequest(serialized, serializedPayload);
+  }
+
+  /**
+   * Serialize a batch of requests, submit it through `submit`, and map the rows. On a contract
+   * mismatch, PostgreSQL enqueued nothing: the client reloads the named contracts and submits the
+   * batch one more time.
+   */
+  async submitEnqueueRequests(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable,
+    submit: (serializedInput: string) => Promise<readonly EnqueueRow[]>,
+  ): Promise<EnqueueResult[]> {
+    return this.enqueueManyWithResultsAttempt(requests, transaction, true, submit);
+  }
+
+  private async serializeEnqueueRequests(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable,
+  ): Promise<SerializedEnqueueRequest[]> {
+    const traceContext = injectTraceContext();
+    return Promise.all(
+      requests.map((request) => this.serializeEnqueueRequest(request, transaction, traceContext)),
+    );
+  }
+
+  private async serializeEnqueueRequest(
+    { type, payload, options = {}, tags }: EnqueueRequest,
+    transaction: Queryable,
+    traceContext: ReturnType<typeof injectTraceContext>,
+  ): Promise<SerializedEnqueueRequest> {
+    const idempotency: Idempotency | undefined = options.idempotency;
+    const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
+      (mode) => mode !== undefined,
+    );
+    if (coalescingModes.length > 1) {
+      throw new TypeError("enqueue options cannot combine idempotency, debounce, or throttle");
+    }
+    if (options.debounce !== undefined && options.runAt !== undefined) {
+      throw new TypeError("debounced enqueue uses its PostgreSQL-owned window instead of runAt");
+    }
+    if (
+      (options.debounce !== undefined || options.throttle !== undefined) &&
+      (options.prerequisiteTaskId !== undefined || options.dependencies !== undefined)
+    ) {
+      throw new TypeError(
+        "enqueue options cannot combine debounce or throttle with prerequisiteTaskId or dependencies",
+      );
+    }
+    const { serializedPayload, acceptance } = await this.serializedTaskAcceptance(
+      type,
+      payload,
+      transaction,
+    );
+    if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
+      throw new TypeError("enqueue options cannot combine prerequisiteTaskId and dependencies");
+    }
+    const dependencies = options.dependencies;
+    if (dependencies !== undefined) {
+      if (
+        dependencies.prerequisiteTaskIds.length === 0 ||
+        dependencies.prerequisiteTaskIds.length > MAX_TASK_DEPENDENCIES
+      ) {
+        throw new RangeError(
+          `dependencies requires between 1 and ${MAX_TASK_DEPENDENCIES} prerequisiteTaskIds`,
+        );
+      }
+      if (
+        new Set(dependencies.prerequisiteTaskIds).size !== dependencies.prerequisiteTaskIds.length
+      ) {
+        throw new TypeError("dependencies prerequisiteTaskIds must be unique");
+      }
+    }
+    const prerequisiteTaskIds = [...(dependencies?.prerequisiteTaskIds ?? [])];
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    prerequisiteTaskIds.sort();
+    return {
+      queue: options.queue ?? this.context.defaultQueue,
+      type,
+      serializedPayload,
+      priority: validateTaskPriority(options.priority),
+      ...acceptance,
+      ...(traceContext === null ? {} : { traceContext }),
+      ...(options.runAt === undefined &&
+      (idempotency !== undefined ||
+        options.debounce !== undefined ||
+        options.throttle !== undefined)
+        ? {}
+        : { runAt: (options.runAt ?? new Date()).toISOString() }),
+      deadline: options.deadline?.toISOString() ?? null,
+      concurrencyKey: options.concurrencyKey ?? null,
+      budget: options.budget ?? null,
+      executionTimeoutMs: options.executionTimeoutMs ?? null,
+      maxAttempts: options.maxAttempts ?? 25,
+      retryPolicy: options.retryPolicy ?? null,
+      prerequisiteTaskId: options.prerequisiteTaskId ?? null,
+      dependencies:
+        dependencies === undefined
+          ? null
+          : {
+              prerequisiteTaskIds,
+              onSuccess: dependencies.onSuccess,
+              onFailure: dependencies.onFailure,
+              onCancellation: dependencies.onCancellation,
+            },
+      tags: tags ?? options.tags ?? [],
+      ...(idempotency === undefined
+        ? {}
+        : {
+            idempotency: {
+              key: idempotency.key,
+              scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+              ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+            },
+          }),
+      ...(options.debounce === undefined
+        ? {}
+        : {
+            debounce: {
+              key: options.debounce.key,
+              scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+              windowMs: options.debounce.windowMs,
+              schedule: options.debounce.schedule,
+            },
+          }),
+      ...(options.throttle === undefined
+        ? {}
+        : {
+            throttle: {
+              key: options.throttle.key,
+              scope: options.throttle.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+              windowMs: options.throttle.windowMs,
+            },
+          }),
+    };
   }
 
   private async enqueueManyWithResultsAttempt(
     requests: readonly EnqueueRequest[],
     transaction: Queryable,
     refreshOnMismatch: boolean,
+    submit: (serializedInput: string) => Promise<readonly EnqueueRow[]>,
   ): Promise<EnqueueResult[]> {
-    if (requests.length === 0) return [];
-    if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
-      throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
-    }
-
     const queueNames = new Set(
       requests.map((request) => request.options?.queue ?? this.context.defaultQueue),
     );
@@ -819,135 +1001,14 @@ export class EnqueueContractsModule extends QueueModule {
         "workhorse.enqueue.count": requests.length,
       },
       async (span) => {
-        const traceContext = injectTraceContext();
-        const input = await Promise.all(
-          requests.map(async ({ type, payload, options = {}, tags }) => {
-            const idempotency: Idempotency | undefined = options.idempotency;
-            const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
-              (mode) => mode !== undefined,
-            );
-            if (coalescingModes.length > 1) {
-              throw new TypeError(
-                "enqueue options cannot combine idempotency, debounce, or throttle",
-              );
-            }
-            if (options.debounce !== undefined && options.runAt !== undefined) {
-              throw new TypeError(
-                "debounced enqueue uses its PostgreSQL-owned window instead of runAt",
-              );
-            }
-            if (
-              (options.debounce !== undefined || options.throttle !== undefined) &&
-              (options.prerequisiteTaskId !== undefined || options.dependencies !== undefined)
-            ) {
-              throw new TypeError(
-                "enqueue options cannot combine debounce or throttle with prerequisiteTaskId or dependencies",
-              );
-            }
-            const { serializedPayload, acceptance } = await this.serializedTaskAcceptance(
-              type,
-              payload,
-              transaction,
-            );
-            if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
-              throw new TypeError(
-                "enqueue options cannot combine prerequisiteTaskId and dependencies",
-              );
-            }
-            const dependencies = options.dependencies;
-            if (dependencies !== undefined) {
-              if (
-                dependencies.prerequisiteTaskIds.length === 0 ||
-                dependencies.prerequisiteTaskIds.length > MAX_TASK_DEPENDENCIES
-              ) {
-                throw new RangeError(
-                  `dependencies requires between 1 and ${MAX_TASK_DEPENDENCIES} prerequisiteTaskIds`,
-                );
-              }
-              if (
-                new Set(dependencies.prerequisiteTaskIds).size !==
-                dependencies.prerequisiteTaskIds.length
-              ) {
-                throw new TypeError("dependencies prerequisiteTaskIds must be unique");
-              }
-            }
-            const prerequisiteTaskIds = [...(dependencies?.prerequisiteTaskIds ?? [])];
-            // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-            prerequisiteTaskIds.sort();
-            return {
-              queue: options.queue ?? this.context.defaultQueue,
-              type,
-              serializedPayload,
-              priority: validateTaskPriority(options.priority),
-              ...acceptance,
-              ...(traceContext === null ? {} : { traceContext }),
-              ...(options.runAt === undefined &&
-              (idempotency !== undefined ||
-                options.debounce !== undefined ||
-                options.throttle !== undefined)
-                ? {}
-                : { runAt: (options.runAt ?? new Date()).toISOString() }),
-              deadline: options.deadline?.toISOString() ?? null,
-              concurrencyKey: options.concurrencyKey ?? null,
-              budget: options.budget ?? null,
-              executionTimeoutMs: options.executionTimeoutMs ?? null,
-              maxAttempts: options.maxAttempts ?? 25,
-              retryPolicy: options.retryPolicy ?? null,
-              prerequisiteTaskId: options.prerequisiteTaskId ?? null,
-              dependencies:
-                dependencies === undefined
-                  ? null
-                  : {
-                      prerequisiteTaskIds,
-                      onSuccess: dependencies.onSuccess,
-                      onFailure: dependencies.onFailure,
-                      onCancellation: dependencies.onCancellation,
-                    },
-              tags: tags ?? options.tags ?? [],
-              ...(idempotency === undefined
-                ? {}
-                : {
-                    idempotency: {
-                      key: idempotency.key,
-                      scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                      ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
-                    },
-                  }),
-              ...(options.debounce === undefined
-                ? {}
-                : {
-                    debounce: {
-                      key: options.debounce.key,
-                      scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                      windowMs: options.debounce.windowMs,
-                      schedule: options.debounce.schedule,
-                    },
-                  }),
-              ...(options.throttle === undefined
-                ? {}
-                : {
-                    throttle: {
-                      key: options.throttle.key,
-                      scope: options.throttle.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                      windowMs: options.throttle.windowMs,
-                    },
-                  }),
-            };
-          }),
-        );
+        const input = await this.serializeEnqueueRequests(requests, transaction);
         try {
           const serializedInput = `[${input
-            .map(({ serializedPayload, ...request }) => {
-              const serializedRequest = JSON.stringify(request);
-              return `${serializedRequest.slice(0, -1)},"payload":${serializedPayload}}`;
-            })
+            .map(({ serializedPayload, ...request }) =>
+              serializedRequest(request, serializedPayload),
+            )
             .join(",")}]`;
-          const result = await transaction.query<{
-            ordinal: number;
-            task_id: string | null;
-            outcome: EnqueueOutcome | "contract_mismatch";
-            reason: string | null;
-          }>(SQL_STATEMENTS["enqueue_many_v1"], [serializedInput]);
+          const result = { rows: await submit(serializedInput) };
           const mismatchRow = result.rows.find((row) => row.outcome === "contract_mismatch");
           if (mismatchRow !== undefined) {
             const mismatch = JSON.parse(mismatchRow.reason ?? "null") as {
@@ -969,7 +1030,7 @@ export class EnqueueContractsModule extends QueueModule {
             if (!refreshOnMismatch) {
               throw new Error("Contract policy changed again while retrying enqueue");
             }
-            return this.enqueueManyWithResultsAttempt(requests, transaction, false);
+            return this.enqueueManyWithResultsAttempt(requests, transaction, false, submit);
           }
           const enqueueResults = result.rows.map((row): EnqueueResult => {
             if (row.task_id === null || row.outcome === "contract_mismatch") {

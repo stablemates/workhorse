@@ -460,6 +460,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "give the terminal cleanup backlog reason its own health budget",
     kind: "additive",
   },
+  {
+    fromVersion: 64,
+    toVersion: 65,
+    file: "0066-add-task-groups-with-completion-callbacks.sql",
+    description: "add task groups with completion callbacks",
+    kind: "additive",
+  },
 ];
 
 /**

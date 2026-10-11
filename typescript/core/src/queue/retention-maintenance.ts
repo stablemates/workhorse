@@ -31,7 +31,8 @@ export type MaintenancePhase =
   | "schedule_occurrences"
   | "enqueue_idempotency"
   | "released_dependencies"
-  | "terminal_tasks";
+  | "terminal_tasks"
+  | "task_groups";
 
 export interface MaintenancePhaseResult {
   phase: MaintenancePhase;

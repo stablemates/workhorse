@@ -3,9 +3,11 @@ import { FastTierUnsupportedError } from "./errors.js";
 import { ChildConflictError } from "./queue/child-tasks.js";
 import type { ExternalWaitOptions } from "./queue/external-waits.js";
 import type { TaskAttempt } from "./task-attempt.js";
+import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
   ChildTaskOptions,
   ChildTaskRequest,
+  EnqueueRequest,
   ClaimedTask,
   Json,
   TaskCheckpoint,
@@ -285,6 +287,23 @@ function createDurableHandlerContext(
   const runChildren: HandlerContext["runChildren"] = (children) => runChildSet(children, "settled");
   const runChildrenAll: HandlerContext["runChildrenAll"] = (children) =>
     runChildSet(children, "all_success");
+  let taskGroupLoad: Promise<TaskGroupLink | null> | undefined;
+  const taskGroup: HandlerContext["taskGroup"] = {
+    get() {
+      if (queue.findTaskGroup === undefined) {
+        return Promise.reject(new TypeError("This worker queue does not support task groups"));
+      }
+      taskGroupLoad ??= queue.findTaskGroup(task.id);
+      return taskGroupLoad;
+    },
+    async add(requests: readonly EnqueueRequest[]) {
+      if (queue.addToTaskGroupAsMember === undefined) {
+        throw new TypeError("This worker queue does not support task groups");
+      }
+      attempt.requireLease();
+      return queue.addToTaskGroupAsMember(task, workerId, requests);
+    },
+  };
   return {
     task,
     signal: attempt.signal,
@@ -300,5 +319,6 @@ function createDurableHandlerContext(
     runChild,
     runChildren,
     runChildrenAll,
+    taskGroup,
   };
 }

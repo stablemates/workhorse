@@ -175,9 +175,43 @@ export type {
   WorkerMaintenanceLoop,
   WorkerMaintenanceTelemetry,
   WorkerOptions,
+  TaskGroupContext,
   WorkerQueueApi,
   WorkerRuntimeState,
 } from "./worker.js";
+export {
+  MAX_TASK_GROUP_DRIFT_LIMIT,
+  MAX_TASK_GROUP_MEMBERS,
+  MAX_TASK_GROUP_PAGE_SIZE,
+  TaskGroupClosedError,
+  TaskGroupLimitExceededError,
+  TaskGroupMembershipConflictError,
+} from "./queue/task-groups.js";
+export type {
+  TaskGroup,
+  TaskGroupBlockResult,
+  TaskGroupBuilder,
+  TaskGroupCallback,
+  TaskGroupCallbackKind,
+  TaskGroupCallbacks,
+  TaskGroupClosedDetails,
+  TaskGroupCounts,
+  TaskGroupDrift,
+  TaskGroupEvent,
+  TaskGroupEventType,
+  TaskGroupLimitDetails,
+  TaskGroupLink,
+  TaskGroupMember,
+  TaskGroupMemberOutcome,
+  TaskGroupMemberPage,
+  TaskGroupMemberQuery,
+  TaskGroupMembershipConflictDetails,
+  TaskGroupRefusal,
+  TaskGroupRepair,
+  TaskGroupRepairAction,
+  TaskGroupResult,
+  TaskGroupState,
+} from "./queue/task-groups.js";
 export { defineWorkerProcess, runWorkerProcess, startWorkerProcess } from "./worker-process.js";
 export type {
   RunWorkerProcessOptions,

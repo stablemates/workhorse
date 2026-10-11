@@ -1245,11 +1245,11 @@ class DashboardTasksCursorPage(TypedDict, total=False):
     taskType: Required[str | None]
     capturedAt: Required[str]
     count: Required[Literal["exact", "none"]]
+    tasks: Required[list[DashboardTaskRow]]
     worker: Required[str | None]
     canCompleteHumanWait: Required[bool]
     page: Required[float]
     pageSize: Required[float]
-    tasks: Required[list[DashboardTaskRow]]
 
 
 class DashboardTasksPage(TypedDict, total=False):

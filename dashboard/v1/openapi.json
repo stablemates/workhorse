@@ -12207,6 +12207,12 @@
               "none"
             ]
           },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTaskRow"
+            }
+          },
           "worker": {
             "anyOf": [
               {
@@ -12225,12 +12231,6 @@
           },
           "pageSize": {
             "type": "number"
-          },
-          "tasks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DashboardTaskRow"
-            }
           }
         },
         "required": [
@@ -12246,11 +12246,11 @@
           "taskType",
           "capturedAt",
           "count",
+          "tasks",
           "worker",
           "canCompleteHumanWait",
           "page",
-          "pageSize",
-          "tasks"
+          "pageSize"
         ]
       },
       "DashboardTasksPage": {
