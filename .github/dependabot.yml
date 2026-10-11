@@ -106,8 +106,10 @@ updates:
         versions: [">=1.47.0"]
 
   # The Ruby gem's Gemfile.lock. Dependabot reads only the Gemfile in this directory, so it does not
-  # update ruby/gemfiles/rails_8_0.gemfile.lock; `pnpm ruby:vuln` audits that lockfile as well, and
-  # an advisory there fails CI until someone relocks it.
+  # update ruby/gemfiles/rails_8_0.gemfile.lock. When a Ruby update changes ruby/Gemfile,
+  # `pnpm ruby:lockfile-check` fails the pull request until someone relocks that file on the branch.
+  # `pnpm ruby:vuln` audits that lockfile as well, and an advisory there fails CI until someone
+  # relocks it.
   - package-ecosystem: bundler
     directory: /ruby
     schedule:

@@ -539,6 +539,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
       - run: pnpm ruby:gates
+      # Dependabot updates only ruby/Gemfile.lock, and the weekly `ruby-rails` job is the only job
+      # that installs the Rails 8.0 lockfile. This step finds a stale one on the pull request that
+      # makes it stale. See SM-1230.
+      - run: pnpm ruby:lockfile-check
       # Unlike the Go and Rust package checks, this runs on every change (ADR 0083, amended by
       # SM-1138). It takes seconds. The release job checks the gem only on the pinned Ruby, so this
       # step is what loads it on the newest supported Ruby outside the development bundle.
