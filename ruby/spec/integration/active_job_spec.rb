@@ -108,6 +108,20 @@ class AjCountingJob < AjSpecJob
   end
 end
 
+# A task group callback. It records the group the handler context reads.
+class AjGroupReportJob < AjSpecJob
+  def perform(label)
+    ActiveJobSpec.seen << {"report" => label, "link" => Stablemates::Workhorse::ActiveJob.current_task_group}
+  end
+end
+
+# A job that Rails would enqueue after the transaction commits.
+class AjDeferredJob < AjSpecJob
+  self.enqueue_after_transaction_commit = true
+
+  def perform = nil
+end
+
 class AjTypedCountingJob < AjCountingJob
   workhorse_options task_type: "spec.active_job.counting"
 end
@@ -576,6 +590,20 @@ RSpec.describe "Active Job adapter against PostgreSQL" do
       ActiveRecord::Base.remove_connection
     end
 
+    it "refuses a deferred job inside a task group in a transaction, after Rails adds its deferral" do
+      ActiveJob::Base.include(ActiveJob::EnqueueAfterTransactionCommit)
+
+      ActiveRecord::Base.transaction do
+        expect { W::ActiveJob.task_group { AjDeferredJob.perform_later } }
+          .to raise_error(ArgumentError, /AjDeferredJob sets enqueue_after_transaction_commit/)
+        expect { W::ActiveJob.task_group { ActiveJob.perform_all_later([AjDeferredJob.new]) } }
+          .to raise_error(ArgumentError, /AjDeferredJob sets enqueue_after_transaction_commit/)
+        result = W::ActiveJob.task_group { AjDefaultJob.perform_later("a") }
+        expect(result.group.counts.total).to eq(1)
+      end
+      expect(task_count).to eq(1), "only the job that joined the group commits"
+    end
+
     it "commits and rolls back a perform_later of either format with the caller's Active Record transaction" do
       committed = nil
       ActiveRecord::Base.transaction do
@@ -592,6 +620,78 @@ RSpec.describe "Active Job adapter against PostgreSQL" do
       expect(task_count).to eq(2)
       expect(tasks.map { |row| row["id"] }).to match_array(committed.map(&:provider_job_id))
     end
+  end
+
+  it "makes the jobs enqueued inside a task group block its member tasks" do
+    result = W::ActiveJob.task_group(on_finish: AjGroupReportJob.new("done")) do
+      AjDefaultJob.perform_later("a")
+      ActiveJob.perform_all_later([AjTypedJob.new({"n" => 1}), AjDefaultJob.new("b")])
+      expect(task_count).to eq(0), "the jobs wait for the end of the block"
+    end
+
+    expect([result.group.state, result.group.counts.total]).to eq([:sealed, 3])
+    members = W::Queue.new(@pool).list_task_group_members(result.group.id).members
+    expect(members.map(&:type)).to eq(["active_job", typed_type, "active_job"])
+    expect(ActiveJobSpec.seen).to be_empty
+
+    subject = worker(jobs: [AjTypedJob])
+    5.times { subject.run_once }
+
+    by_task = ActiveJobSpec.seen.select { |entry| entry.key?("provider_job_id") }.map { |entry| entry["provider_job_id"] }
+    expect(by_task).to match_array(members.map(&:task_id))
+    report = ActiveJobSpec.seen.find { |entry| entry.key?("report") }
+    expect(report["report"]).to eq("done")
+    expect([report["link"].role, report["link"].callback, report["link"].group.id, report["link"].group.counts.succeeded])
+      .to eq([:callback, :on_finish, result.group.id, 3])
+  end
+
+  it "sets each grouped job's provider job ID when the block returns and enqueues nothing when it raises" do
+    job = nil
+    W::ActiveJob.task_group { job = AjDefaultJob.perform_later("a") }
+    expect(job.provider_job_id).to eq(tasks.first["id"])
+
+    expect {
+      W::ActiveJob.task_group do
+        AjDefaultJob.perform_later("b")
+        raise "stop"
+      end
+    }.to raise_error(RuntimeError, "stop")
+    expect(task_count).to eq(1)
+    expect { W::ActiveJob.task_group(on_finish: "report") { nil } }
+      .to raise_error(ArgumentError, /must be an Active Job, an EnqueueRequest, or nil/)
+    expect { W::ActiveJob.current_task_group }.to raise_error(ArgumentError, /needs a job that a Workhorse worker runs/)
+  end
+
+  it "refuses a job that sets enqueue_after_transaction_commit inside a task group" do
+    message = /AjDeferredJob sets enqueue_after_transaction_commit.*set enqueue_after_transaction_commit to false on AjDeferredJob/
+    expect { W::ActiveJob.task_group { AjDeferredJob.perform_later } }.to raise_error(ArgumentError, message)
+    expect {
+      W::ActiveJob.task_group { ActiveJob.perform_all_later([AjDefaultJob.new("a"), AjDeferredJob.new]) }
+    }.to raise_error(ArgumentError, message)
+    expect(task_count).to eq(0)
+
+    expect(AjDeferredJob.perform_later.provider_job_id).to eq(tasks.first["id"]), "outside a group the job enqueues"
+  end
+
+  it "refuses every job when enqueue_after_transaction_commit is set globally, and lets a job that sets it false join" do
+    previous = [ActiveJob::Base.enqueue_after_transaction_commit, AjTypedJob.enqueue_after_transaction_commit]
+    ActiveJob::Base.enqueue_after_transaction_commit = true
+    AjTypedJob.enqueue_after_transaction_commit = false
+
+    expect { W::ActiveJob.task_group { AjDefaultJob.perform_later("a") } }
+      .to raise_error(ArgumentError, /AjDefaultJob sets enqueue_after_transaction_commit/)
+    expect(task_count).to eq(0)
+
+    typed = nil
+    result = W::ActiveJob.task_group do
+      typed = AjTypedJob.perform_later({"n" => 1})
+      ActiveJob.perform_all_later([AjTypedJob.new({"n" => 2})])
+    end
+    members = W::Queue.new(@pool).list_task_group_members(result.group.id).members
+    expect(members.map(&:type)).to eq([typed_type, typed_type])
+    expect(members.first.task_id).to eq(typed.provider_job_id)
+  ensure
+    ActiveJob::Base.enqueue_after_transaction_commit, AjTypedJob.enqueue_after_transaction_commit = previous
   end
 
   it "loads beside the workhorse gem in either order" do

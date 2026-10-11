@@ -16,6 +16,9 @@ module Stablemates
       # The member's ClaimedTask.
       def task = @context.task
 
+      # The TaskGroupContext of the member's task.
+      def task_group = @context.task_group
+
       # The member's CancellationToken.
       def cancellation = @context.cancellation
 

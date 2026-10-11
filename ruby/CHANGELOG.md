@@ -32,8 +32,41 @@ callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not acc
 (member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
 member of the group).
 
-This SDK does not add a task group API yet. It needs schema 65 because its statement catalogue
-names the new functions.
+### Task groups
+
+The Ruby SDK adds task groups (SM-1236). Use the block form to create a group, add its member
+tasks, and seal it in one statement, so in one transaction:
+
+```ruby
+result = queue.task_group(on_finish: Stablemates::Workhorse::EnqueueRequest.new(
+  task_type: "import.report", payload: {"importId" => 42}
+)) do |group|
+  rows.each { |row| group.enqueue("import.row", {"row" => row}) }
+end
+```
+
+- `Queue#task_group` takes the `on_finish:`, `on_success:`, and `on_failure:` callbacks. Each
+  callback is an `EnqueueRequest` without idempotency, debounce, or throttle. The block receives a
+  `TaskGroupBuilder` with `add` and `enqueue`. If the block raises, nothing is enqueued.
+- `Queue#create_task_group`, `Queue#add_to_task_group`, and `Queue#seal_task_group` build a group in
+  more than one transaction.
+- `Queue#get_task_group`, `Queue#list_task_group_members`, and `Queue#find_task_group` read a
+  group. `Admin` has `get_task_group`, `list_task_group_members`, `list_task_group_events`,
+  `cancel_task_group`, `list_task_group_drift`, and `repair_task_group_drift`.
+- `HandlerContext#task_group` and `BatchHandlerContext#task_group` return a `TaskGroupContext`.
+  Its `get` returns the `TaskGroupLink` of the task, with the group ID and the counts. Its `add`
+  adds tasks from a running member task, also after the seal.
+- `Stablemates::Workhorse::ActiveJob.task_group` runs a block in which each job that the
+  Workhorse adapter enqueues becomes a member task. Its callbacks can be Active Job instances,
+  such as `ReportJob.new(import.id)`. A job reads its group through
+  `Stablemates::Workhorse::ActiveJob.current_task_group`.
+- A job class with `enqueue_after_transaction_commit` set to true cannot join a task group. Rails
+  would enqueue that job after the transaction commits, so outside the group. If a task group block
+  enqueues such a job through the Workhorse adapter, the SDK raises `ArgumentError` before Rails
+  defers the job. Set `enqueue_after_transaction_commit` to false on that job class. The group
+  statement runs in the caller's transaction, so the member tasks still commit with it.
+- `TaskGroupClosedError` (`P1008`), `TaskGroupLimitExceededError` (`P1009`), and
+  `TaskGroupMembershipConflictError` (`P1010`) report the task group refusals.
 
 ## 0.7.1 — 2026-10-09
 

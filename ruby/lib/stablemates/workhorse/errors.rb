@@ -118,6 +118,54 @@ module Stablemates
       def initialize(details) = super(details, "PostgreSQL rejected a materially different idempotent queue purge")
     end
 
+    # SQLSTATE P1008: the task group does not accept tasks. +reason+ is :sealed, :finished,
+    # :canceled, or :not_running_member.
+    class TaskGroupClosedError < DiagnosedError
+      def initialize(details)
+        super(details, "Task group #{details.fetch("groupId", "unknown")} does not accept tasks " \
+          "(#{details.fetch("reason", "unknown")})")
+      end
+
+      def group_id = details["groupId"]
+
+      def state = details["state"]&.to_sym
+
+      def reason = details["reason"]&.to_sym
+    end
+
+    # SQLSTATE P1009: an add would take the task group above its member limit.
+    class TaskGroupLimitExceededError < DiagnosedError
+      def initialize(details)
+        super(details, "Task group #{details.fetch("groupId", "unknown")} holds #{details.fetch("total", 0)} " \
+          "tasks and accepts at most #{details.fetch("limit", TaskGroups::MAX_MEMBERS)}")
+      end
+
+      def group_id = details["groupId"]
+
+      def limit = details["limit"]
+
+      def total = details["total"]
+
+      def requested = details["requested"]
+    end
+
+    # SQLSTATE P1010: enqueue idempotency returned a task that is not a member of the task group.
+    # +member_of+ is the group the existing task belongs to, or nil.
+    class TaskGroupMembershipConflictError < DiagnosedError
+      def initialize(details)
+        super(details, "Enqueue idempotency returned task #{details.fetch("taskId", "unknown")}, which is not a " \
+          "member of task group #{details.fetch("groupId", "unknown")}")
+      end
+
+      def group_id = details["groupId"]
+
+      def task_id = details["taskId"]
+
+      def ordinal = details["ordinal"]
+
+      def member_of = details["memberOf"]
+    end
+
     # SQLSTATE P1007: a request and a queue's tier disagree (ADR 0077). +ordinal+ is the 1-based
     # position of the rejected request in an enqueue batch, or nil.
     class FastTierUnsupportedError < Error

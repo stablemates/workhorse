@@ -41,6 +41,28 @@ RSpec.describe W::HandlerContext do
     expect(executor.statements.last[1]).to eq([task.id, "w", 7, "a", '{"n":1}'])
   end
 
+  it "refuses a task group add from a cancelled attempt before any statement" do
+    executor = FakeExecutor.new
+    request = W::EnqueueRequest.new(task_type: "t", payload: {})
+    ctx = context(executor)
+    token.cancel(:requested)
+    expect { ctx.task_group.add([request]) }.to raise_error(W::CancelledError)
+
+    lost = W::CancellationToken.new
+    lost.cancel(:lease_lost)
+    stale = described_class.new(executor: executor, queue: W::Queue.new(executor), task: task, worker_id: "w",
+      cancellation: lost, arbiter: arbiter)
+    expect { stale.task_group.add([request]) }.to raise_error(W::LeaseLostError)
+    expect(executor.statements).to be_empty
+  end
+
+  it "reads the task group one time for each activation" do
+    executor = FakeExecutor.new { [] }
+    ctx = context(executor)
+    expect([ctx.task_group.get, ctx.task_group.get]).to eq([nil, nil])
+    expect(executor.statements.map(&:first)).to eq([W::SqlCatalogue::TASK_GROUP_FOR_TASK_V1])
+  end
+
   it "raises LeaseLostError when a stale attempt writes" do
     executor = FakeExecutor.new { |sql| (sql == W::SqlCatalogue::LIST_CHECKPOINTS) ? [] : [{"status" => "stale"}] }
     expect { context(executor).checkpoint("a") { 1 } }.to raise_error(W::LeaseLostError)

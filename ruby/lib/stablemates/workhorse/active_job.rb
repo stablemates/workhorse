@@ -25,8 +25,9 @@ module Stablemates
       # The keywords +workhorse_options+ accepts. A job class that passes any other key raises.
       OPTION_KEYS = %i[task_type max_attempts tags concurrency_key].freeze
       WORKER_KEY = :stablemates_workhorse_active_job_worker
+      CONTEXT_KEY = :stablemates_workhorse_active_job_context
       private_constant :JOB_ID_TAG, :CLASS_TAG, :MAX_OPTION_TAGS, :MAX_TAG_LENGTH, :MAX_TASK_TYPE_BYTES,
-        :WORKER_KEY
+        :WORKER_KEY, :CONTEXT_KEY
 
       # Declares Workhorse options on a job class. Include it and call +workhorse_options+.
       module Options
@@ -77,11 +78,48 @@ module Stablemates
             typed[task_type] = job_class
           end
           admin = Admin.new(worker.executor)
-          worker.handle(TASK_TYPE) { |payload, context| running(worker) { run_default(payload, context.task) } }
+          worker.handle(TASK_TYPE) { |payload, context| running(worker, context) { run_default(payload, context.task) } }
           typed.each do |task_type, job_class|
-            worker.handle(task_type) { |payload, context| running(worker) { run_typed(job_class, payload, context.task, admin) } }
+            worker.handle(task_type) do |payload, context|
+              running(worker, context) { run_typed(job_class, payload, context.task, admin) }
+            end
           end
           worker
+        end
+
+        # Creates a task group (ADR 0095), runs the block, and seals the group, in one statement. Every
+        # job the block enqueues through the Workhorse adapter, with +perform_later+ or
+        # +perform_all_later+, becomes a member task. The jobs are enqueued when the block returns,
+        # and each job's +provider_job_id+ is set then. If the block raises, nothing is enqueued.
+        #
+        # A job class with +enqueue_after_transaction_commit+ set to true cannot join a group. Rails
+        # would enqueue it after the transaction commits, so after the block ends and outside the
+        # group. If the block enqueues such a job through the Workhorse adapter, the call raises
+        # ArgumentError before Rails defers the job. Set +enqueue_after_transaction_commit+ to false on
+        # that job class. The group statement runs in the caller's transaction, so the member tasks
+        # still commit with it.
+        #
+        # Each callback is an Active Job instance, such as +ReportJob.new(import.id)+, an
+        # EnqueueRequest, or nil. +on_finish+ runs when every member task is finished, +on_success+
+        # when every member task succeeded, and +on_failure+ when one or more did not succeed.
+        # +queue+ is the Queue that creates the group. It defaults to the queue of the Workhorse
+        # adapter that ActiveJob::Base uses. Returns a TaskGroupBlockResult.
+        def task_group(on_finish: nil, on_success: nil, on_failure: nil, queue: nil, &)
+          raise ArgumentError, "task_group needs a block" unless block_given?
+          raise ArgumentError, "queue must be a Queue or nil" unless queue.nil? || queue.is_a?(Queue)
+
+          queue ||= adapter_queue
+          queue.task_group(on_finish: callback(on_finish), on_success: callback(on_success),
+            on_failure: callback(on_failure), &)
+        end
+
+        # The TaskGroupLink of the job that runs now, as a member task or as a callback task, or nil
+        # for a job with no group. Raises ArgumentError outside a job that a Workhorse worker runs.
+        def current_task_group
+          context = Thread.current[CONTEXT_KEY]
+          raise ArgumentError, "current_task_group needs a job that a Workhorse worker runs" if context.nil?
+
+          context.task_group.get
         end
 
         # The request that enqueues +job+, or ArgumentError before any statement runs. An invalid
@@ -103,6 +141,22 @@ module Stablemates
 
         # The worker running the current job, or nil outside a worker.
         def current_worker = Thread.current[WORKER_KEY] # :nodoc:
+
+        # Raises ArgumentError when a task group block is open and one of +jobs+ goes to the Workhorse
+        # adapter with +enqueue_after_transaction_commit+ set. Rails would enqueue that job after the
+        # commit, outside the group.
+        def refuse_deferral(jobs) # :nodoc:
+          return if TaskGroupBuilder.current.nil?
+
+          jobs.each do |job|
+            next unless job.class.queue_adapter.is_a?(::ActiveJob::QueueAdapters::StablematesWorkhorseAdapter)
+            next unless DEFERRING.include?(job.class.enqueue_after_transaction_commit)
+
+            raise ArgumentError, "#{job.class.name} sets enqueue_after_transaction_commit, so Rails would enqueue " \
+              "it after the transaction commits and outside the task group; set " \
+              "enqueue_after_transaction_commit to false on #{job.class.name}"
+          end
+        end
 
         def validate_options(class_name, options) # :nodoc:
           unknown = options.keys - OPTION_KEYS
@@ -165,13 +219,31 @@ module Stablemates
           adapter_tags + (option || [])
         end
 
-        def running(worker)
-          previous = Thread.current[WORKER_KEY]
+        def running(worker, context)
+          previous = [Thread.current[WORKER_KEY], Thread.current[CONTEXT_KEY]]
           Thread.current[WORKER_KEY] = worker
+          Thread.current[CONTEXT_KEY] = context
           yield
           nil
         ensure
-          Thread.current[WORKER_KEY] = previous
+          Thread.current[WORKER_KEY], Thread.current[CONTEXT_KEY] = previous
+        end
+
+        def callback(job)
+          case job
+          when nil, EnqueueRequest then job
+          when ::ActiveJob::Base then request(job, job.scheduled_at && Time.at(job.scheduled_at.to_f))
+          else raise ArgumentError, "a task group callback must be an Active Job, an EnqueueRequest, or nil"
+          end
+        end
+
+        def adapter_queue
+          adapter = ::ActiveJob::Base.queue_adapter
+          unless adapter.is_a?(::ActiveJob::QueueAdapters::StablematesWorkhorseAdapter)
+            raise ArgumentError, "task_group needs a queue: ActiveJob::Base does not use the Workhorse adapter"
+          end
+
+          adapter.workhorse_queue
         end
 
         def run_default(payload, task)
@@ -204,6 +276,42 @@ module Stablemates
         concurrency_key: "must be a non-empty String or respond to call"
       }.freeze
       private_constant :OPTION_RULES
+
+      # The +enqueue_after_transaction_commit+ values that defer an enqueue. Active Job 8.0 also
+      # accepts the deprecated :always.
+      DEFERRING = [true, :always].freeze
+      private_constant :DEFERRING
+
+      # Checks one job before Rails can defer its enqueue. A prepend on ActiveJob::Base runs before
+      # the module that Rails includes for the deferral. Internal to the SDK.
+      module JobDeferralCheck # :nodoc:
+        private
+
+        def raw_enqueue(...)
+          ::Stablemates::Workhorse::ActiveJob.refuse_deferral([self])
+          super
+        end
+      end
+
+      # Checks the jobs of +perform_all_later+ before Rails can defer them. Internal to the SDK.
+      module BatchDeferralCheck # :nodoc:
+        def perform_all_later(*jobs)
+          ::Stablemates::Workhorse::ActiveJob.refuse_deferral(jobs.flatten)
+          super
+        end
+      end
+      private_constant :JobDeferralCheck, :BatchDeferralCheck
+
+      # The checks wait for ActiveJob::Base. Loading it here would run its load hooks, and Rails
+      # would then look up this adapter before this file defines it.
+      ::ActiveSupport.on_load(:active_job) { prepend(JobDeferralCheck) }
+      ::ActiveJob.singleton_class.prepend(BatchDeferralCheck)
+      # Active Job 8.1 splits +perform_all_later+ in a module that it prepends when Rails includes
+      # the deferral, which can be after this file loads. The check therefore also goes into that
+      # module, so it runs before the split.
+      if ::ActiveJob::EnqueueAfterTransactionCommit.const_defined?(:ActiveJobMethods, false)
+        ::ActiveJob::EnqueueAfterTransactionCommit::ActiveJobMethods.prepend(BatchDeferralCheck)
+      end
     end
   end
 end
@@ -226,8 +334,9 @@ module ActiveJob
 
       # Enqueues +jobs+ in atomic chunks of the shared batch limit and returns how many it enqueued.
       # A job with an invalid priority records the error and is skipped. Each job reports only the
-      # error of this call.
+      # error of this call. Inside the block form of a task group, the jobs join the group instead.
       def enqueue_all(jobs)
+        builder = ::Stablemates::Workhorse::TaskGroupBuilder.current
         pending = jobs.filter_map do |job|
           job.enqueue_error = nil
           [job, workhorse.request(job, job.scheduled_at && Time.at(job.scheduled_at.to_f))]
@@ -236,6 +345,8 @@ module ActiveJob
           job.successfully_enqueued = false
           nil
         end
+        return grouped(builder, pending) if builder
+
         pending.each_slice(::Stablemates::Workhorse::SqlCatalogue::MAX_ENQUEUE_BATCH_SIZE) do |chunk|
           results = queue.enqueue_many(chunk.map(&:last))
           chunk.zip(results) do |(job, _request), result|
@@ -252,20 +363,37 @@ module ActiveJob
         !worker.nil? && worker.stopping?
       end
 
-      private
-
-      def workhorse = ::Stablemates::Workhorse::ActiveJob
-
-      def enqueue_one(job, run_at)
-        job.provider_job_id = queue.enqueue_many([workhorse.request(job, run_at)]).first.task_id
-      end
-
-      def queue
+      # The Queue this adapter enqueues through. Internal to the SDK.
+      def workhorse_queue # :nodoc:
         @queue || @lock.synchronize do
           @queue ||= ::Stablemates::Workhorse::Queue.new(
             @executor || ::Stablemates::Workhorse::ActiveRecordExecutor.new(::ActiveRecord::Base)
           )
         end
+      end
+
+      private
+
+      def workhorse = ::Stablemates::Workhorse::ActiveJob
+
+      def queue = workhorse_queue
+
+      # Inside the block form of a task group, a job joins the group. The group enqueues it when the
+      # block returns.
+      def enqueue_one(job, run_at)
+        request = workhorse.request(job, run_at)
+        builder = ::Stablemates::Workhorse::TaskGroupBuilder.current
+        return job.provider_job_id = queue.enqueue_many([request]).first.task_id if builder.nil?
+
+        builder.add_request(request) { |result| job.provider_job_id = result.task_id }
+      end
+
+      def grouped(builder, pending)
+        pending.each do |job, request|
+          builder.add_request(request) { |result| job.provider_job_id = result.task_id }
+          job.successfully_enqueued = true
+        end
+        pending.length
       end
     end
   end

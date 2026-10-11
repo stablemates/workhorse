@@ -252,4 +252,53 @@ RSpec.describe Stablemates::Workhorse::Queue do
     always = described_class.new(FakeExecutor.new { raise W::DatabaseError.new("deadlock detected", "40P01") })
     expect { always.sync_concurrency_policies("app", []) }.to raise_error(W::DatabaseError, "deadlock detected")
   end
+
+  it "sends a callback without a run time and retries a group once after a contract mismatch" do
+    group = "0190a6f8-0000-7000-8000-0000000000aa"
+    snapshot = {"group_id" => group, "state" => "sealed", "result" => nil, "total" => "1", "succeeded" => "0",
+                "failed" => "0", "canceled" => "0", "pending" => "1", "created_at" => nil, "sealed_at" => nil,
+                "finished_at" => nil, "canceled_at" => nil, "canceled_by" => nil, "cancel_reason" => nil,
+                "callbacks" => '{"on_finish": {"taskId": null}}'}
+    creates = 0
+    executor = FakeExecutor.new do |sql, _params|
+      case sql
+      when W::SqlCatalogue::CREATE_TASK_GROUP_V1
+        creates += 1
+        if creates == 1
+          [{"group_id" => nil, "ordinal" => "0", "task_id" => nil, "outcome" => "contract_mismatch",
+            "reason" => '{"taskTypes":["report"]}'}]
+        else
+          [{"group_id" => group, "ordinal" => "1", "task_id" => task, "outcome" => "accepted", "reason" => nil}]
+        end
+      when W::SqlCatalogue::GET_TASK_GROUP_V1 then [snapshot]
+      else []
+      end
+    end
+    report = W::EnqueueRequest.new(task_type: "report", payload: {})
+
+    result = described_class.new(executor).task_group(on_finish: report) { |builder| builder.enqueue("member", {}) }
+
+    expect(creates).to eq(2)
+    expect([result.group.id, result.group.state, result.tasks.map(&:task_id)]).to eq([group, :sealed, [task]])
+    expect(result.group.callbacks).to eq([W::TaskGroupCallback.new(kind: :on_finish, task_id: nil)])
+    sql, params = executor.statements.find { |statement, _| statement == W::SqlCatalogue::CREATE_TASK_GROUP_V1 }
+    expect(sql).to eq(W::SqlCatalogue::CREATE_TASK_GROUP_V1)
+    callbacks = JSON.parse(params[0])
+    expect(callbacks.keys).to eq(["onFinish"])
+    expect(callbacks["onFinish"]).not_to have_key("runAt")
+    expect(JSON.parse(params[1]).first).to have_key("runAt")
+    expect(params[2]).to eq("true")
+  end
+
+  it "refuses a group request before any statement" do
+    executor = FakeExecutor.new
+    queue = described_class.new(executor)
+
+    expect { queue.add_to_task_group("not-a-uuid", []) }.to raise_error(ArgumentError, "task group ID must be a UUID String")
+    expect { queue.list_task_group_members(task, limit: 1001) }.to raise_error(ArgumentError, /between 1 and 1000/)
+    expect { queue.list_task_group_members(task, after: -1) }.to raise_error(ArgumentError, /non-negative/)
+    expect { queue.task_group { |builder| builder.add([{}]) } }
+      .to raise_error(ArgumentError, "requests must be an Array of EnqueueRequest")
+    expect(executor.statements).to be_empty
+  end
 end

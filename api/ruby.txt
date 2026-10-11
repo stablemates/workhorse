@@ -21,15 +21,20 @@ class Stablemates::Workhorse::ActiveRecordExecutor
 class Stablemates::Workhorse::Admin
   def initialize(executor)
   def assert_compatible
+  def cancel_task_group(group_id, audit:)
   def get_checkpoint(task_id, name)
   def get_progress(task_id)
   def get_task(task_id)
+  def get_task_group(group_id)
   def get_task_timeline(task_id, limit: 100, cursor: nil)
   def get_wait(task_id, name)
   def list_checkpoints(task_id)
   def list_dead_letters(limit: 100, cursor: nil, queue: nil, type: nil, tags: [], error_name: nil, finished_after: nil, finished_before: nil)
   def list_human_waits(limit: 100, cursor: nil)
   def list_signal_waits(limit: 100, cursor: nil)
+  def list_task_group_drift(limit: 1000)
+  def list_task_group_events(group_id, limit: 1000)
+  def list_task_group_members(group_id, after: 0, limit: 100)
   def list_tasks(queue: nil, type: nil, states: [], created_after: nil, created_before: nil, limit: 100, cursor: nil, payload: TaskPayloadProjection.new)
   def list_waits(task_id)
   def list_workers
@@ -37,6 +42,7 @@ class Stablemates::Workhorse::Admin
   def purge_queue(queue, audit:)
   def redrive(source_task_id, audit:)
   def redrive_many(audit:, limit: 100, dry_run: false, cursor: nil, queue: nil, type: nil, tags: [], error_name: nil, finished_after: nil, finished_before: nil)
+  def repair_task_group_drift(audit:, limit: 1000)
   def resume_queue(queue, audit:)
   def set_worker_paused(worker_id, paused, audit:)
 
@@ -55,6 +61,7 @@ class Stablemates::Workhorse::BatchHandlerContext
   def get_progress
   def set_progress(progress)
   def task
+  def task_group
 
 class Stablemates::Workhorse::BatchHandlerItem
   superclass Data
@@ -260,6 +267,7 @@ class Stablemates::Workhorse::HandlerContext
   def sleep(name, seconds)
   def sleep_until(name, time)
   def task
+  def task_group
   def wait_for_human(name, context, timeout: nil)
   def wait_for_signal(name, timeout: nil)
 
@@ -309,22 +317,29 @@ class Stablemates::Workhorse::PurgeIdempotencyConflictError
 
 class Stablemates::Workhorse::Queue
   def initialize(executor, default_queue: "default")
+  def add_to_task_group(group_id, requests)
   def assert_compatible
   def cancel(task_id, requested_by:, reason: nil)
   def complete_human_wait(task_id, name, result, idempotency_key:, requested_by:)
+  def create_task_group(on_finish: nil, on_success: nil, on_failure: nil)
   def default_queue
   def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
   def enqueue_many(requests)
+  def find_task_group(task_id)
+  def get_task_group(group_id)
   def health
   def list_budgets(names: nil)
   def list_concurrency_policies(queues: nil)
   def list_rate_limit_policies(queues: nil)
+  def list_task_group_members(group_id, after: 0, limit: 100)
+  def seal_task_group(group_id)
   def send_signal(task_id, name, payload, idempotency_key:, requested_by:)
   def sync_budgets(namespace, definitions, prune: true)
   def sync_concurrency_policies(namespace, definitions, prune: true)
   def sync_contracts(contracts)
   def sync_rate_limit_policies(namespace, definitions, prune: true)
   def sync_schedules(namespace, schedules, prune: true)
+  def task_group(on_finish: nil, on_success: nil, on_failure: nil)
 
 class Stablemates::Workhorse::RateLimit
   superclass Data
@@ -380,6 +395,77 @@ class Stablemates::Workhorse::TaskContractVersion
   superclass Data
   members payload_schema, result_schema, max_payload_bytes, max_result_bytes, sensitive_payload_keys, sensitive_result_keys
   def initialize(payload_schema: true, result_schema: true, max_payload_bytes: nil, max_result_bytes: nil, sensitive_payload_keys: [], sensitive_result_keys: [])
+
+class Stablemates::Workhorse::TaskGroup
+  superclass Data
+  members id, state, result, counts, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks
+
+class Stablemates::Workhorse::TaskGroupBlockResult
+  superclass Data
+  members group, tasks
+
+class Stablemates::Workhorse::TaskGroupBuilder
+  def add(requests)
+  def enqueue(task_type, payload, **)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
+
+class Stablemates::Workhorse::TaskGroupCallback
+  superclass Data
+  members kind, task_id
+
+class Stablemates::Workhorse::TaskGroupClosedError
+  superclass Stablemates::Workhorse::DiagnosedError
+  def initialize(details)
+  def group_id
+  def reason
+  def state
+
+class Stablemates::Workhorse::TaskGroupContext
+  def add(requests)
+  def get
+
+class Stablemates::Workhorse::TaskGroupCounts
+  superclass Data
+  members total, succeeded, failed, canceled, pending
+
+class Stablemates::Workhorse::TaskGroupDrift
+  superclass Data
+  members group_id, state, recorded, counted, action
+
+class Stablemates::Workhorse::TaskGroupEvent
+  superclass Data
+  members id, type, details, occurred_at
+
+class Stablemates::Workhorse::TaskGroupLimitExceededError
+  superclass Stablemates::Workhorse::DiagnosedError
+  def initialize(details)
+  def group_id
+  def limit
+  def requested
+  def total
+
+class Stablemates::Workhorse::TaskGroupLink
+  superclass Data
+  members role, callback, group
+
+class Stablemates::Workhorse::TaskGroupMember
+  superclass Data
+  members position, task_id, queue, type, state, outcome, added_at, counted_at
+
+class Stablemates::Workhorse::TaskGroupMemberPage
+  superclass Data
+  members members, next_after
+
+class Stablemates::Workhorse::TaskGroupMembershipConflictError
+  superclass Stablemates::Workhorse::DiagnosedError
+  def initialize(details)
+  def group_id
+  def member_of
+  def ordinal
+  def task_id
+
+class Stablemates::Workhorse::TaskGroupRepair
+  superclass Data
+  members group_id, recorded_pending, pending, action
 
 class Stablemates::Workhorse::TaskListCursor
   superclass Data
@@ -482,7 +568,9 @@ module Stablemates::Workhorse
 module Stablemates::Workhorse::ActiveJob
   OPTION_KEYS = [:task_type, :max_attempts, :tags, :concurrency_key]
   TASK_TYPE = "active_job"
+  def self.current_task_group
   def self.handle(worker, jobs: [])
+  def self.task_group(on_finish: nil, on_success: nil, on_failure: nil, queue: nil, &)
 
 module Stablemates::Workhorse::ActiveJob::Options
   def self.included(base)
