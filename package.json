@@ -177,6 +177,7 @@
     "rust:integration": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts cargo test --package workhorse --features opentelemetry,dashboard --test postgres --test enqueue_postgres --test client_postgres --test admin_postgres --test worker_postgres --test durable_postgres --test protocol_conformance --test dashboard_conformance --test dashboard_http --test non_finite_postgres",
     "rust:gates": "pnpm rust:format:check && pnpm rust:clippy && pnpm rust:test && pnpm rust:conformance:check",
     "ruby:install": "tsx scripts/with-env.ts sh -c 'cd ruby && bundle check > /dev/null || bundle install'",
+    "ruby:lockfile-check": "tsx scripts/with-env.ts tsx scripts/check-ruby-lockfiles.ts",
     "ruby:lint": "pnpm ruby:install && tsx scripts/with-env.ts sh -c 'cd ruby && bundle exec rake lint'",
     "ruby:test": "pnpm ruby:install && tsx scripts/with-env.ts sh -c 'cd ruby && bundle exec rake test'",
     "ruby:gates": "pnpm ruby:lint && WORKHORSE_REQUIRE_DATABASE=1 pnpm ruby:test",
