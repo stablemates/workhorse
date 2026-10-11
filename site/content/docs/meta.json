@@ -24,6 +24,7 @@
     "fast-tier",
     "retries",
     "durable-execution",
+    "handler-changes",
     "signals",
     "human-waits",
     "child-tasks",
