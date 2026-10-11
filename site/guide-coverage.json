@@ -7,6 +7,7 @@
     "110-retries": "retries",
     "120-cancellation": "cancellation",
     "130-durable-waits": "durable-execution",
+    "132-handler-changes": "handler-changes",
     "135-signals": "signals",
     "140-deadlines-and-timeouts": "deadlines",
     "145-human-decisions": "human-waits",

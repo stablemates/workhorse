@@ -184,7 +184,8 @@ task waits.
 3. The checkpoint runs its operation, and the customer gets a second welcome email.
 
 Thus, a changed name runs its work again. A changed wait name also starts a new wait. Keep each
-name the same in all deployments while a task can use it.
+name the same in all deployments while a task can use it. To change other parts of a handler
+while its tasks wait, read [132-handler-changes.md](132-handler-changes.md).
 
 Workhorse also checks a repeated wait. If a relative wait repeats with a different duration,
 Workhorse keeps the first wake time. If an absolute wait repeats with a different time, Workhorse
