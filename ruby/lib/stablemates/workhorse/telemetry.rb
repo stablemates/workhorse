@@ -44,7 +44,18 @@ module Stablemates
 
       def tracing? = defined?(::OpenTelemetry::Trace::Propagation::TraceContext) ? true : false
 
-      def metrics? = tracing? && ::OpenTelemetry.respond_to?(:meter_provider)
+      def metrics? = tracing? && !meter_provider.nil?
+
+      # +opentelemetry-metrics-api+ 0.9 keeps the global provider in +OpenTelemetry::Internal+ and
+      # defines the public accessor only when the SDK or +opentelemetry/metrics/global+ loads. 0.8
+      # defines only the public accessor.
+      def meter_provider
+        if defined?(::OpenTelemetry::Internal) && ::OpenTelemetry::Internal.respond_to?(:meter_provider)
+          ::OpenTelemetry::Internal.meter_provider
+        elsif ::OpenTelemetry.respond_to?(:meter_provider)
+          ::OpenTelemetry.meter_provider
+        end
+      end
 
       # The current W3C trace context as a carrier Hash, or nil without OpenTelemetry, without a
       # valid span, or when the carrier exceeds the protocol's byte limit.
@@ -147,7 +158,7 @@ module Stablemates
 
         @instruments.compute_if_absent(name) do
           kind, description, unit = INSTRUMENTS.fetch(name)
-          meter = ::OpenTelemetry.meter_provider.meter(INSTRUMENTATION_NAME)
+          meter = meter_provider.meter(INSTRUMENTATION_NAME)
           (kind == :counter) ? meter.create_counter(name, unit: unit, description: description) :
             meter.create_histogram(name, unit: unit, description: description)
         end

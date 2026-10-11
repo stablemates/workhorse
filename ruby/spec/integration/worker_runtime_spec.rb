@@ -73,6 +73,13 @@ module RecordedTelemetry
 end
 
 OpenTelemetry.tracer_provider = RecordedTelemetry::TracerProvider.new
+begin
+  # opentelemetry-metrics-api 0.9 defines the public accessor only behind this require; 0.8 has no
+  # such file and defines the accessor itself.
+  require "opentelemetry/metrics/global"
+rescue LoadError
+  nil
+end
 OpenTelemetry.meter_provider = RecordedTelemetry::MeterProvider.new
 
 RSpec.describe "Worker runtime against PostgreSQL" do
