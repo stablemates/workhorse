@@ -248,7 +248,7 @@ so every running process version always finds the schema shape it expects:
 3. **Contract.** A later migration removes the old shape only after no supported application
    version reads or writes it. When the removal narrows `workhorse.protocol_version`, that step
    ships as a contract step the operator runs deliberately, not as part of `workhorse schema
-migrate`; see [Contract steps and the major boundary](#contract-steps-and-the-major-boundary).
+   migrate`; see [Contract steps and the major boundary](#contract-steps-and-the-major-boundary).
 
 ```mermaid
 flowchart LR
