@@ -168,7 +168,7 @@ the producer cannot tell that a batch handler will run it.
 
 The worker forms each group inside its own process. A group never spans two worker processes, and
 it holds tasks of one queue and one task type.
-[`Queue.enqueueMany`](/docs/enqueue#enqueue-a-batch) writes several tasks in one transaction, but it
+[`Queue.enqueueMany`](/docs/enqueue#enqueue-many-tasks-in-one-call) writes several tasks in one transaction, but it
 does not decide which tasks share a group.
 
 <details>

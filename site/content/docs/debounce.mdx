@@ -1,31 +1,29 @@
 ---
 title: Keyed debounce
-description: Keep one pending task per key and replace its payload while updates keep arriving.
+description: Keep one pending task for each key and replace its payload while updates continue to arrive.
 ---
 
-Some work only matters in its latest version. Keyed debounce keeps one pending task per key and lets
-each new request replace that task's payload until the task runs.
+Some work is important only in its latest version. For example, a search index must show the latest
+text of a document. Keyed debounce keeps one pending task for each key. Each new request with that
+key replaces the payload of the task, until the task starts.
 
-## One document, three edits, one task
+## Replace a pending task while updates arrive
 
-**Example.** A user edits document `doc-42`. Your app wants to rebuild the search index for it, but
-only once the user stops typing. So every edit sends the same request: rebuild `doc-42`, with key
-`doc-42` and a quiet period of two seconds.
+**Example.** A user edits document `doc-42`. Each edit sends a request to rebuild the search index
+for `doc-42`. Each request uses the key `doc-42` and a window of 2 s.
 
-1. **At 0 s** the user saves revision 1. Workhorse creates a task and schedules it for 2 s. The
-   result is `accepted`, with a new `taskId`.
-2. **At 1 s** the user saves revision 2. A task for `doc-42` is still waiting, so Workhorse replaces
-   its payload with revision 2. The quiet period starts again, so the task now runs at 3 s. The
-   result is `replaced`, with the same `taskId`.
-3. **At 2.5 s** the user saves revision 3. Workhorse replaces the payload again and moves the run
-   time to 4.5 s.
-4. **At 4.5 s** the user has stopped typing, and the task is due. Shortly after, promotion, a
-   regular background pass that moves due tasks to `ready`, makes it ready. A worker picks it up
-   and indexes revision 3.
+1. At 0 s, the user saves revision 1. Workhorse creates a task that runs at 2 s. The outcome is
+   `accepted`.
+2. At 1 s, the user saves revision 2. Workhorse puts revision 2 in the pending task and moves its
+   run time to 3 s. The outcome is `replaced`, with the same `taskId`.
+3. At 2.5 s, the user saves revision 3. Workhorse replaces the payload again and moves the run time
+   to 4.5 s.
+4. Soon after 4.5 s, a worker indexes revision 3.
 
-Three requests produced one task and one rebuild, and the rebuild used the latest revision. Every
-request got the same `taskId` back, so your app can track the work without knowing about the
-replacements.
+Three requests make one task, and the task uses the latest revision. Each request gets the same
+`taskId`, so your app can follow the work with one ID.
+
+To use debounce, give a `debounce` key and a window when you enqueue the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -82,9 +80,9 @@ replacements.
   </Tab>
 </Tabs>
 
-PostgreSQL decides each replacement. If two app servers send a request for `doc-42` at the same
-moment, the database handles them one after the other. Both get the same `taskId`, and the later
-request's payload wins.
+If two app servers send a request with the same key at the same time, PostgreSQL runs the requests
+one at a time. Both requests get the same `taskId`. The payload of the second request stays in the
+task.
 
 <details>
 <summary>Reference: options and results</summary>
@@ -98,10 +96,10 @@ request's payload wins.
 | `windowMs` | Required. An integer from 1 to 31,536,000,000 (365 days).   |
 | `schedule` | Required. `reset` or `preserve`.                            |
 
-The key is unique within its scope.
+The key is unique in its scope.
 
 **Start time.** PostgreSQL sets the first run time to `clock_timestamp() + windowMs`. The key window
-ends at the run time. Both move together.
+ends at the run time. The two values move together.
 
 **Results.** `enqueueWithResult` returns `{ taskId, outcome }`. A `non_replaceable` result also has
 a `reason`.
@@ -109,8 +107,8 @@ a `reason`.
 | `outcome`         | When                                                         |
 | ----------------- | ------------------------------------------------------------ |
 | `accepted`        | No live task has this key. Workhorse creates a new task.     |
-| `replaced`        | A pending task has this key. Workhorse replaced its payload. |
-| `non_replaceable` | A task has this key, but Workhorse cannot replace it.        |
+| `replaced`        | A pending task has this key. Workhorse replaces its payload. |
+| `non_replaceable` | A task has this key, but Workhorse cannot replace the task.  |
 
 In Ruby, `result.reason` is `:incompatible_key_mode`, `:not_pending`, or `:window_elapsed_pending`
 for a `:non_replaceable` result, and `nil` for every other outcome.
@@ -118,28 +116,28 @@ for a `:non_replaceable` result, and `nil` for every other outcome.
 **Concurrency.** `enqueue_debounce_v1` takes a transaction advisory lock on the scope and key.
 Concurrent requests for one key run one at a time.
 
-**Storage.** PostgreSQL stores a hash of the key, never the raw key. Events show a short preview and
-the first 12 hexadecimal characters of the key digest.
+**Storage.** PostgreSQL stores a hash of the key. It does not store the raw key. Events show a
+short preview and the first 12 hexadecimal characters of the key digest.
 
 More detail: [Task lifecycle: Keyed debounce](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#keyed-debounce).
 
 </details>
 
-## Reset or preserve the schedule
+## Choose to reset or preserve the run time
 
-In the example, every edit started the quiet period again. That is `schedule: "reset"`. A user who
-never stops typing never gets a rebuild, so pick `reset` when you want the work to run only after
-the requests stop.
+The `schedule` option sets what a replacement does to the run time. In the first example, each
+edit moves the run time. That is `schedule: "reset"`. If the user never stops typing, the task
+never runs. Use `reset` if the work must run only after the requests stop.
 
-Now replay the first two edits with `schedule: "preserve"`:
+**Example.** The first two edits of `doc-42` use `schedule: "preserve"`.
 
-1. **At 0 s** revision 1 creates the task and schedules it for 2 s.
-2. **At 1 s** revision 2 replaces the payload. The run time stays at 2 s.
-3. **At 2 s** the task is due. Shortly after, a worker indexes revision 2.
+1. At 0 s, the user saves revision 1. Workhorse creates a task that runs at 2 s.
+2. At 1 s, the user saves revision 2. Workhorse replaces the payload. The run time stays at 2 s.
+3. Soon after 2 s, a worker indexes revision 2.
 
-With `schedule: "preserve"`, the first request fixes the run time. Later requests only replace the
-payload, so the task runs with whichever revision arrived last before its run time. Pick `preserve`
-when the work must run by a known time, even while requests keep arriving.
+With `preserve`, the first request sets the run time. Later requests replace only the payload. The
+task runs with the last revision that arrives before its run time. Use `preserve` if the work must
+run by a known time while requests continue to arrive.
 
 <details>
 <summary>Reference: schedule policies</summary>
@@ -157,39 +155,41 @@ More detail: [Task lifecycle: Replacement](https://github.com/stablemates/workho
 
 </details>
 
-## Replacement stops when processing starts
+## Handle updates after the task starts
 
-Go back to the example. At 5 s the indexer is rebuilding `doc-42` with revision 3, and the user
-saves revision 4. The running task cannot take a new payload, because a worker is already using the
-old one. The quiet period for that task is over. So Workhorse treats revision 4 as new work and
-creates a second task, with a new `taskId`, that waits its own quiet period.
+Workhorse can replace the payload only while the task is pending. A worker uses the payload of a
+running task, so Workhorse cannot change it.
 
-A request is refused, with the outcome `non_replaceable`, in a narrower case: a task for the key
-still exists but cannot be changed. Workhorse then drops the new payload and returns the existing
-task's `taskId`. The existing task keeps its payload. The result's stable `reason` says why, so a
-caller can tell lifecycle movement from an incompatible request:
+**Example.** The task for `doc-42` holds revision 3. Its window closed at 4.5 s.
 
-- **`not_pending`.** The quiet period is still open, but the task can no longer be replaced. It has
-  started, it is waiting durably, it is backing off before a retry, or it has ended, for example
-  because someone canceled it.
-- **`window_elapsed_pending`.** The quiet period is over, but no worker has started the task yet.
-  This also covers a task that waits durably or backs off before a retry after its quiet period.
-  Workhorse refuses a new task here. Otherwise a late request would put a second live task beside
-  work that is already overdue.
-- **`incompatible_key_mode`.** The key is in use for enqueue idempotency or throttle, not
+1. At 4.6 s, a worker starts the task.
+2. At 5 s, the user saves revision 4.
+3. Workhorse creates a second task for revision 4, with a new `taskId`. The outcome is `accepted`.
+4. If no other edit arrives, a worker runs the second task soon after 7 s.
+
+After the window closes and the task starts, Workhorse treats a new request as new work.
+
+In other cases, a task for the key exists, but Workhorse cannot replace it. Then the outcome is
+`non_replaceable`. Workhorse discards the new payload and returns the `taskId` of the existing task.
+The existing task does not change. The `reason` of the result tells why. The reason is stable.
+Thus, your app can tell a change of the task state from an incompatible request:
+
+- **`not_pending`.** The window is open, but the task is not pending. The task started, is in a
+  durable wait, waits for a retry, or ended. For example, an operator canceled it.
+- **`window_elapsed_pending`.** The window is closed, but no worker started the task. This reason
+  also applies to a task that is in a durable wait or waits for a retry after its window. Workhorse
+  does not create a new task in this case. Otherwise, a late request can add a second live task
+  next to work that is already late.
+- **`incompatible_key_mode`.** The key is in use for enqueue idempotency or throttle, not for
   debounce.
-
-Two operator actions end a key early. After an operator purges the queue, the same key accepts a
-fresh task. After an operator runs a debounced task now, from the dashboard or `Admin.runTaskNow`,
-its quiet period ends. The next request with that key creates a new task.
 
 <details>
 <summary>Reference: replacement conditions and refusals</summary>
 
-**Replacement.** PostgreSQL replaces the pending task only when all of these are true:
+**Replacement.** PostgreSQL replaces the pending task only when all of these conditions are true:
 
 1. The key window is still open.
-2. The key was created by debounce.
+2. Debounce created the key.
 3. The task is `scheduled` or `ready`.
 4. `attempt_started_at` and `wait_name` are null.
 5. `current_attempt` is 1.
@@ -207,28 +207,24 @@ its quiet period ends. The next request with that key creates a new task.
 A refusal appends a `debounce_rejected` event with the same reason. PostgreSQL discards the new
 payload. The accepted task does not change.
 
-**Operator actions**
-
-- A queue purge deletes the key before the task. The next request is `accepted`.
-- `run_task_now_v1` deletes the key of the released task. The next request is `accepted` as a new
-  task.
-
 More detail: [Task lifecycle: Rejection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#rejection).
 
 </details>
 
-## Debounce is not idempotency
+## Use one keyed mode in each request
 
-Suppose the request for `doc-42` also sets an [enqueue idempotency](/docs/idempotency) key. At 0 s
-your app sends it. The SDK rejects the request before it sends a query, and no task exists.
+A keyed mode is enqueue idempotency, debounce, or throttle. One request cannot use debounce with
+[enqueue idempotency](/docs/idempotency) or with [throttle](/docs/throttle). If a request sets two
+keyed modes, the SDK rejects it before it sends a query. Workhorse creates no task.
 
-Debounce and enqueue idempotency solve different problems. Idempotency replays an equivalent request
-and rejects a changed one. Debounce deliberately accepts a changed payload while one task stays
-pending. So one request cannot use both.
+Each keyed mode gives a repeated key a different meaning. Idempotency returns the same task for an
+equal request and rejects a changed request. Debounce accepts a changed payload while one task
+stays pending.
 
-A debounced task also cannot declare the deprecated `prerequisiteTaskId` or `dependencies`.
-Replacement changes the accepted task, but dependency edges must stay stable after acceptance. Use a
-regular [dependent task](/docs/task-dependencies) when dispatch must wait for other work.
+A debounced task also cannot set `dependencies` or the deprecated `prerequisiteTaskId`. A
+replacement changes the accepted task, but the dependencies of a task must not change after
+acceptance. If the task must wait for other work, use a regular
+[dependent task](/docs/task-dependencies).
 
 <details>
 <summary>Reference: options that cannot be combined with debounce</summary>
@@ -248,11 +244,29 @@ More detail: [Task lifecycle: Keyed debounce](https://github.com/stablemates/wor
 
 </details>
 
+## Release a key before its window ends
+
+Usually, a key is free again when its window closes. Two operator actions release a key earlier. If
+an operator purges the queue, the next request with the key creates a new task. If an operator runs
+a debounced task now, from the dashboard or with `Admin.runTaskNow`, its window ends. The next
+request with that key creates a new task.
+
+<details>
+<summary>Reference: operator actions</summary>
+
+- A queue purge deletes the key before the task. The next request is `accepted`.
+- `run_task_now_v1` deletes the key of the released task. The next request is `accepted` as a new
+  task.
+
+More detail: [Task lifecycle: Fresh acceptance](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#fresh-acceptance).
+
+</details>
+
 ## Next
 
-- [Throttle](/docs/throttle) — reuse equivalent work without replacing it
-- [Idempotent enqueue](/docs/idempotency) — replay an identical request
-- [Task dependencies](/docs/task-dependencies) — keep accepted work blocked
+- [Throttle](/docs/throttle) — accept one task for each window
+- [Idempotent enqueue](/docs/idempotency) — return the same task for a repeated request
+- [Task dependencies](/docs/task-dependencies) — keep a task blocked until other work ends
 
 ---
 

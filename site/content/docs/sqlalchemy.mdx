@@ -14,17 +14,17 @@ savepoints, and pool return. Workhorse keeps its schema lifecycle outside your O
 For synchronous SQLAlchemy, use its Psycopg dialect with `Queue`. For asynchronous SQLAlchemy,
 install `SQLAlchemy[asyncio]` and Psycopg, then use its `postgresql+psycopg` dialect with `AsyncQueue`.
 
-The [enqueue page](/docs/enqueue#asynchronous-sqlalchemy-with-psycopg) owns the accessor,
+The [enqueue page](/docs/enqueue#enqueue-in-an-asynchronous-sqlalchemy-transaction) owns the accessor,
 session flush, serialized-use, lifetime, installation, and tested-version guidance.
 It also links the runnable example and continuously collected integration fixture.
 
 SQLAlchemy's asyncpg dialect is **not supported** by this recipe. Executable tests reproduce
 lazy transaction startup and JSON codec incompatibilities. See the
-[asyncpg boundary](/docs/enqueue#sqlalchemys-asyncpg-dialect-is-not-supported) before choosing that dialect.
+[asyncpg boundary](/docs/enqueue#do-not-use-the-asyncpg-dialect-of-sqlalchemy) before choosing that dialect.
 Workhorse's independently owned asyncpg connections and pools remain supported.
 
 ## Next
 
-- [Enqueue inside your transaction](/docs/enqueue#join-an-application-transaction)
+- [Enqueue inside your transaction](/docs/enqueue#enqueue-a-task-in-your-transaction)
 - [Choose separate worker resources](/docs/worker-processes)
 - [Keep schema installation separate](/docs/installation)

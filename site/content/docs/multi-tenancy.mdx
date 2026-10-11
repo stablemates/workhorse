@@ -73,7 +73,7 @@ options that Workhorse already enforces:
 
 The claim passes over a tenant at its cap only within a bounded window of the oldest ready tasks.
 If one tenant's waiting backlog fills that whole window, the claim reaches no other tenant's work.
-[Avoid a blocked queue](/docs/concurrency-policies#avoid-a-blocked-queue) covers that case.
+[Avoid a blocked queue](/docs/concurrency-policies#keep-a-full-key-from-blocking-other-work) covers that case.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
