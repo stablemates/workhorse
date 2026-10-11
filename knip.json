@@ -43,6 +43,12 @@
     },
     "typescript/typeorm": {
       "ignoreDependencies": ["typeorm"]
+    },
+    "site": {
+      "entry": ["vite.config.ts"],
+      "vite": {
+        "config": []
+      }
     }
   }
 }
