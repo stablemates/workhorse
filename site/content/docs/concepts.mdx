@@ -1,34 +1,38 @@
 ---
 title: Core concepts
-description: Follow one task from enqueue to outcome, then see who owns it, why it can run twice, and what history it leaves.
+description: Follow one task from enqueue to outcome. See which worker owns it, why it can run two times, and what history it keeps.
 ---
 
-Most queue bugs are model bugs. You assumed a task runs once, or that a dead worker's writes stop
-mattering, or that finished tasks slow the queue down. This page gives you the model that makes
-Workhorse's behavior predictable: where a task lives, who may touch it, and what remains afterward.
+Many queue errors come from a wrong model of the queue. For example, you expect a task to run one
+time, or you expect a stopped worker to write nothing. This page gives the model of Workhorse: where
+a task is, which worker can change it, and what stays after it finishes. With this model, you can
+predict the behavior of Workhorse.
 
-## A task is three kinds of row
+A **task** is one unit of work that Workhorse accepted. It has a queue, a type, a payload, and the
+rules to run it. Workhorse keeps a task in three tables, not in one row.
 
-**Example.** An application enqueues a `resize-image` task on the `media` queue. A worker runs it
-once, and it succeeds. This is what each table holds along the way.
+## Follow a task from enqueue to outcome
 
-1. **Enqueue.** Workhorse inserts a `task` row with a new ID and the accepted definition. In the same
-   transaction it inserts a `task_runtime` row in state `ready`. No `task_outcome` row exists yet.
-2. **Claim.** A worker claims the task. The same `task_runtime` row changes to `active`, and it now
-   names the worker that owns it. The `task` row does not change.
-3. **Completion.** The handler returns. In one transaction, Workhorse deletes the `task_runtime` row
-   and inserts a `task_outcome` row with state `succeeded` and the result.
-4. **Afterwards.** The `task` row and the `task_outcome` row stay. Nothing updates either again.
+**Example.** An application enqueues a `resize-image` task on the `media` queue. A worker runs the
+task one time, and the task succeeds.
+
+1. Workhorse inserts a `task` row with a new ID and the accepted definition. In the same
+   transaction, it inserts a `task_runtime` row in the state `ready`.
+2. A worker claims the task. The `task_runtime` row changes to `active` and names the worker. The
+   `task` row does not change.
+3. The handler returns. In one transaction, Workhorse deletes the `task_runtime` row and inserts a
+   `task_outcome` row with the state `succeeded` and the result.
+4. The `task` row and the `task_outcome` row stay. Workhorse does not update them again.
 
 Each table has one purpose:
 
 - **`task`** holds the stable ID and the accepted definition: queue, type, payload, attempt budget,
-  and policy. A pending [keyed debounce](/docs/debounce) may replace that definition while keeping
-  the ID. Once the task starts or becomes non-replaceable, Workhorse freezes the definition.
-- **`task_runtime`** holds what changes while the task is alive: its state, its current attempt, and
-  the worker that owns it, if any. Workers and SQL functions update this one row many times.
-- **`task_outcome`** holds the final answer: `succeeded`, `failed`, or `canceled`, with the result or
-  the error. Workhorse writes it once, at the end, and never updates it.
+  and policy. A pending [keyed debounce](/docs/debounce) can replace the definition and keep the
+  ID. When the task starts or becomes non-replaceable, Workhorse freezes the definition.
+- **`task_runtime`** holds the data that changes while the task is live. This data is the state, the
+  current attempt, and the worker that owns the task. Workhorse updates this row many times.
+- **`task_outcome`** holds the final result: `succeeded`, `failed`, or `canceled`, with the result
+  or the error. Workhorse writes this row one time, at the end, and does not update it.
 
 <details>
 <summary>Reference: core tables and states</summary>
@@ -61,21 +65,23 @@ More detail: [Data model: State-specific fields](https://github.com/stablemates/
 
 </details>
 
-## The rule that ties them together
+## Tell a live task from a finished task
 
-In the `resize-image` story, the task had a `task_runtime` row until completion and a
-`task_outcome` row after it. At no committed moment did it have both, or neither.
+In the `resize-image` example, the task had a `task_runtime` row until it succeeded. After that, it
+had a `task_outcome` row. At no time did a committed change give it both rows, or no row.
 
-That is the rule. After any committed change, a task has exactly one of the two rows. So finishing a
-task is not an update. It is a delete and an insert in one transaction. No reader can see a task
-that looks both alive and finished, or neither. The architecture reference calls this rule
-"lifecycle exclusivity".
+This is a rule for each task. After each committed change, a task has exactly one of the rows
+`task_runtime` and `task_outcome`. Thus, Workhorse does not finish a task with an update. It deletes
+one row and inserts the other row in one transaction. A reader never sees a task that is both live
+and finished, or neither.
 
-A task on a [fast-tier queue](/docs/fast-tier) keeps the same rule. It uses two leaner tables in
-place of `task_runtime` and `task_outcome`, and it writes history only when its queue opts in.
+A task on a [fast-tier queue](/docs/fast-tier) obeys the same rule. It uses two smaller tables in
+place of `task_runtime` and `task_outcome`. It writes history only when its queue enables history.
 
 <details>
 <summary>Reference: lifecycle exclusivity</summary>
+
+The architecture reference calls this rule "lifecycle exclusivity".
 
 - For every accepted task, exactly one of `task_runtime` and `task_outcome` exists after a committed
   transition.
@@ -90,19 +96,19 @@ More detail: [Data model: Data model](https://github.com/stablemates/workhorse/b
 
 </details>
 
-## The seven states
+## Read the state of a task
 
-Replay the `resize-image` task with a future `runAt` and one failed attempt.
+A task is always in one of seven states. A live task has one of four states, and a finished task has
+one of three states.
 
-1. **At enqueue** the task is `scheduled`, because its run time is in the future.
-2. **At its run time** promotion, a regular background pass, makes the due task `ready`. It waits
-   for a worker slot in queue-local FIFO order.
-3. **A worker claims it.** The task is `active`, owned by that worker under a lease.
-4. **The handler throws.** Budget remains, so the task returns to `scheduled` with a retry delay.
-5. **The retry delay passes.** The task becomes `ready`, then `active` again on the next claim.
-6. **The handler returns.** The task is `succeeded`, and its result is stored.
+**Example.** The application enqueues the `resize-image` task with a future `runAt`. The first
+attempt fails.
 
-A live task is always in one of four states, and a finished task in one of three:
+1. At enqueue, the task is `scheduled`, because its run time is in the future.
+2. At its run time, Workhorse makes the task `ready`. The task waits for a worker.
+3. A worker claims the task, and the task becomes `active`.
+4. The handler throws an error. Attempts remain, so the task becomes `scheduled` with a retry delay.
+5. After the delay, a worker runs the task again. The handler returns, and the task is `succeeded`.
 
 ```
 blocked ──▶ scheduled ──▶ ready ──▶ active ──▶ succeeded
@@ -110,16 +116,16 @@ blocked ──▶ scheduled ──▶ ready ──▶ active ──▶ succeeded
    └────────────────────────┘ └(retry)─┘  └───▶ canceled
 ```
 
-- `blocked`: the task waits on [prerequisite tasks](/docs/task-dependencies). Its dependency policy
-  decides whether it is released or terminally settled when they finish.
-- `scheduled`: the task has a future `runAt`, a retry delay, or a durable sleep in progress.
-- `ready`: the task is eligible and waits for a worker slot, in queue-local FIFO order.
+- `blocked`: the task waits for [prerequisite tasks](/docs/task-dependencies). When they finish,
+  its dependency policy makes the task ready or finishes it.
+- `scheduled`: the task has a future `runAt`, a retry delay, or a durable sleep.
+- `ready`: the task can run, and it waits for a worker.
 - `active`: one worker owns the task under a lease and runs its handler.
-- `succeeded`, `failed`, `canceled`: terminal. Workhorse stores the result, the error, or the
-  cancellation envelope.
+- `succeeded`, `failed`, `canceled`: the task is finished. Workhorse stores the result, the error,
+  or the cancellation envelope.
 
-`Admin.getTask` returns a snapshot with `state`, `currentAttempt`, `result`, and `error`, whichever
-side of the split the task is on.
+To read the state of a task, call `Admin.getTask`. It returns `state`, `currentAttempt`, `result`,
+and `error`, for a live task and for a finished task.
 
 ```ts
 const admin = new Admin(pool);
@@ -140,23 +146,26 @@ console.log(task?.state, task?.currentAttempt, task?.result);
 | `ready`     | `ready_at` and the FIFO `sequence` are set. Ownership fields are null.                  |
 | `active`    | Worker, heartbeat, lease expiry, a positive fence token, and `attempt_started_at`.      |
 
+When a `scheduled` task is due, Workhorse changes its state to `ready`. Claims take `ready` tasks by
+priority, then in queue-local FIFO order.
+
 `Admin.getTask` returns a `TaskSnapshot`. Its `fenceToken` is zero before the first claim, and its
 `result` stays null until the task succeeds.
 
-More detail: [Data model: State-specific fields](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#state-specific-fields).
+More detail: [Data model: State-specific fields](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#state-specific-fields) and [Data model: Dispatch indexes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#dispatch-indexes).
 
 </details>
 
-## Why finished tasks do not slow dispatch
+## Keep a large history from slowing claims
 
-Workers search `task_runtime` every time they claim work. They ask what is ready to run in this
-queue. In the story, the `resize-image` row left `task_runtime` at completion. So that table holds
-only live work: scheduled, blocked, ready, or running. Finished tasks are not in the table that the
-search reads.
+Each time a worker claims work, it searches `task_runtime` for ready tasks in its queue. Workhorse
+removes the row of a task from `task_runtime` when the task finishes. Thus, this table holds only
+live work: tasks that are scheduled, blocked, ready, or active.
 
-The split keeps completed history out of the ready scan. Its goal is for dispatch cost to scale with
-live work, not with all work the queue has ever processed. Other factors still affect claim latency.
-They include the current backlog, policy checks, database load, and index health.
+This split keeps finished tasks out of the search for ready tasks. The goal is that the cost of a
+claim depends on live work, not on all the work that the queue processed before. Other factors also
+change the time of a claim. They include the number of ready tasks, policy checks, the database load,
+and the health of the indexes.
 
 <details>
 <summary>Reference: dispatch indexes</summary>
@@ -175,20 +184,27 @@ More detail: [Data model: Dispatch indexes](https://github.com/stablemates/workh
 
 </details>
 
-## Who owns active work
+## Know which worker owns a task
 
-Worker A has two free slots. It calls `claim_many_v1` with a limit of two. Workhorse admits the
-tasks that the queue's policies allow. On each `task_runtime` row it records A's worker ID, a lease
-expiry, and a fence token. While the handlers run, A sends every active lease through
-`heartbeat_many_v1`.
+Only the worker that owns a task can change the state of the task. A **lease** is the right of one
+worker to run one task until a time limit. A **fence token** is a number that Workhorse gives to
+each claim. A later claim always gets a higher number.
 
-Now A's process freezes, and its heartbeats stop. Once the lease expires, recovery closes the old
-attempt and makes the task eligible again. Worker B claims it with a new, higher fence token. When A
-wakes and tries to complete the task, its write carries the old token, and Workhorse refuses it.
+**Example.** Worker A has two free slots.
 
-Every semantic write carries the worker ID and fence token. So a stale worker cannot complete, fail,
-or change a task after a newer worker has claimed it. [Workers](/docs/workers) walks through the full
-mechanics.
+1. Worker A calls `claim_many_v1` with a limit of two. Workhorse gives it the tasks that the queue
+   policies allow.
+2. On each `task_runtime` row, Workhorse records the worker ID of A, a lease expiry, and a fence
+   token. While the handlers run, `heartbeat_many_v1` renews each lease.
+3. The process of worker A stops, and its heartbeats stop too. The lease expires, and a worker makes
+   the task available again.
+4. Worker B claims the task with a new, higher fence token.
+5. The process of worker A starts again and tries to complete the task. Its write has the old fence
+   token, so Workhorse refuses the write.
+
+Each lifecycle write of a worker has the worker ID and the fence token. Thus, after a new worker
+claims a task, the old owner cannot complete, fail, or change the task. [Workers](/docs/workers) gives the
+full procedure.
 
 <details>
 <summary>Reference: claim, heartbeat, and recovery</summary>
@@ -205,45 +221,28 @@ More detail: [Task lifecycle: Claim](https://github.com/stablemates/workhorse/bl
 
 </details>
 
-## Why a handler can run twice
+## Expect a second run after a crash
 
-A `send-welcome-email` task asks a mail provider to send one email. The worker uses the default lease.
+Workhorse runs each task **at least one time**. It does not promise to run a task exactly one time.
+Thus, your handler can run two times for one task.
 
-1. **At 0 s, attempt 1.** Worker A claims the task and calls the handler. The handler asks the
-   provider to send the email.
-2. **At 1 s, the email goes out.** The provider accepts the request and sends it.
-3. **At 2 s, the crash.** Worker A's process dies before it records that the task succeeded. Nothing
-   in the database knows the email was sent.
-4. **Once the lease expires, recovery.** Recovery, a regular background pass that returns tasks with
-   expired leases, puts the task back for another attempt.
-5. **Shortly after, attempt 2.** Worker B claims the task and calls the handler. The email goes out a
-   second time.
+**Example.** A `send-welcome-email` task asks a mail provider to send one email. The worker uses the
+default lease of 30 s.
 
-The handler runs outside the transaction that grants ownership. Recovery cannot tell a crash after
-the effect from a crash before it, so it must run the handler again. No queue can close the gap
-between steps 2 and 3. The mail provider and your database are two systems, and nothing makes them
-commit as one.
+1. At 0 s, worker A claims the task. The handler asks the provider to send the email.
+2. At 1 s, the provider sends the email.
+3. At 2 s, the process of worker A stops before it records that the task succeeded.
+4. At about 30 s, the lease expires. A worker finds the expired lease and makes the task ready
+   again.
+5. Soon after, worker B claims the task. The handler asks the provider again, and the provider sends
+   a second email.
 
-The gap has a second side. The process can also die after completion commits, but before the worker
-sees the reply. The task then counts as succeeded, and the worker never learns it.
+No queue can prevent this problem. The mail provider and your database are two different systems.
+They cannot commit as one transaction. A queue that promises exactly-once delivery also needs a
+handler that is safe to run again. Workhorse states this requirement directly.
 
-That is at-least-once delivery. If repeating the work is harmless, do nothing. Setting a flag,
-overwriting a cache, and recalculating a total are all safe to run twice. If repeating it is
-expensive or wrong, you have two tools:
-
-- If an external call must not repeat across systems, give the provider a stable idempotency key.
-  Derive it from the task ID or your own order ID, never from a timestamp or a random value. In
-  attempt 2, the provider sees a key it already accepted and sends nothing.
-- If a stage must not repeat within a task, wrap it in `HandlerContext.checkpoint`. A completed
-  checkpoint replays its stored result on the next run instead of executing again.
-
-```ts
-worker.handle("invoice.send", async (payload: { invoiceId: string }, ctx) => {
-  return ctx.checkpoint("send", () =>
-    emailProvider.send({ idempotencyKey: `invoice:${payload.invoiceId}` }),
-  );
-});
-```
+The problem has a second form. The process can also stop after the completion commits, but before
+the worker gets the reply. The task is then `succeeded`, but the worker does not know it.
 
 <details>
 <summary>Reference: delivery semantics</summary>
@@ -268,30 +267,65 @@ More detail: [Task lifecycle: Delivery semantics](https://github.com/stablemates
 
 </details>
 
-## How a checkpoint replays a stage
+## Decide if a second run is a problem
 
-An invoice handler charges a card, renders an invoice, and emails it. It wraps the charge in
-`ctx.checkpoint("charge", …)` and the rendering, done by `renderInvoice`, in a checkpoint named
-`invoice`. The `sendEmail` call has no checkpoint. Invoice rendering fails once.
+If a second run of the work causes no damage, do nothing. For example, it is safe to set a flag
+again, write a cache again, or calculate a total again. Most tasks are of this type.
 
-1. **Attempt 1.** `ctx.checkpoint("charge", …)` finds no saved value. It charges the card, and
-   Workhorse saves the result under the name `charge`.
-2. **Still attempt 1.** The `invoice` checkpoint calls `renderInvoice`, which throws. Nothing is
-   saved under `invoice`. The attempt fails, and Workhorse schedules a [retry](/docs/retries).
-3. **Attempt 2.** The handler runs again from the top. `ctx.checkpoint("charge", …)` finds the saved
-   value and returns it. The card is not charged again.
-4. **Still attempt 2.** `renderInvoice` succeeds, and its result is saved under `invoice`. The
-   handler calls `sendEmail`.
+If a second run is expensive or wrong, use one of the two procedures that follow.
 
-So the code inside a checkpoint runs until its result is saved. On every later attempt, the
-checkpoint returns the saved result instead of running that code again. The `sendEmail` call can
-repeat if a later stage fails, so it needs its own protection, such as a provider idempotency key.
+## Give the provider an idempotency key
 
-Inside a handler, `HandlerContext.checkpoint` stores the result of named handler code. The shorter
-`context.checkpoint` form in examples refers to that same durable boundary. The Python worker exposes
-it as `context.checkpoint`. In the synchronous worker the operation is a regular callable. On replay,
-it returns the stored JSON value without calling the operation again.
-[Durable execution](/docs/durable-execution) covers checkpoints, durable sleeps, and their rules.
+Many payment and email services accept an idempotency key. If they get the same key two times, they
+do the work one time. This is the strongest protection, because the system that does the work keeps
+the guarantee.
+
+In the example, the handler sends the task ID as the idempotency key. In attempt 2, the provider
+finds a key that it accepted before. It returns the first result and does not send a second email.
+
+```ts
+worker.handle("send-welcome-email", async (payload: { email: string }, ctx) => {
+  await mail.send({ to: payload.email, idempotencyKey: `welcome:${ctx.task.id}` });
+});
+```
+
+Make the key from a value that does not change between attempts, such as the task ID or your order
+number. Do not use a timestamp or a random value. A retry then sends a new key, and the provider
+cannot find the duplicate.
+
+## Skip completed code with a checkpoint
+
+A **checkpoint** is a named part of handler code. Workhorse stores its result for the task. A later
+run of the task gets the stored result and does not run that code again.
+
+**Example.** An invoice handler charges a card, renders an invoice, and sends it by email. It puts
+the first two calls in checkpoints. The invoice renderer fails one time.
+
+1. In attempt 1, the `charge` checkpoint finds no stored value. It charges the card, and Workhorse
+   stores the result.
+2. Still in attempt 1, `renderInvoice` throws an error. Workhorse stores nothing under `invoice`,
+   and schedules a [retry](/docs/retries).
+3. In attempt 2, the handler starts again from the top. The `charge` checkpoint returns the stored
+   value. The card is not charged again.
+4. Still in attempt 2, `renderInvoice` succeeds. Workhorse stores its result, and the handler calls
+   `sendEmail`.
+
+```ts
+worker.handle("invoice.send", async (payload: { amount: number; email: string }, ctx) => {
+  const charge = await ctx.checkpoint("charge", () => payments.charge(payload.amount));
+  const pdf = await ctx.checkpoint("invoice", () => renderInvoice(charge.id));
+  await sendEmail(payload.email, pdf);
+});
+```
+
+The code in a checkpoint runs until Workhorse stores its result. After that, each later attempt gets
+the stored result. The `sendEmail` call has no checkpoint. It can run again if a later step fails,
+so it needs its own protection, such as a provider idempotency key.
+
+The Python worker has the same checkpoint as `context.checkpoint`. In the synchronous worker, the
+operation is a usual callable. On a later attempt, the checkpoint returns the stored JSON value and
+does not call the operation. [Durable execution](/docs/durable-execution) gives the rules for
+checkpoints and durable sleeps.
 
 <details>
 <summary>Reference: checkpoint API and rules</summary>
@@ -325,16 +359,20 @@ More detail: [Data model: Key and write rules](https://github.com/stablemates/wo
 
 </details>
 
-## The honest limit of checkpoints
+## Protect an external call that a checkpoint cannot protect
 
-Change one step in the invoice story. Worker A's process dies after the provider charges the card,
-but before the `charge` checkpoint commits. In attempt 2, `ctx.checkpoint("charge", …)` finds no
-saved value. It charges the card again.
+A checkpoint stores its value in a database transaction after your code runs. The process can stop
+between these two events.
 
-A checkpoint saves its value in a database transaction after your code has run. A process can die in
-between. So checkpoints narrow the duplicate window, but only the provider can close it. For anything
-dangerous to repeat, combine a checkpoint with a provider idempotency key. The provider then charges
-the card once, whichever attempt asks.
+**Example.** The invoice handler runs again, but the process stops at a different time.
+
+1. In attempt 1, the `charge` checkpoint charges the card.
+2. The process stops before Workhorse stores the result of `charge`.
+3. In attempt 2, the `charge` checkpoint finds no stored value. It charges the card a second time.
+
+Thus, a checkpoint makes the risk smaller, but it does not remove it. If a second run of an
+operation causes damage, use a checkpoint and a provider idempotency key together. The provider then
+charges the card only one time, for all attempts.
 
 <details>
 <summary>Reference: checkpoint window</summary>
@@ -348,22 +386,22 @@ More detail: [Data model: Handler behavior](https://github.com/stablemates/workh
 
 </details>
 
-## Where history goes
+## Find out what happened to a task
 
-In the `resize-image` story, the finished task kept its `task` and `task_outcome` rows. Workhorse
-also recorded what happened on the way. The enqueue, the claim, and the success each left an event in
-`task_event`. The one attempt left one closed-attempt row in `attempt_history`.
+In the `resize-image` example, the finished task kept its `task` row and its `task_outcome` row.
+Workhorse also recorded each event of the task. The enqueue, the claim, and the success each added
+an event to `task_event`. The one attempt added one row to `attempt_history`.
 
-Both relations are append-only, and they sit off the dispatch path, so audits never compete with
-claims. `Admin.getTaskTimeline` merges both into one cursor stream. You can then answer "what
-happened to task X" from SQL-backed records rather than log lines. Every history row has a UUIDv7
-identity that stays stable in an export store or across Workhorse installations. A retention routine
-retires old rows on its own schedule, independently of live dispatch.
+These two tables are append-only. Claims do not read them, so an audit does not slow claims.
+`Admin.getTaskTimeline` merges the two tables into one stream that you can read page by page. Thus,
+you can find what happened to a task from records in SQL, not from log lines. Each history row has a
+UUIDv7. The UUID does not change in an export store or in the history of other Workhorse
+installations. A retention routine deletes old rows on its own schedule.
 
-`task_query` is a separate bounded routing projection for operator reads. `Admin.listTasks` pages
-through its immutable creation order, then reads each task's current state from `task_runtime` or
-`task_outcome`. Claims and other lifecycle changes do not rewrite the projection or maintain broad
-state indexes on `task_runtime`.
+`Admin.listTasks` reads a separate table, `task_query`, which holds data for operator reads.
+`Admin.listTasks` reads tasks in the order of their creation. Then it reads the current state of
+each task from `task_runtime` or `task_outcome`. Claims and other lifecycle changes do not change
+`task_query`, and they do not need state indexes on `task_runtime`.
 
 <details>
 <summary>Reference: history relations</summary>
@@ -378,16 +416,21 @@ state indexes on `task_runtime`.
 - `task_event.event_id` and `attempt_history.attempt_id` are UUIDv7 values from `uuid_v7_v1()`. The
   UUID is the portable identity in an export store.
 - `retain_history_v1` runs from `run_maintenance_v1`, once per local date.
+- `Admin.getTaskTimeline` merges both relations into one cursor stream.
 
 More detail: [Data model: History](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#history).
 
 </details>
 
+## What this means for you
+
+Expect that each handler runs two times on some day. Write it so that a second run causes no damage.
+
 ## Next
 
 - [Workers](/docs/workers) — leases, fence tokens, and how a process claims tasks
-- [Retries](/docs/retries) — what happens after an attempt fails
-- [Durable execution](/docs/durable-execution) — preserve completed work across another run
+- [Retries](/docs/retries) — what occurs after an attempt fails
+- [Durable execution](/docs/durable-execution) — keep completed work for a later run
 
 ---
 

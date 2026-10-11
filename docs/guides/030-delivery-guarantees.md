@@ -2,30 +2,29 @@
 
 <!-- scenario-names: renderInvoice, sendEmail, charge, send-welcome-email -->
 
-Workhorse guarantees **at-least-once** execution. Read that carefully: at least once, not exactly
-once. This guide explains why a handler can run twice, and what to do about it.
+Workhorse runs each task **at least one time**. It does not promise to run a task exactly one time.
+Thus, your handler can run two times for one task. This guide tells why, and how to make a second
+run safe.
 
-## One email, sent twice
+## Expect a second run after a crash
 
 **Example.** A `send-welcome-email` task asks a mail provider to send one email. The worker uses the
-default lease. This is what happens on a bad day.
+default lease of 30 s.
 
-1. **At 0 s — attempt 1.** Worker A claims the task and calls the handler. The handler asks the
-   provider to send the email.
-2. **At 1 s — the email goes out.** The provider accepts the request and sends the email.
-3. **At 2 s — the crash.** Worker A's process dies before it records that the task succeeded.
-   Nothing in the database knows the email was sent.
-4. **At about 30 s — recovery.** The lease expires. Recovery, a regular background pass that
-   returns tasks with expired leases, puts the task back for another attempt.
-5. **Shortly after — attempt 2.** Worker B claims the task and calls the handler. The email goes out
-   a second time.
+1. At 0 s, worker A claims the task. The handler asks the provider to send the email.
+2. At 1 s, the provider sends the email.
+3. At 2 s, the process of worker A stops before it records that the task succeeded.
+4. At about 30 s, the lease expires. A worker finds the expired lease and makes the task ready
+   again.
+5. Soon after, worker B claims the task. The handler asks the provider again, and the provider sends
+   a second email.
 
-No queue can close the gap between steps 2 and 3. The mail provider and your database are two
-separate systems, and nothing makes them commit as one. A queue that promises exactly-once delivery
-still needs an idempotent handler to keep that promise. Workhorse asks for that directly.
+No queue can prevent this problem. The mail provider and your database are two different systems.
+They cannot commit as one transaction. A queue that promises exactly-once delivery also needs a
+handler that is safe to run again. Workhorse states this requirement directly.
 
-The gap has a second side. The process can also die after completion commits, but before the
-worker sees the reply. The task then counts as succeeded, and the worker never learns it.
+The problem has a second form. The process can also stop after the completion commits, but before
+the worker gets the reply. The task is then `succeeded`, but the worker does not know it.
 
 <details>
 <summary>Reference: delivery semantics</summary>
@@ -50,58 +49,64 @@ More detail: [Task lifecycle: Delivery semantics](../architecture/lifecycle.md#d
 
 </details>
 
-## What to do about it
+## Decide if a second run is a problem
 
-**If repeating the work is harmless, do nothing.** Setting a flag, overwriting a cache, and
-recalculating a total are all safe to run twice. Most tasks are like this.
+If a second run of the work causes no damage, do nothing. For example, it is safe to set a flag
+again, write a cache again, or calculate a total again. Most tasks are of this type.
 
-**If repeating it is expensive or wrong,** you have two tools.
+If a second run is expensive or wrong, use one of the two procedures that follow.
 
-### Provider idempotency keys
+## Give the provider an idempotency key
 
-Suppose the welcome-email handler sends the task id as an idempotency key. In attempt 2, the
-provider sees a key it already accepted. It returns the first result and sends nothing.
+Many payment and email services accept an idempotency key. If they get the same key two times, they
+do the work one time. This is the strongest protection, because the system that does the work keeps
+the guarantee.
 
-Most payment and messaging APIs accept an idempotency key. If you send the same key twice, the
-provider does the work once. Derive the key from something stable, such as the task id or your own
-order id. Never derive it from a timestamp or a random value, because a retry would then send a new
-key.
-
-This is the strongest option, because the guarantee lives in the system that performs the effect.
-
-### Checkpoints
-
-An invoice handler charges a card, renders an invoice, and emails it. It wraps each of the first two
-calls in a **checkpoint**, which saves the call's result under a name:
+In the example, the handler sends the task ID as the idempotency key. In attempt 2, the provider
+finds a key that it accepted before. It returns the first result and does not send a second email.
 
 ```ts
-const handler = async (payload, ctx) => {
+worker.handle("send-welcome-email", async (payload: { email: string }, ctx) => {
+  await mail.send({ to: payload.email, idempotencyKey: `welcome:${ctx.task.id}` });
+});
+```
+
+Make the key from a value that does not change between attempts, such as the task ID or your order
+number. Do not use a timestamp or a random value. A retry then sends a new key, and the provider
+cannot find the duplicate.
+
+## Skip completed code with a checkpoint
+
+A **checkpoint** is a named part of handler code. Workhorse stores its result for the task. A later
+run of the task gets the stored result and does not run that code again.
+
+**Example.** An invoice handler charges a card, renders an invoice, and sends it by email. It puts
+the first two calls in checkpoints. The invoice renderer fails one time.
+
+1. In attempt 1, the `charge` checkpoint finds no stored value. It charges the card, and Workhorse
+   stores the result.
+2. Still in attempt 1, `renderInvoice` throws an error. Workhorse stores nothing under `invoice`,
+   and schedules a [retry](110-retries.md).
+3. In attempt 2, the handler starts again from the top. The `charge` checkpoint returns the stored
+   value. The card is not charged again.
+4. Still in attempt 2, `renderInvoice` succeeds. Workhorse stores its result, and the handler calls
+   `sendEmail`.
+
+```ts
+worker.handle("invoice.send", async (payload: { amount: number; email: string }, ctx) => {
   const charge = await ctx.checkpoint("charge", () => payments.charge(payload.amount));
   const pdf = await ctx.checkpoint("invoice", () => renderInvoice(charge.id));
   await sendEmail(payload.email, pdf);
-};
+});
 ```
 
-This is what happens when invoice rendering fails once:
+The code in a checkpoint runs until Workhorse stores its result. After that, each later attempt gets
+the stored result. The `sendEmail` call has no checkpoint. It can run again if a later step fails,
+so it needs its own protection, such as a provider idempotency key.
 
-1. **Attempt 1.** `ctx.checkpoint("charge", …)` finds no saved value. It charges the card, and
-   Workhorse saves the result under the name `charge`.
-2. **Still attempt 1.** `ctx.checkpoint("invoice", …)` calls `renderInvoice`, which throws. Nothing
-   is saved under `invoice`. The attempt fails, and Workhorse schedules a [retry](110-retries.md).
-3. **Attempt 2.** The handler runs again from the top. `ctx.checkpoint("charge", …)` finds the saved
-   value and returns it. The card is not charged again.
-4. **Still attempt 2.** `renderInvoice` runs and succeeds, and its result is saved under `invoice`.
-   The handler sends the email.
-
-So the code inside a checkpoint runs until its result is saved. On every later attempt, the
-checkpoint returns the saved result instead of running that code again.
-
-The `sendEmail` call has no checkpoint. It can repeat if a later step fails, so it needs its own
-protection, such as a provider idempotency key.
-
-The Python worker exposes the same boundary as `context.checkpoint`. In the synchronous worker the
-operation is a regular callable. On replay, it returns the stored JSON value without calling the
-operation again.
+The Python worker has the same checkpoint as `context.checkpoint`. In the synchronous worker, the
+operation is a usual callable. On a later attempt, the checkpoint returns the stored JSON value and
+does not call the operation.
 
 <details>
 <summary>Reference: checkpoint API and rules</summary>
@@ -135,17 +140,20 @@ More detail: [Data model: Key and write rules](../architecture/data-model.md#key
 
 </details>
 
-## The honest limit of checkpoints
+## Protect an external call that a checkpoint cannot protect
 
-In the story, the card charge succeeded and its checkpoint was saved. Now change one step.
-Worker A's process dies after the provider charges the card, but before the `charge` checkpoint
-commits. In attempt 2, `ctx.checkpoint("charge", …)` finds no saved value. It charges the card
-again.
+A checkpoint stores its value in a database transaction after your code runs. The process can stop
+between these two events.
 
-A checkpoint saves its value in a database transaction _after_ your code has run. A process can
-die in between. So checkpoints shrink the window, but they do not close it. For anything dangerous
-to repeat, combine a checkpoint with a provider idempotency key. The provider then charges the card
-once, whichever attempt asks.
+**Example.** The invoice handler runs again, but the process stops at a different time.
+
+1. In attempt 1, the `charge` checkpoint charges the card.
+2. The process stops before Workhorse stores the result of `charge`.
+3. In attempt 2, the `charge` checkpoint finds no stored value. It charges the card a second time.
+
+Thus, a checkpoint makes the risk smaller, but it does not remove it. If a second run of an
+operation causes damage, use a checkpoint and a provider idempotency key together. The provider then
+charges the card only one time, for all attempts.
 
 <details>
 <summary>Reference: checkpoint window</summary>
@@ -159,16 +167,15 @@ More detail: [Data model: Handler behavior](../architecture/data-model.md#handle
 
 </details>
 
-## Rule of thumb
+## What this means for you
 
-Assume every handler will run twice at some point, on some bad day. Design it so that nothing bad
-happens when it does. That is the whole discipline.
+Expect that each handler runs two times on some day. Write it so that a second run causes no damage.
 
 ## Next
 
-- [020-leases-and-fences.md](020-leases-and-fences.md) — why a dead worker's task comes back
-- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — stopping duplicate tasks being created
-- [130-durable-waits.md](130-durable-waits.md) — the other reason a handler runs twice
+- [020-leases-and-fences.md](020-leases-and-fences.md) — why the task of a stopped worker runs again
+- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — how to prevent duplicate tasks
+- [130-durable-waits.md](130-durable-waits.md) — another reason that a handler runs again
 
 ---
 

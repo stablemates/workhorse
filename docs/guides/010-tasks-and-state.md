@@ -2,35 +2,35 @@
 
 <!-- scenario-names: media, resize-image -->
 
-A **task** is one unit of work that Workhorse accepted: a queue, a type, a payload, and the rules
-for running it. A task is not one row. Its core lives in three tables, and the split explains much
-of the rest of the system.
+A **task** is one unit of work that Workhorse accepted. It has a queue, a type, a payload, and the
+rules to run it. Workhorse keeps a task in three tables, not in one row. If you know what each table
+holds, you can predict much of the behavior of Workhorse.
 
-## One task, from enqueue to outcome
+## Follow a task from enqueue to outcome
 
-**Example.** An application enqueues a `resize-image` task on the `media` queue. A worker runs it
-once, and it succeeds. This is what each table holds along the way.
+**Example.** An application enqueues a `resize-image` task on the `media` queue. A worker runs the
+task one time, and the task succeeds.
 
-1. **Enqueue.** Workhorse inserts a `task` row with a new id and the accepted definition. In the
-   same transaction it inserts a `task_runtime` row in state `ready`. No `task_outcome` row exists.
-2. **Claim.** A worker claims the task. The same `task_runtime` row changes to `active`, and it now
-   names the worker that owns it. The `task` row does not change.
-3. **Completion.** The handler returns. In one transaction, Workhorse deletes the `task_runtime`
-   row and inserts a `task_outcome` row with state `succeeded` and the result.
-4. **Afterwards.** The `task` row and the `task_outcome` row stay. Nothing updates either again.
+1. Workhorse inserts a `task` row with a new ID and the accepted definition. In the same
+   transaction, it inserts a `task_runtime` row in the state `ready`.
+2. A worker claims the task. The `task_runtime` row changes to `active` and names the worker. The
+   `task` row does not change.
+3. The handler returns. In one transaction, Workhorse deletes the `task_runtime` row and inserts a
+   `task_outcome` row with the state `succeeded` and the result.
+4. The `task` row and the `task_outcome` row stay. Workhorse does not update them again.
 
 Each table has one purpose:
 
-- **`task`** holds the stable id and the accepted definition: queue, type, payload, attempt budget,
-  and policy. A pending [keyed debounce](215-debounce.md) may replace that definition while keeping
-  the id. Once the task starts or becomes non-replaceable, Workhorse freezes the definition.
-- **`task_runtime`** holds what changes while the task is alive. That is its state, its current
-  attempt, and the worker that owns it, if any. One row is updated many times.
-- **`task_outcome`** holds the final answer: succeeded, failed, or canceled, with the result or the
-  error. Workhorse writes it once, at the end, and never updates it.
+- **`task`** holds the stable ID and the accepted definition: queue, type, payload, attempt budget,
+  and policy. A pending [keyed debounce](215-debounce.md) can replace the definition and keep the
+  ID. When the task starts or becomes non-replaceable, Workhorse freezes the definition.
+- **`task_runtime`** holds the data that changes while the task is live. This data is the state, the
+  current attempt, and the worker that owns the task. Workhorse updates this row many times.
+- **`task_outcome`** holds the final result: `succeeded`, `failed`, or `canceled`, with the result
+  or the error. Workhorse writes this row one time, at the end, and does not update it.
 
-A live task has one of four states. It is `scheduled` until a future time, `ready` to run,
-`active` while a worker owns it, or `blocked` while it waits on
+A live task has one of four states. It is `scheduled` until a future time, or `ready` to run. It is
+`active` while a worker owns it, or `blocked` while it waits for
 [prerequisite tasks](160-task-dependencies.md).
 
 <details>
@@ -64,22 +64,23 @@ More detail: [Data model: State-specific fields](../architecture/data-model.md#s
 
 </details>
 
-## The rule that ties them together
+## Tell a live task from a finished task
 
-In the story, the task had a `task_runtime` row until completion, and a `task_outcome` row after
-it. At no committed moment did it have both, or neither.
+In the example, the task had a `task_runtime` row until it succeeded. After that, it had a
+`task_outcome` row. At no time did a committed change give it both rows, or no row.
 
-That is the rule. After any committed change, a task has **exactly one** of `task_runtime` and
-`task_outcome`. So finishing a task is not an update. It is a delete and an insert in one
-transaction. No reader can see a task that looks both alive and finished, or neither.
+This is a rule for each task. After each committed change, a task has exactly one of the rows
+`task_runtime` and `task_outcome`. Thus, Workhorse does not finish a task with an update. It deletes
+one row and inserts the other row in one transaction. A reader never sees a task that is both live
+and finished, or neither.
 
-The architecture reference calls this rule "lifecycle exclusivity".
-
-A task on a [fast-tier queue](305-fast-tier.md) keeps the same rule. It uses two leaner tables in
-place of `task_runtime` and `task_outcome`, and it writes history only when its queue opts in.
+A task on a [fast-tier queue](305-fast-tier.md) obeys the same rule. It uses two smaller tables in
+place of `task_runtime` and `task_outcome`. It writes history only when its queue enables history.
 
 <details>
 <summary>Reference: lifecycle exclusivity</summary>
+
+The architecture reference calls this rule "lifecycle exclusivity".
 
 - For every accepted task, exactly one of `task_runtime` and `task_outcome` exists after a committed
   transition.
@@ -94,18 +95,16 @@ More detail: [Data model: Data model](../architecture/data-model.md#data-model).
 
 </details>
 
-## Why bother
+## Keep a large history from slowing claims
 
-Workers search `task_runtime` every time they claim work. They ask: what is ready to run in this
-queue?
+Each time a worker claims work, it searches `task_runtime` for ready tasks in its queue. Workhorse
+removes the row of a task from `task_runtime` when the task finishes. Thus, this table holds only
+live work: tasks that are scheduled, blocked, ready, or active.
 
-In the story, the `resize-image` row left `task_runtime` at completion. So that table holds only
-live work: scheduled, blocked, ready, or running. Finished tasks are not in the table that the
-search reads.
-
-The split keeps completed history out of the ready scan. Its goal is for dispatch cost to scale with
-live work, not with all work the queue has ever processed. Other factors still affect claim
-latency. They include the current backlog, policy checks, database load, and index health.
+This split keeps finished tasks out of the search for ready tasks. The goal is that the cost of a
+claim depends on live work, not on all the work that the queue processed before. Other factors also
+change the time of a claim. They include the number of ready tasks, policy checks, the database load,
+and the health of the indexes.
 
 <details>
 <summary>Reference: dispatch indexes</summary>
@@ -124,17 +123,17 @@ More detail: [Data model: Dispatch indexes](../architecture/data-model.md#dispat
 
 </details>
 
-## Where the history goes
+## Find out what happened to a task
 
-In the story, the finished task kept its `task` and `task_outcome` rows. Workhorse also recorded
-what happened on the way. The enqueue, the claim, and the success each left an event. The one
-attempt left one closed-attempt row.
+In the example, the finished task kept its `task` row and its `task_outcome` row. Workhorse also
+recorded each event of the task. The enqueue, the claim, and the success each added an event. The
+one attempt added one row for a closed attempt.
 
-Two append-only tables hold that record. `task_event` keeps every lifecycle event. `attempt_history`
-keeps one row for every attempt that closed. They are separate from the three core tables, so they
-can grow without slowing dispatch. A retention routine removes old rows on its own schedule. Each
-history row has a UUID that stays stable when you export history or combine history from several
-Workhorse installations.
+Two append-only tables hold this history. `task_event` keeps each lifecycle event. `attempt_history`
+keeps one row for each attempt that closed. These tables are separate from the three core tables, so
+they can grow and not slow claims. A retention routine deletes old rows on its own schedule. Each
+history row has a UUID. The UUID does not change when you export history or combine the history of
+many Workhorse installations.
 
 <details>
 <summary>Reference: history relations</summary>
@@ -156,9 +155,9 @@ More detail: [Data model: History](../architecture/data-model.md#history).
 
 ## Next
 
-- [020-leases-and-fences.md](020-leases-and-fences.md) — how a worker takes ownership of a task
-- [030-delivery-guarantees.md](030-delivery-guarantees.md) — why a task can run twice
-- [330-retention.md](330-retention.md) — how the history tables get cleaned up
+- [020-leases-and-fences.md](020-leases-and-fences.md) — how a worker gets ownership of a task
+- [030-delivery-guarantees.md](030-delivery-guarantees.md) — why a task can run two times
+- [330-retention.md](330-retention.md) — how Workhorse deletes old history
 
 ---
 

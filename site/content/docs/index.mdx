@@ -1,46 +1,49 @@
 ---
 title: What is Workhorse?
-description: A durable task queue that lives inside PostgreSQL, so your tasks commit with your data.
+description: A durable task queue that keeps its data in PostgreSQL, so your tasks commit with your data.
 ---
 
-Every application eventually needs work that outlives a request: send the email, charge the card,
-rebuild the report. The moment that work moves to a separate broker, you have two systems that can
-disagree — an order row without its task, or a task for an order that rolled back.
+Most applications have work that must continue after a request ends. For example, the application
+sends an email, charges a card, or builds a report. If a separate broker holds this work, you have
+two systems that can disagree. An order can exist without its task, or a task can exist for an order
+that rolled back.
 
-Workhorse removes the second system. It is a durable task queue built from PostgreSQL tables and
-versioned SQL functions, with supported SDKs for TypeScript, Python, Go, Rust, and Ruby. There is
-no broker, no Redis, and no PostgreSQL extension — one database owns your business data, your queued
-work, your execution state, and the evidence of what happened.
+Workhorse removes the second system. It is a durable task queue that uses PostgreSQL tables and
+versioned SQL functions. It has supported SDKs for TypeScript, Python, Go, Rust, and Ruby. It needs
+no broker, no Redis, and no PostgreSQL extension. One database holds your business data, your
+queued work, the state of each task, and the record of what occurred.
 
-## Start with your task
+## Find the page for your task
 
-If you are new to Workhorse, follow the [quickstart](/docs/quickstart) to install the schema,
-enqueue a task, and run a worker. Choose the TypeScript, Python, Go, Rust, or Ruby example for your
-application.
+If Workhorse is new to you, do the [quickstart](/docs/quickstart). It installs the schema, enqueues a
+task, and runs a worker. Choose the example in the language of your application.
 
-Each concept page opens with an example marked **Example**. Its queues, tasks, and tenants are
-invented, and its times and counts are illustration.
+The first example on each concept page starts with a bold **Example.** marker. Its queues, tasks,
+and tenants are invented. Its times and counts are only illustrations.
 
-| I want to…                   | Read this                              | What you will learn                                                         |
-| ---------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| Run my first task            | [Quickstart](/docs/quickstart)         | Connect a producer and worker to the same database.                         |
-| Commit a task with my data   | [Transactional enqueue](/docs/enqueue) | Use an application transaction so the write and task commit together.       |
-| Make a handler safe to retry | [Core concepts](/docs/concepts)        | Understand delivery guarantees before adding checkpoints or external calls. |
-| Use my existing ORM          | [Integrations](/docs/integrations)     | Choose the adapter for your database client.                                |
-| Operate a worker fleet       | [Operations](/docs/operations)         | Inspect health, monitor queues, and respond to failures.                    |
-| Look up a method             | [API reference](/docs/api)             | Find the reference for your language SDK.                                   |
+| I want to…                   | Read this                              | What you learn                                                      |
+| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| Run my first task            | [Quickstart](/docs/quickstart)         | How to connect a producer and a worker to the same database.        |
+| Commit a task with my data   | [Transactional enqueue](/docs/enqueue) | How to commit a write and a task in one application transaction.    |
+| Make a handler safe to retry | [Core concepts](/docs/concepts)        | Why a handler can run two times, and how to make a second run safe. |
+| Use my existing ORM          | [Integrations](/docs/integrations)     | Which adapter to use for your database client.                      |
+| Operate a worker fleet       | [Operations](/docs/operations)         | How to examine health, monitor queues, and repair failures.         |
+| Look up a method             | [API reference](/docs/api)             | Where to find the reference for the SDK of your language.           |
 
-## The core promise
+## Commit a task with your data
 
-An application takes an order and wants it fulfilled in the background. It inserts the order row and
-enqueues an `order.fulfill` task in one transaction.
+Workhorse can enqueue a task in the transaction of your application. Thus, the task and your data
+commit together, or roll back together.
 
-1. **The transaction opens.** The application inserts the order row.
-2. **It calls `Queue.enqueue`** and passes its open transaction as the last argument.
-3. **If the transaction commits**, the order and the task both exist.
-4. **If it rolls back instead**, PostgreSQL removes the business write and the task together.
+**Example.** An application takes an order. It inserts the order row and enqueues an
+`order.fulfill` task in one transaction.
 
-So no window exists where one committed and the other did not.
+1. The application opens a transaction and inserts the order row.
+2. It calls `Queue.enqueue` and gives the open transaction as the last argument.
+3. If the transaction commits, the order and the task both exist.
+4. If the transaction rolls back, PostgreSQL removes the order and the task together.
+
+Thus, the order and the task cannot exist one without the other.
 
 ```ts
 import { Pool, Queue } from "@stablemates/workhorse";
@@ -62,21 +65,27 @@ try {
 }
 ```
 
-Now a worker runs that task, and its process dies partway through.
+## Keep the work when a worker stops
 
-1. **The claim.** A `Worker` claims the task and runs the handler you registered with
-   `Worker.handle`. The claim grants a temporary lease and a fence token.
-2. **The charge.** The handler charges the card, and `ctx.checkpoint` saves that stage's result.
-3. **The crash.** The process dies while it prints the label.
-4. **Recovery.** The lease expires, and another worker recovers the task. The fence token blocks the
-   dead worker from writing stale results.
-5. **The rerun.** The handler restarts from the top. `ctx.checkpoint` replays the stored charge
-   result instead of charging again, and the label stage runs.
+A worker runs the task. If the process of the worker stops, another worker runs the task again. A
+checkpoint stores the result of a part of the handler, so that part does not run again.
 
-Handlers run outside database transactions, so delivery is at least once: a handler can run twice
-after a crash. A checkpoint cannot atomically commit an external service's response. If the process
-dies after the service succeeds but before the checkpoint is saved, the call can repeat. Use a stable
-provider idempotency key for effects such as charging a card.
+**Example.** A worker runs the `order.fulfill` task. Its process stops while the handler runs.
+
+1. A `Worker` claims the task. The claim gives the worker a lease and a fence token.
+2. The worker runs the handler that you registered with `Worker.handle`. The handler charges the
+   card, and `ctx.checkpoint` stores the result of the charge.
+3. The process stops while the handler prints the label.
+4. The lease expires, and another worker claims the task. The fence token stops the old worker from
+   writing old results.
+5. The handler starts again from the top. `ctx.checkpoint` returns the stored result, so the card
+   is not charged again. Then the handler prints the label.
+
+A handler runs outside a database transaction. Thus, Workhorse runs each task at least one time, and
+a handler can run two times after a crash. A checkpoint cannot commit the response of an external
+service in the same transaction. If the process stops after the service succeeds but before the
+checkpoint is stored, the call can occur again. For effects such as a card charge, give the provider
+an idempotency key that does not change between attempts.
 
 ```ts
 import { Worker } from "@stablemates/workhorse";
@@ -93,9 +102,9 @@ const worker = new Worker(queue).handle<OrderPayload>("order.fulfill", async (pa
 await worker.run();
 ```
 
-Beyond checkpoints, tasks get retries with configurable backoff, durable sleeps that release the
-worker slot, cron-style schedules, idempotent enqueue, dead letters with redrive, and immutable
-history you can query with `Admin.getTask` and `Admin.getTaskTimeline`.
+Workhorse also has retries with a backoff policy and durable sleeps that free the worker slot. It
+has cron schedules, idempotent enqueue, and dead letters that you can run again. It keeps an
+immutable history that you can read with `Admin.getTask` and `Admin.getTaskTimeline`.
 
 <details>
 <summary>Reference: the core promise</summary>
@@ -115,51 +124,57 @@ More detail: [Overview: Design objective](https://github.com/stablemates/workhor
 
 </details>
 
-## When to use it
+## Decide if Workhorse fits your application
 
-If your application already runs on PostgreSQL and needs reliable background work, Workhorse fits.
-Choose its TypeScript, Python, Go, Rust, or Ruby SDK and connect it to PostgreSQL 15 or newer.
+Use Workhorse if your application uses PostgreSQL and needs reliable background work. Choose the
+TypeScript, Python, Go, Rust, or Ruby SDK. [Compatibility](/docs/compatibility) gives the supported
+versions of PostgreSQL and of each runtime.
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
-release may change behaviour, so read the changelog before you upgrade. It will not ask you to
-recreate your database: migrations are ordered, and inside a major line a migration only adds, so a
-running deployment upgrades in place.
+Workhorse is a public beta. You can use it for evaluation and for early production use. A minor
+release can change behavior, so read the changelog before you upgrade. A minor release does not make
+you create your database again. Migrations are ordered, and inside a major line a migration only
+adds. Thus, a running deployment upgrades in place. The upgrade from 0.4.x to 0.5.0 is the one
+exception. [Installation](/docs/installation) gives its offline procedure.
 
 Workhorse supports strict priority, dependency fan-in, child tasks, external signals, and human
-decisions. Orchestration remains application code rather than a separate workflow definition.
-External calls still need provider idempotency keys. If the queue must scale independently of the
+decisions. You write the orchestration as application code, not as a separate workflow definition.
+External calls still need provider idempotency keys. If the queue must scale separately from the
 database, use a dedicated broker.
 
-## Which package do I need?
+## Choose your packages
 
-- `@stablemates/workhorse` provides `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
-- `stablemates-workhorse` provides synchronous and asynchronous Python queue clients and workers.
-- `github.com/stablemates/workhorse/go` provides Go queue clients and workers over pgx or `database/sql`.
-- `@stablemates/workhorse-dashboard` provides the operator interface and its framework-neutral server host.
-- `@stablemates/workhorse-drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
-- `@stablemates/workhorse-prisma` adapts Prisma clients and interactive transactions.
-- `@stablemates/workhorse-typeorm` adapts TypeORM data sources and transactional entity managers.
-- `@stablemates/workhorse-kysely` adapts Kysely databases and transactions.
+- `@stablemates/workhorse` gives `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
+- `stablemates-workhorse` on PyPI gives synchronous and asynchronous Python queue clients and workers.
+- `github.com/stablemates/workhorse/go` gives Go queue clients and workers over pgx or `database/sql`.
+- The `workhorse` crate gives the Rust queue client, `Admin`, and workers.
+- The `stablemates-workhorse` gem gives the Ruby queue client, `Admin`, and workers.
+- `@stablemates/workhorse-dashboard` gives the operator interface and its server host, which works with each framework.
+- `@stablemates/workhorse-drizzle` connects Drizzle databases and transactions to the core `Queryable` protocol.
+- `@stablemates/workhorse-prisma` connects Prisma clients and interactive transactions.
+- `@stablemates/workhorse-typeorm` connects TypeORM data sources and transactional entity managers.
+- `@stablemates/workhorse-kysely` connects Kysely databases and transactions.
+- `@stablemates/workhorse-knex` connects Knex instances and transactions.
+- `@stablemates/workhorse-otel` connects Workhorse telemetry to OpenTelemetry.
 
-TypeScript applications start with `@stablemates/workhorse`, which includes its default PostgreSQL
-driver. Python includes Psycopg by default and offers an asyncpg extra, while Go includes pgx.
-TypeScript applications add an adapter when they want to enqueue inside an ORM transaction.
+A TypeScript application starts with `@stablemates/workhorse`, which includes its default PostgreSQL
+driver. Python includes Psycopg and has an `asyncpg` extra. Go includes pgx. A TypeScript application
+adds an adapter if it enqueues in an ORM transaction.
 
-If you are integrating Workhorse with an AI coding agent, start with the
+If you connect Workhorse to an AI coding agent, start with the
 [agent documentation index](/llms.txt) or the [agent integration guide](/docs/for-ai-agents).
 
-## Before you deploy
+## Prepare to deploy
 
-Read [delivery guarantees](/docs/concepts) to identify effects that must tolerate a retry.
-Then configure [worker processes](/docs/worker-processes) for shutdown and
-[operations](/docs/operations) for health checks and incident response.
-Check [compatibility](/docs/compatibility) before choosing a release or upgrading an existing installation.
+1. Read [Core concepts](/docs/concepts) to find the effects that must be safe to run again.
+2. Configure [worker processes](/docs/worker-processes) for shutdown.
+3. Configure [operations](/docs/operations) for health checks and incident response.
+4. Read [Compatibility](/docs/compatibility) before you choose a release or upgrade an installation.
 
 ## Next
 
 - [Installation](/docs/installation) — add the package and install its schema
-- [Quickstart](/docs/quickstart) — run a task, kill the worker, watch it finish anyway
-- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run twice
+- [Quickstart](/docs/quickstart) — run a task, stop the worker, and see the task finish
+- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run two times
 
 ---
 

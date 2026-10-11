@@ -356,7 +356,7 @@ A checkpoint saves its value only after the send returns. Suppose the process di
 provider accepts the welcome email but before the `welcome` checkpoint commits. The next attempt
 finds no saved value and sends again. The key `welcome:<task ID>` is the same on every attempt, so
 the provider can drop that second send. Without such a key, the email can arrive twice.
-[The honest limit of checkpoints](/docs/concepts#the-honest-limit-of-checkpoints) explains this
+[Protect an external call that a checkpoint cannot protect](/docs/concepts#protect-an-external-call-that-a-checkpoint-cannot-protect) explains this
 window.
 
 ## Nightly task synced on deploy
