@@ -3,40 +3,55 @@ title: Releases
 description: The current published version of the TypeScript, Python, Go, Rust, and Ruby lines, when each shipped, and which versions receive fixes.
 ---
 
-Workhorse publishes five lines from one source commit: ten npm packages released in lockstep, one
-Python distribution, one Go module, one Rust crate, and one Ruby gem. Each line carries its own
-version, so "the current version" is one number per line. This page prints every one, because you
-cannot apply the support policy below without them.
+Workhorse publishes five release lines from one source commit:
 
-The build reads every version here from the changelog that owns its line. Nobody types a
-version into this page, so it cannot disagree with the release it describes.
+- ten npm packages, which release together with one version,
+- one Python distribution,
+- one Go module,
+- one Rust crate,
+- one Ruby gem.
+
+Each line has its own version, so each line has its own current version. This page shows all of
+them. You need them to apply the support policy below.
+
+The site build reads each version on this page from the changelog of its line. Nobody types a
+version into this page, so the page always agrees with the release that it describes.
 
 <ReleaseTable />
 
-## Only the current line receives fixes
+## Upgrade to the current line to get a fix
 
-A fix ships on the highest published minor of the current major of each affected line, and nowhere
-else. There are no maintenance branches, no backports, and no long-term-support designation. An
-older version keeps working, and it keeps the defect: upgrade to the current line to receive the
-fix.
+Workhorse ships a fix only on the highest published minor release of the current major, for each
+line that the defect affects. Workhorse has no maintenance branches, no backports, and no long-term
+support version. An older version continues to work, but it keeps the defect. To get the fix,
+upgrade to the current line.
 
-Which lines move depends on where the defect lives. A defect in the SQL schema or in the protocol
-the SDKs share is fixed on every line as one release train. A defect in one SDK ships on that line
-alone, and the other lines do not move.
+The location of the defect decides which lines get a new release:
 
-That single-line policy is affordable because every upgrade is an ordinary rolling deployment. A
-minor adds, a major adds, and the one destructive act is a contract step you run on your own
-schedule. Taking a fix therefore costs a package bump and a `workhorse schema migrate` that only
-adds, which is the same procedure every other release uses.
+- If the defect is in the SQL schema or in the protocol that the SDKs share, each line gets the fix
+  in one release train. A release train publishes the artifacts of all lines from one commit, in one
+  controlled release window.
+- If the defect is in one SDK, only that line gets a new release. The other lines do not change.
+
+This policy works because each upgrade is an ordinary rolling deployment. A minor release only adds,
+and a major release also only adds. The one destructive action is the contract step, which you run
+when you decide. Thus, a fix costs a package update and a `workhorse schema migrate` that only adds.
+Each other release uses the same procedure.
 
 ## Report a vulnerability privately
 
-Report a vulnerability through GitHub's private advisory form rather than an issue, a pull request,
-or a discussion.
-[`SECURITY.md`](https://github.com/stablemates/workhorse/blob/main/SECURITY.md) is the whole policy:
-where to report, what the maintainers do after a report, the fix target for each severity, the
-embargo, and what a reporter may safely test. It renders on GitHub beside the reporting button, and
-this page does not restate it, because a second copy would be the one that goes stale.
+Report a vulnerability through the private advisory form of GitHub. Do not use an issue, a pull
+request, or a discussion. [`SECURITY.md`](https://github.com/stablemates/workhorse/blob/main/SECURITY.md)
+is the full policy. It tells you:
+
+- where to report,
+- what the maintainers do after a report,
+- the fix target for each severity,
+- the embargo,
+- what a reporter can safely test.
+
+GitHub shows `SECURITY.md` next to the report button. This page does not copy it, because a second
+copy can become out of date.
 
 ## Next
 

@@ -3,28 +3,34 @@ title: Workhorse for AI coding agents
 description: Read the agent-facing documentation, decide whether Workhorse fits, then integrate one transactional task from enqueue through confirmation.
 ---
 
-You are integrating Workhorse into someone else's application. You read documentation by fetching
-URLs, and you cannot click a language tab. So this page starts with what to fetch, then whether to
-stop. Then it walks one integration end to end: the four things you write, the three mistakes that
-survive review, and how to confirm the task settled.
+This page is for an AI coding agent that adds Workhorse to an application. An agent reads
+documentation when it fetches a URL. It cannot click a language tab, so an HTML page shows it only
+one language. This page tells you what to fetch and how to decide if Workhorse fits. Then it shows
+one complete integration, from the enqueue to the result.
+
+Each documentation page has a Markdown twin. A Markdown twin is a copy of the page in Markdown. It
+shows the examples for all languages.
+
+All examples on this page use one application. The application inserts order `order-42` and
+enqueues the task `order.created` for it.
 
 ## Read the Markdown, not the HTML
 
-**Example.** An agent is asked to add Workhorse to a Python order service. This is how it finds what
-to read.
+**Example.** An agent must add Workhorse to a Python order service.
 
-1. **It fetches the index.** `/llms.txt` is a compact map of every page, grouped like the sidebar.
-   It names this page as the place to start.
-2. **It fetches this page with `Accept: text/markdown`.** The page URL answers with its Markdown
-   twin. The twin shows every language at once, because it expands each language tab inline. The
-   Python example is there, next to the others.
-3. **It follows a link to the enqueue page by appending `.md`.** The URL `/docs/enqueue.md` fetches
-   the same twin without negotiation.
+1. The agent fetches `/llms.txt`. This index lists each page, in the same groups as the sidebar. It
+   names this page as the start point.
+2. The agent fetches this page with the header `Accept: text/markdown`. The URL of the page returns
+   its Markdown twin.
+3. The twin shows the code of each language tab. The agent finds the Python example next to the
+   other examples.
+4. The agent adds `.md` to the URL of the enqueue page. The URL `/docs/enqueue.md` returns the twin
+   without the header.
 
-Every documentation page has a Markdown twin, and both routes reach it. Read the twin, not the HTML
-page. The HTML page shows one language, because its language tabs collapse to whichever tab is
-selected. A second index, `/llms-full.txt`, holds the whole corpus in one response. It is large, so
-fetch it only when a change crosses several contracts at once. One twin is usually the cheaper read.
+Read the twin, not the HTML page. The HTML page shows only the language of the selected tab.
+
+The second index, `/llms-full.txt`, holds all pages in one file. It is large. Fetch it only if a
+change touches many subjects at the same time. Usually, one twin costs less to read.
 
 <details>
 <summary>Reference: agent-facing files and negotiation</summary>
@@ -57,30 +63,32 @@ More detail: [ADR 0062: Decision](https://github.com/stablemates/workhorse/blob/
 
 </details>
 
-## Whether Workhorse fits
+## Decide whether Workhorse fits
 
-The agent's order service runs on MySQL. This section says PostgreSQL is the only database. So the
-agent stops here and reports why. It has written no code.
+Workhorse has some fixed properties. They are not defects, but they can make Workhorse wrong for an
+application. Read them before you write code, so that you can stop early.
 
-This page states what Workhorse is not before it shows any code. So you can stop early rather than
-discover a mismatch after writing the integration. Stop here if any of these is disqualifying. They
-are properties, not defects.
+Stop and report why if one of these properties does not fit the application:
 
-- Handlers run at least once. A retry can run your handler again, so its effects must tolerate that.
-- A client's compatibility check refuses a schema older than the client needs. It also refuses one
-  that no longer serves the client's SQL protocol. Migration runs from a deployment step, never
-  automatically.
-- PostgreSQL is the only supported database. There is no other backend.
-- There is no workflow definition language. You compose checkpoints in your own code.
-- A concurrency policy is scoped to one queue, not across queues.
+- A handler runs at least one time, and sometimes more. Each effect of the handler must be safe to
+  repeat.
+- PostgreSQL is the only supported database. Workhorse has no other backend.
+- The schema does not change when the application starts. A deployment step installs or migrates
+  it. Each client refuses a schema that is too old, or a schema that no longer serves its SQL
+  protocol.
+- Workhorse has no workflow definition language. You write the steps of a flow as checkpoints in
+  your own code.
+- A concurrency policy applies to one queue, not to many queues.
 
-[Limitations](/docs/limitations.md) owns this subject, including the workarounds this page does not
-restate.
+For example, if the order service runs on MySQL, stop. Report the reason, and do not write code.
+
+[Limitations](/docs/limitations.md) owns this subject. It also gives the workarounds.
 
 <details>
 <summary>Reference: schema compatibility refusals</summary>
 
-The TypeScript, Go, and Python compatibility checks return the same five refusal codes:
+The TypeScript, Python, Go, and Rust compatibility checks return the same five refusal codes. Ruby
+returns the same codes as symbols with underscores, for example `:schema_too_old`.
 
 | Code                      | Meaning                                                              |
 | ------------------------- | -------------------------------------------------------------------- |
@@ -101,42 +109,43 @@ More detail: [Schema and SQL protocol: Schema compatibility checks](https://gith
 
 </details>
 
-## The four things you write
+## Write the four parts of the integration
 
-This page's example inserts order `order-42` and enqueues `order.created` for it. The agent writes
-four things.
+An integration has four parts. Each part has one correct place in the application.
 
-1. **The schema install.** It runs from the deployment, not from the application.
-2. **The enqueue.** It runs inside the transaction that inserts `order-42`, so the order and the
-   task commit together.
-3. **The handler.** It sends the confirmation email inside a checkpoint. A checkpoint is named
-   handler code whose result Workhorse records, so a replay reuses it.
-4. **The failure policy.** The agent chooses the retry budget and the time bounds when it enqueues.
+1. **The schema install.** The deployment installs the schema, not the application.
+2. **The enqueue.** The application enqueues `order.created` in the transaction that inserts
+   `order-42`. Thus, the order and the task commit together.
+3. **The handler.** The handler sends the confirmation email in a checkpoint. A checkpoint is a
+   named piece of handler code. Workhorse stores its result, so a later run uses the stored result.
+4. **The failure policy.** The enqueue sets the number of attempts and the time limits.
 
-After the worker settles the task, the agent reads it back by its identifier. The rest of this
-section shows each of the four in turn.
+After the worker completes the task, read the task with its identifier. The subsections below show
+each part.
 
-**Install the schema from your deployment, never at application startup.** The schema is a
-deployment step. A TypeScript project runs the binary it depends on:
+### Install the schema from your deployment
+
+Install the schema in a deployment step. Do not install it when the application starts. A
+TypeScript project runs the binary of its own dependency:
 
 ```bash
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, or Ruby project has no Node.js dependency tree to resolve that binary from, so it names the
-version instead, which must equal the SDK version the application depends on:
+A Python, Go, Rust, or Ruby project has no Node.js dependencies. It names the version in the
+command. This version must be equal to the SDK version of the application:
 
 ```bash
 npx --package @stablemates/workhorse@0.7.1 workhorse schema install
 ```
 
-That command needs Node.js on the machine that runs your deployment.
-[Compatibility](/docs/compatibility.md) names the version. The application itself does not need
-Node. A Python, Go, Rust, or Ruby service installs the schema this way and then runs without it.
-Assert compatibility when the application starts, with `assertSchemaCompatible` in TypeScript,
+The machine that runs the deployment needs Node.js for this command. [Compatibility](/docs/compatibility.md)
+names the Node.js version. The application does not need Node.js.
+
+When the application starts, assert compatibility. Use `assertSchemaCompatible` in TypeScript,
 `assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust and Ruby.
 
-Install the SDK your application uses:
+Install the SDK of the application language:
 
 ```bash
 npm install @stablemates/workhorse
@@ -149,20 +158,33 @@ bundle add connection_pool
 
 The Ruby SDK also needs the `connection_pool` gem.
 
-**Enqueue inside the transaction that writes your application data.** This is what replaces an
-outbox. Each language hands the transaction over differently. TypeScript passes the transaction
-client as the fourth argument to `enqueue`. Python constructs the `Queue` over the connection whose
-transaction is open. Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`. Rust and Ruby
-construct the `Queue` over the open transaction, as Python does.
+### Enqueue in the transaction of your application data
 
-**Register a handler.** The example below calls the bounded run method so it can finish. A
-production worker process calls the continuous one instead: `worker.run()` in TypeScript,
-`worker.run()` in Python, `worker.Run(ctx)` in Go, `run_worker_process` in Rust, and
-`Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
+Enqueue the task in the same transaction that writes the application data. Then you do not need an
+outbox. Each language gets the transaction in a different way:
 
-**Choose the failure policy at enqueue.** `maxAttempts` and `retryPolicy` set the retry budget.
-`deadline` and `executionTimeoutMs` are separate time bounds. The deadline ends the whole task when
-it passes. The execution timeout ends one attempt, and the task then retries while attempts remain.
+- TypeScript passes the transaction client as the fourth argument to `enqueue`.
+- Python constructs the `Queue` over the connection whose transaction is open.
+- Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`.
+- Rust and Ruby construct the `Queue` over the open transaction, as Python does.
+
+### Register a handler
+
+The example calls the bounded run method, so it can stop. A production worker process calls the
+continuous method:
+
+- `worker.run()` in TypeScript.
+- `worker.run()` in Python.
+- `worker.Run(ctx)` in Go.
+- `run_worker_process` in Rust.
+- `Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
+
+### Set the failure policy when you enqueue
+
+`maxAttempts` and `retryPolicy` set the number of attempts and the delay between them. `deadline`
+and `executionTimeoutMs` set two different time limits. When the deadline passes, the task ends.
+When the execution timeout passes, the attempt ends. Then the task retries if it has attempts that
+remain.
 
 <details>
 <summary>Reference: the four things, per language</summary>
@@ -188,29 +210,32 @@ More detail: [Task lifecycle](https://github.com/stablemates/workhorse/blob/main
 
 </details>
 
-## The three mistakes
+## Avoid the three mistakes that pass review
 
-Three mistakes survive review, because none of them fails immediately.
+Three mistakes often pass a code review, because none of them fails immediately.
 
-**Enqueuing outside the caller's transaction.** The insert of `order-42` rolls back, but the task
-commits. A worker then processes an order that does not exist. The remedy is to pass the
-transaction, as the example does.
+**Do not enqueue outside the transaction of the caller.** If you do, the insert of `order-42` can
+roll back while the task commits. Then a worker processes an order that does not exist. Give the
+transaction to the enqueue, as the example does.
 
-**Installing the schema on the runtime path.** Every application instance races to install. A
-version skew then becomes a startup failure under load rather than a deployment failure. The remedy
-is the deployment command above, plus a compatibility assertion at startup.
+**Do not install the schema when the application starts.** If you do, all instances of the
+application try to install it at the same time. Then a version difference causes a startup failure
+under load, not a deployment failure. Use the deployment command and the startup assertion above.
 
-**An external effect that is not restart-safe.** A handler that sends the email and then fails
-sends it again on every retry. The remedy is a checkpoint, which records the result the first time.
-The operation runs once, and a replay reuses the recorded value instead of running it again.
-An idempotency key on the remote call, an outbox, an inbox, or a compensation path are the
-alternatives when a checkpoint does not fit.
+**Do not let a handler repeat an external effect.** For example, a handler sends the email and then
+fails. If the send is not in a checkpoint, each retry sends the email again. Put the send in a
+checkpoint. The checkpoint stores the result of the first send, and a later run uses the stored
+result. If a checkpoint does not fit, use an idempotency key on the remote call. You can also use an
+outbox, an inbox, or a compensating action.
 
-## One task, end to end
+## Integrate one task from enqueue to result
 
-Each example opens PostgreSQL, enqueues `order.created` inside the transaction that inserts the
-order, and sets a failure policy. It then runs a worker whose handler wraps its external send in a
-checkpoint, and reads the durable result.
+Each example does these steps:
+
+1. It connects to PostgreSQL.
+2. It enqueues `order.created` in the transaction that inserts the order, with a failure policy.
+3. It runs a worker. The handler puts the external send in a checkpoint.
+4. It reads the stored result of the task.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -499,17 +524,20 @@ checkpoint, and reads the durable result.
   </Tab>
 </Tabs>
 
-Two asymmetries to expect. Go's `RetryPolicy` is a `map[string]any` where TypeScript has a typed
-union. Python's is a mapping, Rust's is a JSON object, and Ruby's is a Hash, so only TypeScript rejects a malformed
-policy at compile time.
-Every language does have a schema compatibility assertion, named above.
+Expect two differences between the languages. Go's `RetryPolicy` is a `map[string]any`, but
+TypeScript has a typed union. Python uses a mapping, Rust a JSON object, and Ruby a Hash. Thus, only
+TypeScript rejects a malformed policy when it compiles. Each language has a schema compatibility
+assertion, as the section about the schema install names.
 
-## Confirm the task settled
+## Confirm that the task is complete
 
-The worker in the example runs once and settles the `order.created` task. The program then reads
-the task back by the identifier that enqueue returned. A settled task reports its state and its
-result. Until then it reports the state it is in. That is how you tell a slow worker from a missing
-one.
+After the worker runs, confirm that the task has a final state. Then you know that the integration
+works.
+
+The worker in the example runs one time and completes the `order.created` task. The program then
+reads the task with the identifier that the enqueue returned. A complete task shows its state and
+its result. An incomplete task shows its current state. Thus, you can find a slow worker or a
+missing worker.
 
 <details>
 <summary>Reference: identifiers the playbook uses</summary>
@@ -537,8 +565,28 @@ one.
 task when it passes. `executionTimeoutMs` ends one attempt; the task then retries under its policy
 while attempts remain.
 
-**Example checks.** The page carries one complete program per language, and the site checks
-compile or run each one. A renamed method therefore breaks the build before it reaches an agent.
+More detail: [Task lifecycle: Enqueue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#enqueue).
+
+</details>
+
+## Know how the site keeps the examples correct
+
+The site checks the programs on this page when it builds. Thus, an agent never fetches a program
+that calls a method the SDK no longer has.
+
+**Example.** A pull request renames a Go method that the Go program on this page calls.
+
+1. The site build compiles the Go program on this page.
+2. The program still calls the old name, so the Go compiler fails.
+3. The build fails, and the change stops before it reaches an agent.
+
+The page has one complete program for each language. Each identifier that the text of the page
+names must also be in the program of its language. A short list of identifiers is the exception, and
+their source files must still define them. The name check of the feature pages does not include this
+page, because the compilation of its programs is a stronger check.
+
+<details>
+<summary>Reference: example checks</summary>
 
 | Language   | Check                                                                                                               |
 | ---------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -548,13 +596,7 @@ compile or run each one. A renamed method therefore breaks the build before it r
 | Rust       | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
 | Ruby       | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
 
-Identifiers named in this page's prose must also appear in that language's program. The exception
-is a short list of identifiers whose defining source files must still define them. The cross-SDK
-name sweep that guards the feature pages does not cover this page, because compiling its programs
-is the stronger check.
-
-More detail: [Task lifecycle: Enqueue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#enqueue)
-and [ADR 0049: Decision](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0049-publish-one-agent-documentation-layer.md#decision).
+More detail: [ADR 0049: Decision](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0049-publish-one-agent-documentation-layer.md#decision).
 
 </details>
 

@@ -3,38 +3,34 @@ title: Durable agentic flow
 description: Build a durable agent loop from checkpoints, child tools, durable timers, and approval signals in an ordinary handler.
 ---
 
-An agent loop plans with a model, calls tools, pauses, and waits for a person. Any of those steps
-can outlive a worker process. The loop becomes durable when each restart boundary lives in
-PostgreSQL. Workhorse builds those boundaries from ordinary tasks, so your application still owns
-the model calls, the tool code, and the prompts.
+An agent loop is a handler that plans with a model, calls tools, and waits for a person. These steps
+can take more time than one worker process lives. If a worker stops, the loop must continue from the
+last step that it finished. Workhorse stores the result of each step in PostgreSQL, so another
+worker can continue the loop. Your application keeps the model calls, the tool code, and the
+prompts.
 
-## One conversation, from plan to approval
+A model call is slow and expensive, so the loop must not repeat it. A checkpoint stores the result
+of the call, and a later run of the handler uses the stored result. A child task is a task that a
+handler creates and then waits for. Each tool runs as a child task, so a tool worker runs it.
 
-**Example.** An `agent.loop` task answers a prompt for conversation `conv-12`. It plans with a
-model, runs two tool tasks, cools down, and waits for a reviewer to approve the answer.
+All examples on this page use one `agent.loop` task. The task answers a prompt for conversation
+`conv-12`.
 
-1. **The plan.** Worker A claims the task. The `plan` checkpoint calls the model and stores the
-   plan under the name `plan`.
-2. **The tools.** `HandlerContext.runChildrenAll` creates two [child tasks](/docs/child-tasks),
-   `research` and `calculate`, on a tool queue. The parent blocks, and worker A's slot is free.
-3. **The release.** Tool workers run both children. Both succeed, so Workhorse releases the parent.
-4. **The first replay.** Worker B runs the handler from its entry point. The `plan` checkpoint
-   returns the stored plan without calling the model. `runChildrenAll` returns the stored tool
-   results. The handler then reaches `HandlerContext.sleep`, and the task pauses on a
-   [durable timer](/docs/durable-execution).
-5. **The second replay.** The cooldown ends. A worker replays the handler again, passes every
-   earlier boundary, and reaches `HandlerContext.waitForSignal`. The task pauses again.
-6. **The approval.** The reviewer's app calls `Queue.sendSignal` with the signal `approval`. The
-   task becomes ready, as the [signal contract](/docs/signals) describes.
-7. **The last replay.** A worker replays the handler once more. `waitForSignal` returns the
-   approval, and the handler finishes the answer.
+## Plan one time and run the tools as child tasks
 
-The handler ran four times, but the model planned once and each tool ran once. Each boundary
-released the lease instead of keeping an in-memory continuation. So the loop survived every worker
-that left between steps.
+**Example.** The `agent.loop` task for `conv-12` starts on worker A.
 
-The handler starts from its entry point after every durable boundary, as described in
-[delivery guarantees](/docs/concepts). Compose those boundaries in ordinary handler code:
+1. Worker A runs the handler. The `plan` checkpoint calls the model and stores the plan.
+2. `HandlerContext.runChildrenAll` creates the [child tasks](/docs/child-tasks) `research` and
+   `calculate` on a tool queue. The handler stops, and worker A gets a free slot.
+3. Tool workers run the two child tasks. Both succeed, so Workhorse makes the parent task ready.
+4. Worker B runs the handler again from the start. The `plan` checkpoint returns the stored plan
+   and does not call the model.
+5. `runChildrenAll` returns the stored tool results, and the handler continues.
+
+Worker A can stop after step 2. The loop keeps the plan and the tool results.
+
+Write the steps of the loop in ordinary handler code:
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
@@ -84,17 +80,37 @@ The handler starts from its entry point after every durable boundary, as describ
   </Tab>
 </Tabs>
 
-Keep the boundaries stable across replays. The child set must keep stable names and requests,
-because a changed replay conflicts. A checkpoint reuses its stored result once it is saved. A
-relative timer keeps its first wake target.
+`runChildrenAll` returns the results only if all child tasks succeed. If a tool fails, the parent
+gets the failure. If the model must see the result of each tool, also of a failed tool, use
+`runChildren`.
 
-`runChildrenAll` joins independent tool children and propagates a rejected tool outcome to the
-parent. Use `runChildren` when the model should inspect every settled outcome instead.
+## Wait for a timer and an approval
 
-The repository example puts the tool children on a queue governed by
-`Queue.syncRateLimitPolicies`. Each tool request carries the conversation identity as its
-`concurrencyKey`. One busy conversation then cannot take the whole tool rate, as
-[per-key traffic control](/docs/rate-limits) explains.
+A loop can wait for time to pass, or for a person to approve the answer. Workhorse stores each wait
+in PostgreSQL. While the task waits, it uses no worker slot.
+
+**Example.** The handler for `conv-12` has its tool results.
+
+1. The handler calls `HandlerContext.sleep` with the name `model-cooldown`. The task waits on a
+   [durable timer](/docs/durable-execution).
+2. The cooldown ends. A worker runs the handler again. The handler gets past the stored steps and
+   stops at `HandlerContext.waitForSignal`.
+3. The reviewer's application calls `Queue.sendSignal` with the signal `approval`. The task
+   becomes ready, as [Signals](/docs/signals) describes.
+4. A worker runs the handler again. `waitForSignal` returns the approval, and the handler completes
+   the answer.
+
+In the two examples, the handler runs four times. The model makes the plan one time, and each tool
+runs one time.
+
+After each durable wait, the handler starts again from the start, as
+[Core concepts](/docs/concepts) describes. Thus, each step must give the same result when the
+handler runs again:
+
+- Give each child task the same name and the same request each time. If the set of child tasks
+  changes, Workhorse raises a conflict.
+- A checkpoint returns its stored result after the first save.
+- A relative timer keeps the wake time of its first call.
 
 <details>
 <summary>Reference: boundaries in the example</summary>
@@ -111,29 +127,52 @@ The repository example puts the tool children on a queue governed by
 - Each suspension clears ownership without closing the logical attempt.
 - Each wake makes the same attempt claimable under a new fence token.
 - An omitted signal timeout defaults to `MAX_EXTERNAL_WAIT_TIMEOUT_MS`, 604,800,000 ms (7 days).
-- In the example, each tool request sets `queue` and `concurrencyKey` in its `options`.
-- A keyed rate-limit policy gives each non-null concurrency key its own bucket within the queue.
 
-More detail: [Task lifecycle: Durable timer suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#durable-timer-suspension).
+More detail: [Task lifecycle: Durable timer suspension](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#durable-timer-suspension) and [Data model: Timeout and deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#timeout-and-deadline).
 
 </details>
 
-## Keep the progress view moving forward
+## Share the tool capacity between conversations
 
-Go back to step 5 of the story. When the handler replays after the cooldown, it reports the stage
-`planned` again. The stored stage is already `tools-complete`. A plain write would move the operator
-view backward. So the example's `reportProgress` helper first reads the stored stage with
-`HandlerContext.getProgress`. It writes with `HandlerContext.setProgress` only when the new stage is
-further along.
+Many conversations can use one tool queue. If one conversation sends many tool calls, the other
+conversations must wait. To prevent this, the repository example limits the rate of each
+conversation.
 
-Operators watch the loop through its progress value. The repository example stores the furthest
-stage the loop has reached, such as `planned` or `tools-complete`. Every SDK writes the same fenced
-projection, so the dashboard sees one language-independent progress value.
+The example puts the tool tasks on a queue with a policy from `Queue.syncRateLimitPolicies`. Each
+tool request uses the conversation ID as its `concurrencyKey`. The policy gives each key its own
+part of the rate, as [Rate limits](/docs/rate-limits) describes.
 
-Python, Rust, and Ruby handlers use `set_progress` and `get_progress`. In Python these are
+<details>
+<summary>Reference: per-conversation rate</summary>
+
+- In the example, each tool request sets `queue` and `concurrencyKey` in its `options`.
+- A keyed rate-limit policy gives each non-null concurrency key its own bucket within the queue.
+
+More detail: [Task lifecycle: Key limits and the policy window](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#key-limits-and-the-policy-window) and [Data model: Concurrency key](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#concurrency-key).
+
+</details>
+
+## Keep the progress value from moving back
+
+Operators follow the loop through its progress value. The progress value is one JSON value that a
+handler writes for its task, and the dashboard shows it. The repository example stores the last
+stage of the loop, for example `planned` or `tools-complete`.
+
+**Example.** The handler for `conv-12` runs again after the cooldown.
+
+1. The stored stage is `tools-complete`.
+2. The handler starts again from the start and reports the stage `planned` again.
+3. If the handler writes `planned`, the dashboard shows an earlier stage.
+
+To prevent this, the repository example uses the helper `reportProgress`. The helper reads the
+stored stage with `HandlerContext.getProgress`. It writes the new stage with
+`HandlerContext.setProgress` only if the new stage is later. The short code on this page calls
+`setProgress` directly, so it does not do this check.
+
+Python, Rust, and Ruby use `get_progress` and `set_progress`. In Python, these are
 `HandlerContext.get_progress` and `HandlerContext.set_progress`. Go uses
-`HandlerContext.GetProgress` and `HandlerContext.SetProgress`. A handler in any of these SDKs reads
-the stored stage the same way before it advances it.
+`HandlerContext.GetProgress` and `HandlerContext.SetProgress`. All SDKs write the same value, so the
+dashboard shows one progress value for each task.
 
 <details>
 <summary>Reference: progress</summary>
@@ -161,14 +200,24 @@ More detail: [Data model: Limits and lifetime](https://github.com/stablemates/wo
 
 ## Make model and tool calls safe to repeat
 
-Suppose the `research` tool calls a search provider, and the provider stores the request. Then the
-tool worker's process dies before the `tool-call` checkpoint commits. The lease expires, and another
-worker runs the tool again. The provider sees the same call twice.
+A worker can stop after it calls a provider, but before Workhorse stores the result. Then another
+worker makes the same call again.
 
-Model and tool calls remain at least once. Give their providers a stable idempotency key, or use an
-outbox, an inbox, or a compensation path. The example derives each key from the task ID and the
-checkpoint name. Workhorse provides no exactly-once effect, no persisted continuation, and no
-durable call stack.
+**Example.** The `research` tool calls a search provider.
+
+1. The tool worker calls the provider, and the provider stores the request.
+2. The tool worker stops before the `tool-call` checkpoint saves its result.
+3. The claim of the tool worker expires. Another worker runs the tool again.
+4. The provider gets the same call two times.
+
+Thus, Workhorse runs model calls and tool calls at least one time, and sometimes more. To make a
+repeated call safe, do one of these:
+
+- Give the provider a stable idempotency key.
+- Use an outbox, an inbox, or a compensating action.
+
+The repository example makes each key from the task ID and the checkpoint name. Workhorse does not
+give an exactly-once effect. It does not store a continuation or a call stack.
 
 <details>
 <summary>Reference: delivery semantics</summary>
@@ -186,13 +235,20 @@ More detail: [Task lifecycle: Delivery semantics](https://github.com/stablemates
 
 ## Run the repository example
 
-The repository command builds the publishable packages and runs
-`typescript/examples/agentic-flow.mjs`. The example enqueues a parent, runs its tool children,
-crosses a durable timer, and delivers an idempotent approval signal. It then prints the final
-result and the progress value.
+The repository has a complete version of this loop in `typescript/examples/agentic-flow.mjs`. Run
+it to see all the steps of this page.
 
-The example connects to `DATABASE_URL` when it is set, and otherwise to the configured
-`DATABASE_URL_TEST_PACKED`. The database must already have the current Workhorse schema.
+1. Make sure that the database has the current Workhorse schema. The example does not install it.
+2. Set `DATABASE_URL`. If you do not set it, the example uses `DATABASE_URL_TEST_PACKED`.
+3. Run this command. It builds the packages and runs the example.
+
+```sh
+pnpm example:agentic-flow
+```
+
+The example enqueues a parent task, runs its tool tasks, and waits on a durable timer. Then it sends
+the approval signal with one idempotency key. It repeats the send until Workhorse reports a
+delivery. At the end, it prints the result and the progress value.
 
 <details>
 <summary>Reference: running the example</summary>
