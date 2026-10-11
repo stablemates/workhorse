@@ -37,8 +37,31 @@ callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not acc
 (member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
 member of the group).
 
-This SDK does not add a task group API yet. It needs schema 65 because its statement catalogue
-names the new functions.
+### Task groups
+
+The Python SDK adds task groups (SM-1233). The names follow the TypeScript SDK, in Python form.
+
+- `Queue` and `AsyncQueue` gain `create_task_group`, `add_to_task_group`, `seal_task_group`,
+  `get_task_group`, `list_task_group_members`, and `find_task_group`. Each callback is a keyword
+  argument: `on_finish`, `on_success`, or `on_failure`, with an `EnqueueRequest` as its value.
+- The block form `with queue.task_group(on_finish=...) as builder:` (`async with` on
+  `AsyncQueue`) collects the tasks that `builder.add` receives. When the block exits without an
+  error, one statement creates the group, adds the tasks, and seals the group. `builder.result`
+  then holds the group and the enqueue results. If the block raises, nothing is created.
+- A handler reads its group through `ctx.task_group.get()`, and a running member task adds tasks
+  through `ctx.task_group.add()` under its fenced lease. `AsyncHandlerContext.task_group` gives the
+  same calls as coroutines. A callback handler reads the group ID and the counts through `get()`.
+- `Admin` and `AsyncAdmin` gain `get_task_group`, `list_task_group_members`,
+  `list_task_group_events`, `cancel_task_group`, `list_task_group_drift`, and
+  `repair_task_group_drift`.
+- `P1008`, `P1009`, and `P1010` raise `TaskGroupClosedError`, `TaskGroupLimitExceededError`, and
+  `TaskGroupMembershipConflictError`. A fast-tier member raises `FastTierUnsupportedError` with the
+  feature `task groups`.
+- New public types: `TaskGroup`, `TaskGroupCounts`, `TaskGroupCallback`, `TaskGroupMember`,
+  `TaskGroupMemberPage`, `TaskGroupLink`, `TaskGroupEvent`, `TaskGroupBuilder`,
+  `TaskGroupBlockResult`, `TaskGroupDrift`, `TaskGroupRecordedCounts`, `TaskGroupRepair`,
+  `TaskGroupContext`, `AsyncTaskGroupContext`, their literal types, and the constants
+  `MAX_TASK_GROUP_MEMBERS`, `MAX_TASK_GROUP_PAGE_SIZE`, and `MAX_TASK_GROUP_DRIFT_LIMIT`.
 
 ## 0.7.1 — 2026-10-09
 

@@ -6,7 +6,7 @@ from typing import Any, Protocol, cast
 
 from psycopg.rows import tuple_row
 
-from ._statements import DriverDialect, DriverStatement
+from ._statements import SQL_STATEMENTS, DriverDialect, DriverStatement
 
 Row = Mapping[str, object]
 
@@ -113,6 +113,8 @@ class AsyncpgExecutor:
         if not records:
             return []
         json_columns = _JSON_COLUMNS.intersection(records[0].keys())
+        if statement.asyncpg in _TEXT_RESULT_STATEMENTS:
+            json_columns -= {"result"}
         rows: list[Row] = []
         for record in records:
             row = dict(record.items())
@@ -179,6 +181,17 @@ _JSON_COLUMNS = frozenset(
         "retry_policy",
         "trace_context",
     }
+)
+
+# Statements whose result column is text, not JSON: the result of a task group snapshot.
+_TEXT_RESULT_STATEMENTS = frozenset(
+    SQL_STATEMENTS[name][1]
+    for name in (
+        "cancel_task_group_v1",
+        "get_task_group_v1",
+        "seal_task_group_v1",
+        "task_group_for_task_v1",
+    )
 )
 
 

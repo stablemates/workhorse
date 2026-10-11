@@ -19,12 +19,40 @@ from ._drivers import (
     SyncExecutor as _SyncExecutor,
 )
 from ._statements import SQL_STATEMENTS as _SQL_STATEMENTS, DriverStatement as _DriverStatement
+from ._task_groups import (
+    CANCEL as _CANCEL_TASK_GROUP,
+    GET as _GET_TASK_GROUP,
+    LIST_DRIFT as _LIST_TASK_GROUP_DRIFT,
+    LIST_EVENTS as _LIST_TASK_GROUP_EVENTS,
+    LIST_MEMBERS as _LIST_TASK_GROUP_MEMBERS,
+    REPAIR_DRIFT as _REPAIR_TASK_GROUP_DRIFT,
+    drift_limit as _drift_limit,
+    drifts as _drifts,
+    event_parameters as _event_parameters,
+    events as _events,
+    member_page as _member_page,
+    member_parameters as _member_parameters,
+    optional_task_group as _optional_task_group,
+    repairs as _repairs,
+)
 from .errors import (
     PurgeIdempotencyConflictError,
     RedriveIdempotencyConflictError,
     _translate_database_error,
 )
-from .types import Json, RetryPolicy, TaskCheckpoint, TaskProgress, TaskState, TaskWait
+from .types import (
+    Json,
+    RetryPolicy,
+    TaskCheckpoint,
+    TaskGroup,
+    TaskGroupDrift,
+    TaskGroupEvent,
+    TaskGroupMemberPage,
+    TaskGroupRepair,
+    TaskProgress,
+    TaskState,
+    TaskWait,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -559,6 +587,65 @@ class Admin(_AdminOperations):
         except Exception as error:
             _raise_admin_error(error)
 
+    def get_task_group(self, group_id: str) -> TaskGroup | None:
+        _assert_sync_compatible(self._executor)
+        return _optional_task_group(self._sync_rows(_GET_TASK_GROUP, (group_id,)))
+
+    def list_task_group_members(
+        self, group_id: str, *, after: int = 0, limit: int = 100
+    ) -> TaskGroupMemberPage:
+        _assert_sync_compatible(self._executor)
+        parameters = _member_parameters(group_id, after, limit)
+        return _member_page(self._sync_rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+
+    def list_task_group_events(
+        self, group_id: str, *, limit: int = 1_000
+    ) -> tuple[TaskGroupEvent, ...]:
+        """Read the history of a group in time order: create, seal, cancel, finish, and repairs."""
+        _assert_sync_compatible(self._executor)
+        return _events(self._sync_rows(_LIST_TASK_GROUP_EVENTS, _event_parameters(group_id, limit)))
+
+    def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None:
+        """Seal an open group and cancel every member task that is not terminal.
+
+        No task can join the group after this call, not even from a running member task. The
+        canceled members count as not succeeded, so the group finishes as usual and ``on_finish``
+        and ``on_failure`` run. A finished group stays unchanged. Returns None for an unknown group.
+        """
+        _assert_sync_compatible(self._executor)
+        _validate_audit(audit)
+        try:
+            rows = self._sync_rows(
+                _CANCEL_TASK_GROUP, (group_id, audit.actor, audit.reason, audit.request_id)
+            )
+        except Exception as error:
+            _raise_admin_error(error)
+        return _optional_task_group(rows)
+
+    def list_task_group_drift(self, *, limit: int = 1_000) -> tuple[TaskGroupDrift, ...]:
+        """List unfinished groups whose counters disagree with their member outcomes.
+
+        It also lists sealed groups whose members are all finished. It writes nothing, so it is the
+        dry run of ``repair_task_group_drift``.
+        """
+        _assert_sync_compatible(self._executor)
+        return _drifts(self._sync_rows(_LIST_TASK_GROUP_DRIFT, (_drift_limit(limit),)))
+
+    def repair_task_group_drift(
+        self, audit: AdminAudit, *, limit: int = 1_000
+    ) -> tuple[TaskGroupRepair, ...]:
+        """Recount each drifted group from its member outcomes, and finish a sealed group with no
+        pending member. The ``counter_repaired`` event of each repaired group records the audit.
+        """
+        _assert_sync_compatible(self._executor)
+        _validate_audit(audit)
+        value = _drift_limit(limit)
+        return _repairs(
+            self._sync_rows(
+                _REPAIR_TASK_GROUP_DRIFT, (value, audit.actor, audit.reason, audit.request_id)
+            )
+        )
+
 
 class AsyncAdmin(_AdminOperations):
     """Asynchronous operator client over a caller-owned Psycopg or asyncpg connection."""
@@ -759,6 +846,67 @@ class AsyncAdmin(_AdminOperations):
             return _queue_history(row)
         except Exception as error:
             _raise_admin_error(error)
+
+    async def get_task_group(self, group_id: str) -> TaskGroup | None:
+        await _assert_async_compatible(self._executor)
+        return _optional_task_group(await self._async_rows(_GET_TASK_GROUP, (group_id,)))
+
+    async def list_task_group_members(
+        self, group_id: str, *, after: int = 0, limit: int = 100
+    ) -> TaskGroupMemberPage:
+        await _assert_async_compatible(self._executor)
+        parameters = _member_parameters(group_id, after, limit)
+        return _member_page(await self._async_rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+
+    async def list_task_group_events(
+        self, group_id: str, *, limit: int = 1_000
+    ) -> tuple[TaskGroupEvent, ...]:
+        """Read the history of a group in time order: create, seal, cancel, finish, and repairs."""
+        await _assert_async_compatible(self._executor)
+        return _events(
+            await self._async_rows(_LIST_TASK_GROUP_EVENTS, _event_parameters(group_id, limit))
+        )
+
+    async def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None:
+        """Seal an open group and cancel every member task that is not terminal.
+
+        No task can join the group after this call, not even from a running member task. The
+        canceled members count as not succeeded, so the group finishes as usual and ``on_finish``
+        and ``on_failure`` run. A finished group stays unchanged. Returns None for an unknown group.
+        """
+        await _assert_async_compatible(self._executor)
+        _validate_audit(audit)
+        try:
+            rows = await self._async_rows(
+                _CANCEL_TASK_GROUP, (group_id, audit.actor, audit.reason, audit.request_id)
+            )
+        except Exception as error:
+            _raise_admin_error(error)
+        return _optional_task_group(rows)
+
+    async def list_task_group_drift(self, *, limit: int = 1_000) -> tuple[TaskGroupDrift, ...]:
+        """List unfinished groups whose counters disagree with their member outcomes.
+
+        It also lists sealed groups whose members are all finished. It writes nothing, so it is the
+        dry run of ``repair_task_group_drift``.
+        """
+        await _assert_async_compatible(self._executor)
+        return _drifts(await self._async_rows(_LIST_TASK_GROUP_DRIFT, (_drift_limit(limit),)))
+
+    async def repair_task_group_drift(
+        self, audit: AdminAudit, *, limit: int = 1_000
+    ) -> tuple[TaskGroupRepair, ...]:
+        """Recount each drifted group from its member outcomes, and finish a sealed group with no
+        pending member. The ``counter_repaired`` event of each repaired group records the audit.
+        """
+        await _assert_async_compatible(self._executor)
+        _validate_audit(audit)
+        value = _drift_limit(limit)
+        return _repairs(
+            await self._async_rows(
+                _REPAIR_TASK_GROUP_DRIFT, (value, audit.actor, audit.reason, audit.request_id)
+            )
+        )
 
 
 def _validate_tier(tier: str) -> None:

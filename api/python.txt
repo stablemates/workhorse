@@ -8,15 +8,20 @@
 
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
+  def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
   def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   def get_progress(self, task_id: str) -> TaskProgress | None
   def get_task(self, task_id: str) -> TaskSnapshot | None
+  def get_task_group(self, group_id: str) -> TaskGroup | None
   def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
   def get_wait(self, task_id: str, name: str) -> TaskWait | None
   def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
   def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
+  def list_task_group_drift(self, *, limit: int = 1000) -> tuple[TaskGroupDrift, ...]
+  def list_task_group_events(self, group_id: str, *, limit: int = 1000) -> tuple[TaskGroupEvent, ...]
+  def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
   def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
   def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
@@ -24,6 +29,7 @@ class Admin(_AdminOperations)
   def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
+  def repair_task_group_drift(self, audit: AdminAudit, *, limit: int = 1000) -> tuple[TaskGroupRepair, ...]
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
   def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
@@ -37,17 +43,22 @@ class AdminAudit
 
 class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
+  async def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
   async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   async def get_progress(self, task_id: str) -> TaskProgress | None
   async def get_task(self, task_id: str) -> TaskSnapshot | None
+  async def get_task_group(self, group_id: str) -> TaskGroup | None
   async def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
   async def get_wait(self, task_id: str, name: str) -> TaskWait | None
   async def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   async def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
   async def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
+  async def list_task_group_drift(self, *, limit: int = 1000) -> tuple[TaskGroupDrift, ...]
+  async def list_task_group_events(self, group_id: str, *, limit: int = 1000) -> tuple[TaskGroupEvent, ...]
+  async def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
   async def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
   async def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   async def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
@@ -55,6 +66,7 @@ class AsyncAdmin(_AdminOperations)
   async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
+  async def repair_task_group_drift(self, audit: AdminAudit, *, limit: int = 1000) -> tuple[TaskGroupRepair, ...]
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
   async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
@@ -86,7 +98,7 @@ class AsyncCancellationToken
 type AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 
 class AsyncHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
@@ -99,29 +111,42 @@ class AsyncHandlerContext
   async def sleep(self, name: str, duration_ms: int) -> None
   async def sleep_until(self, name: str, wake_at: datetime) -> None
   task: ClaimedTask
+  @property task_group -> AsyncTaskGroupContext
   async def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   async def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
 class AsyncQueue
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
+  async def add_to_task_group(self, group_id: str, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  async def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   async def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
+  async def find_task_group(self, task_id: str) -> TaskGroupLink | None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncQueue
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncQueue
+  async def get_task_group(self, group_id: str) -> TaskGroup | None
   async def health(self) -> QueueHealth
   async def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
+  async def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
+  async def seal_task_group(self, group_id: str) -> TaskGroup
   async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   async def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   async def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
+  def task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> AsyncIterator[TaskGroupBuilder]
+
+class AsyncTaskGroupContext
+  def __init__(self, _get: Callable[[], Awaitable[TaskGroupLink | None]], _add: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]]) -> None
+  async def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
+  async def get(self) -> TaskGroupLink | None
 
 class AsyncWorker
   def __init__(self, executor: _AsyncRowExecutor, pool: object, driver: Literal['psycopg', 'asyncpg'], *, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, shared_heartbeats: bool = False, **worker_options: Any) -> None
@@ -501,7 +526,7 @@ class FastTierUnsupportedError(WorkhorseError)
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class HandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
@@ -514,6 +539,7 @@ class HandlerContext
   def sleep(self, name: str, duration_ms: int) -> None
   def sleep_until(self, name: str, wake_at: datetime) -> None
   task: ClaimedTask
+  @property task_group -> TaskGroupContext
   def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
@@ -572,6 +598,12 @@ type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 class LifecycleError(WorkhorseError)
   def __init__(self, *args, **kwargs)
 
+MAX_TASK_GROUP_DRIFT_LIMIT: int = 10000
+
+MAX_TASK_GROUP_MEMBERS: int = 100000
+
+MAX_TASK_GROUP_PAGE_SIZE: int = 1000
+
 METRIC_ATTRIBUTE_CARDINALITY_LIMIT: int = 2000
 
 class ProgressLeaseLostError(LifecycleError)
@@ -588,22 +620,29 @@ class PurgeIdempotencyConflictError(WorkhorseError)
 
 class Queue
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
+  def add_to_task_group(self, group_id: str, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
+  def find_task_group(self, task_id: str) -> TaskGroupLink | None
+  def get_task_group(self, group_id: str) -> TaskGroup | None
   def health(self) -> QueueHealth
   def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
+  def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
+  def seal_task_group(self, group_id: str) -> TaskGroup
   def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
+  def task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> Iterator[TaskGroupBuilder]
 
 type QueueHealth = dict[str, Json]
 
@@ -723,6 +762,132 @@ class TaskContractVersion
   result_schema: Json = True
   sensitive_payload_keys: Sequence[str]
   sensitive_result_keys: Sequence[str]
+
+class TaskGroup
+  def __init__(self, id: str, state: TaskGroupState, result: TaskGroupResult | None, counts: TaskGroupCounts, created_at: datetime, sealed_at: datetime | None, finished_at: datetime | None, canceled_at: datetime | None, canceled_by: str | None, cancel_reason: str | None, callbacks: tuple[TaskGroupCallback, ...]) -> None
+  callbacks: tuple[TaskGroupCallback, ...]
+  cancel_reason: str | None
+  canceled_at: datetime | None
+  canceled_by: str | None
+  counts: TaskGroupCounts
+  created_at: datetime
+  finished_at: datetime | None
+  id: str
+  result: TaskGroupResult | None
+  sealed_at: datetime | None
+  state: TaskGroupState
+
+class TaskGroupBlockResult
+  def __init__(self, group: TaskGroup, tasks: tuple[EnqueueResult, ...]) -> None
+  group: TaskGroup
+  tasks: tuple[EnqueueResult, ...]
+
+class TaskGroupBuilder
+  def __init__(self) -> None
+  def add(self, requests: Sequence[EnqueueRequest]) -> None
+  @property result -> TaskGroupBlockResult
+
+class TaskGroupCallback
+  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None) -> None
+  kind: TaskGroupCallbackKind
+  task_id: str | None
+
+type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
+
+class TaskGroupClosedError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
+class TaskGroupContext
+  def __init__(self, _get: Callable[[], TaskGroupLink | None], _add: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]]) -> None
+  def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
+  def get(self) -> TaskGroupLink | None
+
+class TaskGroupCounts
+  def __init__(self, total: int, succeeded: int, failed: int, canceled: int, pending: int) -> None
+  canceled: int
+  failed: int
+  pending: int
+  succeeded: int
+  total: int
+
+class TaskGroupDrift
+  def __init__(self, group_id: str, state: TaskGroupState, recorded: TaskGroupRecordedCounts, counted: TaskGroupCounts, action: TaskGroupRepairAction) -> None
+  action: TaskGroupRepairAction
+  counted: TaskGroupCounts
+  group_id: str
+  recorded: TaskGroupRecordedCounts
+  state: TaskGroupState
+
+class TaskGroupEvent
+  def __init__(self, id: str, type: TaskGroupEventType, details: Json, occurred_at: datetime) -> None
+  details: Json
+  id: str
+  occurred_at: datetime
+  type: TaskGroupEventType
+
+type TaskGroupEventType = Literal[
+    "created",
+    "sealed",
+    "canceled",
+    "finished",
+    "callback_enqueued",
+    "callback_failed",
+    "counter_repaired",
+]
+
+class TaskGroupLimitExceededError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
+class TaskGroupLink
+  def __init__(self, role: TaskGroupRole, callback: TaskGroupCallbackKind | None, group: TaskGroup) -> None
+  callback: TaskGroupCallbackKind | None
+  group: TaskGroup
+  role: TaskGroupRole
+
+class TaskGroupMember
+  def __init__(self, position: int, task_id: str, queue: str | None, type: str | None, state: TaskState | None, outcome: TaskGroupMemberOutcome | None, added_at: datetime, counted_at: datetime | None) -> None
+  added_at: datetime
+  counted_at: datetime | None
+  outcome: TaskGroupMemberOutcome | None
+  position: int
+  queue: str | None
+  state: TaskState | None
+  task_id: str
+  type: str | None
+
+type TaskGroupMemberOutcome = Literal["succeeded", "failed", "canceled"]
+
+class TaskGroupMemberPage
+  def __init__(self, members: tuple[TaskGroupMember, ...], next_after: int | None) -> None
+  members: tuple[TaskGroupMember, ...]
+  next_after: int | None
+
+class TaskGroupMembershipConflictError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
+class TaskGroupRecordedCounts
+  def __init__(self, total: int, succeeded: int, failed: int, canceled: int) -> None
+  canceled: int
+  failed: int
+  succeeded: int
+  total: int
+
+type TaskGroupRefusal = Literal["sealed", "finished", "canceled", "not_running_member"]
+
+class TaskGroupRepair
+  def __init__(self, group_id: str, recorded_pending: int, pending: int, action: TaskGroupRepairAction) -> None
+  action: TaskGroupRepairAction
+  group_id: str
+  pending: int
+  recorded_pending: int
+
+type TaskGroupRepairAction = Literal["recounted", "finished"]
+
+type TaskGroupResult = Literal["succeeded", "failed"]
+
+type TaskGroupRole = Literal["member", "callback"]
+
+type TaskGroupState = Literal["open", "sealed", "finished"]
 
 class TaskListCursor
   def __init__(self, created_at: str, task_id: str, signature: str) -> None
@@ -960,15 +1125,20 @@ def run_worker_process(worker: Worker, *, shutdown_timeout_ms: int = 25000, forc
 
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
+  def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
   def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   def get_progress(self, task_id: str) -> TaskProgress | None
   def get_task(self, task_id: str) -> TaskSnapshot | None
+  def get_task_group(self, group_id: str) -> TaskGroup | None
   def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
   def get_wait(self, task_id: str, name: str) -> TaskWait | None
   def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
   def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
+  def list_task_group_drift(self, *, limit: int = 1000) -> tuple[TaskGroupDrift, ...]
+  def list_task_group_events(self, group_id: str, *, limit: int = 1000) -> tuple[TaskGroupEvent, ...]
+  def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
   def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
   def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
@@ -976,6 +1146,7 @@ class Admin(_AdminOperations)
   def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
   def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
+  def repair_task_group_drift(self, audit: AdminAudit, *, limit: int = 1000) -> tuple[TaskGroupRepair, ...]
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
   def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
@@ -989,17 +1160,22 @@ class AdminAudit
 
 class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
+  async def cancel_task_group(self, group_id: str, audit: AdminAudit) -> TaskGroup | None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
   async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
   async def get_progress(self, task_id: str) -> TaskProgress | None
   async def get_task(self, task_id: str) -> TaskSnapshot | None
+  async def get_task_group(self, group_id: str) -> TaskGroup | None
   async def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
   async def get_wait(self, task_id: str, name: str) -> TaskWait | None
   async def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   async def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
   async def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
+  async def list_task_group_drift(self, *, limit: int = 1000) -> tuple[TaskGroupDrift, ...]
+  async def list_task_group_events(self, group_id: str, *, limit: int = 1000) -> tuple[TaskGroupEvent, ...]
+  async def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
   async def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
   async def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   async def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
@@ -1007,6 +1183,7 @@ class AsyncAdmin(_AdminOperations)
   async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
   async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
+  async def repair_task_group_drift(self, audit: AdminAudit, *, limit: int = 1000) -> tuple[TaskGroupRepair, ...]
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def set_queue_history(self, queue_name: str, *, record_attempts: bool | None = None, record_claims: bool | None = None) -> QueueHistory
   async def set_queue_tier(self, queue_name: str, tier: QueueTier, audit: AdminAudit) -> QueueTier
@@ -1314,43 +1491,57 @@ class AsyncWorker
 
 class AsyncQueue
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
+  async def add_to_task_group(self, group_id: str, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  async def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   async def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
+  async def find_task_group(self, task_id: str) -> TaskGroupLink | None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncQueue
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncQueue
+  async def get_task_group(self, group_id: str) -> TaskGroup | None
   async def health(self) -> QueueHealth
   async def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
+  async def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
+  async def seal_task_group(self, group_id: str) -> TaskGroup
   async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   async def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   async def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
+  def task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> AsyncIterator[TaskGroupBuilder]
 
 class Queue
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
+  def add_to_task_group(self, group_id: str, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
   def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  def create_task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> TaskGroup
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
   def enqueue_with_result(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> EnqueueResult
+  def find_task_group(self, task_id: str) -> TaskGroupLink | None
+  def get_task_group(self, group_id: str) -> TaskGroup | None
   def health(self) -> QueueHealth
   def list_budgets(self, budget_names: Sequence[str] = ()) -> list[Budget]
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
+  def list_task_group_members(self, group_id: str, *, after: int = 0, limit: int = 100) -> TaskGroupMemberPage
+  def seal_task_group(self, group_id: str) -> TaskGroup
   def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   def sync_budgets(self, namespace: str, definitions: Sequence[BudgetDefinition], *, prune: bool = True) -> list[Budget]
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
   def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
+  def task_group(self, *, on_finish: EnqueueRequest | None = None, on_success: EnqueueRequest | None = None, on_failure: EnqueueRequest | None = None) -> Iterator[TaskGroupBuilder]
 
 ## workhorse.compatibility
 
@@ -5646,6 +5837,15 @@ class TaskContractUnavailableError(WorkhorseError)
 class TaskContractValidationError(WorkhorseError)
   def __init__(self, task_type: str, version: str, kind: str) -> None
 
+class TaskGroupClosedError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
+class TaskGroupLimitExceededError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
+class TaskGroupMembershipConflictError(WorkhorseError)
+  def __init__(self, details: Mapping[str, object]) -> None
+
 class TaskValueSizeLimitError(WorkhorseError)
   def __init__(self, task_type: str, value_kind: str, actual_bytes: int, max_bytes: int) -> None
 
@@ -5685,7 +5885,7 @@ class AsyncCancellationToken
   async def wait(self, timeout: float | None = None) -> bool
 
 class AsyncHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
@@ -5698,8 +5898,14 @@ class AsyncHandlerContext
   async def sleep(self, name: str, duration_ms: int) -> None
   async def sleep_until(self, name: str, wake_at: datetime) -> None
   task: ClaimedTask
+  @property task_group -> AsyncTaskGroupContext
   async def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   async def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
+
+class AsyncTaskGroupContext
+  def __init__(self, _get: Callable[[], Awaitable[TaskGroupLink | None]], _add: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]]) -> None
+  async def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
+  async def get(self) -> TaskGroupLink | None
 
 class BatchFailed(dict)
   def __init__(self, *args, **kwargs)
@@ -5931,7 +6137,7 @@ class EnqueueResult
   task_id: str
 
 class HandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
@@ -5944,6 +6150,7 @@ class HandlerContext
   def sleep(self, name: str, duration_ms: int) -> None
   def sleep_until(self, name: str, wake_at: datetime) -> None
   task: ClaimedTask
+  @property task_group -> TaskGroupContext
   def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
@@ -5967,6 +6174,12 @@ class Idempotency
   ttl_ms: int = 86400000
 
 type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
+
+MAX_TASK_GROUP_DRIFT_LIMIT: int = 10000
+
+MAX_TASK_GROUP_MEMBERS: int = 100000
+
+MAX_TASK_GROUP_PAGE_SIZE: int = 1000
 
 type NonReplaceableReason = EnqueueNonReplaceableReason
 
@@ -6046,6 +6259,123 @@ class TaskContractVersion
   result_schema: Json = True
   sensitive_payload_keys: Sequence[str]
   sensitive_result_keys: Sequence[str]
+
+class TaskGroup
+  def __init__(self, id: str, state: TaskGroupState, result: TaskGroupResult | None, counts: TaskGroupCounts, created_at: datetime, sealed_at: datetime | None, finished_at: datetime | None, canceled_at: datetime | None, canceled_by: str | None, cancel_reason: str | None, callbacks: tuple[TaskGroupCallback, ...]) -> None
+  callbacks: tuple[TaskGroupCallback, ...]
+  cancel_reason: str | None
+  canceled_at: datetime | None
+  canceled_by: str | None
+  counts: TaskGroupCounts
+  created_at: datetime
+  finished_at: datetime | None
+  id: str
+  result: TaskGroupResult | None
+  sealed_at: datetime | None
+  state: TaskGroupState
+
+class TaskGroupBlockResult
+  def __init__(self, group: TaskGroup, tasks: tuple[EnqueueResult, ...]) -> None
+  group: TaskGroup
+  tasks: tuple[EnqueueResult, ...]
+
+class TaskGroupBuilder
+  def __init__(self) -> None
+  def add(self, requests: Sequence[EnqueueRequest]) -> None
+  @property result -> TaskGroupBlockResult
+
+class TaskGroupCallback
+  def __init__(self, kind: TaskGroupCallbackKind, task_id: str | None) -> None
+  kind: TaskGroupCallbackKind
+  task_id: str | None
+
+type TaskGroupCallbackKind = Literal["on_finish", "on_success", "on_failure"]
+
+class TaskGroupContext
+  def __init__(self, _get: Callable[[], TaskGroupLink | None], _add: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]]) -> None
+  def add(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
+  def get(self) -> TaskGroupLink | None
+
+class TaskGroupCounts
+  def __init__(self, total: int, succeeded: int, failed: int, canceled: int, pending: int) -> None
+  canceled: int
+  failed: int
+  pending: int
+  succeeded: int
+  total: int
+
+class TaskGroupDrift
+  def __init__(self, group_id: str, state: TaskGroupState, recorded: TaskGroupRecordedCounts, counted: TaskGroupCounts, action: TaskGroupRepairAction) -> None
+  action: TaskGroupRepairAction
+  counted: TaskGroupCounts
+  group_id: str
+  recorded: TaskGroupRecordedCounts
+  state: TaskGroupState
+
+class TaskGroupEvent
+  def __init__(self, id: str, type: TaskGroupEventType, details: Json, occurred_at: datetime) -> None
+  details: Json
+  id: str
+  occurred_at: datetime
+  type: TaskGroupEventType
+
+type TaskGroupEventType = Literal[
+    "created",
+    "sealed",
+    "canceled",
+    "finished",
+    "callback_enqueued",
+    "callback_failed",
+    "counter_repaired",
+]
+
+class TaskGroupLink
+  def __init__(self, role: TaskGroupRole, callback: TaskGroupCallbackKind | None, group: TaskGroup) -> None
+  callback: TaskGroupCallbackKind | None
+  group: TaskGroup
+  role: TaskGroupRole
+
+class TaskGroupMember
+  def __init__(self, position: int, task_id: str, queue: str | None, type: str | None, state: TaskState | None, outcome: TaskGroupMemberOutcome | None, added_at: datetime, counted_at: datetime | None) -> None
+  added_at: datetime
+  counted_at: datetime | None
+  outcome: TaskGroupMemberOutcome | None
+  position: int
+  queue: str | None
+  state: TaskState | None
+  task_id: str
+  type: str | None
+
+type TaskGroupMemberOutcome = Literal["succeeded", "failed", "canceled"]
+
+class TaskGroupMemberPage
+  def __init__(self, members: tuple[TaskGroupMember, ...], next_after: int | None) -> None
+  members: tuple[TaskGroupMember, ...]
+  next_after: int | None
+
+class TaskGroupRecordedCounts
+  def __init__(self, total: int, succeeded: int, failed: int, canceled: int) -> None
+  canceled: int
+  failed: int
+  succeeded: int
+  total: int
+
+type TaskGroupRefusal = Literal["sealed", "finished", "canceled", "not_running_member"]
+
+class TaskGroupRepair
+  def __init__(self, group_id: str, recorded_pending: int, pending: int, action: TaskGroupRepairAction) -> None
+  action: TaskGroupRepairAction
+  group_id: str
+  pending: int
+  recorded_pending: int
+
+type TaskGroupRepairAction = Literal["recounted", "finished"]
+
+type TaskGroupResult = Literal["succeeded", "failed"]
+
+type TaskGroupRole = Literal["member", "callback"]
+
+type TaskGroupState = Literal["open", "sealed", "finished"]
 
 class TaskProgress
   def __init__(self, task_id: str, value: Json, revision: int, attempt: int, fence_token: int, worker_id: str, created_at: datetime, updated_at: datetime) -> None

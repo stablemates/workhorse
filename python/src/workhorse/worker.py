@@ -71,6 +71,7 @@ from ._telemetry import (
     task_span_attributes as _task_span_attributes,
 )
 from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
+from .client import Queue
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -108,9 +109,12 @@ from .types import (
     ChildTaskRequest,
     ClaimedTask,
     EnqueueOptions,
+    EnqueueRequest,
+    EnqueueResult,
     HandlerContext,
     Json,
     TaskCheckpoint,
+    TaskGroupLink,
     TaskProgress,
     TaskWait,
 )
@@ -357,8 +361,13 @@ class _HandlerDurability:
         arbiter: _AttemptOutcomeArbiter,
         fast_tier: bool = False,
         payload_validators: dict[tuple[str, str], Any] | None = None,
+        task_groups: Queue | None = None,
     ) -> None:
         self._executor = executor
+        self._task_groups = task_groups
+        self._task_group: TaskGroupLink | None = None
+        self._task_group_load_error: BaseException | None = None
+        self._task_group_load_attempted = False
         self._payload_validators = {} if payload_validators is None else payload_validators
         self._task = task
         self._fast_tier = fast_tier
@@ -408,6 +417,8 @@ class _HandlerDurability:
             self.run_child,
             self.run_children,
             self.run_children_all,
+            self.get_task_group,
+            self.add_to_task_group,
         )
 
     def _fast_tier_context(self) -> HandlerContext:
@@ -439,6 +450,10 @@ class _HandlerDurability:
             reject("child tasks"),
             reject("child tasks"),
             reject("child tasks"),
+            # A callback task can run on a fast-tier queue and read its group. A fast-tier task is
+            # never a member, so an add fails as it does for any task without a group.
+            self.get_task_group,
+            self.add_to_task_group,
         )
 
     def _load_checkpoints(self) -> dict[str, TaskCheckpoint]:
@@ -476,6 +491,38 @@ class _HandlerDurability:
 
     def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._load_checkpoints().get(name)
+
+    def get_task_group(self) -> TaskGroupLink | None:
+        """Read the group of this task one time for the activation, then reuse the answer."""
+        if self._task_groups is None:
+            raise TypeError("This worker does not support task groups")
+        with self._lock:
+            if not self._task_group_load_attempted:
+                self._task_group_load_attempted = True
+                try:
+                    self._task_group = self._task_groups.find_task_group(self._task.id)
+                except BaseException as error:
+                    self._task_group_load_error = error
+            if self._task_group_load_error is not None:
+                raise self._task_group_load_error
+            return self._task_group
+
+    def add_to_task_group(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
+        """Add tasks to the group of this member task under the attempt's fenced lease.
+
+        PostgreSQL refuses the add with P1008 when the lease is stale or the group is canceled.
+        """
+        if self._task_groups is None:
+            raise TypeError("This worker does not support task groups")
+        self._cancellation.raise_if_cancelled()
+        link = self.get_task_group()
+        if link is None or link.role != "member":
+            raise TypeError(f"Task {self._task.id} is not a member of a task group")
+        return self._task_groups._add_to_task_group(
+            link.group.id,
+            requests,
+            (self._task.id, self._worker_id, self._task.fence_token),
+        )
 
     def get_wait(self, name: str) -> TaskWait | None:
         return self._load_waits().get(name)
@@ -1229,6 +1276,9 @@ class Worker:
         self._contract_validators: dict[tuple[str, str], Any] = {}
         # Child payload validators are keyed like result validators, so they need their own cache.
         self._child_payload_validators: dict[tuple[str, str], Any] = {}
+        # Member adds and group reads run through a queue on the worker's executor, so an add
+        # applies task contracts and retries a contract mismatch as an enqueue does.
+        self._task_groups = Queue._from_executor(self._executor)
         self._execution_lock = Lock()
         self._wake = Event()
         self._dispatch_wake_version = 0
@@ -2938,6 +2988,7 @@ class Worker:
             arbiter,
             fast_tier,
             self._child_payload_validators,
+            self._task_groups,
         )
 
         def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
