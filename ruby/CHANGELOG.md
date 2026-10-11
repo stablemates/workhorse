@@ -316,7 +316,7 @@ Requires **schema v43**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
   renews the lease, `Worker#stop` still wakes the dispatcher, and a second signal still exits the
   process. The first failure of each logger is written to standard error.
 - Add the Active Job adapter, selected with `config.active_job.queue_adapter =
-:stablemates_workhorse`. It requires Active Job 8.0 or later. A default job runs under the
+  :stablemates_workhorse`. It requires Active Job 8.0 or later. A default job runs under the
   `active_job` task type. A typed job declares its task type with `workhorse_options` and carries
   one JSON `Hash`, so another SDK can enqueue or run it. `Stablemates::Workhorse::ActiveJob.handle`
   registers both formats on a `Worker`.
