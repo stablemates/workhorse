@@ -1,0 +1,3350 @@
+{
+  "description": "SM-1209 checkpoint-replay lifecycle scenario, full profile, three sequential invocations on a shared development PostgreSQL server.",
+  "invocations": [
+    {
+      "invocation": 1,
+      "loadAverage1mStart": 78.68,
+      "loadAverage1mEnd": 84.05,
+      "report": {
+        "configuration": {
+          "comparative": {
+            "churn": {
+              "batchSize": 100,
+              "sampleIntervalMs": 1000,
+              "targetRatePerSecond": 100,
+              "targetTasks": 6000,
+              "workerConcurrency": 16
+            },
+            "enqueueBatchSize": 100,
+            "leaseMs": 30000,
+            "repetitions": 5,
+            "seed": 1,
+            "tasksPerRun": 1000,
+            "workerConcurrency": [
+              1,
+              4,
+              16,
+              32
+            ]
+          },
+          "operational": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          }
+        },
+        "environment": {
+          "database": "workhorse_bench_eagleanton_sm_1209_measu_0a82f676",
+          "postgresVersion": "PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+          "settings": {
+            "autovacuum": "on",
+            "autovacuum_naptime": "60s",
+            "checkpoint_timeout": "300s",
+            "maintenance_work_mem": "65536kB",
+            "max_connections": "500",
+            "max_wal_size": "1024MB",
+            "shared_buffers": "5242888kB",
+            "synchronous_commit": "on",
+            "work_mem": "4096kB"
+          }
+        },
+        "generatedAt": "2026-10-11T18:25:33.710Z",
+        "lifecycle": {
+          "options": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "queuePrefix": "operational",
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          },
+          "scenarios": [
+            {
+              "assertions": [
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints0 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints0 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints0 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "expected": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "name": "checkpoints0 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [],
+                  "expected": [],
+                  "name": "checkpoints0 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "expected": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "name": "checkpoints10 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints100 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints100 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints100 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints100 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "expected": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "name": "checkpoints100 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints300 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints300 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints300 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints300 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "expected": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "name": "checkpoints300 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints1000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints1000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints1000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints1000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "expected": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "name": "checkpoints1000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints3000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints3000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints3000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints3000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "expected": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "name": "checkpoints3000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "expected": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "name": "checkpoints10000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replays every stored value",
+                  "passed": true
+                }
+              ],
+              "durationMs": 59985.610597,
+              "metrics": {
+                "checkpointCounts": "0,10,100,300,1000,3000,10000",
+                "checkpoints0CheckpointBytes": 0,
+                "checkpoints0CheckpointEvents": 0,
+                "checkpoints0ListExecutionP50Ms": 0.012,
+                "checkpoints0ListSharedBlocks": 5,
+                "checkpoints0ReplayDbP50Ms": 6.566752000000179,
+                "checkpoints0ReplayHandlerP50Ms": 0.0019930000000840664,
+                "checkpoints0ReplayPassMaxMs": 15.895236000000068,
+                "checkpoints0ReplayPassP50Ms": 7.160096999999951,
+                "checkpoints0ReplayReadP50Ms": null,
+                "checkpoints0ReplayShareP50": 0.00025614178130786236,
+                "checkpoints0ReplayStatementsP50": 3,
+                "checkpoints0SaveP50Ms": null,
+                "checkpoints0SaveP95Ms": null,
+                "checkpoints0SavePassMs": 11.442731999999978,
+                "checkpoints0SaveTotalMs": 0,
+                "checkpoints10000CheckpointBytes": 1439998,
+                "checkpoints10000CheckpointEvents": 10000,
+                "checkpoints10000ListExecutionP50Ms": 6.982,
+                "checkpoints10000ListSharedBlocks": 2263,
+                "checkpoints10000ReplayDbP50Ms": 94.97141600000032,
+                "checkpoints10000ReplayHandlerP50Ms": 108.91008100000181,
+                "checkpoints10000ReplayPassMaxMs": 275.18631900000037,
+                "checkpoints10000ReplayPassP50Ms": 123.23091700000077,
+                "checkpoints10000ReplayReadP50Ms": 70.38991099999839,
+                "checkpoints10000ReplayShareP50": 0.9023953364683404,
+                "checkpoints10000ReplayStatementsP50": 4,
+                "checkpoints10000SaveP50Ms": 3.4698459999999614,
+                "checkpoints10000SaveP95Ms": 8.059559000001173,
+                "checkpoints10000SavePassMs": 38024.134688,
+                "checkpoints10000SaveTotalMs": 37730.629111000126,
+                "checkpoints1000CheckpointBytes": 143998,
+                "checkpoints1000CheckpointEvents": 1000,
+                "checkpoints1000ListExecutionP50Ms": 0.629,
+                "checkpoints1000ListSharedBlocks": 223,
+                "checkpoints1000ReplayDbP50Ms": 28.14220000000023,
+                "checkpoints1000ReplayHandlerP50Ms": 14.443146000001434,
+                "checkpoints1000ReplayPassMaxMs": 33.20642599999883,
+                "checkpoints1000ReplayPassP50Ms": 30.439752000001135,
+                "checkpoints1000ReplayReadP50Ms": 11.949784999998883,
+                "checkpoints1000ReplayShareP50": 0.556726452256809,
+                "checkpoints1000ReplayStatementsP50": 4,
+                "checkpoints1000SaveP50Ms": 3.398070999999618,
+                "checkpoints1000SaveP95Ms": 7.001228000000083,
+                "checkpoints1000SavePassMs": 3656.112521,
+                "checkpoints1000SaveTotalMs": 3607.5251320000125,
+                "checkpoints100CheckpointBytes": 14398,
+                "checkpoints100CheckpointEvents": 100,
+                "checkpoints100ListExecutionP50Ms": 0.062,
+                "checkpoints100ListSharedBlocks": 17,
+                "checkpoints100ReplayDbP50Ms": 16.458946000000196,
+                "checkpoints100ReplayHandlerP50Ms": 4.602386000000024,
+                "checkpoints100ReplayPassMaxMs": 30.350844999999936,
+                "checkpoints100ReplayPassP50Ms": 17.083471000000372,
+                "checkpoints100ReplayReadP50Ms": 2.569923999999901,
+                "checkpoints100ReplayShareP50": 0.3698908589037727,
+                "checkpoints100ReplayStatementsP50": 4,
+                "checkpoints100SaveP50Ms": 3.966219999999794,
+                "checkpoints100SaveP95Ms": 7.923313000000007,
+                "checkpoints100SavePassMs": 488.06336499999975,
+                "checkpoints100SaveTotalMs": 468.8677259999995,
+                "checkpoints10CheckpointBytes": 1438,
+                "checkpoints10CheckpointEvents": 10,
+                "checkpoints10ListExecutionP50Ms": 0.023,
+                "checkpoints10ListSharedBlocks": 2,
+                "checkpoints10ReplayDbP50Ms": 8.493334000000004,
+                "checkpoints10ReplayHandlerP50Ms": 3.622622999999976,
+                "checkpoints10ReplayPassMaxMs": 32.124962000000096,
+                "checkpoints10ReplayPassP50Ms": 10.10643899999991,
+                "checkpoints10ReplayReadP50Ms": 1.0427620000000388,
+                "checkpoints10ReplayShareP50": 0.2372464751864877,
+                "checkpoints10ReplayStatementsP50": 4,
+                "checkpoints10SaveP50Ms": 2.6571979999998803,
+                "checkpoints10SaveP95Ms": 4.772506000000021,
+                "checkpoints10SavePassMs": 45.99577999999997,
+                "checkpoints10SaveTotalMs": 29.985807000000023,
+                "checkpoints3000CheckpointBytes": 431998,
+                "checkpoints3000CheckpointEvents": 3000,
+                "checkpoints3000ListExecutionP50Ms": 1.747,
+                "checkpoints3000ListSharedBlocks": 675,
+                "checkpoints3000ReplayDbP50Ms": 36.5577200000007,
+                "checkpoints3000ReplayHandlerP50Ms": 36.206859000001714,
+                "checkpoints3000ReplayPassMaxMs": 52.09323899999799,
+                "checkpoints3000ReplayPassP50Ms": 45.162272999998095,
+                "checkpoints3000ReplayReadP50Ms": 26.17662399999972,
+                "checkpoints3000ReplayShareP50": 0.780033915940322,
+                "checkpoints3000ReplayStatementsP50": 4,
+                "checkpoints3000SaveP50Ms": 3.9372849999999744,
+                "checkpoints3000SaveP95Ms": 7.996119000001272,
+                "checkpoints3000SavePassMs": 12471.677601,
+                "checkpoints3000SaveTotalMs": 12362.729468000069,
+                "checkpoints300CheckpointBytes": 43198,
+                "checkpoints300CheckpointEvents": 300,
+                "checkpoints300ListExecutionP50Ms": 0.221,
+                "checkpoints300ListSharedBlocks": 71,
+                "checkpoints300ReplayDbP50Ms": 17.424472000000605,
+                "checkpoints300ReplayHandlerP50Ms": 5.0924379999996745,
+                "checkpoints300ReplayPassMaxMs": 25.18989800000054,
+                "checkpoints300ReplayPassP50Ms": 19.077210999999807,
+                "checkpoints300ReplayReadP50Ms": 3.0313319999995656,
+                "checkpoints300ReplayShareP50": 0.37717745625433313,
+                "checkpoints300ReplayStatementsP50": 4,
+                "checkpoints300SaveP50Ms": 3.379566000000068,
+                "checkpoints300SaveP95Ms": 7.306352000000061,
+                "checkpoints300SavePassMs": 1244.218054,
+                "checkpoints300SaveTotalMs": 1221.4996860000033,
+                "replayKneeCheckpoints": 1000,
+                "replayPasses": 5,
+                "waitMs": 20
+              },
+              "name": "checkpoint-replay"
+            }
+          ],
+          "totalDurationMs": 59985.642167
+        },
+        "profile": "full",
+        "provenance": {
+          "command": [
+            "/home/anton/.local/share/mise/installs/node/24.21.0/bin/node",
+            "/home/anton/.t3/worktrees/workhorse/eagleanton-sm-1209-measure-handler-replay-cost-as-the-number-of-checkpoints-per/typescript/core/src/cli/benchmark.ts",
+            "--",
+            "--suite",
+            "lifecycle",
+            "--profile",
+            "full",
+            "--scenario",
+            "checkpoint-replay",
+            "--output",
+            "/tmp/sm1209-r2-full-1.json"
+          ],
+          "runtime": {
+            "architecture": "x64",
+            "cpuModel": "AMD Ryzen 9 9955HX 16-Core Processor",
+            "logicalCpuCount": 32,
+            "nodeVersion": "v24.21.0",
+            "platform": "linux",
+            "release": "7.0.0-31-generic",
+            "totalMemoryBytes": 98773422080
+          },
+          "source": {
+            "commit": "f7552f68342ebce26cb4bdc6f3d064fb0e74097b",
+            "dirty": false
+          }
+        },
+        "schemaVersion": 3,
+        "suite": "lifecycle"
+      }
+    },
+    {
+      "invocation": 2,
+      "loadAverage1mStart": 84.05,
+      "loadAverage1mEnd": 75.82,
+      "report": {
+        "configuration": {
+          "comparative": {
+            "churn": {
+              "batchSize": 100,
+              "sampleIntervalMs": 1000,
+              "targetRatePerSecond": 100,
+              "targetTasks": 6000,
+              "workerConcurrency": 16
+            },
+            "enqueueBatchSize": 100,
+            "leaseMs": 30000,
+            "repetitions": 5,
+            "seed": 1,
+            "tasksPerRun": 1000,
+            "workerConcurrency": [
+              1,
+              4,
+              16,
+              32
+            ]
+          },
+          "operational": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          }
+        },
+        "environment": {
+          "database": "workhorse_bench_eagleanton_sm_1209_measu_0a82f676",
+          "postgresVersion": "PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+          "settings": {
+            "autovacuum": "on",
+            "autovacuum_naptime": "60s",
+            "checkpoint_timeout": "300s",
+            "maintenance_work_mem": "65536kB",
+            "max_connections": "500",
+            "max_wal_size": "1024MB",
+            "shared_buffers": "5242888kB",
+            "synchronous_commit": "on",
+            "work_mem": "4096kB"
+          }
+        },
+        "generatedAt": "2026-10-11T18:26:36.220Z",
+        "lifecycle": {
+          "options": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "queuePrefix": "operational",
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          },
+          "scenarios": [
+            {
+              "assertions": [
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints0 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints0 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints0 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "expected": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "name": "checkpoints0 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [],
+                  "expected": [],
+                  "name": "checkpoints0 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "expected": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "name": "checkpoints10 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints100 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints100 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints100 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints100 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "expected": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "name": "checkpoints100 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints300 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints300 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints300 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints300 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "expected": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "name": "checkpoints300 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints1000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints1000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints1000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints1000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "expected": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "name": "checkpoints1000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints3000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints3000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints3000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints3000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "expected": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "name": "checkpoints3000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "expected": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "name": "checkpoints10000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replays every stored value",
+                  "passed": true
+                }
+              ],
+              "durationMs": 67205.132771,
+              "metrics": {
+                "checkpointCounts": "0,10,100,300,1000,3000,10000",
+                "checkpoints0CheckpointBytes": 0,
+                "checkpoints0CheckpointEvents": 0,
+                "checkpoints0ListExecutionP50Ms": 0.016,
+                "checkpoints0ListSharedBlocks": 5,
+                "checkpoints0ReplayDbP50Ms": 13.387901000000056,
+                "checkpoints0ReplayHandlerP50Ms": 0.0021639999999933934,
+                "checkpoints0ReplayPassMaxMs": 24.20411399999989,
+                "checkpoints0ReplayPassP50Ms": 14.345371000000114,
+                "checkpoints0ReplayReadP50Ms": null,
+                "checkpoints0ReplayShareP50": 0.00013617852713289732,
+                "checkpoints0ReplayStatementsP50": 3,
+                "checkpoints0SaveP50Ms": null,
+                "checkpoints0SaveP95Ms": null,
+                "checkpoints0SavePassMs": 25.486355000000003,
+                "checkpoints0SaveTotalMs": 0,
+                "checkpoints10000CheckpointBytes": 1439998,
+                "checkpoints10000CheckpointEvents": 10000,
+                "checkpoints10000ListExecutionP50Ms": 6.918,
+                "checkpoints10000ListSharedBlocks": 2263,
+                "checkpoints10000ReplayDbP50Ms": 104.98359899999923,
+                "checkpoints10000ReplayHandlerP50Ms": 94.02062699999078,
+                "checkpoints10000ReplayPassMaxMs": 187.2963230000023,
+                "checkpoints10000ReplayPassP50Ms": 137.09364000000642,
+                "checkpoints10000ReplayReadP50Ms": 68.1923289999977,
+                "checkpoints10000ReplayShareP50": 0.7489998223226291,
+                "checkpoints10000ReplayStatementsP50": 4,
+                "checkpoints10000SaveP50Ms": 3.953806000004988,
+                "checkpoints10000SaveP95Ms": 12.809101999999257,
+                "checkpoints10000SavePassMs": 45766.129657000005,
+                "checkpoints10000SaveTotalMs": 45484.76938299999,
+                "checkpoints1000CheckpointBytes": 143998,
+                "checkpoints1000CheckpointEvents": 1000,
+                "checkpoints1000ListExecutionP50Ms": 0.518,
+                "checkpoints1000ListSharedBlocks": 39,
+                "checkpoints1000ReplayDbP50Ms": 25.29646799999864,
+                "checkpoints1000ReplayHandlerP50Ms": 12.00949799999944,
+                "checkpoints1000ReplayPassMaxMs": 33.126554999998916,
+                "checkpoints1000ReplayPassP50Ms": 27.47405400000025,
+                "checkpoints1000ReplayReadP50Ms": 5.102697000000262,
+                "checkpoints1000ReplayShareP50": 0.44088886521093834,
+                "checkpoints1000ReplayStatementsP50": 4,
+                "checkpoints1000SaveP50Ms": 3.946802999999818,
+                "checkpoints1000SaveP95Ms": 9.913015000000087,
+                "checkpoints1000SavePassMs": 4131.636199999999,
+                "checkpoints1000SaveTotalMs": 4088.9673150000226,
+                "checkpoints100CheckpointBytes": 14398,
+                "checkpoints100CheckpointEvents": 100,
+                "checkpoints100ListExecutionP50Ms": 0.08,
+                "checkpoints100ListSharedBlocks": 17,
+                "checkpoints100ReplayDbP50Ms": 20.21014200000036,
+                "checkpoints100ReplayHandlerP50Ms": 10.318315999999868,
+                "checkpoints100ReplayPassMaxMs": 27.054535000000214,
+                "checkpoints100ReplayPassP50Ms": 22.184125000000222,
+                "checkpoints100ReplayReadP50Ms": 3.031080999999631,
+                "checkpoints100ReplayShareP50": 0.46512161286504494,
+                "checkpoints100ReplayStatementsP50": 4,
+                "checkpoints100SaveP50Ms": 3.947714999999789,
+                "checkpoints100SaveP95Ms": 14.001964999999927,
+                "checkpoints100SavePassMs": 510.0715290000003,
+                "checkpoints100SaveTotalMs": 491.170489000001,
+                "checkpoints10CheckpointBytes": 1438,
+                "checkpoints10CheckpointEvents": 10,
+                "checkpoints10ListExecutionP50Ms": 0.03,
+                "checkpoints10ListSharedBlocks": 2,
+                "checkpoints10ReplayDbP50Ms": 15.35411900000031,
+                "checkpoints10ReplayHandlerP50Ms": 3.5024969999999485,
+                "checkpoints10ReplayPassMaxMs": 17.03394800000001,
+                "checkpoints10ReplayPassP50Ms": 16.017475999999988,
+                "checkpoints10ReplayReadP50Ms": 1.2884129999999914,
+                "checkpoints10ReplayShareP50": 0.20561862699122638,
+                "checkpoints10ReplayStatementsP50": 4,
+                "checkpoints10SaveP50Ms": 3.1775769999999284,
+                "checkpoints10SaveP95Ms": 7.947406999999885,
+                "checkpoints10SavePassMs": 63.84184600000003,
+                "checkpoints10SaveTotalMs": 36.348807000000306,
+                "checkpoints3000CheckpointBytes": 431998,
+                "checkpoints3000CheckpointEvents": 3000,
+                "checkpoints3000ListExecutionP50Ms": 1.719,
+                "checkpoints3000ListSharedBlocks": 675,
+                "checkpoints3000ReplayDbP50Ms": 37.10000999999829,
+                "checkpoints3000ReplayHandlerP50Ms": 27.804174999997485,
+                "checkpoints3000ReplayPassMaxMs": 58.95867200000066,
+                "checkpoints3000ReplayPassP50Ms": 43.10511400000178,
+                "checkpoints3000ReplayReadP50Ms": 22.3061839999973,
+                "checkpoints3000ReplayShareP50": 0.6452324643177088,
+                "checkpoints3000ReplayStatementsP50": 4,
+                "checkpoints3000SaveP50Ms": 3.3391499999997905,
+                "checkpoints3000SaveP95Ms": 11.109775000000809,
+                "checkpoints3000SavePassMs": 11390.103770999998,
+                "checkpoints3000SaveTotalMs": 11317.767482999998,
+                "checkpoints300CheckpointBytes": 43198,
+                "checkpoints300CheckpointEvents": 300,
+                "checkpoints300ListExecutionP50Ms": 0.18,
+                "checkpoints300ListSharedBlocks": 65,
+                "checkpoints300ReplayDbP50Ms": 12.063259000000471,
+                "checkpoints300ReplayHandlerP50Ms": 2.147939999999835,
+                "checkpoints300ReplayPassMaxMs": 19.56356499999947,
+                "checkpoints300ReplayPassP50Ms": 13.07872899999984,
+                "checkpoints300ReplayReadP50Ms": 1.6316790000000765,
+                "checkpoints300ReplayShareP50": 0.183992570035954,
+                "checkpoints300ReplayStatementsP50": 4,
+                "checkpoints300SaveP50Ms": 3.94504999999981,
+                "checkpoints300SaveP95Ms": 7.951856000000134,
+                "checkpoints300SavePassMs": 1268.4354130000006,
+                "checkpoints300SaveTotalMs": 1237.8275439999998,
+                "replayKneeCheckpoints": 3000,
+                "replayPasses": 5,
+                "waitMs": 20
+              },
+              "name": "checkpoint-replay"
+            }
+          ],
+          "totalDurationMs": 67205.161825
+        },
+        "profile": "full",
+        "provenance": {
+          "command": [
+            "/home/anton/.local/share/mise/installs/node/24.21.0/bin/node",
+            "/home/anton/.t3/worktrees/workhorse/eagleanton-sm-1209-measure-handler-replay-cost-as-the-number-of-checkpoints-per/typescript/core/src/cli/benchmark.ts",
+            "--",
+            "--suite",
+            "lifecycle",
+            "--profile",
+            "full",
+            "--scenario",
+            "checkpoint-replay",
+            "--output",
+            "/tmp/sm1209-r2-full-2.json"
+          ],
+          "runtime": {
+            "architecture": "x64",
+            "cpuModel": "AMD Ryzen 9 9955HX 16-Core Processor",
+            "logicalCpuCount": 32,
+            "nodeVersion": "v24.21.0",
+            "platform": "linux",
+            "release": "7.0.0-31-generic",
+            "totalMemoryBytes": 98773422080
+          },
+          "source": {
+            "commit": "f7552f68342ebce26cb4bdc6f3d064fb0e74097b",
+            "dirty": false
+          }
+        },
+        "schemaVersion": 3,
+        "suite": "lifecycle"
+      }
+    },
+    {
+      "invocation": 3,
+      "loadAverage1mStart": 75.82,
+      "loadAverage1mEnd": 38.7,
+      "report": {
+        "configuration": {
+          "comparative": {
+            "churn": {
+              "batchSize": 100,
+              "sampleIntervalMs": 1000,
+              "targetRatePerSecond": 100,
+              "targetTasks": 6000,
+              "workerConcurrency": 16
+            },
+            "enqueueBatchSize": 100,
+            "leaseMs": 30000,
+            "repetitions": 5,
+            "seed": 1,
+            "tasksPerRun": 1000,
+            "workerConcurrency": [
+              1,
+              4,
+              16,
+              32
+            ]
+          },
+          "operational": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          }
+        },
+        "environment": {
+          "database": "workhorse_bench_eagleanton_sm_1209_measu_0a82f676",
+          "postgresVersion": "PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+          "settings": {
+            "autovacuum": "on",
+            "autovacuum_naptime": "60s",
+            "checkpoint_timeout": "300s",
+            "maintenance_work_mem": "65536kB",
+            "max_connections": "500",
+            "max_wal_size": "1024MB",
+            "shared_buffers": "5242888kB",
+            "synchronous_commit": "on",
+            "work_mem": "4096kB"
+          }
+        },
+        "generatedAt": "2026-10-11T18:27:45.171Z",
+        "lifecycle": {
+          "options": {
+            "batchSize": 25,
+            "checkpointCounts": [
+              0,
+              10,
+              100,
+              300,
+              1000,
+              3000,
+              10000
+            ],
+            "checkpointReplayPasses": 5,
+            "heartbeatCount": 32,
+            "leaseMs": 200,
+            "pruneLimit": 10000,
+            "queuePrefix": "operational",
+            "retryDelayMs": 100,
+            "scenarios": [
+              "checkpoint-replay"
+            ],
+            "scheduleDelayMs": 100,
+            "scheduleSamples": 10,
+            "taskCount": 100
+          },
+          "scenarios": [
+            {
+              "assertions": [
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints0 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints0 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints0 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints0 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "expected": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "name": "checkpoints0 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [],
+                  "expected": [],
+                  "name": "checkpoints0 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints0 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10,
+                  "expected": 10,
+                  "name": "checkpoints10 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "expected": [
+                    10,
+                    10,
+                    10,
+                    10,
+                    10
+                  ],
+                  "name": "checkpoints10 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints100 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints100 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints100 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints100 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 100,
+                  "expected": 100,
+                  "name": "checkpoints100 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints100 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "expected": [
+                    100,
+                    100,
+                    100,
+                    100,
+                    100
+                  ],
+                  "name": "checkpoints100 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints100 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints300 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints300 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints300 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints300 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 300,
+                  "expected": 300,
+                  "name": "checkpoints300 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints300 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "expected": [
+                    300,
+                    300,
+                    300,
+                    300,
+                    300
+                  ],
+                  "name": "checkpoints300 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints300 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints1000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints1000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints1000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints1000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 1000,
+                  "expected": 1000,
+                  "name": "checkpoints1000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints1000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "expected": [
+                    1000,
+                    1000,
+                    1000,
+                    1000,
+                    1000
+                  ],
+                  "name": "checkpoints1000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints1000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints3000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints3000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints3000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints3000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 3000,
+                  "expected": 3000,
+                  "name": "checkpoints3000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints3000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "expected": [
+                    3000,
+                    3000,
+                    3000,
+                    3000,
+                    3000
+                  ],
+                  "name": "checkpoints3000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints3000 replays every stored value",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 1 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 2 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 3 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 4 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 5 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": true,
+                  "expected": true,
+                  "name": "checkpoints10000 pass 6 claims the task",
+                  "passed": true
+                },
+                {
+                  "actual": "succeeded",
+                  "expected": "succeeded",
+                  "name": "checkpoints10000 task succeeds",
+                  "passed": true
+                },
+                {
+                  "actual": 1,
+                  "expected": 1,
+                  "name": "checkpoints10000 keeps one logical attempt",
+                  "passed": true
+                },
+                {
+                  "actual": 6,
+                  "expected": 6,
+                  "name": "checkpoints10000 handler runs",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 runs each operation once",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 save pass saves each checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 stores one row per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 10000,
+                  "expected": 10000,
+                  "name": "checkpoints10000 records one event per checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "expected": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                  ],
+                  "name": "checkpoints10000 replay passes issue one list query each",
+                  "passed": true
+                },
+                {
+                  "actual": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "expected": [
+                    10000,
+                    10000,
+                    10000,
+                    10000,
+                    10000
+                  ],
+                  "name": "checkpoints10000 replay lists return every checkpoint",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replay passes save nothing",
+                  "passed": true
+                },
+                {
+                  "actual": 0,
+                  "expected": 0,
+                  "name": "checkpoints10000 replays every stored value",
+                  "passed": true
+                }
+              ],
+              "durationMs": 74393.16627,
+              "metrics": {
+                "checkpointCounts": "0,10,100,300,1000,3000,10000",
+                "checkpoints0CheckpointBytes": 0,
+                "checkpoints0CheckpointEvents": 0,
+                "checkpoints0ListExecutionP50Ms": 0.006,
+                "checkpoints0ListSharedBlocks": 5,
+                "checkpoints0ReplayDbP50Ms": 17.029949999999985,
+                "checkpoints0ReplayHandlerP50Ms": 0.0015329999999948996,
+                "checkpoints0ReplayPassMaxMs": 32.00621799999999,
+                "checkpoints0ReplayPassP50Ms": 17.38320500000009,
+                "checkpoints0ReplayReadP50Ms": null,
+                "checkpoints0ReplayShareP50": 9.048842143656503e-05,
+                "checkpoints0ReplayStatementsP50": 3,
+                "checkpoints0SaveP50Ms": null,
+                "checkpoints0SaveP95Ms": null,
+                "checkpoints0SavePassMs": 22.793871999999965,
+                "checkpoints0SaveTotalMs": 0,
+                "checkpoints10000CheckpointBytes": 1439998,
+                "checkpoints10000CheckpointEvents": 10000,
+                "checkpoints10000ListExecutionP50Ms": 6.829,
+                "checkpoints10000ListSharedBlocks": 2263,
+                "checkpoints10000ReplayDbP50Ms": 77.12088199998834,
+                "checkpoints10000ReplayHandlerP50Ms": 93.3465589999978,
+                "checkpoints10000ReplayPassMaxMs": 337.14964200000395,
+                "checkpoints10000ReplayPassP50Ms": 103.19161599999643,
+                "checkpoints10000ReplayReadP50Ms": 68.42144999999437,
+                "checkpoints10000ReplayShareP50": 0.9116241777660605,
+                "checkpoints10000ReplayStatementsP50": 4,
+                "checkpoints10000SaveP50Ms": 3.9723719999965397,
+                "checkpoints10000SaveP95Ms": 13.9435650000014,
+                "checkpoints10000SavePassMs": 50815.137332,
+                "checkpoints10000SaveTotalMs": 50557.92206900044,
+                "checkpoints1000CheckpointBytes": 143998,
+                "checkpoints1000CheckpointEvents": 1000,
+                "checkpoints1000ListExecutionP50Ms": 0.586,
+                "checkpoints1000ListSharedBlocks": 223,
+                "checkpoints1000ReplayDbP50Ms": 19.961443999998664,
+                "checkpoints1000ReplayHandlerP50Ms": 9.23627099999976,
+                "checkpoints1000ReplayPassMaxMs": 28.10029200000099,
+                "checkpoints1000ReplayPassP50Ms": 24.06452099999842,
+                "checkpoints1000ReplayReadP50Ms": 4.23146799999995,
+                "checkpoints1000ReplayShareP50": 0.36443312557932805,
+                "checkpoints1000ReplayStatementsP50": 4,
+                "checkpoints1000SaveP50Ms": 3.9701969999996436,
+                "checkpoints1000SaveP95Ms": 12.742196000001059,
+                "checkpoints1000SavePassMs": 4601.082519,
+                "checkpoints1000SaveTotalMs": 4565.043661999993,
+                "checkpoints100CheckpointBytes": 14398,
+                "checkpoints100CheckpointEvents": 100,
+                "checkpoints100ListExecutionP50Ms": 0.075,
+                "checkpoints100ListSharedBlocks": 17,
+                "checkpoints100ReplayDbP50Ms": 10.715944000000036,
+                "checkpoints100ReplayHandlerP50Ms": 1.747436000000107,
+                "checkpoints100ReplayPassMaxMs": 26.22423300000014,
+                "checkpoints100ReplayPassP50Ms": 11.153177000000142,
+                "checkpoints100ReplayReadP50Ms": 0.8147229999999581,
+                "checkpoints100ReplayShareP50": 0.16357927043450177,
+                "checkpoints100ReplayStatementsP50": 4,
+                "checkpoints100SaveP50Ms": 0.6800889999999526,
+                "checkpoints100SaveP95Ms": 7.975920999999971,
+                "checkpoints100SavePassMs": 262.3091689999999,
+                "checkpoints100SaveTotalMs": 239.08058199999982,
+                "checkpoints10CheckpointBytes": 1438,
+                "checkpoints10CheckpointEvents": 10,
+                "checkpoints10ListExecutionP50Ms": 0.027,
+                "checkpoints10ListSharedBlocks": 2,
+                "checkpoints10ReplayDbP50Ms": 16.581747999999834,
+                "checkpoints10ReplayHandlerP50Ms": 0.7926210000000538,
+                "checkpoints10ReplayPassMaxMs": 22.040543999999954,
+                "checkpoints10ReplayPassP50Ms": 17.211602000000084,
+                "checkpoints10ReplayReadP50Ms": 0.4477919999999358,
+                "checkpoints10ReplayShareP50": 0.07006700335118246,
+                "checkpoints10ReplayStatementsP50": 4,
+                "checkpoints10SaveP50Ms": 5.416337000000112,
+                "checkpoints10SaveP95Ms": 9.10084699999993,
+                "checkpoints10SavePassMs": 79.05933699999991,
+                "checkpoints10SaveTotalMs": 55.12129499999992,
+                "checkpoints3000CheckpointBytes": 431998,
+                "checkpoints3000CheckpointEvents": 3000,
+                "checkpoints3000ListExecutionP50Ms": 1.928,
+                "checkpoints3000ListSharedBlocks": 675,
+                "checkpoints3000ReplayDbP50Ms": 35.8441559999992,
+                "checkpoints3000ReplayHandlerP50Ms": 29.7015739999988,
+                "checkpoints3000ReplayPassMaxMs": 45.21372899999915,
+                "checkpoints3000ReplayPassP50Ms": 41.39666999999827,
+                "checkpoints3000ReplayReadP50Ms": 18.28260600000067,
+                "checkpoints3000ReplayShareP50": 0.7313896983088494,
+                "checkpoints3000ReplayStatementsP50": 4,
+                "checkpoints3000SaveP50Ms": 3.8218980000001466,
+                "checkpoints3000SaveP95Ms": 11.63362000000052,
+                "checkpoints3000SavePassMs": 12666.031636000002,
+                "checkpoints3000SaveTotalMs": 12589.037007999981,
+                "checkpoints300CheckpointBytes": 43198,
+                "checkpoints300CheckpointEvents": 300,
+                "checkpoints300ListExecutionP50Ms": 0.194,
+                "checkpoints300ListSharedBlocks": 65,
+                "checkpoints300ReplayDbP50Ms": 14.541811000000052,
+                "checkpoints300ReplayHandlerP50Ms": 2.3422349999996186,
+                "checkpoints300ReplayPassMaxMs": 47.74081299999989,
+                "checkpoints300ReplayPassP50Ms": 15.042523000000074,
+                "checkpoints300ReplayReadP50Ms": 1.696781000000101,
+                "checkpoints300ReplayShareP50": 0.13878962750294924,
+                "checkpoints300ReplayStatementsP50": 4,
+                "checkpoints300SaveP50Ms": 3.973642999999811,
+                "checkpoints300SaveP95Ms": 12.947501999999986,
+                "checkpoints300SavePassMs": 1570.18376,
+                "checkpoints300SaveTotalMs": 1547.3362169999946,
+                "replayKneeCheckpoints": 3000,
+                "replayPasses": 5,
+                "waitMs": 20
+              },
+              "name": "checkpoint-replay"
+            }
+          ],
+          "totalDurationMs": 74393.18845199999
+        },
+        "profile": "full",
+        "provenance": {
+          "command": [
+            "/home/anton/.local/share/mise/installs/node/24.21.0/bin/node",
+            "/home/anton/.t3/worktrees/workhorse/eagleanton-sm-1209-measure-handler-replay-cost-as-the-number-of-checkpoints-per/typescript/core/src/cli/benchmark.ts",
+            "--",
+            "--suite",
+            "lifecycle",
+            "--profile",
+            "full",
+            "--scenario",
+            "checkpoint-replay",
+            "--output",
+            "/tmp/sm1209-r2-full-3.json"
+          ],
+          "runtime": {
+            "architecture": "x64",
+            "cpuModel": "AMD Ryzen 9 9955HX 16-Core Processor",
+            "logicalCpuCount": 32,
+            "nodeVersion": "v24.21.0",
+            "platform": "linux",
+            "release": "7.0.0-31-generic",
+            "totalMemoryBytes": 98773422080
+          },
+          "source": {
+            "commit": "f7552f68342ebce26cb4bdc6f3d064fb0e74097b",
+            "dirty": false
+          }
+        },
+        "schemaVersion": 3,
+        "suite": "lifecycle"
+      }
+    }
+  ]
+}

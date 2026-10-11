@@ -34,9 +34,11 @@ import {
   Queue,
   Worker,
 } from "../src/index.js";
-import type { ClaimedTask, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+import type { ClaimedTask, Json, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
 // The crash harness and the refill batch are worker internals, not published API, so they come from
 // the source module.
+// The statement catalogue is internal too. The replay probe matches its exact text.
+import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import { dispatchRefillBatch, InjectedCrashError, type Failpoint } from "../src/worker.js";
 
 registerOpenTelemetry();
@@ -72,6 +74,7 @@ export const operationalScenarioNames = [
   "dead-letter-redrive-lifecycle",
   "query-listing-lifecycle",
   "progress-lifecycle",
+  "checkpoint-replay",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -134,6 +137,10 @@ export interface OperationalScenarioOptions {
   retryDelayMs?: number;
   /** Upper bound on terminal tasks seeded for the weekly retirement scenario. */
   pruneLimit?: number;
+  /** Ascending checkpoints-per-task counts the checkpoint replay scenario measures. */
+  checkpointCounts?: readonly number[];
+  /** Replay passes after the save pass for each checkpoint count. */
+  checkpointReplayPasses?: number;
   /** Queue prefix. Every scenario appends its stable scenario name. */
   queuePrefix?: string;
   /** Select a stable subset while retaining contract order. */
@@ -155,6 +162,8 @@ export interface ResolvedOperationalScenarioOptions {
   leaseMs: number;
   retryDelayMs: number;
   pruneLimit: number;
+  checkpointCounts: readonly number[];
+  checkpointReplayPasses: number;
   queuePrefix: string;
   scenarios: readonly OperationalScenarioName[];
 }
@@ -364,6 +373,27 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "lookupMs",
       "latestRevision",
       "progressEvents",
+    ],
+  },
+  {
+    name: "checkpoint-replay",
+    purpose:
+      "Record what a full-tier handler pays to replay its stored checkpoints after each durable wait as the number of checkpoints per task grows.",
+    invariants: [
+      "every checkpoint count completes in one logical attempt after one save pass and every replay pass",
+      "the save pass runs each checkpoint operation once and stores one row and one checkpoint_saved event per checkpoint",
+      "each replay pass reads the stored checkpoints with exactly one list query, or none at count 0, and runs no checkpoint operation and no save",
+      "each replay pass returns every stored checkpoint value",
+    ],
+    metrics: [
+      "checkpointCounts",
+      "replayPasses",
+      "replayKneeCheckpoints",
+      "save pass latency, per-save p50 and p95, and total save time by checkpoint count",
+      "replay pass latency, list-query time, handler replay time, and statement time by checkpoint count",
+      "replay share of the pass by checkpoint count",
+      "list-query execution time and shared buffers by checkpoint count",
+      "stored checkpoint bytes and checkpoint_saved events by checkpoint count",
     ],
   },
   {
@@ -694,6 +724,8 @@ const defaults: ResolvedOperationalScenarioOptions = {
   leaseMs: 40,
   retryDelayMs: 40,
   pruneLimit: 1_000,
+  checkpointCounts: [0, 10, 100],
+  checkpointReplayPasses: 3,
   queuePrefix: "operational",
   scenarios: operationalScenarioNames,
 };
@@ -703,6 +735,36 @@ function positiveInteger(name: string, value: number): number {
     throw new RangeError(`${name} must be a positive safe integer`);
   }
   return value;
+}
+
+/** Bounds one benchmark task's checkpoints, so a typo cannot start an hours-long save pass. */
+export const MAX_BENCHMARK_CHECKPOINTS_PER_TASK = 100_000;
+/** Bounds replay passes. Each pass adds one durable wait, and a task holds at most 1,000. */
+export const MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES = 100;
+
+function checkpointReplayPassCount(value: number): number {
+  positiveInteger("checkpointReplayPasses", value);
+  if (value > MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES) {
+    throw new RangeError(
+      `checkpointReplayPasses must not exceed ${MAX_BENCHMARK_CHECKPOINT_REPLAY_PASSES}`,
+    );
+  }
+  return value;
+}
+
+function checkpointCountList(values: readonly number[]): readonly number[] {
+  if (values.length === 0) throw new RangeError("checkpointCounts must not be empty");
+  values.forEach((value, index) => {
+    if (!Number.isSafeInteger(value) || value < 0 || value > MAX_BENCHMARK_CHECKPOINTS_PER_TASK) {
+      throw new RangeError(
+        `checkpointCounts must contain integers from 0 to ${MAX_BENCHMARK_CHECKPOINTS_PER_TASK}`,
+      );
+    }
+    if (index > 0 && value <= values[index - 1]!) {
+      throw new RangeError("checkpointCounts must be strictly ascending");
+    }
+  });
+  return [...values];
 }
 
 export function resolveOperationalScenarioOptions(
@@ -737,6 +799,10 @@ export function resolveOperationalScenarioOptions(
     leaseMs: positiveInteger("leaseMs", options.leaseMs ?? defaults.leaseMs),
     retryDelayMs: positiveInteger("retryDelayMs", options.retryDelayMs ?? defaults.retryDelayMs),
     pruneLimit: positiveInteger("pruneLimit", options.pruneLimit ?? defaults.pruneLimit),
+    checkpointCounts: checkpointCountList(options.checkpointCounts ?? defaults.checkpointCounts),
+    checkpointReplayPasses: checkpointReplayPassCount(
+      options.checkpointReplayPasses ?? defaults.checkpointReplayPasses,
+    ),
     queuePrefix,
     scenarios: operationalScenarioNames.filter((name) => requested.includes(name)),
   };
@@ -5283,6 +5349,243 @@ async function telemetryContext(
   };
 }
 
+type CheckpointStatementKind = "list" | "save" | "other";
+
+interface CheckpointStatementSample {
+  pass: number;
+  kind: CheckpointStatementKind;
+  durationMs: number;
+  rows: number;
+}
+
+/**
+ * Times every statement a checkpoint replay worker sends and tags it with the current pass.
+ *
+ * It matches the catalogue text exactly, so a renamed statement makes the replay invariants fail
+ * instead of silently counting it as other work.
+ */
+class CheckpointStatementProbe implements Queryable {
+  pass = 0;
+  readonly samples: CheckpointStatementSample[] = [];
+
+  constructor(private readonly target: Queryable) {}
+
+  async query<R extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<R>> {
+    const kind: CheckpointStatementKind =
+      text === SQL_STATEMENTS.list_checkpoints
+        ? "list"
+        : text === SQL_STATEMENTS.save_checkpoint_v1
+          ? "save"
+          : "other";
+    const pass = this.pass;
+    const started = performance.now();
+    const result = await this.target.query<R>(text, values);
+    this.samples.push({
+      pass,
+      kind,
+      durationMs: Math.max(0, performance.now() - started),
+      rows: result.rows.length,
+    });
+    return result;
+  }
+
+  inPass(pass: number, kind?: CheckpointStatementKind): CheckpointStatementSample[] {
+    return this.samples.filter(
+      (sample) => sample.pass === pass && (kind === undefined || sample.kind === kind),
+    );
+  }
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+// Each value is the same size, so stored bytes grow with the count alone.
+function checkpointValue(step: number): { step: number; result: string } {
+  return { step, result: "r".repeat(100) };
+}
+
+async function checkpointReplay(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const { checkpointCounts, checkpointReplayPasses: replayPasses } = context.options;
+  // Long enough that 10,000 sequential saves never meet lease expiry between heartbeats.
+  const leaseMs = 60_000;
+  const waitMs = 20;
+  let knee: number | null = null;
+
+  metrics.checkpointCounts = checkpointCounts.join(",");
+  metrics.replayPasses = replayPasses;
+  metrics.waitMs = waitMs;
+
+  for (const count of checkpointCounts) {
+    await reset(context.pool);
+    const prefix = `checkpoints${count}`;
+    const probe = new CheckpointStatementProbe(context.pool);
+    const queue = operationalQueue(probe, context.queueName);
+    let handlerRuns = 0;
+    let operations = 0;
+    let valueMismatches = 0;
+    const passValues: Json[][] = [];
+    const replayHandlerMs: number[] = [];
+    const worker = new Worker(queue, {
+      workerId: `benchmark-checkpoint-replay-${count}`,
+      leaseMs,
+      heartbeatMs: leaseMs / 4,
+      // The probe has no connect(), so heartbeats share it and appear as other statements.
+      sharedHeartbeats: true,
+      pollMs: 1,
+      // One warm-up pass below runs maintenance, so no timed pass repeats it.
+      maintenanceIntervalMs: 3_600_000,
+      maintenanceRoutinePollMs: 3_600_000,
+      registryIntervalMs: 0,
+    }).handle("checkpoint-replay", async (_payload, handlerContext) => {
+      handlerRuns += 1;
+      const pass = handlerRuns;
+      const values: Json[] = [];
+      const entered = performance.now();
+      for (let step = 0; step < count; step += 1) {
+        values.push(
+          await handlerContext.checkpoint(`step-${step}`, () => {
+            operations += 1;
+            return checkpointValue(step);
+          }),
+        );
+      }
+      if (pass > 1) replayHandlerMs.push(Math.max(0, performance.now() - entered));
+      // The scenario checks these values after each timed pass, so the check adds nothing to it.
+      passValues.push(values);
+      // A real handler calls every earlier wait again. This one schedules only the new wait, so
+      // every replay pass has the same fixed cost and the checkpoint count is the only variable.
+      if (pass <= replayPasses) await handlerContext.sleep(`rest-${pass}`, waitMs);
+      return { checkpoints: count, passes: pass };
+    });
+
+    const directQueue = operationalQueue(context.pool, context.queueName);
+    probe.pass = 0;
+    await worker.runOnce();
+    const taskId = await directQueue.enqueue("checkpoint-replay", { count });
+    const passMs: number[] = [];
+    for (let pass = 1; pass <= replayPasses + 1; pass += 1) {
+      if (pass > 1) {
+        await context.sleep(waitMs + 5);
+        await directQueue.promote(1);
+      }
+      probe.pass = pass;
+      const [ran, durationMs] = await measured(context.now, () => worker.runOnce());
+      probe.pass = -1;
+      for (const values of passValues.splice(0)) {
+        values.forEach((value, step) => {
+          if (!jsonEquivalent(value, checkpointValue(step))) valueMismatches += 1;
+        });
+      }
+      recordInvariant(assertions, `${prefix} pass ${pass} claims the task`, ran, true);
+      passMs.push(durationMs);
+    }
+
+    const snapshot = await context.admin.getTask(taskId);
+    const attempts = await rowCount(context.pool, "attempt_history", taskId);
+    const storedRows = await rowCount(context.pool, "task_checkpoint", taskId);
+    const events = await context.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'checkpoint_saved'`,
+      [taskId],
+    );
+    const checkpointEvents = Number(events.rows[0]?.count ?? 0);
+    const bytes = await context.pool.query<{ bytes: string }>(
+      `SELECT COALESCE(sum(pg_column_size(checkpoint_value)), 0)::text AS bytes
+         FROM workhorse.task_checkpoint WHERE task_id = $1`,
+      [taskId],
+    );
+    const plans: ClaimPlanSummary[] = [];
+    for (let sample = 0; sample < 3; sample += 1) {
+      const plan = await context.pool.query<{ "QUERY PLAN": unknown }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${SQL_STATEMENTS.list_checkpoints}`,
+        [taskId],
+      );
+      plans.push(summarizeClaimPlan(plan.rows[0]?.["QUERY PLAN"]));
+    }
+
+    const saves = probe.inPass(1, "save").map((sample) => sample.durationMs);
+    const replayPassNumbers = Array.from({ length: replayPasses }, (_, index) => index + 2);
+    const replayLists = replayPassNumbers.map((pass) => probe.inPass(pass, "list"));
+    const replayReadMs = replayLists.flat().map((sample) => sample.durationMs);
+    const replayDbMs = replayPassNumbers.map((pass) =>
+      sum(probe.inPass(pass).map((sample) => sample.durationMs)),
+    );
+    const replayStatements = replayPassNumbers.map((pass) => probe.inPass(pass).length);
+    const replayPassMs = passMs.slice(1);
+    const replayShares = replayPassMs.map((duration, index) =>
+      duration === 0 ? 0 : (replayHandlerMs[index] ?? 0) / duration,
+    );
+    const replayShareP50 = percentile(replayShares, 0.5);
+
+    metrics[`${prefix}SavePassMs`] = passMs[0] ?? null;
+    metrics[`${prefix}SaveTotalMs`] = sum(saves);
+    metrics[`${prefix}SaveP50Ms`] = percentile(saves, 0.5);
+    metrics[`${prefix}SaveP95Ms`] = percentile(saves, 0.95);
+    metrics[`${prefix}ReplayPassP50Ms`] = percentile(replayPassMs, 0.5);
+    metrics[`${prefix}ReplayPassMaxMs`] = Math.max(...replayPassMs);
+    metrics[`${prefix}ReplayReadP50Ms`] = percentile(replayReadMs, 0.5);
+    metrics[`${prefix}ReplayHandlerP50Ms`] = percentile(replayHandlerMs, 0.5);
+    metrics[`${prefix}ReplayDbP50Ms`] = percentile(replayDbMs, 0.5);
+    metrics[`${prefix}ReplayStatementsP50`] = percentile(replayStatements, 0.5);
+    metrics[`${prefix}ReplayShareP50`] = replayShareP50;
+    metrics[`${prefix}ListExecutionP50Ms`] = percentile(
+      plans.map((plan) => plan.executionTimeMs),
+      0.5,
+    );
+    metrics[`${prefix}ListSharedBlocks`] = Math.max(...plans.map((plan) => plan.sharedBlocks));
+    metrics[`${prefix}CheckpointBytes`] = Number(bytes.rows[0]?.bytes ?? 0);
+    metrics[`${prefix}CheckpointEvents`] = checkpointEvents;
+    if (knee === null && replayShareP50 !== null && replayShareP50 >= 0.5) knee = count;
+
+    recordInvariant(assertions, `${prefix} task succeeds`, snapshot?.state, "succeeded");
+    recordInvariant(assertions, `${prefix} keeps one logical attempt`, attempts, 1);
+    recordInvariant(assertions, `${prefix} handler runs`, handlerRuns, replayPasses + 1);
+    recordInvariant(assertions, `${prefix} runs each operation once`, operations, count);
+    recordInvariant(assertions, `${prefix} save pass saves each checkpoint`, saves.length, count);
+    recordInvariant(assertions, `${prefix} stores one row per checkpoint`, storedRows, count);
+    recordInvariant(
+      assertions,
+      `${prefix} records one event per checkpoint`,
+      checkpointEvents,
+      count,
+    );
+    // A handler with no checkpoint never loads them, which makes count 0 the fixed-cost baseline.
+    const expectedLists = count === 0 ? 0 : 1;
+    recordInvariant(
+      assertions,
+      `${prefix} replay passes issue one list query each`,
+      replayLists.map((lists) => lists.length),
+      replayPassNumbers.map(() => expectedLists),
+      jsonEquivalent,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} replay lists return every checkpoint`,
+      replayLists.flat().map((sample) => sample.rows),
+      replayLists.flat().map(() => count),
+      jsonEquivalent,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} replay passes save nothing`,
+      sum(replayPassNumbers.map((pass) => probe.inPass(pass, "save").length)),
+      0,
+    );
+    recordInvariant(assertions, `${prefix} replays every stored value`, valueMismatches, 0);
+  }
+
+  metrics.replayKneeCheckpoints = knee;
+  return { name: "checkpoint-replay", durationMs: 0, metrics, assertions };
+}
+
 const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
@@ -5295,6 +5598,7 @@ const operationalScenarioImplementations: Readonly<
   "dead-letter-redrive-lifecycle": deadLetterRedriveLifecycle,
   "query-listing-lifecycle": queryListingLifecycle,
   "progress-lifecycle": progressLifecycle,
+  "checkpoint-replay": checkpointReplay,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,
