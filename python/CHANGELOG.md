@@ -69,7 +69,10 @@ The Python SDK adds task groups (SM-1233). The names follow the TypeScript SDK, 
   error, one statement creates the group, adds the tasks, and seals the group. `builder.result`
   then holds the group and the enqueue results. If the block raises, nothing is created.
 - A handler reads its group through `ctx.task_group.get()`, and a running member task adds tasks
-  through `ctx.task_group.add()` under its fenced lease. `AsyncHandlerContext.task_group` gives the
+  through `ctx.task_group.add()` under its fenced lease. If a request names no queue, `add()` puts
+  the task in the queue of the member task (SM-1251,
+  [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
+  `AsyncHandlerContext.task_group` gives the
   same calls as coroutines. A callback handler reads the group ID and the counts through `get()`.
 - `Admin` and `AsyncAdmin` gain `get_task_group`, `list_task_group_members`,
   `list_task_group_events`, `cancel_task_group`, `list_task_group_drift`, and

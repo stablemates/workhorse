@@ -69,7 +69,9 @@ migration changes no stored data.
 TypeScript `Queue` gains `createTaskGroup`, `addToTaskGroup`, `sealTaskGroup`, the block form
 `taskGroup`, `getTaskGroup`, `listTaskGroupMembers`, and `findTaskGroup`. The block form creates,
 adds, and seals in one transaction. A handler reads its group through `ctx.taskGroup.get()`, and a
-running member task adds tasks through `ctx.taskGroup.add()`. `Admin` gains `getTaskGroup`,
+running member task adds tasks through `ctx.taskGroup.add()`. If a request names no queue, `add()`
+puts the task in the queue of the member task, not in the `defaultQueue` of the `Queue` (SM-1251,
+[ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)). `Admin` gains `getTaskGroup`,
 `listTaskGroupMembers`, `listTaskGroupEvents`, `cancelTaskGroup`, `listTaskGroupDrift`, and
 `repairTaskGroupDrift`. `MaintenancePhase` gains `task_groups`. The other SDKs add task groups in
 later releases.

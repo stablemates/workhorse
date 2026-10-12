@@ -67,7 +67,10 @@ migration changes no stored data.
   executor makes the other calls part of the caller's transaction.
 - A handler reads its group through `ctx.task_group().get()`, as a member task or as a callback
   task. A running member task adds tasks through `ctx.task_group().add()`, under its fenced lease,
-  also after the seal. `BatchHandlerContext::task_group` gives a batch member the same calls.
+  also after the seal. If a request names no queue, `add()` puts the task in the queue of the member
+  task (SM-1251,
+  [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
+  `BatchHandlerContext::task_group` gives a batch member the same calls.
 - `Admin` gains `get_task_group`, `list_task_group_members`, `list_task_group_events`,
   `cancel_task_group`, `list_task_group_drift`, and `repair_task_group_drift`.
 - `Error` gains `TaskGroupClosed` (`P1008`), `TaskGroupLimitExceeded` (`P1009`), and

@@ -35,10 +35,14 @@ async fn harness(name: &str) -> Option<Harness> {
 
 impl Harness {
     fn worker(&self) -> Worker {
+        self.worker_serving(&[QUEUE])
+    }
+
+    fn worker_serving(&self, queues: &[&str]) -> Worker {
         let manager = deadpool_postgres::Manager::new(self.database.url().parse().unwrap(), NoTls);
         let pool = deadpool_postgres::Pool::builder(manager).max_size(6).build().unwrap();
         let options = WorkerOptions {
-            queues: vec![QUEUE.into()],
+            queues: queues.iter().map(|queue| queue.to_string()).collect(),
             worker_id: Some(format!("rust-groups-{}", Uuid::new_v4())),
             polling_only: true,
             poll_interval: Some(Duration::from_millis(20)),
@@ -483,4 +487,47 @@ async fn a_member_add_checks_the_current_contract() {
     assert_eq!(page.members.len(), 2);
     let added = harness.admin.get_task(page.members[1].task_id).await.unwrap().unwrap();
     assert_eq!(added.contract_version.as_deref(), Some("v1"));
+}
+
+#[tokio::test]
+async fn a_member_add_without_a_queue_goes_to_the_queue_of_the_member() {
+    let Some(harness) = harness("task_groups_member_default_queue").await else { return };
+    // The first queue of this worker is not the queue of the member task.
+    let worker = harness.worker_serving(&["rust-groups-first", QUEUE]);
+    worker.handle("import", |payload: Value, context: HandlerContext| async move {
+        if payload["spawn"] == json!(true) {
+            // The request names no queue, so the added member goes to the queue of its member task.
+            let added = context
+                .task_group()
+                .add(vec![request("import", json!({ "spawn": false }))])
+                .await?;
+            assert_eq!(added.len(), 1);
+        }
+        Ok(json!(null))
+    });
+    let members = vec![request("import", json!({ "spawn": true })).with_options(EnqueueOptions {
+        queue: Some(QUEUE.into()),
+        max_attempts: 1,
+        ..Default::default()
+    })];
+    let group =
+        harness.queue.task_group(TaskGroupCallbacks::default(), members).await.unwrap().group;
+    assert!(worker.run_once().await.unwrap());
+
+    let page = harness
+        .queue
+        .list_task_group_members(group.id, TaskGroupMemberQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.members.len(), 2);
+    let first = harness.admin.get_task(page.members[0].task_id).await.unwrap().unwrap();
+    assert_eq!(first.queue, QUEUE);
+    let added = harness.admin.get_task(page.members[1].task_id).await.unwrap().unwrap();
+    assert_eq!(added.queue, QUEUE);
+
+    // The worker runs the added member and finishes the group.
+    assert!(worker.run_once().await.unwrap());
+    let finished = harness.queue.get_task_group(group.id).await.unwrap().unwrap();
+    assert_eq!(finished.state, TaskGroupState::Finished);
+    assert_eq!((finished.counts.total, finished.counts.succeeded), (2, 2));
 }

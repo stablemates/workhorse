@@ -318,6 +318,54 @@ func TestTaskGroupCallbackHandlerReadsTheGroupAndAMemberAddsAfterTheSeal(t *test
 	}
 }
 
+func TestTaskGroupMemberAddWithoutAQueueGoesToTheQueueOfTheMember(t *testing.T) {
+	fixture := newTaskGroupFixture(t, "go-task-group-default-add")
+	block, err := fixture.queue.TaskGroup(fixture.ctx, workhorse.TaskGroupCallbacks{}, func(builder *workhorse.TaskGroupBuilder) error {
+		return builder.Add(groupMember("default-add", 1))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker drains its queue, so only the first member adds a task.
+	added := false
+	fixture.runGroupWorker(t, "default-add", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		if added {
+			return nil, nil
+		}
+		added = true
+		unnamed := workhorse.EnqueueRequest{Type: "member", Payload: 2, Options: workhorse.EnqueueOptions{MaxAttempts: 1}}
+		results, err := handler.AddToTaskGroup([]workhorse.EnqueueRequest{unnamed})
+		if err != nil {
+			return nil, err
+		}
+		if len(results) != 1 || results[0].Outcome != workhorse.EnqueueAccepted {
+			return nil, fmt.Errorf("unexpected member add: %+v", results)
+		}
+		return nil, nil
+	})
+
+	page, err := fixture.queue.ListTaskGroupMembers(fixture.ctx, block.Group.ID, workhorse.TaskGroupMemberQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Members) != 2 || page.Members[0].Queue == nil || *page.Members[0].Queue != "default-add" ||
+		page.Members[1].Queue == nil || *page.Members[1].Queue != "default-add" {
+		t.Fatalf("unexpected members: %+v", page.Members)
+	}
+	var queueName string
+	if err := fixture.pool.QueryRow(fixture.ctx, "SELECT queue_name FROM workhorse.task WHERE id = $1", page.Members[1].TaskID).Scan(&queueName); err != nil {
+		t.Fatal(err)
+	}
+	if queueName != "default-add" {
+		t.Fatalf("expected the added member on the queue of its member task, found %q", queueName)
+	}
+
+	if group := fixture.group(t, block.Group.ID); group.State != workhorse.TaskGroupFinished ||
+		group.Counts != (workhorse.TaskGroupCounts{Total: 2, Succeeded: 2}) {
+		t.Fatalf("unexpected finished group: %+v", group)
+	}
+}
+
 func TestTaskGroupEmptyGroupFinishesAtTheSealAndRefusesAnAdd(t *testing.T) {
 	fixture := newTaskGroupFixture(t, "go-task-group-empty")
 	group, err := fixture.queue.CreateTaskGroup(fixture.ctx, groupCallbacks("empty-callbacks"))

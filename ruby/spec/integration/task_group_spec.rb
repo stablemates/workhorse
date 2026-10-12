@@ -158,10 +158,14 @@ RSpec.describe "Task groups against PostgreSQL" do
   it "lets a running member task add tasks after the seal" do
     result = queue.task_group(on_finish: request("group.report")) { |group| group.enqueue("group.parent", {}) }
     added = nil
-    subject = worker
+    other = "#{@queue_name}-other"
+    # The first queue of this worker is not the queue of the member task.
+    subject = W::Worker.new(@pool, queues: ["#{@queue_name}-first", @queue_name], polling_only: true,
+      poll_interval: 0.01, disable_registry: true)
     subject.handle("group.parent") do |_payload, context|
       before = context.task_group.get
-      added = context.task_group.add([request("group.member", {"from" => "parent"})])
+      added = context.task_group.add([request("group.member", {"from" => "parent"}),
+        request("group.member", {"from" => "parent"}, queue: other)])
       raise "the activation must keep its first read" unless context.task_group.get.equal?(before)
 
       {}
@@ -170,9 +174,13 @@ RSpec.describe "Task groups against PostgreSQL" do
     subject.handle("group.report") { {} }
     drain(subject)
 
+    # The request with no queue goes to the queue of the member task. The worker does not serve +other+.
     group = queue.get_task_group(result.group.id)
-    expect([group.state, group.counts.total, group.counts.succeeded]).to eq([:finished, 2, 2])
+    expect([group.state, group.counts.total, group.counts.succeeded]).to eq([:sealed, 3, 2])
     expect(queue.find_task_group(added.first.task_id).group.id).to eq(result.group.id)
+    queues = queue.list_task_group_members(result.group.id).members.to_h { |member| [member.task_id, member.queue] }
+    expect(added.map { |item| queues.fetch(item.task_id) }).to eq([@queue_name, other])
+    expect(added.map { |item| state(item.task_id) }).to eq(%w[succeeded ready])
   end
 
   it "refuses an add from a task that is not a member" do

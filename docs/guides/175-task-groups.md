@@ -211,19 +211,20 @@ more work that must finish before the callbacks run.
 Thus, the callbacks see the work that member tasks add. Only a running member task can add after
 the seal. A task that is not a member gets an error. No task can join a canceled group.
 
-Set the queue on each request that a handler adds. The default queue of a handler add is not the
-same in each SDK. The reference block shows each default.
+If a request that a handler adds names no queue, Workhorse puts the task in the queue of the member
+task that adds it. A worker just ran that member task, so a worker serves its queue. If the new task
+needs a different queue, name that queue on the request.
 
 <details>
 <summary>Reference: add from a handler</summary>
 
-| SDK        | Call                               | Queue of a request with no queue               |
-| ---------- | ---------------------------------- | ---------------------------------------------- |
-| TypeScript | `ctx.taskGroup.add(requests)`      | `Queue.defaultQueue` of the worker's `Queue`   |
-| Python     | `context.task_group.add(requests)` | `default`                                      |
-| Go         | `HandlerContext.AddToTaskGroup`    | `default`                                      |
-| Rust       | `HandlerContext::task_group().add` | `default`                                      |
-| Ruby       | `context.task_group.add(requests)` | The first queue in the `queues:` of the worker |
+| SDK        | Call                               | Queue of a request with no queue |
+| ---------- | ---------------------------------- | -------------------------------- |
+| TypeScript | `ctx.taskGroup.add(requests)`      | The queue of the member task     |
+| Python     | `context.task_group.add(requests)` | The queue of the member task     |
+| Go         | `HandlerContext.AddToTaskGroup`    | The queue of the member task     |
+| Rust       | `HandlerContext::task_group().add` | The queue of the member task     |
+| Ruby       | `context.task_group.add(requests)` | The queue of the member task     |
 
 `add_task_group_members_v1` takes the member task, the worker, and the fence token. It refuses the
 add with `P1008` and the reason `not_running_member` when they do not name an `active` member of

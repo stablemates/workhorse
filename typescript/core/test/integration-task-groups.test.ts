@@ -194,6 +194,28 @@ describe("task groups", () => {
     ).rejects.toMatchObject({ details: { groupId: other.id, reason: "not_running_member" } });
   });
 
+  it("puts a member add without a queue on the queue of the member task", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("default-add", 1)]),
+    );
+    const worker = new Worker(queue, { queue: "default-add", workerId: "default-add-worker" });
+    worker.handle("member", async (_payload: number, context) => {
+      // The request names no queue, so the added member goes to the queue of its member task.
+      await context.taskGroup.add([{ type: "member", payload: 2, options: { maxAttempts: 1 } }]);
+      return null;
+    });
+    expect(await worker.runOnce()).toBe(true);
+
+    const page = await queue.listTaskGroupMembers(group.id);
+    expect(page.members).toHaveLength(2);
+    await expect(admin.getTask(page.members[0]!.taskId)).resolves.toMatchObject({
+      queue: "default-add",
+    });
+    await expect(admin.getTask(page.members[1]!.taskId)).resolves.toMatchObject({
+      queue: "default-add",
+    });
+  });
+
   it.each(["seal", "outcome"] as const)(
     "enqueues each callback one time when the %s comes first and the other change waits",
     async (first) => {

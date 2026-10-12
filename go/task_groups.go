@@ -824,7 +824,8 @@ func (handler *HandlerContext) AddToTaskGroup(requests []EnqueueRequest) ([]Enqu
 			contracts = &cache
 		}
 		handler.taskGroupQueue = &Queue{
-			executor: handler.executor, defaultQueue: defaultWorkerQueueValue,
+			// A request with no queue goes to the queue of the member task that adds it.
+			executor: handler.executor, defaultQueue: handler.Task.Queue,
 			compatibility: compatibility, contracts: contracts,
 		}
 	}

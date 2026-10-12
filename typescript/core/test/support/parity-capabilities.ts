@@ -1485,29 +1485,29 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Queue of a handler task group add without a queue",
     rust: {
-      value: "`default`",
+      value: "The queue of the member task",
       file: "rust/src/context.rs",
-      pattern: 'group_enqueue: EnqueueClient::new("default"),',
+      pattern: "let group_enqueue = EnqueueClient::new(task.queue.as_str());",
     },
     typescript: {
-      value: "The `defaultQueue` of the worker's `Queue`",
-      file: "typescript/core/src/queue/enqueue-contracts.ts",
-      pattern: "request.options?.queue ?? this.context.defaultQueue",
+      value: "The queue of the member task",
+      file: "typescript/core/src/queue/task-groups.ts",
+      pattern: "? { ...request, options: { ...request.options, queue: task.queue } }",
     },
     python: {
-      value: "`default`",
+      value: "The queue of the member task",
       file: "python/src/workhorse/worker.py",
-      pattern: "self._task_groups = Queue._from_executor(self._executor)",
+      pattern: "replace(request, options=replace(request.options, queue=self._task.queue))",
     },
     go: {
-      value: "`default`",
+      value: "The queue of the member task",
       file: "go/task_groups.go",
-      pattern: "defaultQueue: defaultWorkerQueueValue",
+      pattern: "executor: handler.executor, defaultQueue: handler.Task.Queue,",
     },
     ruby: {
-      value: "The first queue of the worker",
-      file: "ruby/lib/stablemates/workhorse/worker.rb",
-      pattern: "@queue = Queue.new(@executor, default_queue: @queues.first)",
+      value: "The queue of the member task",
+      file: "ruby/lib/stablemates/workhorse/queue.rb",
+      pattern: "request.with(queue: task.queue)",
     },
   },
 ];

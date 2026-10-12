@@ -115,13 +115,17 @@ module Stablemates
         add_task_group_members(TaskGroups.group_id(group_id), requests, [nil, nil, nil])
       end
 
-      # Adds +requests+ to the group of +task+, a running member task, under its fenced lease.
-      # Internal to the SDK.
+      # Adds +requests+ to the group of +task+, a running member task, under its fenced lease. A
+      # request with no queue goes to the queue of +task+, as in the other SDKs. Internal to the
+      # SDK.
       def add_to_task_group_as_member(task, worker_id, requests) # :nodoc:
         TaskGroups.validate_add(requests)
         link = find_task_group(task.id)
         raise ArgumentError, "Task #{task.id} is not a member of a task group" unless link&.role == :member
 
+        requests = requests.map do |request|
+          (request.queue.nil? || request.queue == "") ? request.with(queue: task.queue) : request
+        end
         add_task_group_members(link.group.id, requests, [task.id, worker_id, task.fence_token.to_s])
       end
 

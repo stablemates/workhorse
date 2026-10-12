@@ -170,7 +170,7 @@ differ today, and the reasons follow the table.
 | Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
 | Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      |
-| Queue of a handler task group add without a queue | The `defaultQueue` of the worker's `Queue`                | `default`                                                 | `default`                                                 | `default`                                                 | The first queue of the worker                             |
+| Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -204,12 +204,10 @@ PostgreSQL sees the same thing either way. An abandoned handler holds a lease no
 exited at its own deadline. What differs is what the handler observes: a Go, Rust, or Ruby handler
 observes cancellation, where a TypeScript or Python handler observes termination.
 
-The queue of a handler task group add is the second row that differs. A handler can add a task to
-its own task group. If the request names no queue, each SDK picks the queue in its own way. Python,
-Go, and Rust use `default`. TypeScript uses the `defaultQueue` of the `Queue` that the worker uses.
-Ruby uses the first queue of the worker. No host language forces this difference, so it does not
-follow the ADR 0072 rule. A separate issue decides whether it must change. Until then, set the queue
-on each request that a handler adds.
+The queue of a handler task group add agrees. A handler can add a task to its own task group. If
+the request names no queue, all five SDKs put the task in the queue of the member task that adds it.
+A worker just ran that member task, so a worker serves its queue. [ADR
+0097](decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the rule.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
 choice. All five SDKs carry it and all five leave it unset, so the persisted retry policy chooses

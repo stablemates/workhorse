@@ -75,7 +75,9 @@ end
   `cancel_task_group`, `list_task_group_drift`, and `repair_task_group_drift`.
 - `HandlerContext#task_group` and `BatchHandlerContext#task_group` return a `TaskGroupContext`.
   Its `get` returns the `TaskGroupLink` of the task, with the group ID and the counts. Its `add`
-  adds tasks from a running member task, also after the seal.
+  adds tasks from a running member task, also after the seal. If a request names no queue, `add`
+  puts the task in the queue of the member task, not in the first queue of the worker (SM-1251,
+  [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
 - `Stablemates::Workhorse::ActiveJob.task_group` runs a block in which each job that the
   Workhorse adapter enqueues becomes a member task. Its callbacks can be Active Job instances,
   such as `ReportJob.new(import.id)`. A job reads its group through

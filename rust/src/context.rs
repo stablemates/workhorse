@@ -60,6 +60,8 @@ impl HandlerContext {
         pool: deadpool_postgres::Pool,
         worker_id: String,
     ) -> Self {
+        // A task group add with no queue goes to the queue of the member task that adds it.
+        let group_enqueue = EnqueueClient::new(task.queue.as_str());
         let inner = Durable {
             task,
             cancellation,
@@ -69,7 +71,7 @@ impl HandlerContext {
             calls: InFlight::default(),
             checkpoints: InFlight::default(),
             task_group: OnceCell::new(),
-            group_enqueue: EnqueueClient::new("default"),
+            group_enqueue,
         };
         Self { inner: Arc::new(inner) }
     }
