@@ -64,6 +64,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "slot-refill" => slot_refill(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
+            "release-wait" => release_wait(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
             "oversized-result" => oversized_result(database, fixture).await,
             "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
@@ -1277,6 +1278,70 @@ async fn missing_handler(database: &ScratchDatabase, fixture: &Value) -> Checked
     worker.handle(task_type, |_: Value, _| async { Ok(Value::Null) });
     run_once(&worker, true).await?;
     assert_state(&client, task, &fixture["expectedAfterHandled"]).await
+}
+
+/// Runs a listening worker that has no handler for the one ready task. Each release wakes the
+/// worker, so the gap between two releases shows its bound.
+async fn release_wait(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let task = queue
+        .enqueue(text(fixture, "taskType"), &json!({}), Default::default())
+        .await
+        .map_err(driver)?
+        .task_id;
+    let worker = worker(
+        database,
+        4,
+        WorkerOptions {
+            polling_only: false,
+            listen_config: Some(database.url().parse().map_err(sql)?),
+            lease_duration: millis(fixture, "leaseMs"),
+            poll_interval: Some(millis(fixture, "pollMs")),
+            ..options(fixture)
+        },
+    )?;
+    worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
+    let (stop, running) = run(&worker);
+    tokio::time::sleep(millis(fixture, "runMs")).await;
+    // Without a listener, the worker gets no notification, and the fixture proves nothing.
+    let listeners = client
+        .query_one(
+            "SELECT count(*) FROM pg_stat_activity
+              WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'",
+            &[],
+        )
+        .await
+        .map(|row| row.get::<_, i64>(0));
+    let _ = stop.send(());
+    running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    let listeners = listeners.map_err(sql)?;
+    check(listeners > 0, || "no session listened while the worker ran".into())?;
+    let times: Vec<f64> = client
+        .query(
+            "SELECT (extract(epoch FROM occurred_at) * 1000)::float8 FROM workhorse.task_event
+              WHERE task_id = $1 AND event_type = 'released' ORDER BY occurred_at",
+            &[&task],
+        )
+        .await
+        .map_err(sql)?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    let releases = i64::try_from(times.len()).unwrap_or(i64::MAX);
+    let (least, most) =
+        (number(fixture, "expectedMinimumReleases"), number(fixture, "expectedMaximumReleases"));
+    check((least..=most).contains(&releases), || {
+        format!("the worker released the task {releases} times while it ran")
+    })?;
+    let least_gap = fixture["expectedMinimumReleaseGapMs"].as_f64().unwrap_or(f64::MAX);
+    for pair in times.windows(2) {
+        let gap = pair[1] - pair[0];
+        check(gap >= least_gap, || {
+            format!("the worker released the task again after {gap:.0} ms")
+        })?;
+    }
+    Ok(())
 }
 
 async fn json_round_trip(database: &ScratchDatabase, fixture: &Value) -> Checked {

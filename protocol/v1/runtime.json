@@ -227,6 +227,19 @@
     "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
   },
   {
+    "id": "a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval",
+    "kind": "release-wait",
+    "covers": ["unrunnable-task-release-wait"],
+    "taskType": "protocol.release-wait",
+    "registeredTaskType": "protocol.release-wait-registered",
+    "leaseMs": 5000,
+    "pollMs": 1000,
+    "runMs": 2500,
+    "expectedMinimumReleases": 2,
+    "expectedMaximumReleases": 3,
+    "expectedMinimumReleaseGapMs": 900
+  },
+  {
     "id": "json-values-survive-the-payload-and-result-round-trip",
     "kind": "json-round-trip",
     "covers": ["json-value-round-trip"],

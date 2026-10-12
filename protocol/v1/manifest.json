@@ -81,6 +81,7 @@
     "enqueue-trace-propagation",
     "budget-admission-serialization",
     "missing-handler-release",
+    "unrunnable-task-release-wait",
     "json-value-round-trip",
     "heartbeat-failure-tolerance",
     "maintenance-phase-resilience",

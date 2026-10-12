@@ -548,8 +548,18 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Unhandled task type released to its queue",
-    ruby: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
-    rust: { fixtures: ["runtime/missing-handler-releases-the-task-with-its-attempt-intact"] },
+    ruby: {
+      fixtures: [
+        "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
+        "runtime/a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval",
+      ],
+    },
+    rust: {
+      fixtures: [
+        "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
+        "runtime/a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval",
+      ],
+    },
     typescript: { file: "integration-claim-lease-fence.test.ts", pattern: "unregistered type" },
     python: { file: "test_worker.py", pattern: "unregistered_type" },
     go: { file: "worker_test.go", pattern: "UnregisteredType" },

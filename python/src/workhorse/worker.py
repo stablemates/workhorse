@@ -218,8 +218,10 @@ class _DispatchSlots:
     # The cohort of every handler thread this run started.
     thread_cohorts: dict[Thread, int] = field(default_factory=dict)
     # Set by a claim that found nothing to run: no claim starts until its deadline, or until a
-    # dispatch wake newer than that claim's start.
-    empty_wait: tuple[float, int] | None = None
+    # dispatch wake newer than that claim's start. A wake version of None marks a release wait,
+    # which follows a claim that released every task it claimed. Each release notifies the queue,
+    # so a wake does not end that wait: only its deadline, a stop, or a pause does.
+    empty_wait: tuple[float, int | None] | None = None
     consecutive_empty_claims: int = 0
     claimed_any: bool = False
     # A single pass ends at its first claim that made no progress.
@@ -1942,14 +1944,19 @@ class Worker:
                     if paused:
                         if not continuous:
                             break
-                        # Paused starts no claims but keeps observing executions and claims.
+                        # Paused starts no claims but keeps observing executions and claims. A
+                        # pause ends the empty wait, so a resume claims at once. A release wait
+                        # ignores the wake of the resume, so it must end here.
+                        with self._state_lock:
+                            slots.empty_wait = None
                         self._wake.wait(
                             self._dispatch_wait_seconds(listener, consecutive_empty_claims)
                         )
                         continue
                     if empty_wait is not None:
                         remaining = empty_wait[0] - monotonic()
-                        if remaining <= 0 or wake_version != empty_wait[1]:
+                        woken = empty_wait[1] is not None and wake_version != empty_wait[1]
+                        if remaining <= 0 or woken:
                             with self._state_lock:
                                 if slots.empty_wait is empty_wait:
                                     slots.empty_wait = None
@@ -2027,12 +2034,14 @@ class Worker:
             return
         slots.consecutive_empty_claims += 1
         slots.pass_ended = True
-        if slots.empty_wait is None:
-            slots.empty_wait = (
-                monotonic()
-                + self._dispatch_wait_seconds(slots.listener, slots.consecutive_empty_claims),
-                outcome.wake_version,
-            )
+        deadline = monotonic() + self._dispatch_wait_seconds(
+            slots.listener, slots.consecutive_empty_claims
+        )
+        if not outcome.claimed:
+            if slots.empty_wait is None:
+                slots.empty_wait = (deadline, outcome.wake_version)
+        elif slots.empty_wait is None or slots.empty_wait[1] is not None:
+            slots.empty_wait = (deadline, None)
 
     def _run_dispatch_claim(
         self,

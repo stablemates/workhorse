@@ -1911,8 +1911,10 @@ export class Worker {
     let nextClaimId = 0;
     let firstFailure: { executionId: number; reason: unknown } | undefined;
     let claimError: { error: unknown } | undefined;
-    // Set by a claim that found nothing to run. No claim starts until its deadline or a wake.
-    let emptyWait: { deadline: number; wakeVersion: number } | undefined;
+    // Set by a claim that found nothing to run. No claim starts until its deadline or a wake. A
+    // release wait follows a claim that released every task it claimed. Each release notifies the
+    // queue, so a wake does not end that wait: only its deadline, a stop, or a pause does.
+    let emptyWait: { deadline: number; wakeVersion: number; release?: true } | undefined;
 
     const cohortFree = (cohort: number): number =>
       cohortCapacity[cohort]! -
@@ -2038,7 +2040,15 @@ export class Worker {
       }
       this.previousPassWorked = false;
       this.consecutiveEmptyClaims += 1;
-      emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+      if (attempt.claimed.length === 0) {
+        emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
+      } else if (!emptyWait?.release) {
+        emptyWait = {
+          deadline: Date.now() + this.nextDispatchPollMs(),
+          wakeVersion,
+          release: true,
+        };
+      }
     };
     const freeSlots = (): number => this.concurrency - active.size + handedOver.size - reserved;
     // Cohort claims need every queue to be fast-tier, because only a fast-tier completion refills
@@ -2105,16 +2115,24 @@ export class Worker {
     while (true) {
       if (shouldStop() || firstFailure || claimError !== undefined) break;
       if (this.paused) {
+        // A pause ends the empty wait, so a resume claims at once. A release wait ignores the
+        // wake of the resume, so it must end here.
+        emptyWait = undefined;
         await nextEvent(this.nextDispatchPollMs());
         continue;
       }
       if (emptyWait) {
         const remainingMs = emptyWait.deadline - Date.now();
-        if (remainingMs <= 0 || this.dispatchWakeVersion !== emptyWait.wakeVersion) {
+        const woken = !emptyWait.release && this.dispatchWakeVersion !== emptyWait.wakeVersion;
+        if (remainingMs <= 0 || woken) {
           emptyWait = undefined;
           continue;
         }
-        await nextEvent(remainingMs, emptyWait.wakeVersion);
+        // A wake during a release wait only ends this sleep. The loop then sleeps again.
+        await nextEvent(
+          remainingMs,
+          emptyWait.release ? this.dispatchWakeVersion : emptyWait.wakeVersion,
+        );
         continue;
       }
       if (!cohortDispatch()) {

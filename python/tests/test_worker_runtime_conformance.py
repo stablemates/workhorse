@@ -56,6 +56,7 @@ ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
         "json-round-trip",
         "maintenance-phase-error",
         "missing-handler",
+        "release-wait",
     }
 )
 SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
@@ -130,6 +131,7 @@ def execute_runtime_fixture(
             execute_budget_admission_race_fixture(setup_connection, race_fixture, database_url)
         ),
         "missing-handler": execute_missing_handler_fixture,
+        "release-wait": execute_release_wait_fixture,
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
         "oversized-result": execute_oversized_result_fixture,
@@ -1126,6 +1128,59 @@ def execute_missing_handler_fixture(
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
 
 
+def release_times_ms(connection: psycopg.Connection[Any], task_id: str) -> list[float]:
+    rows = connection.execute(
+        "SELECT extract(epoch FROM occurred_at) * 1000 FROM workhorse.task_event "
+        "WHERE task_id = %s AND event_type = 'released' ORDER BY occurred_at",
+        (task_id,),
+    ).fetchall()
+    return [float(row[0]) for row in rows]
+
+
+def listening_sessions(connection: psycopg.Connection[Any]) -> int:
+    """Counts the sessions that listen for tasks. Without one the fixture proves nothing."""
+    row = connection.execute(
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'"
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def assert_release_wait(times: list[float], fixture: Mapping[str, Any]) -> None:
+    assert fixture["expectedMinimumReleases"] <= len(times) <= fixture["expectedMaximumReleases"], (
+        f"{len(times)} releases while the worker ran"
+    )
+    gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+    assert min(gaps) >= fixture["expectedMinimumReleaseGapMs"], f"release gaps {gaps}"
+
+
+def execute_release_wait_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
+    # The worker listens on its queue, so each release wakes it. It has no handler for the task.
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
+    ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
+    errors: list[BaseException] = []
+    thread = run_in_thread(worker.run, errors)
+    try:
+        sleep(fixture["runMs"] / 1000)
+        listeners = listening_sessions(connection)
+    finally:
+        worker.stop()
+        join(thread)
+    assert errors == []
+    assert listeners > 0, "no session listened while the worker ran"
+    assert_release_wait(release_times_ms(connection, task_id), fixture)
+
+
 def execute_json_round_trip_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
@@ -1349,6 +1404,7 @@ async def execute_async_runtime_fixture(
         "json-round-trip": execute_async_json_round_trip_fixture,
         "maintenance-phase-error": execute_async_maintenance_phase_error_fixture,
         "missing-handler": execute_async_missing_handler_fixture,
+        "release-wait": execute_async_release_wait_fixture,
     }
     await executors[fixture["kind"]](connection, fixture, database_url)
 
@@ -1467,6 +1523,32 @@ async def execute_async_missing_handler_fixture(
         assert await newer.run_once() is True
     assert handled == [{"index": 1}]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
+
+
+async def execute_async_release_wait_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+
+    async def registered(_payload: object, _context: AsyncHandlerContext) -> None:
+        return None
+
+    async with async_worker(
+        database_url, fixture, lease_ms=fixture["leaseMs"], poll_ms=fixture["pollMs"]
+    ) as worker:
+        worker.handle(fixture["registeredTaskType"], registered)
+        running = asyncio.create_task(worker.run())
+        try:
+            await asyncio.sleep(fixture["runMs"] / 1000)
+            listeners = await asyncio.to_thread(listening_sessions, connection)
+        finally:
+            worker.stop()
+            await running
+    assert listeners > 0, "no session listened while the worker ran"
+    times = await asyncio.to_thread(release_times_ms, connection, task_id)
+    assert_release_wait(times, fixture)
 
 
 async def execute_async_maintenance_phase_error_fixture(

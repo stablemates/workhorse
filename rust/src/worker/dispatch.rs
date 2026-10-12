@@ -298,8 +298,10 @@ struct Dispatcher<D: Dispatch> {
     wake_version: u64,
     notification_delay_pending: bool,
     /// Set by a claim that found nothing to run. No claim starts until its deadline, or until a
-    /// notification arrives after that claim started.
-    empty_wait: Option<(Instant, u64)>,
+    /// notification arrives after that claim started. A version of `None` marks a release wait,
+    /// which follows a claim that released every task it claimed. Each release notifies the queue,
+    /// so a notification does not end that wait: only its deadline, a stop, or a pause does.
+    empty_wait: Option<(Instant, Option<u64>)>,
     stopping: Arc<AtomicBool>,
 }
 
@@ -343,7 +345,7 @@ impl<D: Dispatch> Dispatcher<D> {
         }
     }
 
-    fn set_empty_wait(&mut self, empty_wait: Option<(Instant, u64)>) {
+    fn set_empty_wait(&mut self, empty_wait: Option<(Instant, Option<u64>)>) {
         self.empty_wait = empty_wait;
         lock(&self.shared.slots).waiting = empty_wait.is_some();
     }
@@ -460,6 +462,7 @@ impl<D: Dispatch> Dispatcher<D> {
         });
         let Some(Claimed { wake_version, tasks }) = claimed else { return };
         let Some(tasks) = tasks else { return };
+        let released = !tasks.is_empty();
         // A claimed task holds a lease, so it runs even when the loop is stopping.
         if self.launch(tasks, cohort, executions) {
             self.consecutive_empty = 0;
@@ -468,7 +471,11 @@ impl<D: Dispatch> Dispatcher<D> {
         }
         // A claim that only handed its tasks back made no progress, so it backs off like an empty
         // one. Claiming again at once would spin on a task no handler here can run.
-        self.back_off(wake_version);
+        if released {
+            self.release_wait();
+        } else {
+            self.back_off(wake_version);
+        }
     }
 
     /// Launches the tasks a fused claim handed over.
@@ -491,7 +498,17 @@ impl<D: Dispatch> Dispatcher<D> {
         self.consecutive_empty = self.consecutive_empty.saturating_add(1);
         if self.empty_wait.is_none() {
             let deadline = Instant::now() + self.worker.poll_delay(self.consecutive_empty);
-            self.set_empty_wait(Some((deadline, wake_version)));
+            self.set_empty_wait(Some((deadline, Some(wake_version))));
+        }
+    }
+
+    /// Backs off after a claim that released every task it claimed. The release replaces an empty
+    /// wait that a notification could end, so its own notification cannot end the wait.
+    fn release_wait(&mut self) {
+        self.consecutive_empty = self.consecutive_empty.saturating_add(1);
+        if !matches!(self.empty_wait, Some((_, None))) {
+            let deadline = Instant::now() + self.worker.poll_delay(self.consecutive_empty);
+            self.set_empty_wait(Some((deadline, None)));
         }
     }
 }
@@ -517,9 +534,15 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
             break;
         }
         let wake_at = if worker.paused() {
+            // A pause ends the empty wait, so a resume claims at once. A release wait ignores the
+            // wake of the resume, so it must end here.
+            if dispatcher.empty_wait.is_some() {
+                dispatcher.set_empty_wait(None);
+            }
             Some(Instant::now() + worker.poll_delay(dispatcher.consecutive_empty))
         } else if let Some((deadline, version)) = dispatcher.empty_wait {
-            if Instant::now() >= deadline || dispatcher.wake_version != version {
+            let woken = version.is_some_and(|version| dispatcher.wake_version != version);
+            if Instant::now() >= deadline || woken {
                 dispatcher.set_empty_wait(None);
                 continue;
             }
@@ -1085,6 +1108,37 @@ mod tests {
         let worker = harness.stop().await;
         assert_eq!(worker.released.load(Ordering::SeqCst), 1);
         assert_eq!(worker.started.load(Ordering::SeqCst), 0);
+    }
+
+    // SM-1247: each release notifies the queue. If that notification ended the wait, the worker
+    // claimed and released the same task again after the notification delay only.
+    #[tokio::test]
+    async fn a_notification_does_not_end_a_release_wait() {
+        let mut harness = Harness::start_plain(2, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask { handled: false, ..FakeTask::ready() }]);
+        settled().await;
+        harness.notification.notify_one();
+        tokio::time::sleep(NOTIFICATION_DELAY * 2).await;
+        assert!(harness.claims.try_recv().is_err(), "a notification ended the release wait");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_pause_ends_a_release_wait() {
+        let mut harness = Harness::start_plain(2, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask { handled: false, ..FakeTask::ready() }]);
+        settled().await;
+        harness.worker.paused.store(true, Ordering::SeqCst);
+        harness.notification.notify_one();
+        settled().await;
+        // A resume wakes the loop, and the worker claims without the rest of the release wait.
+        harness.worker.paused.store(false, Ordering::SeqCst);
+        harness.notification.notify_one();
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        harness.stop().await;
     }
 
     #[tokio::test]

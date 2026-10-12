@@ -885,10 +885,13 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	stopping := false
 	var firstError error
 	// Set by a claim that found nothing to run. No claim starts until its deadline or a wake that
-	// arrived after that claim started.
+	// arrived after that claim started. A release wait follows a claim that released every task it
+	// claimed. Each release notifies the queue, so a wake does not end that wait: only its
+	// deadline, a stop, or a pause does.
 	var emptyWait *struct {
 		deadline    time.Time
 		wakeVersion int
+		release     bool
 	}
 	maintenanceErrors := environment.maintenanceErrors
 	waitTimer := time.NewTimer(time.Hour)
@@ -922,13 +925,14 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		}
 		return best
 	}
-	setEmptyWait := func(startedVersion int) {
+	setEmptyWait := func(startedVersion int, release bool) {
 		consecutiveEmptyClaims++
-		if emptyWait == nil {
+		if emptyWait == nil || (release && !emptyWait.release) {
 			emptyWait = &struct {
 				deadline    time.Time
 				wakeVersion int
-			}{time.Now().Add(pollDelay()), startedVersion}
+				release     bool
+			}{time.Now().Add(pollDelay()), startedVersion, release}
 		}
 	}
 	runnable := func(tasks []ClaimedTask) bool {
@@ -1051,7 +1055,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			emptyWait = nil
 			return
 		}
-		setEmptyWait(settlement.wakeVersion)
+		setEmptyWait(settlement.wakeVersion, len(settlement.tasks) > 0)
 	}
 	// The refill-batch rule applies to a fused claim as well: while a plain claim that can fill the
 	// completing task's cohort is in flight, a completion claims only when that would fill at least
@@ -1100,7 +1104,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			consecutiveEmptyClaims = 0
 		} else if settlement.answered && len(settlement.tasks) == 0 && len(worker.queues) == 1 {
 			// Another queue may still have work, so only a single-queue worker backs off here.
-			setEmptyWait(reservation.wakeVersion)
+			setEmptyWait(reservation.wakeVersion, false)
 		}
 	}
 
@@ -1114,13 +1118,16 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		// A nil channel never fires, so the loop waits only on executions and claims.
 		var wakeAfter <-chan time.Time
 		if worker.remotelyPaused.Load() {
-			// A paused worker starts no claim but keeps observing its executions and claims.
+			// A paused worker starts no claim but keeps observing its executions and claims. A pause
+			// ends the empty wait, so a resume claims at once. A release wait ignores the wake of the
+			// resume, so it must end here.
+			emptyWait = nil
 			resetTimer(waitTimer, pollDelay())
 			wakeAfter = waitTimer.C
 		} else {
 			if emptyWait != nil {
 				remaining := time.Until(emptyWait.deadline)
-				if remaining <= 0 || wakeVersion != emptyWait.wakeVersion {
+				if remaining <= 0 || (!emptyWait.release && wakeVersion != emptyWait.wakeVersion) {
 					emptyWait = nil
 				} else {
 					resetTimer(waitTimer, remaining)
