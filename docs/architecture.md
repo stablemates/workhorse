@@ -18,7 +18,9 @@ columns, and limits of that area. For an explanation of a concept, read the
 
 - [Schema versions and migrations](architecture/schema-and-protocol.md#schema-versions-and-migrations):
   the current version, the migration plan, and the migration runner
-- [SQL protocol conformance](architecture/schema-and-protocol.md#sql-protocol-conformance)
+- [SQL protocol conformance](architecture/schema-and-protocol.md#sql-protocol-conformance),
+  including [durable replay conflicts](architecture/schema-and-protocol.md#durable-replay-conflicts)
+  and the TypeScript test that [replays stored state](architecture/schema-and-protocol.md#replay-stored-state-in-a-test)
 - The [Python](architecture/schema-and-protocol.md#python-sdk),
   [Go](architecture/schema-and-protocol.md#go-sdk),
   [Ruby](architecture/schema-and-protocol.md#ruby-sdk), and

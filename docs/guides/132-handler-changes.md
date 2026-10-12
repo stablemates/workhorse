@@ -155,6 +155,78 @@ More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_
 
 </details>
 
+## Test a change against the stored state of a task
+
+Before a deployment, you can run the new handler code against the stored state of a waiting task.
+The TypeScript function `replayHandler` does this in a test. It uses no database and no worker. It
+fails when the new code asks for a new checkpoint, wait, or child before a stored one.
+
+**Example.** A test checks the new `order.ship` code from the first section. It uses the state of
+the task at 5 h, after the payment clears.
+
+1. The test writes the state: the stored `reserve` checkpoint and the delivered `payment-cleared`
+   signal.
+2. `replayHandler` runs the new code. `ctx.waitForSignal("payment-cleared")` returns the stored
+   payload.
+3. The code asks for the `ship` checkpoint. The state does not hold `ship`. It still holds
+   `reserve`, which the code has not asked for.
+4. `replayHandler` raises `HandlerReplayError`. The operation of `ship` does not run.
+
+```ts
+import { replayHandler, type DurableState } from "@stablemates/workhorse";
+
+const state: DurableState = {
+  checkpoints: { reserve: { value: { reservationId: "r-1" } } },
+  signals: { "payment-cleared": { payload: { amount: 10 } } },
+};
+
+// Raises HandlerReplayError at the "ship" checkpoint.
+await replayHandler(shipVersion2, { orderId: "o-1" }, state);
+```
+
+Thus the test finds the change before a task resumes on it. The replay returns each stored value,
+and it runs the operation of a new checkpoint only after the code asks for every stored name. It
+stops where a live task waits: at a pending signal, timer, human decision, or child. A changed
+absolute wait time, human-decision context, or child request also fails the replay, as it fails
+the task.
+
+A version checkpoint is a new name before the stored names, so the replay fails on it too. Give
+the names that you add on purpose in `allowNew`, for example `{ allowNew: ["code-version"] }`.
+
+If the replay finds no problem, it returns a report. The report lists the stored names that the
+code replayed, the new names, and the stored names that the code did not ask for. A stored name that
+the code does not ask for is not a failure. Look at that list to find a removed checkpoint.
+
+Write the state from the records of a real task. `Admin.listCheckpoints` and `Admin.listWaits`
+return its checkpoints and timer waits. No admin read returns a delivered signal payload, a
+human-decision result, or a child result, so write these values yourself.
+
+<details>
+<summary>Reference: replaying stored state</summary>
+
+| `DurableState` field | Each entry, keyed by name                                                                 |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `checkpoints`        | `{ value }`                                                                               |
+| `waits`              | `mode`, `wakeAt` as an ISO 8601 string, `durationMs` for `relative`, optional `pending`   |
+| `signals`            | `{ payload }` or `{ pending: true }`                                                      |
+| `humanWaits`         | `{ context, result }` or `{ context, pending: true }`                                     |
+| `children`           | `type`, `payload`, optional `options`, optional `set` (the join mode), optional `outcome` |
+
+| `HandlerReplayError.problem.reason` | Cause                                                                                                                 |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `new_before_stored`                 | A new name before every stored name was asked for, and not listed in `allowNew`                                       |
+| `conflict`                          | A changed wait mode, absolute wait target, human-decision context, child request, child join call, or child set names |
+
+- `replayHandler(handler, payload, state, options)` returns a `HandlerReplayReport` with
+  `replayed`, `new`, `unused`, and `outcome`.
+- `outcome` is `completed` with the handler result, or `suspended` with the boundary where the
+  replay stopped.
+- An error that the handler throws reaches the caller unchanged.
+
+More detail: [Schema and protocol: Replay stored state in a test](../architecture/schema-and-protocol.md#replay-stored-state-in-a-test).
+
+</details>
+
 ## Move a large change to a new queue
 
 A queue for each version keeps the old code running for the tasks that started on it. Workers of
