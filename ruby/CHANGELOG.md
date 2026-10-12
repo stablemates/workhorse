@@ -99,6 +99,33 @@ end
 - `TaskGroupClosedError` (`P1008`), `TaskGroupLimitExceededError` (`P1009`), and
   `TaskGroupMembershipConflictError` (`P1010`) report the task group refusals.
 
+### Checkpoint input
+
+A checkpoint finds its stored result by name only. If a deployment changes the input of a checkpoint
+operation, a replay returns the result of the old input and gives no error. A Ruby handler can now
+give the input of a checkpoint (SM-1264,
+[ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)):
+
+```ruby
+context.checkpoint("charge-card", input: {"amountCents" => amount}) { gateway.charge(amount) }
+```
+
+- `HandlerContext#checkpoint` and `BatchHandlerContext#checkpoint` take the `input:` keyword, a JSON
+  value. The checkpoint stores the fingerprint of the input with its value, through
+  `save_checkpoint_v2`. A call without `input:` keeps its current behavior. `input: nil` gives the
+  JSON input null.
+- If the stored checkpoint, or an overlapping call with the same name, has the fingerprint of a
+  different input, the call raises `CheckpointInputConflictError` and the block does not run. If the
+  call or the stored checkpoint has no input, the call compares nothing.
+- `CheckpointInputConflictError` is a subclass of `ConflictError`. The worker fails the task at once
+  and keeps the current attempt, as for every replay conflict. The task error names the class.
+- `Stablemates::Workhorse.checkpoint_input_fingerprint(input)` returns the fingerprint: the SHA-256
+  digest of the RFC 8785 canonical JSON of the input, as 64 lowercase hexadecimal characters. It
+  refuses an Integer larger than 2**53 - 1 in magnitude, because RFC 8785 writes each number as an
+  IEEE 754 double.
+- `TaskCheckpoint#input_fingerprint` returns the stored fingerprint, or nil. `Admin#get_checkpoint`,
+  `Admin#list_checkpoints`, and `HandlerContext#get_checkpoint` return it.
+
 ### Behaviour changes
 
 - If a child task request names no queue, `run_child`, `run_children`, and `run_children_all` put

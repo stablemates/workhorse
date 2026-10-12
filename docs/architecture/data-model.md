@@ -1660,8 +1660,23 @@ In TypeScript, `HandlerContext.checkpoint(name, operation, { input })` also comp
 `requestedFingerprint`. It is a terminal replay conflict; see
 [Schema and protocol: Durable replay conflicts](schema-and-protocol.md#durable-replay-conflicts).
 `TaskCheckpoint.inputFingerprint` returns the stored fingerprint, or null. `Queue.saveCheckpoint`
-accepts `{ inputFingerprint }` and refuses another format with a `TypeError`. The other SDKs do not
-give an input yet. Their checkpoint reads return the column and ignore it.
+accepts `{ inputFingerprint }` and refuses another format with a `TypeError`.
+
+In Ruby, `HandlerContext#checkpoint(name, input:)` and `BatchHandlerContext#checkpoint` compare
+inputs as TypeScript does, with these Ruby details:
+
+1. `Workhorse.checkpoint_input_fingerprint(input)` computes the same digest. Object keys sort by
+   UTF-16 code units, and each number uses the ECMAScript form of its IEEE 754 double. A value that
+   is not JSON with finite numbers, an Integer larger than 2**53 - 1 in magnitude, or a string that
+   is not valid UTF-8 raises an `ArgumentError`. A call without `input:` gives no fingerprint, and
+   `input: nil` gives the fingerprint of the JSON null.
+2. A different stored fingerprint, an overlapping call with a different fingerprint, or the
+   `input_conflict` status raises `CheckpointInputConflictError`, and the block does not run.
+
+The Ruby `CheckpointInputConflictError` is a subclass of `ConflictError`. It carries `name`,
+`stored_fingerprint`, and `requested_fingerprint`. `TaskCheckpoint#input_fingerprint` returns the
+stored fingerprint, or nil. An SDK that does not give an input yet returns the column from its
+checkpoint reads and ignores it.
 
 In Go:
 

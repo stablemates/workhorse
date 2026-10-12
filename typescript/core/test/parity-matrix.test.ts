@@ -57,7 +57,8 @@ function documentedTables(markdown: string): DocumentedRow[][] {
     const cells = line
       .split("|")
       .slice(1, -1)
-      .map((cell) => cell.trim());
+      // The generator links a Planned cell to its issue, as `[Planned][SM-1261]`.
+      .map((cell) => cell.trim().replace(/^\[Planned\]\[[^\]]+\]$/, "Planned"));
     if (cells.length < 4 || cells.length > 6 || /^-+$/.test(cells[0]!)) continue;
     const [capability, ...statuses] = cells as [string, Status, Status, Status];
     current.push({

@@ -390,9 +390,17 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 <details>
 <summary>Reference: checkpoint input</summary>
 
-`HandlerContext.checkpoint(name, operation, { input })` computes the fingerprint with
-`checkpointInputFingerprint(input)`. The fingerprint is the SHA-256 digest of the RFC 8785 canonical
-JSON of the input, as 64 lowercase hexadecimal characters. Key order does not change it.
+Each SDK in this table gives the input of a checkpoint. The fingerprint function returns the
+fingerprint that the call stores.
+
+| SDK        | Call with an input                                      | Fingerprint function                            | Stored fingerprint                 |
+| ---------- | ------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })` | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`  |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`         | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint` |
+
+The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
+hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
+input.
 
 | Stored fingerprint | Fingerprint of the call | Result                                                      |
 | ------------------ | ----------------------- | ----------------------------------------------------------- |
@@ -401,8 +409,8 @@ JSON of the input, as 64 lowercase hexadecimal characters. Key order does not ch
 | Present            | Equal                   | The stored value returns.                                   |
 | Present            | Different               | `CheckpointInputConflictError`. The operation does not run. |
 
-Overlapping calls with one name compare their inputs in the same way. `TaskCheckpoint.inputFingerprint`
-returns the stored fingerprint, or null. Only the TypeScript SDK gives an input now.
+Overlapping calls with one name compare their inputs in the same way. The stored fingerprint is
+null for a checkpoint without an input. An SDK that is not in the table does not give an input now.
 
 More detail: [Data model: `task_checkpoint`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_checkpoint).
 
@@ -443,7 +451,8 @@ Workhorse fails the task on the first conflict with saved evidence in one of the
 
 The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictError`,
 `WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
-includes a changed child set. Only the TypeScript SDK raises `CheckpointInputConflictError` now.
+includes a changed child set. Only an SDK that gives a checkpoint input raises
+`CheckpointInputConflictError`.
 
 The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
 the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.

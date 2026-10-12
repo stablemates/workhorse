@@ -26,8 +26,9 @@ module Stablemates
       def get_checkpoint(name) = @context.get_checkpoint(name)
 
       # Returns the value the member's checkpoint named +name+ saved, running the block to produce
-      # and save it only when no such checkpoint exists.
-      def checkpoint(name, &) = @context.checkpoint(name, &)
+      # and save it only when no such checkpoint exists. The +input+ keyword works as in
+      # HandlerContext#checkpoint.
+      def checkpoint(name, input: HandlerContext::NO_INPUT, &) = @context.checkpoint(name, input: input, &)
 
       # The progress the member reported last, as TaskProgress, or nil.
       def get_progress = @context.get_progress

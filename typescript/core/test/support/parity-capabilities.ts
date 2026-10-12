@@ -615,6 +615,21 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     go: { file: "worker_test.go", pattern: "heckpoint" },
   },
   {
+    capability: "Checkpoint input check",
+    ruby: {
+      file: "integration/worker_spec.rb",
+      example:
+        "fails the task at once when a replayed checkpoint input differs and keeps the attempt",
+    },
+    rust: { planned: "SM-1263" },
+    typescript: {
+      file: "integration-checkpoints-progress-waits.test.ts",
+      pattern: "CheckpointInputConflictError",
+    },
+    python: { planned: "SM-1261" },
+    go: { planned: "SM-1262" },
+  },
+  {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
     ruby: {
       file: "integration/worker_spec.rb",

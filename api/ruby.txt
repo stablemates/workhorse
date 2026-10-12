@@ -56,7 +56,7 @@ class Stablemates::Workhorse::AlreadyWaitingError
 
 class Stablemates::Workhorse::BatchHandlerContext
   def cancellation
-  def checkpoint(name, &)
+  def checkpoint(name, input: HandlerContext::NO_INPUT, &)
   def get_checkpoint(name)
   def get_progress
   def set_progress(progress)
@@ -95,6 +95,12 @@ class Stablemates::Workhorse::CancelledError
   superclass Stablemates::Workhorse::Error
   def initialize(reason)
   def reason
+
+class Stablemates::Workhorse::CheckpointInputConflictError
+  superclass Stablemates::Workhorse::ConflictError
+  def initialize(name, stored_fingerprint, requested_fingerprint)
+  def requested_fingerprint
+  def stored_fingerprint
 
 class Stablemates::Workhorse::ChildOutcome
   superclass Data
@@ -257,7 +263,7 @@ class Stablemates::Workhorse::FastTierUnsupportedError
 
 class Stablemates::Workhorse::HandlerContext
   def cancellation
-  def checkpoint(name, &block)
+  def checkpoint(name, input: NO_INPUT, &block)
   def get_checkpoint(name)
   def get_progress
   def run_child(name, task_type, payload, **enqueue_options)  # keywords: Stablemates::Workhorse::EnqueueRequest#initialize
@@ -389,7 +395,7 @@ class Stablemates::Workhorse::SignalIdempotencyConflictError
 
 class Stablemates::Workhorse::TaskCheckpoint
   superclass Data
-  members task_id, name, value, attempt, fence_token, worker_id, created_at
+  members task_id, name, value, attempt, fence_token, worker_id, created_at, input_fingerprint
 
 class Stablemates::Workhorse::TaskContractVersion
   superclass Data
@@ -562,6 +568,7 @@ class Stablemates::Workhorse::WorkerRegistryEntry
 
 module Stablemates::Workhorse
   VERSION: String
+  def self.checkpoint_input_fingerprint(input)
   def self.run_worker_process(worker)
   def self.run_worker_processes(processes:, shutdown_grace: 25, &build_worker)
 
