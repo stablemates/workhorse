@@ -25,7 +25,7 @@ Requires **schema v65**, Node.js **22** or newer, and PostgreSQL **15** or newer
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **65**.
+1. Run `workhorse schema migrate`. The final schema version is **66**.
 2. Roll out the updated processes.
 
 The SDK compatibility floor is schema version **65**, which migration 0066 reaches. The floor rises
@@ -45,6 +45,17 @@ reports a new `task_groups` phase after `terminal_tasks`, and deletes a finished
 callback tasks are terminal. New SQLSTATEs: `P1008` (the task group does not accept tasks), `P1009`
 (member limit of 100,000), and `P1010` (an enqueue idempotency hit returns a task that is not a
 member of the group).
+
+Migration 0067 (`0067-count-task-group-outcomes-in-counter-shards.sql`) counts task group outcomes
+in counter shards (SM-1245,
+[ADR 0096](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0096-count-task-group-outcomes-in-counter-shards.md)).
+Each group gets 32 rows in the new `task_group_shard` table, and a member outcome locks only its
+shard row at commit. The outcome locks the group row only when the pending count of its shard
+becomes 0. The migration moves the counts of existing groups into the shards. It locks `task_group`
+in `EXCLUSIVE` mode while it runs, so task group changes wait for it. The counts on a `task_group`
+row stay 0 until the group finishes, so read the counts through `get_task_group_v1`. The migration
+also adds `dashboard_task_groups_v1`, which lists task groups one page at a time. It adds no function
+that an SDK statement catalogue calls, so the compatibility floor stays at schema version 65.
 
 TypeScript `Queue` gains `createTaskGroup`, `addToTaskGroup`, `sealTaskGroup`, the block form
 `taskGroup`, `getTaskGroup`, `listTaskGroupMembers`, and `findTaskGroup`. The block form creates,

@@ -118,6 +118,17 @@ async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
     .join("\n");
 }
 
+/** The enqueue requests of `count` member tasks, as `create_task_group_v1` takes them. */
+function taskGroupRequests(count: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      queue: "migrated-members",
+      type: "member",
+      payload: index + 1,
+    })),
+  );
+}
+
 /** The index the non-transactional step tests build and drop again. */
 const probeIndex = "task_runtime_concurrent_probe_idx";
 const concurrentBody = `-- workhorse-migration: {"kind":"additive","execution":"nontransactional"}
@@ -873,6 +884,112 @@ describe("schema migrations", () => {
       terminal_cleanup_backlog_ms: 7_200_000,
       application_terminal_cleanup_backlog_ms: 10_800_000,
       operator_overrides: ["terminal_cleanup_backlog_ms"],
+    });
+  });
+
+  it("moves the counts of existing task groups into counter shards", async () => {
+    // Schema 65 counts each group on its row. Migration 0067 counts the membership rows into 32
+    // shard rows for each group (ADR 0096), and keeps the counts on the row only for a finished
+    // group.
+    const db = releaseDatabase.pool;
+    await db.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await db.query(await readFile(path.join(repository, "sql", "releases", "0064.sql"), "utf8"));
+    await applySchemaMigrationPlan(db, {
+      baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+      currentVersion: 65,
+      steps: SCHEMA_MIGRATIONS.filter((step) => step.toVersion <= 65),
+      readStep: (file) => readFile(path.join(repository, "sql", "migrations", file), "utf8"),
+    });
+    const create = async (count: number, seal: boolean) => {
+      const rows = (
+        await db.query<{ group_id: string; task_id: string | null }>(
+          "SELECT group_id, task_id FROM workhorse.create_task_group_v1('{}', $1, $2) ORDER BY ordinal",
+          [taskGroupRequests(count), seal],
+        )
+      ).rows;
+      return { id: rows[0]!.group_id, tasks: rows.map((row) => row.task_id!) };
+    };
+    const cancel = (taskIds: readonly string[]) =>
+      Promise.all(
+        taskIds.map((id) => db.query("SELECT workhorse.cancel_v1($1, 'test', 'stop')", [id])),
+      );
+
+    // Positions 1 and 33 select shard 0, and position 2 selects shard 1.
+    const sealed = await create(40, true);
+    await cancel([sealed.tasks[0]!, sealed.tasks[32]!, sealed.tasks[1]!]);
+    const finished = await create(2, true);
+    await cancel(finished.tasks);
+    // A lost count: the member has an outcome row, but the group never counted it.
+    const lost = await create(1, false);
+    await cancel(lost.tasks);
+    await db.query(
+      "UPDATE workhorse.task_group_member SET outcome = NULL, counted_at = NULL WHERE group_id = $1",
+      [lost.id],
+    );
+    await db.query("UPDATE workhorse.task_group SET canceled_count = 0 WHERE id = $1", [lost.id]);
+
+    await migrateSchema(db);
+
+    const shards = async (groupId: string) =>
+      (
+        await db.query<{ shard: number; total: number; canceled: number }>(
+          `SELECT shard, total_count AS total, canceled_count AS canceled
+             FROM workhorse.task_group_shard WHERE group_id = $1 ORDER BY shard`,
+          [groupId],
+        )
+      ).rows;
+    const row = async (groupId: string) =>
+      (
+        await db.query(
+          `SELECT state, shard_count, pending_shard_count, total_count, canceled_count
+             FROM workhorse.task_group WHERE id = $1`,
+          [groupId],
+        )
+      ).rows[0];
+    const snapshot = async (groupId: string) =>
+      (
+        await db.query("SELECT total, canceled, pending FROM workhorse.get_task_group_v1($1)", [
+          groupId,
+        ])
+      ).rows[0];
+
+    const sealedShards = await shards(sealed.id);
+    expect(sealedShards).toHaveLength(32);
+    expect(sealedShards.slice(0, 3)).toEqual([
+      { shard: 0, total: 2, canceled: 2 },
+      { shard: 1, total: 2, canceled: 1 },
+      { shard: 2, total: 2, canceled: 0 },
+    ]);
+    expect(await row(sealed.id)).toEqual({
+      state: "sealed",
+      shard_count: 32,
+      pending_shard_count: 31,
+      total_count: 0,
+      canceled_count: 0,
+    });
+    expect(await snapshot(sealed.id)).toEqual({ total: 40, canceled: 3, pending: 37 });
+    expect(await row(finished.id)).toMatchObject({
+      state: "finished",
+      pending_shard_count: 0,
+      total_count: 2,
+      canceled_count: 2,
+    });
+    expect(await snapshot(finished.id)).toEqual({ total: 2, canceled: 2, pending: 0 });
+
+    // The migration moves counts and does not repair drift. The drift listing reports the group.
+    expect(await row(lost.id)).toMatchObject({ state: "open", pending_shard_count: 1 });
+    const drift = await db.query<{ group_id: string; recorded_canceled: number; canceled: number }>(
+      "SELECT group_id, recorded_canceled, canceled FROM workhorse.list_task_group_drift_v1(100)",
+    );
+    expect(drift.rows).toEqual([{ group_id: lost.id, recorded_canceled: 0, canceled: 1 }]);
+
+    // The shard functions continue the migrated groups.
+    await cancel(sealed.tasks.slice(2).filter((id) => id !== sealed.tasks[32]));
+    expect(await row(sealed.id)).toMatchObject({
+      state: "finished",
+      pending_shard_count: 0,
+      total_count: 40,
+      canceled_count: 40,
     });
   });
 

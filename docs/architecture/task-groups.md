@@ -4,7 +4,8 @@ A task group is a set of full-tier tasks that Workhorse tracks as one unit. A me
 in a task group. When the group is sealed and every member task is finished, Workhorse enqueues the
 callback tasks of the group. [ADR 0095](../decisions/0095-add-task-groups-with-completion-callbacks.md)
 records the decision. Migration 0066 adds the tables and functions, and schema version 65 carries
-them.
+them. [ADR 0096](../decisions/0096-count-task-group-outcomes-in-counter-shards.md) replaces the single
+group counter with counter shards. Migration 0067 adds them, and schema version 66 carries them.
 
 ## Lifecycle
 
@@ -28,20 +29,85 @@ otherwise. An empty group finishes with the result `succeeded`.
 ## Order of group changes
 
 Five changes affect a group: an add, a seal, a cancel, a member outcome, and a purge of a member
-task. Each change locks the `task_group` row with `FOR UPDATE` before it reads or changes the
-counters. Only `finish_task_group_internal_v1` changes a group from `sealed` to `finished`, and it
-enqueues the callbacks in the same transaction. Thus each callback is enqueued one time.
+task. The `task_group` row orders the add, the seal, the cancel, and the finish. Only
+`finish_task_group_internal_v1` changes a group from `sealed` to `finished`, and it enqueues the
+callbacks in the same transaction. Thus each callback is enqueued one time.
 
-If a seal and the last member outcome occur at the same time, the row lock puts them in order. The
-change that comes second finishes the group.
+Every change takes its locks in one order: first the runtime rows of tasks, then shard rows in the
+order `(group_id, shard)`, then group rows in identity order.
 
-A member outcome locks its group from the statement trigger `task_outcome_settle_task_groups_insert`
-on `task_outcome`. The trigger name sorts after `task_outcome_resolve_dependencies_insert`, so a
-dependency cascade settles its dependents before the trigger locks a group row. When one statement
-writes the outcomes of members of several groups, the trigger locks the groups in identity order.
+| Change                     | Shard rows                                                 | Group row                                        |
+| -------------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| Add                        | All shard rows of the group, after the prerequisites       | Always                                           |
+| Seal                       | Read without a lock                                        | Always                                           |
+| Cancel                     | All shard rows, after the runtime rows of the live members | Always                                           |
+| Member outcome or purge    | The shard rows of the members, at the apply step           | Only when the pending count of a shard becomes 0 |
+| Delete of a finished group | All shard rows, with `SKIP LOCKED`                         | Always, with `SKIP LOCKED`                       |
+| Drift repair               | All shard rows                                             | Always                                           |
+| Finish                     | Read without a lock                                        | The caller holds the lock                        |
+
+The finish condition is: the group is `sealed`, and `task_group.pending_shard_count` is 0.
+Workhorse changes `pending_shard_count` only while it holds the group row lock. An add increases it
+for each shard whose pending count changes from 0. An apply step decreases it for each shard whose
+pending count changes to 0. A drift repair sets it from the shard rows. If a seal and the last
+shard to reach 0 occur at the same time, the group row lock puts them in order, and the change that
+comes second finishes the group. Each change that decreases `pending_shard_count` writes the group
+row. Thus a second change at the `REPEATABLE READ` or `SERIALIZABLE` level gets a serialization
+failure, and it cannot finish from an old snapshot.
+
+After the seal, a running member task can still add tasks. That member is not terminal, so its
+shard is pending and the group cannot finish first.
+
+## Count a member outcome
+
+A member outcome is counted in two steps in the transaction that writes the outcome:
+
+1. **Record.** The statement trigger `task_outcome_settle_task_groups_insert` on `task_outcome`
+   runs `settle_task_group_outcomes_v1()`. This trigger function reads the new outcomes of member
+   tasks from the transition table `new_outcomes`, and it calls
+   `record_task_group_outcomes_internal_v1`. The record function locks the membership rows whose
+   `outcome` is null, in `task_id` order. It adds those members to the list of the transaction, and
+   then it writes the outcome on each membership row. Only one change can write the outcome of a
+   member, so a member is counted one time. This step locks no shard row and no group row.
+2. **Apply.** The deferred constraint trigger `task_group_member_apply_outcomes` on
+   `task_group_member` fires `AFTER UPDATE OF outcome` when `outcome` changes from null. It is
+   `DEFERRABLE INITIALLY DEFERRED`, so it runs at commit. Its function,
+   `apply_task_group_outcomes_v1()`, calls `apply_task_group_outcomes_internal_v1(NULL)` on the
+   first firing, which applies the whole list and clears it. Each later firing finds an empty list
+   and returns.
+
+The list is the transaction-local setting `workhorse.task_group_outcomes`, written with
+`set_config(..., true)` and read through `listed_task_group_outcomes_internal_v1`. It holds member
+task identities only. PostgreSQL restores it when a savepoint rolls back, together with the
+membership rows of that savepoint, and it discards it when the transaction ends.
+
+`apply_task_group_outcomes_internal_v1(p_group_ids uuid[])` applies the listed members of the given
+groups, or of every group when `p_group_ids` is null, and removes them from the list. In order, it:
+
+1. Reads the outcome of each listed member from its membership row. It ignores a member with no
+   outcome, and it counts a member that the list names two times one time.
+2. Locks the shard rows of those members in the order `(group_id, shard)`, and adds the outcomes.
+   If a shard drifted and the new sums would exceed its `total_count`, the shard keeps its counts,
+   so the member outcome does not fail. The drift listing reports that shard.
+3. Locks the group rows of the shards whose pending count became 0, in identity order.
+4. Decreases `pending_shard_count` by the number of such shards, but never below 0. It finishes a
+   group that is `sealed` with `pending_shard_count` 0.
+
+Some changes must see the new counts before they return. An add and a purge call
+`count_task_group_outcomes_internal_v1`, which records and then applies the members of their own
+groups at once. A cancel applies the members of its group after every 100 calls to `cancel_v1` and
+at the end. A drift repair does not apply: it sets the shard counts from the membership rows and
+removes the members of its group from the list. Thus an outcome that the transaction recorded
+before the repair is in the repaired counts one time.
+
+If a caller runs `SET CONSTRAINTS ALL IMMEDIATE`, the apply trigger fires at the end of each
+statement that records an outcome, inside the record step. The record step lists the members before
+it writes their outcomes, so that firing finds them. Two apply passes in one transaction can lock
+shard rows out of order. If two such transactions deadlock, PostgreSQL rolls back one of them, and
+no count is lost or counted two times.
 
 `cancel_task_group_v1` and `purge_queue_internal_v1` lock the runtime rows of the member tasks
-before the group row, in the order that completion locks them.
+before the shard rows, in the order that completion locks them.
 
 ## Tables
 
@@ -52,14 +118,19 @@ before the group row, in the order that completion locks them.
 | `id uuid`                                              | Primary key; default `uuid_v7_v1()`                                    |
 | `state text`                                           | `open`, `sealed`, or `finished`; default `open`                        |
 | `result text`                                          | `succeeded` or `failed`; set only when `finished`                      |
-| `total_count integer`                                  | 0 through 100,000                                                      |
-| `succeeded_count`, `failed_count`, `canceled_count`    | Non-negative; their sum is at most `total_count`                       |
+| `total_count integer`                                  | 0 through 100,000; 0 until the group is `finished`                     |
+| `succeeded_count`, `failed_count`, `canceled_count`    | Non-negative; their sum is at most `total_count`; 0 until `finished`   |
 | `on_finish`, `on_success`, `on_failure jsonb`          | The callback enqueue requests; each is a JSON object or null           |
 | `created_at`, `sealed_at`, `finished_at`, `updated_at` | `sealed_at` is set from `sealed` on; `finished_at` only when finished  |
 | `canceled_at`, `canceled_by`, `cancel_reason`          | All set or all null; actor 1 through 200 characters; reason 1 to 2,000 |
+| `shard_count smallint`                                 | N, the number of shard rows; set at the create and never changed       |
+| `pending_shard_count integer`                          | The shards with a pending count above 0; 0 through `shard_count`       |
 
 `task_group_state_shape_check` requires that an `open` group has no seal, finish, result, or
 cancel, and that a `finished` group has counts that add up to `total_count`.
+`task_group_unfinished_counts_check` requires that the four counts are 0 while the group is not
+`finished`. The finish writes the sums of the shard rows to them. `task_group_shards_check`
+requires `shard_count >= 1` and `pending_shard_count BETWEEN 0 AND shard_count`.
 
 | Index                     | Columns             | Predicate            |
 | ------------------------- | ------------------- | -------------------- |
@@ -83,6 +154,21 @@ One row for each member task.
 keeps the `canceled` outcome that the purge counted. `task_group_member_pending_idx` indexes
 `(group_id, task_id)` where `outcome IS NULL`.
 
+### `task_group_shard`
+
+One row for each counter shard of each group (ADR 0096). `create_task_group_v1` inserts all
+`shard_count` rows, so a shard row exists for the full life of its group. A member task uses the
+shard `(position - 1) % shard_count`.
+
+| Column                                              | Rule                                              |
+| --------------------------------------------------- | ------------------------------------------------- |
+| `group_id uuid`                                     | References `task_group.id` `ON DELETE CASCADE`    |
+| `shard smallint`                                    | 0 or more; the primary key is `(group_id, shard)` |
+| `total_count integer`                               | Non-negative; the member tasks of the shard       |
+| `succeeded_count`, `failed_count`, `canceled_count` | Non-negative; their sum is at most `total_count`  |
+
+The pending count of a shard is `total_count` minus the three outcome counts.
+
 ### `task_group_callback`
 
 One row for each callback task that a finished group enqueued: `task_id` (primary key), `group_id`
@@ -103,7 +189,7 @@ The group history: `event_id` (primary key, `uuid_v7_v1()`), `group_id` (`ON DEL
 | `finished`          | `finish_task_group_internal_v1`        | `result`, `total`, `succeeded`, `failed`, `canceled`         |
 | `callback_enqueued` | `finish_task_group_internal_v1`        | `kind`, `taskId`                                             |
 | `callback_failed`   | `finish_task_group_internal_v1`        | `kind`, `code`, `message`                                    |
-| `counter_repaired`  | `repair_task_group_internal_v1`        | The audit, `recorded` and `counted` counts                   |
+| `counter_repaired`  | `repair_task_group_internal_v1`        | The audit, `recorded` and `counted` counts, `shards`         |
 
 ## Create and callbacks
 
@@ -118,8 +204,9 @@ DEFAULT false)` returns `(group_id, ordinal, task_id, outcome, reason)`:
 4. If a member request or a callback request names a task type whose current contract version
    differs, it returns one `contract_mismatch` row with a null group and creates nothing. The
    TypeScript client then reloads the contracts and serializes the requests and callbacks again.
-5. It creates the group and its `created` event, adds `p_requests` in adds of at most 1,000, and
-   seals the group if `p_seal` is true.
+5. It creates the group with `shard_count` from `task_group_shard_count_v1()`, inserts its shard
+   rows and its `created` event, adds `p_requests` in adds of at most 1,000, and seals the group if
+   `p_seal` is true.
 
 The function returns one row for each request. Without requests, it returns one row whose ordinal,
 task, and outcome are null. The TypeScript block form `Queue.taskGroup` uses one call with
@@ -139,9 +226,9 @@ p_worker_id text DEFAULT NULL, p_fence_token bigint DEFAULT NULL)` returns the r
 
 1. Rejects more than 1,000 requests, and any request with `debounce` or `throttle`.
 2. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
-   the group row. Completion, cancellation, and purge lock a runtime row before its group row, so
-   an add that names a member as a prerequisite takes the same order. An unknown group raises an
-   error.
+   all shard rows of the group, then the group row. Completion, cancellation, and purge lock a
+   runtime row before the shard and group rows, so an add that names a member as a prerequisite
+   takes the same order. An unknown group raises an error.
 3. Refuses the add with `P1008` when the group is canceled or finished, when the member arguments
    do not name an `active` member of this group with that worker and fence token, or when the group
    is sealed and no member arguments are given.
@@ -150,10 +237,11 @@ p_worker_id text DEFAULT NULL, p_fence_token bigint DEFAULT NULL)` returns the r
    adds nothing.
 6. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
    this call enqueued. Thus an idempotent retry of the same add returns the existing member.
-7. Rejects with `P1009` an add that takes `total_count` above 100,000. The check runs under the
-   group row lock.
-8. Inserts the membership rows, increases `total_count`, and counts the outcomes that the enqueue
-   already wrote, for example for a deadline in the past.
+7. Rejects with `P1009` an add that takes the member count above 100,000. The member count is the
+   sum of the shard `total_count` values, read while the add holds all shard rows and the group row.
+8. Inserts the membership rows at the next positions, increases the `total_count` of their shards,
+   and increases `pending_shard_count` for each shard whose pending count was 0. Then it counts the
+   outcomes that the enqueue already wrote, for example for a deadline in the past.
 
 A task becomes a member only when this function enqueues it. A child task, a dependent task, or a
 redrive target of a member task is not a member.
@@ -176,12 +264,13 @@ The `P1008` reason is `sealed`, `finished`, `canceled`, or `not_running_member`.
 `cancel_task_group_v1(p_group_id, p_requested_by, p_reason, p_request_id)` returns the group
 snapshot, or no row for an unknown group:
 
-1. It locks the runtime rows of the pending member tasks, then the group row.
+1. It locks the runtime rows of the pending member tasks, then all shard rows, then the group row.
 2. If the group is `finished`, it returns the snapshot and changes nothing.
 3. It seals an `open` group and records the cancel columns. No task can join a canceled group, not
    even from a running member task.
 4. It calls `cancel_v1` for each pending member task. A queued member task becomes `canceled` at
-   once. An active member task gets a cancel request, and its outcome follows.
+   once. An active member task gets a cancel request, and its outcome follows. The cancel applies
+   the recorded outcomes of its group after every 100 members and at the end.
 5. It writes the `canceled` event and finishes the group if no member task is pending.
 
 The canceled member tasks count as not succeeded, so `onFinish` and `onFailure` run.
@@ -191,22 +280,44 @@ The canceled member tasks count as not succeeded, so `onFinish` and `onFailure` 
 
 `purge_queue_internal_v1` deletes the tasks of a queue that are not terminal. Before the deletes it
 reads the member tasks among them. After the deletes, it counts each of them as `canceled` through
-`count_task_group_outcomes_internal_v1` in the same transaction. Thus the group can finish, and a
+`count_task_group_outcomes_internal_v1` in the same transaction, which records and applies them at
+once. Thus the group can finish, and a
 callback that it enqueues on the purged queue stays.
 
 ## Drift and repair
 
 `list_task_group_drift_v1(p_limit integer)` reads groups that are not finished, in identity order,
 with `p_limit` from 1 through 10,000. For each member it takes the counted outcome, else the
-`task_outcome` state, else `canceled` when the task row is gone. A group drifts when these counts
-differ from its counters, or when it is sealed and no member is pending. The `action` is `finished`
-for a sealed group with no pending member, and `recounted` otherwise.
+`task_outcome` state, else `canceled` when the task row is gone. It calculates the expected counts
+of each shard from its membership rows. A group drifts when one of these conditions is true:
+
+- The counts of a shard differ from its expected counts, or a shard row is missing.
+- `pending_shard_count` differs from the number of shard rows with a pending count above 0.
+- The group is sealed, and no member is pending.
+
+The `recorded_*` columns are the sums of the shard rows. The `action` is `finished` for a sealed
+group with no pending member, and `recounted` otherwise.
 
 `repair_task_group_drift_v1(p_limit, p_requested_by, p_reason, p_request_id)` repairs each listed
-group through `repair_task_group_internal_v1`. That function locks the group, records the missing
-member outcomes, sets the counters from the membership rows, writes a `counter_repaired` event, and
-finishes a sealed group with no pending member. It returns `(group_id, recorded_pending, pending,
-action)`. `Admin.listTaskGroupDrift` and `Admin.repairTaskGroupDrift` call these functions.
+group through `repair_task_group_internal_v1`. In order, that function:
+
+1. Locks all shard rows of the group, then the group row.
+2. Records the missing member outcomes on the membership rows. It skips a membership row that
+   another transaction holds with `SKIP LOCKED`, and counts that member as pending. That
+   transaction is recording the member, and it applies the member at its commit.
+3. Removes the members of the group from the list of the transaction.
+4. Sets the counts of each changed shard from its membership rows. It does not add to the current
+   counts.
+5. Sets `pending_shard_count` from the shard counts.
+6. Writes a `counter_repaired` event. `shards` lists each changed shard with its `recorded` and
+   `counted` counts.
+7. Finishes a sealed group whose `pending_shard_count` is 0.
+
+It returns `(group_id, recorded_pending, pending, action)`, or no row when the group needed no
+change. `Admin.listTaskGroupDrift` and `Admin.repairTaskGroupDrift` call these functions.
+
+The finish also checks that the shard sums show no pending member. If `pending_shard_count` drifted
+to 0 while a shard is pending, the group stays `sealed`, and the drift listing reports it.
 
 ## Maintenance
 
@@ -214,11 +325,14 @@ The `terminal_storage` routine reports the `task_groups` phase after `terminal_t
 calls `maintain_task_groups_v1(p_outcome_before, p_limit)` with the cutoff of
 `terminal_outcome_retention_days` and the limit `terminal_task_prune_limit`:
 
-1. It repairs at most `p_limit` sealed groups that have no pending member with a live runtime row,
-   oldest `sealed_at` first. A healthy sealed group stops the probe at its first live member.
+1. It selects at most `p_limit` sealed groups that have no pending member with a live runtime row,
+   oldest `sealed_at` first, and repairs them in identity order. A healthy sealed group stops the
+   probe at its first live member.
 2. If `terminal_outcome_retention_days` is set, it deletes at most `p_limit` finished groups whose
    `finished_at` is before the cutoff and whose callback tasks have no live runtime row in either
-   tier. The delete cascades to the membership, callback, and event rows.
+   tier. For each group, it locks all shard rows, then the group row, with `SKIP LOCKED`, and it
+   skips the group if one of these rows is locked. The delete cascades to the shard, membership,
+   callback, and event rows.
 
 A callback task that a purge deleted has no runtime row, so it counts as terminal. A purge deletes
 it without an outcome, and no later change can make it run.
@@ -235,12 +349,26 @@ Terminal-task pruning keeps a member task while its group is not finished.
 | Function                                                   | Returns                                                                                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `get_task_group_v1(p_group_id)`                            | The snapshot: state, result, counts with `pending`, times, cancel columns, and `callbacks` |
+| `dashboard_task_groups_v1(p_input jsonb)`                  | One `dashboard/v1` page of groups, newest first, each with the snapshot fields             |
 | `task_group_for_task_v1(p_task_id)`                        | `role` (`member` or `callback`), `callback_kind`, and the snapshot of the group of a task  |
 | `list_task_group_members_v1(p_group_id, p_after, p_limit)` | Members after a position, at most 1,000, with the live task state and the counted outcome  |
 | `list_task_group_events_v1(p_group_id, p_limit)`           | At most 1,000 events in time order                                                         |
 
+For a group that is not finished, the counts are the sums of its shard rows, read in one statement
+without a lock. For a finished group, they are the counts on its row. `task_group_for_task_v1` and
+`seal_task_group_v1` return the snapshot of `get_task_group_v1`.
+
 `callbacks` is a JSON object with one key for each requested callback, such as
 `{"on_finish": {"taskId": null}}`. `taskId` is set when the finished group enqueued that callback.
+
+`dashboard_task_groups_v1` takes `state` (`all`, `open`, `sealed`, or `finished`; default `all`),
+`page` (1 through 1,000; default 1), and `pageSize` (1 through 100; default 50). It returns `state`,
+`page`, `pageSize`, `hasMore`, and `groups`. Each group has `id`, `state`, `result`, `counts`
+(`total`, `succeeded`, `failed`, `canceled`, `pending`), `createdAt`, `sealedAt`, `finishedAt`,
+`canceledAt`, `canceledBy`, `cancelReason`, and `callbacks`, a list of `{ kind, taskId }` in the
+order `onFinish`, `onSuccess`, `onFailure`. It reads one group more than it returns, so `hasMore`
+costs no count of the whole table. The dashboard reads task groups only through functions, so the
+task group tables are not a governed dashboard read.
 
 `Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
 `listTaskGroupEvents`. A handler reads the group of its task through `ctx.taskGroup.get()`, which
@@ -251,6 +379,7 @@ calls `task_group_for_task_v1` one time for each handler activation.
 | Limit                              | Value                                                              |
 | ---------------------------------- | ------------------------------------------------------------------ |
 | Member tasks in one group          | 100,000 (`task_group_member_limit_v1()`, `MAX_TASK_GROUP_MEMBERS`) |
+| Counter shards of a new group      | 32 (`task_group_shard_count_v1()`)                                 |
 | Tasks in one add call              | 1,000                                                              |
 | Callbacks of each kind             | 1                                                                  |
 | Members or events in one read      | 1,000 (`MAX_TASK_GROUP_PAGE_SIZE`)                                 |

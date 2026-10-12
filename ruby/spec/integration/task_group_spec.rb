@@ -207,7 +207,10 @@ RSpec.describe "Task groups against PostgreSQL" do
 
     open = queue.create_task_group
     queue.add_to_task_group(open.id, [request("group.member")])
-    @connection.exec_params("UPDATE workhorse.task_group SET succeeded_count = 1 WHERE id = $1", [open.id])
+    # The counts of a group that is not finished live in its shard rows (ADR 0096). The member is in shard 0.
+    @connection.exec_params(
+      "UPDATE workhorse.task_group_shard SET succeeded_count = 1 WHERE group_id = $1 AND shard = 0", [open.id]
+    )
     drift = admin.list_task_group_drift.find { |item| item.group_id == open.id }
     expect(drift.recorded).to eq(W::TaskGroupCounts.new(total: 1, succeeded: 1, failed: 0, canceled: 0, pending: nil))
     expect([drift.state, drift.counted.pending, drift.action]).to eq([:open, 1, :recounted])

@@ -209,6 +209,9 @@ describe("task groups", () => {
       try {
         await holder.query("BEGIN");
         await (first === "seal" ? seal(holder) : complete(holder));
+        // An outcome changes the shard rows at commit (ADR 0096). Run that step now, so the
+        // holder takes the group row lock when its shard reaches 0.
+        if (first === "outcome") await holder.query("SET CONSTRAINTS ALL IMMEDIATE");
         const waiterPid = (await waiter.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
           .rows[0]!.pid;
         const waiting = first === "seal" ? complete(waiter) : seal(waiter);
@@ -504,13 +507,18 @@ describe("task groups", () => {
     );
     await completeAll("drift-members");
     // Simulate a lost count: the members are finished, but the group still counts them pending.
+    // The two members are in shards 0 and 1, so two shards are pending.
     await pool.query(
       `UPDATE workhorse.task_group_member SET outcome = NULL, counted_at = NULL WHERE group_id = $1`,
       [group.id],
     );
     await pool.query(
+      "UPDATE workhorse.task_group_shard SET succeeded_count = 0 WHERE group_id = $1",
+      [group.id],
+    );
+    await pool.query(
       `UPDATE workhorse.task_group SET state = 'sealed', result = NULL, finished_at = NULL,
-         succeeded_count = 0 WHERE id = $1`,
+         total_count = 0, succeeded_count = 0, pending_shard_count = 2 WHERE id = $1`,
       [group.id],
     );
     await pool.query("DELETE FROM workhorse.task_group_callback WHERE group_id = $1", [group.id]);
@@ -631,10 +639,11 @@ describe("task groups", () => {
   it("checks the member limit under the group lock", async () => {
     const group = await queue.createTaskGroup();
     await queue.addToTaskGroup(group.id, [member("limit-members", 1)]);
-    await pool.query("UPDATE workhorse.task_group SET total_count = $2 WHERE id = $1", [
-      group.id,
-      MAX_TASK_GROUP_MEMBERS - 1,
-    ]);
+    // The member count of a group is the sum of its shard totals. Member 1 is in shard 0.
+    await pool.query(
+      "UPDATE workhorse.task_group_shard SET total_count = total_count + $2 WHERE group_id = $1 AND shard = 1",
+      [group.id, MAX_TASK_GROUP_MEMBERS - 2],
+    );
     const refusal = queue.addToTaskGroup(group.id, [
       member("limit-members", 2),
       member("limit-members", 3),

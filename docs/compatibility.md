@@ -1055,3 +1055,6 @@ The unreleased SDKs require schema version 65 before workers start. Migration
 `0066-add-task-groups-with-completion-callbacks.sql` adds the task group functions that every SDK
 statement catalogue calls. Run `workhorse schema migrate` before you start updated processes. A
 0.7 process keeps working on version 65, because a migration inside a major line only adds.
+Migration `0067-count-task-group-outcomes-in-counter-shards.sql` moves the task group counts into
+counter shards. It adds no function that an SDK statement catalogue calls, so the floor stays at
+schema version 65.

@@ -208,8 +208,8 @@ committed transition. SQL functions preserve this lifecycle exclusivity atomical
 fast-tier queue uses `fast_task_runtime` and `fast_task_outcome` in their place, as
 [Fast tier](fast-tier.md#fast-tier) describes.
 
-The task group tables `task_group`, `task_group_member`, `task_group_callback`, and
-`task_group_event` are on the [Task groups](task-groups.md#tables) page.
+The task group tables `task_group`, `task_group_member`, `task_group_shard`,
+`task_group_callback`, and `task_group_event` are on the [Task groups](task-groups.md#tables) page.
 
 ### `task`
 
@@ -1464,8 +1464,9 @@ cancellation deletes runtime and inserts the outcome in one transaction.
 #### Dispatch and retention
 
 Terminal tasks no longer occupy dispatch indexes. Automated retention never deletes an outcome
-alone. A statement trigger, `task_outcome_settle_task_groups_insert`, counts the outcome of a task
-group member in the transaction that inserts it ([Task groups](task-groups.md#order-of-group-changes)). It removes the stable terminal task only after every retention boundary has elapsed and no
+alone. A statement trigger, `task_outcome_settle_task_groups_insert`, records the outcome of a task
+group member in the transaction that inserts it, and that transaction counts it in a counter shard
+at commit ([Task groups](task-groups.md#count-a-member-outcome)). It removes the stable terminal task only after every retention boundary has elapsed and no
 history rows remain.
 
 #### Dead-letter index

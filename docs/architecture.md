@@ -40,8 +40,8 @@ columns, and limits of that area. For an explanation of a concept, read the
 
 ### [Task groups](architecture/task-groups.md)
 
-- The [task group](architecture/task-groups.md#task-groups) lifecycle, tables, callbacks, cancel,
-  drift repair, maintenance, and limits
+- The [task group](architecture/task-groups.md#task-groups) lifecycle, tables, counter shards,
+  callbacks, cancel, drift repair, maintenance, the dashboard read, and limits
 
 ### [Fast tier](architecture/fast-tier.md)
 
