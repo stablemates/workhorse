@@ -179,6 +179,21 @@ export type {
   WorkerQueueApi,
   WorkerRuntimeState,
 } from "./worker.js";
+export { HandlerReplayError, replayHandler } from "./handler-replay.js";
+export type {
+  DurableKind,
+  DurableName,
+  DurableState,
+  DurableStateCheckpoint,
+  DurableStateChild,
+  DurableStateHumanWait,
+  DurableStateSignal,
+  DurableStateWait,
+  HandlerReplayNames,
+  HandlerReplayProblem,
+  HandlerReplayReport,
+  ReplayHandlerOptions,
+} from "./handler-replay.js";
 export {
   MAX_TASK_GROUP_DRIFT_LIMIT,
   MAX_TASK_GROUP_MEMBERS,

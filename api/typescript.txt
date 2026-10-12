@@ -89,6 +89,14 @@ interface DependencyLineageRecord
 interface DependencyRepair
 type DependencyRepairAction
 type DependencyTerminalPolicy
+type DurableKind
+interface DurableName
+interface DurableState
+interface DurableStateCheckpoint
+interface DurableStateChild
+type DurableStateHumanWait
+type DurableStateSignal
+type DurableStateWait
 type EnqueueDebounce
 type EnqueueIdempotency
 interface EnqueueIdempotencyConflictDetails
@@ -111,6 +119,10 @@ class FastTierUnsupportedError
 const HEALTH_HISTORY_SCAN_LIMIT
 type Handler
 interface HandlerContext
+class HandlerReplayError
+interface HandlerReplayNames
+interface HandlerReplayProblem
+interface HandlerReplayReport
 type HeartbeatStatus
 interface HumanWait
 class HumanWaitAlreadyWaitingError
@@ -211,6 +223,7 @@ interface RedriveRequest
 interface RedriveResult
 type RedriveStatus
 type ReleaseOwnedStatus
+interface ReplayHandlerOptions
 interface RetentionCategoryValues
 interface RetentionPolicy
 interface RetentionPolicyDefinition
@@ -363,6 +376,7 @@ function readSchemaVersion
 function readWorkerClientProtocols
 function registerQueueMetrics
 function registerTelemetryProvider
+function replayHandler
 function rowsToQueryResult
 function runWorkerProcess
 function startWorkerProcess
@@ -3173,6 +3187,58 @@ interface DurableBoundaryDescription {
 
 type DurableBoundaryState = "saved" | "blocked" | "not-reached" | "pending";
 
+type DurableKind = "checkpoint" | "wait" | "signal" | "humanWait" | "child";
+
+interface DurableName {
+  kind: DurableKind;
+  name: string;
+}
+
+interface DurableState {
+  checkpoints?: Record<string, DurableStateCheckpoint>;
+  waits?: Record<string, DurableStateWait>;
+  signals?: Record<string, DurableStateSignal>;
+  humanWaits?: Record<string, DurableStateHumanWait>;
+  children?: Record<string, DurableStateChild>;
+}
+
+interface DurableStateCheckpoint {
+  value: Json;
+}
+
+interface DurableStateChild {
+  type: string;
+  payload: Json;
+  options?: Json;
+  set?: "settled" | "all_success";
+  outcome?: ChildOutcome;
+}
+
+type DurableStateHumanWait = {
+  context: Json;
+  result: Json;
+} | {
+  context: Json;
+  pending: true;
+};
+
+type DurableStateSignal = {
+  payload: Json;
+} | {
+  pending: true;
+};
+
+type DurableStateWait = {
+  mode: "relative";
+  durationMs: number;
+  wakeAt: string;
+  pending?: boolean;
+} | {
+  mode: "absolute";
+  wakeAt: string;
+  pending?: boolean;
+};
+
 interface EnqueueBaseOptions {
   queue?: string;
   /** Dispatch rank from 0 through 100. Higher values are claimed first. */
@@ -3376,6 +3442,40 @@ interface HandlerContext<TPayload extends Json = Json> {
   runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildTaskRequest[]): Promise<TResult>;
   /** The task group of this task, as a member task or as a callback task (ADR 0095). */
   taskGroup: TaskGroupContext;
+}
+
+class HandlerReplayError extends WorkhorseError {
+  readonly problem: HandlerReplayProblem;
+  readonly names: HandlerReplayNames;
+  constructor(problem: HandlerReplayProblem, names: HandlerReplayNames, detail: string);
+}
+
+interface HandlerReplayNames {
+  /** Stored names that the handler asked for. */
+  replayed: DurableName[];
+  /** Names that the state does not hold. */
+  new: DurableName[];
+  /** Stored names that the handler did not ask for. */
+  unused: DurableName[];
+}
+
+interface HandlerReplayProblem {
+  reason: "new_before_stored" | "conflict";
+  at: DurableName;
+}
+
+interface HandlerReplayReport<TResult extends Json = Json> extends HandlerReplayNames {
+  /**
+  * `completed` when the handler returned. `suspended` when it reached a stored pending boundary
+  * or a new wait or child, where a live task suspends.
+  */
+  outcome: {
+    status: "completed";
+    result: TResult;
+  } | {
+    status: "suspended";
+    at: DurableName;
+  };
 }
 
 type HeartbeatStatus = "accepted" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
@@ -4331,6 +4431,16 @@ interface RenderDashboardHtmlOptions {
   runtime: DashboardRuntimeConfig;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
+}
+
+interface ReplayHandlerOptions {
+  /**
+  * Names that the new code adds on purpose before a stored name, for example a version
+  * checkpoint. The replay reports them as new and does not fail on them.
+  */
+  allowNew?: readonly string[];
+  /** Fields of the claimed task that the handler sees. The replay supplies the others. */
+  task?: Partial<Omit<ClaimedTask, "payload">>;
 }
 
 interface RetentionCategoryValues<T> {
@@ -6403,6 +6513,8 @@ function registerQueueMetrics(source: QueueMetricSource): () => void;
 function registerTelemetryProvider(provider: WorkhorseTelemetryProvider): () => void;
 
 function renderDashboardHtml(template: string, options: RenderDashboardHtmlOptions): string;
+
+function replayHandler<TPayload extends Json, TResult extends Json>(handler: Handler<TPayload, TResult>, payload: TPayload, state: DurableState, options?: ReplayHandlerOptions): Promise<HandlerReplayReport<TResult>>;
 
 function rowsToQueryResult<TRow extends QueryResultRow>(rows: readonly TRow[]): QueryResult<TRow>;
 

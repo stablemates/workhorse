@@ -259,6 +259,95 @@ Transient failures, lease loss, child-limit refusals, and already-waiting signal
 existing settlement behavior. `protocol/v1/runtime.json` pins terminal conflicts and those retryable
 controls in every SDK.
 
+#### Replay stored state in a test
+
+The TypeScript SDK exports `replayHandler(handler, payload, state, options)` from
+`typescript/core/src/handler-replay.ts`. It runs a handler against the stored durable state of one
+task, before a deployment. It uses no database, no worker, and no SQL function. The other SDKs have
+no equivalent.
+
+`state` is a `DurableState`, a plain JSON value with one optional record for each kind of name.
+Each record is keyed by name. Dates are ISO 8601 strings, so a fixture file can hold the state.
+
+| Field         | Entry type               | Entry fields                                                                           |
+| ------------- | ------------------------ | -------------------------------------------------------------------------------------- |
+| `checkpoints` | `DurableStateCheckpoint` | `value`                                                                                |
+| `waits`       | `DurableStateWait`       | `mode`, `wakeAt`, `durationMs` for `relative`, optional `pending`                      |
+| `signals`     | `DurableStateSignal`     | `payload`, or `pending: true`                                                          |
+| `humanWaits`  | `DurableStateHumanWait`  | `context` and `result`, or `context` and `pending: true`                               |
+| `children`    | `DurableStateChild`      | `type`, `payload`, optional `options` in JSON form, optional `set`, optional `outcome` |
+
+A checkpoint entry is an object, so a later field can join `value` without a change to the other
+fields. `set` is `settled` for a child that `runChildren` created and `all_success` for a child that
+`runChildrenAll` created. It is absent for a child of `runChild`, as `task_child.created_as_set` is
+false for that child. A child without `outcome` is not terminal. A pending entry, or a child without
+`outcome`, marks the boundary where the task is suspended.
+
+The replay gives the handler a `HandlerContext` that reads only `state`:
+
+1. A stored checkpoint returns its `value`, and its operation does not run.
+2. A stored wait, signal, human decision, or terminal child returns as a live worker returns it. A
+   pending boundary stops the replay with outcome `suspended`.
+3. A name that `state` does not hold is new. A new checkpoint runs its operation, and later calls
+   with that name return its value. A new wait, signal, human decision, or child stops the replay
+   with outcome `suspended`.
+4. `getCheckpoint` and `getWait` mark a stored name as replayed. They never mark a name as new.
+5. `getProgress` returns the last value that `setProgress` gave in the replay, or null.
+   `taskGroup.get` returns null, and `taskGroup.add` rejects with a `TypeError`.
+
+Overlapping `checkpoint` calls with one name share one operation, as in a live handler. A
+`waitForHuman` call with the name of an earlier call in the replay must give the same context, in
+`JSON.stringify` form. Otherwise it is a conflict, also after the first call stopped the replay. The
+claimed task has ID `replay`, type `replay`, and attempt 1, unless `options.task` gives other
+fields.
+
+The replay raises `HandlerReplayError` at the first problem. It records the problem, so a handler
+that catches the error cannot hide it. `HandlerReplayError.problem.reason` is one of these values:
+
+| Reason              | Cause                                                                                                                                                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new_before_stored` | The handler asks for a new name while `state` holds a name that the handler has not asked for. The replay raises the error before a new checkpoint operation runs.                                                                              |
+| `conflict`          | A wait changes its mode or its absolute target, a human decision changes its context, or a child changes its type, payload, options, or join call. A child set names other children than the stored children. Values are compared in JSON form. |
+
+`options.allowNew` lists names that the new code adds on purpose, for example a version checkpoint.
+A listed name is new, but it does not cause `new_before_stored`. A changed relative wait duration is
+not a conflict, as `task_wait` keeps the first target.
+
+A replay without a problem returns `HandlerReplayReport`. `HandlerReplayError.names` holds the same
+three lists:
+
+- `replayed`: stored names that the handler asked for, in the order of the first request.
+- `new`: names that `state` does not hold, in the order of the first request.
+- `unused`: stored names that the handler did not ask for. An unused name is not a problem.
+
+The report `outcome` is `completed` with the handler result, or `suspended` with the boundary. An
+error that the handler throws reaches the caller unchanged, unless the replay found a problem or
+reached a suspension first.
+
+The child rules follow `create_child_v2` and `create_children_v1`:
+
+1. A task creates one child through `runChild`. A `runChild` call conflicts when `state` holds a
+   child with another name, or when the replay already asked for another `runChild` name. A child
+   of `runChild` conflicts with a stored child that has `set`. A child set conflicts with a
+   stored child that has no `set`, or that has another `set` value.
+2. When `state` holds children, a child set must name each stored child and no other child. A task
+   holds one child set. An empty child set conflicts when `state` holds a child.
+3. When `state` holds no child, the names of a child set are new, and the replay stops at the first
+   child.
+4. A repeated name in one child set throws a `TypeError` before the replay compares the set.
+5. A `runChild` call with the name of an earlier `runChild` call, and a child set after an earlier
+   child set, must make an equal request. Otherwise it is a conflict, also after the first call
+   stopped the replay. The replay compares these requests as a live handler compares calls in
+   flight: structured clones, where an omitted set `options` differs from `{}`.
+
+A stored child with a `failed` or `canceled` outcome makes `runChild` and `runChildrenAll` throw a
+`TypeError`, because a live parent task does not resume after that outcome. `runChildren` returns
+each settled outcome.
+
+The state comes from the caller. `Admin.listCheckpoints` and `Admin.listWaits` return checkpoints
+and timer waits. No admin read returns a delivered signal payload, a human decision context or
+result, a child result, or the stored child request (`task_child.request_fingerprint`).
+
 ### Failure envelope
 
 `protocol/v1/failures.json` pins the JSON error envelope that a worker passes to `fail_v1`.

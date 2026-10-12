@@ -76,6 +76,13 @@ puts the task in the queue of the member task, not in the `defaultQueue` of the 
 `repairTaskGroupDrift`. `MaintenancePhase` gains `task_groups`. The other SDKs add task groups in
 later releases.
 
+TypeScript gains `replayHandler` (SM-1210). A test can run new handler code against the stored
+durable state of a task before a deployment, without a database or a worker. The state is a plain
+JSON `DurableState` value with stored checkpoints, timer waits, signals, human decisions, and
+children. The replay raises `HandlerReplayError` when the code asks for a new name before a stored
+name, or when a wait, human decision, or child request conflicts with the stored request. It
+reports the replayed, new, and unused names. The change adds no SQL function and no migration.
+
 ## 0.7.1 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
