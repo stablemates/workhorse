@@ -1,7 +1,7 @@
 # Language feature parity
 
 This is the authoritative per-language support matrix for the Workhorse SDKs, anchored to schema
-version 65. It owns one question: which language can use which capability today. What each
+version 66. It owns one question: which language can use which capability today. What each
 capability does, and its exact limits, stay owned by [docs/features.md](features.md); this
 document never restates them.
 
@@ -247,22 +247,24 @@ Every Planned cell below must be Supported before 1.0.0
 (WH-581). Adding a command or a procedure later
 would not break anything, so this is not a compatibility requirement; it is the point at which an
 operator surface stops being excused as beta-incomplete. An operator should not have to change
-tools mid-incident because one action is only in the browser. The table below now meets that bar;
-the rule stands for any capability added after it.
+tools mid-incident because one action is only in the browser. The rule also applies to each
+capability that the table gets after WH-581, so the Planned task group cell must be Supported
+before 1.0.0.
 
 <!-- BEGIN GENERATED PARITY PRODUCT -->
 
-| Capability                                 | PostgreSQL | Dashboard | CLI       |
-| ------------------------------------------ | ---------- | --------- | --------- |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported |
-| Queue health snapshot                      | Supported  | Supported | Supported |
-| Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause and resume                     | Supported  | Supported | Supported |
-| Queue purge                                | Supported  | Supported | Supported |
-| Dead-letter listing                        | Supported  | Supported | Supported |
-| Redrive                                    | Supported  | Supported | Supported |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
-| Durable operator worker pause              | Supported  | Supported | Supported |
+| Capability                                 | PostgreSQL | Dashboard | CLI                |
+| ------------------------------------------ | ---------- | --------- | ------------------ |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported          |
+| Queue health snapshot                      | Supported  | Supported | Supported          |
+| Cancellation requests                      | Supported  | Supported | Supported          |
+| Queue pause and resume                     | Supported  | Supported | Supported          |
+| Queue purge                                | Supported  | Supported | Supported          |
+| Dead-letter listing                        | Supported  | Supported | Supported          |
+| Redrive                                    | Supported  | Supported | Supported          |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported          |
+| Durable operator worker pause              | Supported  | Supported | Supported          |
+| Task group listing, detail, and cancel     | Supported  | Supported | [Planned][SM-1257] |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -367,4 +369,7 @@ this document states still governs: a cell says Supported because tests prove it
 stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
+
+[SM-1257]: https://linear.app/stablemates/issue/SM-1257
+
 <!-- END GENERATED PARITY LINEAR LINKS -->
