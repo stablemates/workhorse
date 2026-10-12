@@ -123,10 +123,28 @@ const mutationAuthorization = os
   });
 const mutationProcedure = procedure.meta({ mutation: true }).use(mutationAuthorization);
 
+const utf8 = new TextEncoder();
+/**
+ * The audit request ID, bounded in UTF-8 bytes to match the SQL audit functions.
+ *
+ * Each SQL function that writes an operator audit refuses a `request_id` of more than 512 UTF-8
+ * bytes. A length in characters cannot express that bound, so a refinement measures the bytes and
+ * the request fails validation before any SQL runs. The refinement measures the value as sent,
+ * before `trim`, because the Go, Python, Rust, and Ruby hosts measure the same bytes and report the
+ * same issue.
+ */
+const auditRequestIdSchema = z
+  .string()
+  .refine((value) => utf8.encode(value).length <= 512, {
+    message: "The request ID must contain at most 512 UTF-8 bytes",
+  })
+  .trim()
+  .min(1)
+  .meta({ description: "At most 512 UTF-8 bytes." });
 const auditSchema = z.object({
   actor: z.string().trim().min(1),
   reason: z.string().trim().min(1).max(2_000),
-  requestId: z.string().trim().min(1),
+  requestId: auditRequestIdSchema,
 });
 const cancellationAuditSchema = z.object({
   actor: z.string().trim().min(1),
@@ -137,7 +155,7 @@ const cancellationAuditSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value || null),
-  requestId: z.string().trim().min(1),
+  requestId: auditRequestIdSchema,
 });
 
 const taskDetailInput = z.object({ id: z.uuid() });

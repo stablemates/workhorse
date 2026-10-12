@@ -7131,6 +7131,130 @@
               }
             }
           }
+        },
+        {
+          "id": "cancel-task-group-request-id-too-long",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx"
+              }
+            }
+          },
+          "expect": {
+            "status": 400,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "BAD_REQUEST",
+                "status": 400,
+                "message": "Input validation failed",
+                "data": {
+                  "issues": [
+                    {
+                      "code": "custom",
+                      "path": [
+                        "audit",
+                        "requestId"
+                      ],
+                      "message": "The request ID must contain at most 512 UTF-8 bytes"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-request-id-at-limit",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+              }
+            }
+          },
+          "expect": {
+            "status": 404,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "NOT_FOUND",
+                "status": 404,
+                "message": "Task group not found"
+              }
+            }
+          }
+        },
+        {
+          "id": "cancel-task-group-request-id-too-long-before-trim",
+          "procedure": "cancelTaskGroup",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+              }
+            }
+          },
+          "expect": {
+            "status": 400,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "BAD_REQUEST",
+                "status": 400,
+                "message": "Input validation failed",
+                "data": {
+                  "issues": [
+                    {
+                      "code": "custom",
+                      "path": [
+                        "audit",
+                        "requestId"
+                      ],
+                      "message": "The request ID must contain at most 512 UTF-8 bytes"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-ignores-request-id",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-00000000dead",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance group cancel",
+                "requestId": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx"
+              }
+            }
+          },
+          "expect": {
+            "status": 404,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "NOT_FOUND",
+                "status": 404,
+                "message": "Task group not found"
+              }
+            }
+          }
         }
       ]
     },

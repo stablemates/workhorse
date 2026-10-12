@@ -5097,7 +5097,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5239,7 +5240,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5386,7 +5388,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5526,7 +5529,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5667,7 +5671,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5841,7 +5846,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -5976,7 +5982,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6197,7 +6204,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6336,7 +6344,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6460,7 +6469,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6600,7 +6610,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6750,7 +6761,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -6909,7 +6921,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -7055,7 +7068,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -7255,7 +7269,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [
@@ -7399,7 +7414,8 @@
                           },
                           "requestId": {
                             "type": "string",
-                            "minLength": 1
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
                           }
                         },
                         "required": [

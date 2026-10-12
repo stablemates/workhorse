@@ -279,6 +279,10 @@ const OPTIONAL_MUTATIONS: [&str; 2] = ["enqueueTest", "setSchedulePaused"];
 /// The largest RPC request body the service reads.
 const MAX_REQUEST_BYTES: usize = 2 << 20;
 
+/// The audit request ID bound of the SQL audit functions, in UTF-8 bytes. JSON Schema measures
+/// strings in characters, so the request schema cannot state this bound.
+const MAX_REQUEST_ID_BYTES: usize = 512;
+
 struct Host<E: Executor> {
     backend: Backend<E>,
     base_path: String,
@@ -510,6 +514,17 @@ where
             "code": "custom",
             "path": ["feature"],
             "message": "The feature demo kind requires a feature family",
+        });
+        let error = RpcError::bad_request("Input validation failed");
+        return Err(error.with_data(json!({ "issues": [issue] })));
+    }
+    let request_id = input.pointer("/audit/requestId").and_then(Value::as_str);
+    let oversized = request_id.is_some_and(|request_id| request_id.len() > MAX_REQUEST_ID_BYTES);
+    if MUTATIONS.contains(&name) && oversized {
+        let issue = json!({
+            "code": "custom",
+            "path": ["audit", "requestId"],
+            "message": "The request ID must contain at most 512 UTF-8 bytes",
         });
         let error = RpcError::bad_request("Input validation failed");
         return Err(error.with_data(json!({ "issues": [issue] })));

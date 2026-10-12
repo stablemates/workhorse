@@ -302,6 +302,10 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 			return
 		}
 	}
+	if mutations[name] && oversizedRequestID(envelope.JSON) {
+		writeRPCErrorData(response, http.StatusBadRequest, "BAD_REQUEST", "Input validation failed", map[string]any{"issues": []any{map[string]any{"code": "custom", "path": []any{"audit", "requestId"}, "message": "The request ID must contain at most 512 UTF-8 bytes"}}})
+		return
+	}
 	assignActor(envelope.JSON, actor)
 	result, err := procedure(request.Context(), envelope.JSON, actor)
 	if err != nil {
@@ -318,6 +322,24 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"json": result})
+}
+
+// maxRequestIDBytes is the audit request ID bound of the SQL audit functions, in UTF-8 bytes.
+const maxRequestIDBytes = 512
+
+// oversizedRequestID reports whether a mutation's audit request ID exceeds maxRequestIDBytes.
+// JSON Schema measures strings in characters, so the generated validator cannot state this bound.
+func oversizedRequestID(input any) bool {
+	document, ok := input.(map[string]any)
+	if !ok {
+		return false
+	}
+	audit, ok := document["audit"].(map[string]any)
+	if !ok {
+		return false
+	}
+	requestID, ok := audit["requestId"].(string)
+	return ok && len(requestID) > maxRequestIDBytes
 }
 
 func assignActor(input any, actor string) {

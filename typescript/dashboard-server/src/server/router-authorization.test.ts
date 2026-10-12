@@ -85,6 +85,50 @@ describe("dashboard mutation authorization", () => {
     },
   );
 
+  it.each(Object.entries(MUTATION_INPUTS))(
+    "refuses a %s request ID of more than 512 UTF-8 bytes before touching the database",
+    async (name, input) => {
+      const context: DashboardRpcContext = { ...readOnlyContext(), operator: { mode: "writable" } };
+      const client = createRouterClient(dashboardRouter, { context });
+      const document = input as { audit: typeof AUDIT };
+      const oversized = {
+        ...document,
+        audit: { ...document.audit, requestId: `${"é".repeat(256)}x` },
+      };
+
+      await expect(
+        (client.dashboard as Record<string, (value: unknown) => Promise<unknown>>)[name]?.(
+          oversized,
+        ),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        data: {
+          issues: [
+            {
+              code: "custom",
+              path: ["audit", "requestId"],
+              message: "The request ID must contain at most 512 UTF-8 bytes",
+            },
+          ],
+        },
+      });
+      expect(context.database.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("measures the request ID as sent, before it removes whitespace", async () => {
+    const context: DashboardRpcContext = { ...readOnlyContext(), operator: { mode: "writable" } };
+    const client = createRouterClient(dashboardRouter, { context });
+
+    await expect(
+      client.dashboard.cancelTaskGroup({
+        id: TASK_ID,
+        audit: { ...AUDIT, requestId: `${"a".repeat(512)} ` },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(context.database.execute).not.toHaveBeenCalled();
+  });
+
   it.each(Object.keys(MUTATION_INPUTS))(
     "requires a matching Origin for %s, because the host classifies it as a mutation",
     (name) => {

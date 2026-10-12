@@ -50,6 +50,9 @@ _MAX_REQUEST_BYTES = 2 << 20
 # Characters escaped in the runtime configuration so it cannot close its inline script.
 # ``json.dumps`` already escapes every non-ASCII character, including U+2028 and U+2029.
 _SCRIPT_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026"}
+# The audit request ID bound of the SQL audit functions, in UTF-8 bytes. JSON Schema measures
+# strings in characters, so the generated validator cannot state this bound.
+_MAX_REQUEST_ID_BYTES = 512
 _UNVERIFIED_COMPATIBILITY = (
     "Unable to verify Workhorse schema compatibility because the database query failed."
 )
@@ -83,6 +86,19 @@ class DashboardProcedure(Protocol):
 
 
 Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | DashboardResponse]
+
+
+def _oversized_request_id(input_value: object) -> bool:
+    if not isinstance(input_value, dict):
+        return False
+    audit = input_value.get("audit")
+    if not isinstance(audit, dict):
+        return False
+    request_id = audit.get("requestId")
+    return (
+        isinstance(request_id, str)
+        and len(request_id.encode("utf-8", "surrogatepass")) > _MAX_REQUEST_ID_BYTES
+    )
 
 
 def _normalize_dashboard_path(path: str) -> str:
@@ -271,6 +287,21 @@ class DashboardHost:
                                 "code": "custom",
                                 "path": ["feature"],
                                 "message": "The feature demo kind requires a feature family",
+                            }
+                        ]
+                    },
+                )
+            if procedure in _MUTATIONS and _oversized_request_id(input_value):
+                raise _DashboardRPCError(
+                    400,
+                    "BAD_REQUEST",
+                    "Input validation failed",
+                    {
+                        "issues": [
+                            {
+                                "code": "custom",
+                                "path": ["audit", "requestId"],
+                                "message": "The request ID must contain at most 512 UTF-8 bytes",
                             }
                         ]
                     },
