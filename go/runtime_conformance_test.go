@@ -804,8 +804,10 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 	older.Handle(fixture.RegisteredTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
 		return nil, nil
 	})
-	if _, err := older.RunOnce(ctx); err != nil {
-		t.Fatal(err)
+	// A pass that released each task that it claimed made no progress, so it returns false.
+	expectedProgress := fixture.ExpectedReleasedPassOutcome != "unprocessed"
+	if processed, err := older.RunOnce(ctx); err != nil || processed != expectedProgress {
+		t.Fatalf("the released-only pass reported processed=%t err=%v", processed, err)
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRelease)
 
@@ -815,12 +817,16 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 		t.Fatalf("released task carried attempts=%d releases=%d", attempts, releases)
 	}
 
-	// The released task is ready again, so a worker that reported the release as progress would
-	// claim and release it without waiting. The next pass makes none.
-	expectedProgress := fixture.ExpectedRunOutcomeAfterRelease != "unprocessed"
+	// The worker keeps no state between calls. The next call claims the ready task again at once,
+	// inside the poll interval, releases it, and returns false again.
 	if processed, err := older.RunOnce(ctx); err != nil || processed != expectedProgress {
 		t.Fatalf("the pass after the release reported processed=%t err=%v", processed, err)
 	}
+	attempts, releases = releaseEvidenceFor(t, ctx, pool, taskID)
+	if attempts != fixture.ExpectedAttempts || releases != fixture.ExpectedReleaseEventsAfterNextPass {
+		t.Fatalf("after the next pass the task carried attempts=%d releases=%d", attempts, releases)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRelease)
 
 	newer, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-" + fixture.ID + "-newer",

@@ -129,6 +129,9 @@ charged, err := handler.Checkpoint("charge-card", func() (any, error) {
   A parent task that created a child before the upgrade can replay that request after the upgrade.
   If the replayed request names no queue, it keeps the queue of the stored child, so the parent
   task joins its child.
+- `Worker.RunOnce` does not change: a pass that released every task that it claimed returns
+  `false`, and the next call claims at once (SM-1259, [ADR 0099](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0099-report-a-released-only-single-pass-as-no-progress.md)). TypeScript
+  `runOnce()` now does the same. If you call the single-pass call in a loop, wait after `false`.
 
 ## 0.7.1 — 2026-10-09
 

@@ -85,8 +85,9 @@ type workerRuntimeFixture struct {
 	RegisteredTaskType                   string                            `json:"registeredTaskType"`
 	ExpectedAfterRelease                 workerFixtureTaskState            `json:"expectedAfterRelease"`
 	ExpectedAttempts                     int                               `json:"expectedAttempts"`
+	ExpectedReleasedPassOutcome          string                            `json:"expectedReleasedPassOutcome"`
 	ExpectedReleaseEvents                int                               `json:"expectedReleaseEvents"`
-	ExpectedRunOutcomeAfterRelease       string                            `json:"expectedRunOutcomeAfterRelease"`
+	ExpectedReleaseEventsAfterNextPass   int                               `json:"expectedReleaseEventsAfterNextPass"`
 	ExpectedAfterHandled                 workerFixtureTaskState            `json:"expectedAfterHandled"`
 	RunMS                                int                               `json:"runMs"`
 	ExpectedMinimumReleases              int                               `json:"expectedMinimumReleases"`

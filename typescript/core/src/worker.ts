@@ -454,7 +454,7 @@ export interface WorkerOptions {
   sharedHeartbeats?: boolean;
   /**
    * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
-   * 250 milliseconds without it; `runOnce()` retains the 250-millisecond compatibility default.
+   * 250 milliseconds without it. `runOnce()` does not wait: it claims on each call.
    */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
@@ -610,8 +610,6 @@ export class Worker {
   private loggedRegistrationState:
     | { activeSlots: number; draining: boolean; paused: boolean }
     | undefined;
-  private lastClaimAt = Number.NEGATIVE_INFINITY;
-  private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
   private stopping = false;
   private locallyPaused = false;
@@ -1084,8 +1082,6 @@ export class Worker {
   /** Resume claims immediately instead of waiting for the previous idle poll deadline. */
   resume(): void {
     this.locallyPaused = false;
-    this.previousPassWorked = false;
-    this.lastClaimAt = Number.NEGATIVE_INFINITY;
     logInfo("workhorse.worker.resumed", "Worker resumed locally", {
       ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
@@ -1129,6 +1125,13 @@ export class Worker {
     if (shouldCrash) throw new InjectedCrashError(point);
   }
 
+  /**
+   * Runs maintenance, claims tasks for the free slots once, and waits for those tasks to settle.
+   *
+   * Returns `true` only if a handler ran. A pass that claimed no task, or that released each task
+   * because no handler is registered for its type, returns `false`. The worker keeps no state
+   * between calls, so a caller that calls `runOnce()` in a loop must wait after `false`.
+   */
   runOnce(): Promise<boolean> {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
@@ -1240,10 +1243,6 @@ export class Worker {
   ): Promise<boolean> {
     if (includeMaintenance) await this.runMaintenance();
     if (shouldStop() || this.paused) return false;
-    const nowMs = Date.now();
-    if (!this.previousPassWorked && nowMs - this.lastClaimAt < this.pollMs) return false;
-
-    this.lastClaimAt = nowMs;
     const executions: Array<Promise<PromiseSettledResult<void>>> = [];
     let claimError: unknown;
     let claimFailed = false;
@@ -1259,17 +1258,15 @@ export class Worker {
       }
     }
 
-    const claimed = executions.length > 0;
-    // A pass that only handed its claims back made no progress, so it waits the poll interval like
-    // an empty one. Skipping that wait would spin on a task no worker in this release can run.
-    this.previousPassWorked = ranAHandler;
     const settlements = await Promise.all(executions);
     const firstFailure = settlements.find(
       (settlement): settlement is PromiseRejectedResult => settlement.status === "rejected",
     );
     if (firstFailure) throw firstFailure.reason;
     if (claimFailed) throw claimError;
-    return claimed;
+    // A pass that only handed its claims back made no progress, so it reports none. The caller
+    // then waits before the next call, as it does after an empty pass.
+    return ranAHandler;
   }
 
   private startExecution(task: ClaimedTask): Promise<PromiseSettledResult<void>> {
@@ -1636,11 +1633,6 @@ export class Worker {
     }
     this.registered = true;
     this.remotelyPaused = paused;
-    // Resuming must not wait for the next idle poll deadline, exactly like a local resume().
-    if (wasRemotelyPaused && !paused) {
-      this.previousPassWorked = false;
-      this.lastClaimAt = Number.NEGATIVE_INFINITY;
-    }
     if (wasRemotelyPaused !== paused) {
       logInfo(
         paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
@@ -1991,7 +1983,6 @@ export class Worker {
       const delayed = this.notificationClaimDelayPending && this.consecutiveEmptyClaims > 0;
       this.notificationClaimDelayPending = false;
       const wakeVersion = this.dispatchWakeVersion;
-      this.lastClaimAt = Date.now();
       claims.set(
         claimId,
         (async (): Promise<ClaimSettlement> => {
@@ -2045,12 +2036,10 @@ export class Worker {
       // A claim that only handed its tasks back made no progress, so it backs off like an empty
       // one. Claiming again at once would spin on a task no handler here can run.
       if (attempt.claimed.some((task) => this.handlers.has(task.type))) {
-        this.previousPassWorked = true;
         this.consecutiveEmptyClaims = 0;
         emptyWait = undefined;
         return;
       }
-      this.previousPassWorked = false;
       this.consecutiveEmptyClaims += 1;
       if (attempt.claimed.length === 0) {
         emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
@@ -2082,7 +2071,6 @@ export class Worker {
       cohortReserved[cohort]! += limit;
       handedOver.add(task);
       cohortHandedOver[cohort]! += 1;
-      this.lastClaimAt = Date.now();
       return {
         claim: { queue: task.queue, limit, leaseMs: this.leaseMs, cohort },
         settle: (claimed) => {
@@ -2096,11 +2084,9 @@ export class Worker {
           }
           for (const next of claimed ?? []) launch(next, cohort);
           if (claimed?.some((next) => this.handlers.has(next.type))) {
-            this.previousPassWorked = true;
             this.consecutiveEmptyClaims = 0;
           } else if (claimed?.length === 0 && this.queueNames.length === 1) {
             // Another queue may still have work, so only a single-queue worker backs off here.
-            this.previousPassWorked = false;
             this.consecutiveEmptyClaims += 1;
             emptyWait ??= { deadline: Date.now() + this.nextDispatchPollMs(), wakeVersion };
           }

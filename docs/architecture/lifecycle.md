@@ -1509,26 +1509,31 @@ that returns only tasks of unregistered types releases them and does not change 
 
 ##### Single-pass call
 
-The single-pass call opens no listener, so a notification does not affect it. The SDKs report a
-pass whose claims were all released in two different ways:
+The single-pass call is TypeScript `runOnce()`, Python `run_once()` and `AsyncWorker.run_once()`,
+Go `Worker.RunOnce`, Rust `Worker::run_once`, and Ruby `Worker#run_once`. It opens no listener, so a
+notification does not affect it. [ADR 0099](../decisions/0099-report-a-released-only-single-pass-as-no-progress.md)
+gives all five SDKs one result and one wait rule:
 
-| SDK        | Call               | Result for the released-only pass | Next call                                                            |
-| ---------- | ------------------ | --------------------------------- | -------------------------------------------------------------------- |
-| TypeScript | `runOnce()`        | `true`                            | Returns `false` without a claim until `pollMs` ends after that claim |
-| Python     | `run_once()`       | `False`                           | Claims again at once                                                 |
-| Go         | `Worker.RunOnce`   | `false`                           | Claims again at once                                                 |
-| Rust       | `Worker::run_once` | `false`                           | Claims again at once                                                 |
-| Ruby       | `run_once`         | `false`                           | Claims again at once                                                 |
+1. The call returns `true` only if a handler ran. If the call released every task that it claimed,
+   it returns `false`, as a call that claimed no task does.
+2. The worker keeps no state between single-pass calls for this case. The next call claims at once.
+   If the released task is first in its queue, the worker claims it and releases it again.
+3. The `false` result is the wait rule. A caller that loops on the single-pass call must wait after
+   `false`. `pollMs` and the release wait do not apply to the single-pass call.
 
-In Python, Go, Rust, and Ruby, only the `false` result tells the caller to wait. The release wait
-does not change this difference. SM-1259 tracks it.
+Before ADR 0099, TypeScript `runOnce()` returned `true` for a released-only pass. After that pass
+or an empty pass, a second call inside `pollMs` returned `false` without a claim.
 
-The shared `missing-handler` runtime fixture checks the single-pass call in two ways:
+The shared runtime fixture `missing-handler-releases-the-task-with-its-attempt-intact` checks two
+calls of a worker that has no handler for the one ready task. Its poll interval is 5,000 ms, so a
+call that waited for it could not claim again:
 
-- The TypeScript, Python, Go, and Ruby tests check that the second call after the release reports
-  no progress. These tests pass for both behaviors in the table.
-- The Rust test checks that the first call, which releases the task, returns `false`. It makes no
-  second call before it registers the handler.
+- The first call returns `false` and writes one `released` event.
+- The second call also returns `false`. It writes a second `released` event, because it claims the
+  task again at once.
+
+The TypeScript, Python, Go, Rust, and Ruby runners make both calls before a worker that has the
+handler runs the task.
 
 ### Terminal transitions
 

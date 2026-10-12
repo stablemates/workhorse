@@ -221,19 +221,25 @@ export interface MissingHandlerRuntimeFixture extends RuntimeFixtureBase {
   kind: "missing-handler";
   registeredTaskType: string;
   leaseMs: number;
-  /** The interval a worker waits after a pass that made no progress. */
+  /**
+   * The poll interval of the continuous loop. It is longer than the fixture, so a single pass that
+   * waited for it after a release could not claim the task again.
+   */
   pollMs: number;
   expectedAfterRelease: ExpectedRuntimeState;
   expectedAttempts: number;
+  /**
+   * "unprocessed": a single pass that released each task that it claimed reports no progress. The
+   * false result tells a caller that loops on the single-pass call to wait.
+   */
+  expectedReleasedPassOutcome: "unprocessed";
   /** One single pass claims the one ready task once, so one release follows it. */
   expectedReleaseEvents: number;
   /**
-   * "unprocessed": the pass after a released-only pass reports no progress, so a worker without the
-   * handler backs off instead of spinning on a task it cannot run. Each SDK reaches that from its
-   * own side: a TypeScript pass declines to claim inside the poll interval, while a Go or Python
-   * pass claims, releases again, and reports the release as no progress.
+   * The worker keeps no state between single-pass calls, so the next call claims the released task
+   * again at once and releases it again.
    */
-  expectedRunOutcomeAfterRelease: "unprocessed";
+  expectedReleaseEventsAfterNextPass: number;
   expectedAfterHandled: ExpectedRuntimeState;
 }
 

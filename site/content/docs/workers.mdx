@@ -96,7 +96,8 @@ you can chain calls and serve many task types with one worker.
 
 `run` claims and runs tasks until you stop the worker. To connect its lifetime to your process,
 give an `AbortSignal` to `worker.run(signal)`. `runOnce` runs one claim-and-run pass and returns
-whether it found a task. Use `runOnce` in tests and scripts.
+whether a handler ran. Use `runOnce` in tests and scripts. If you call `runOnce` in a loop, wait
+after it returns `false`.
 
 The `HandlerContext` holds the claimed task, its `AbortSignal`, checkpoints, durable waits, and
 progress. Each write through the context carries the current
@@ -110,7 +111,7 @@ the task. Thus, handler code cannot write as an old owner after another worker o
 | -------------------- | ------------------------------------------------------------------------- |
 | `Worker.handle`      | Binds one task type to a handler. Returns the worker, so calls chain.     |
 | `worker.run(signal)` | Claims and runs tasks until the `AbortSignal` aborts or the worker stops. |
-| `runOnce`            | Runs one claim-and-run pass and returns whether it found work.            |
+| `runOnce`            | Runs one claim-and-run pass and returns whether a handler ran.            |
 
 A handler receives the payload and a `HandlerContext`. Its JSON return value becomes the `result`
 of the task. A thrown error fails the attempt, and the task retries while attempts remain.
@@ -533,7 +534,7 @@ Python or Rust worker holds its own.
 | Explicit `pollMs` (`poll_ms`, `PollInterval`) | Replaces the fallback base                 |
 | No listener, consecutive empty waits          | Doubles up to a 5,000 ms cap, ±10% jitter  |
 | No listener, starting wait                    | 250 ms                                     |
-| TypeScript `runOnce()`                        | 250 ms; never opens a listener             |
+| TypeScript `runOnce()`                        | No wait; never opens a listener            |
 
 - A payload that names a configured queue, or `*`, wakes the worker.
 - `promote_v1`, `run_task_now_v1`, `recover_expired_v1`, `sync_concurrency_policies_v1`, and
@@ -946,9 +947,10 @@ handler run. A task with one attempt then fails, and its handler never runs.
 The return is fenced, as every owned write is. A worker whose lease PostgreSQL no longer accepts
 cannot return a task that another worker runs.
 
-A pass that only returned tasks counts as an empty pass. The worker then waits before it claims
+A pass that only returned tasks counts as an empty pass. The `run` loop then waits before it claims
 again. Thus, if no deployed worker handles a type, the workers check the task again at the poll
-interval, not in a tight loop.
+interval, not in a tight loop. `runOnce` returns `false` for that pass and does not wait. If you call
+`runOnce` in a loop, wait after `false`.
 
 <details>
 <summary>Reference: owned release</summary>

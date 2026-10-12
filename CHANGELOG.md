@@ -112,6 +112,12 @@ reports the replayed, new, and unused names. The change adds no SQL function and
   A parent task that created a child before the upgrade can replay that request after the upgrade.
   If the replayed request names no queue, it keeps the queue of the stored child, so the parent
   task joins its child.
+- `Worker.runOnce()` returns `false` when it released every task that it claimed (SM-1259,
+  [ADR 0099](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0099-report-a-released-only-single-pass-as-no-progress.md)). A worker releases a task when it has no handler for the task type.
+  Before, `runOnce()` returned `true` for that pass. After that pass or a pass that claimed no task,
+  a second call inside `pollMs` returned `false` without a claim. Now the worker keeps no state between calls, so the next call claims at
+  once. `pollMs` no longer changes `runOnce()`. If you call `runOnce()` in a loop, wait after
+  `false`. The Python, Go, Rust, and Ruby workers already return `false` for that pass.
 
 ## 0.7.1 — 2026-10-09
 

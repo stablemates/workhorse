@@ -1108,7 +1108,7 @@ describe("worker registry", () => {
     expect(tickState.rows[0]?.last_completed_at).toBeInstanceOf(Date);
   });
 
-  it("keeps idle claim polling on pollMs despite more frequent maintenance wakeups", async () => {
+  it("claims on each runOnce call while maintenance keeps its own interval", async () => {
     const tickResults: MaintenancePhaseResult[] = [
       { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
       { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
@@ -1196,11 +1196,14 @@ describe("worker registry", () => {
       await worker.runOnce();
 
       expect(tick).toHaveBeenCalledTimes(4);
-      expect(claim).toHaveBeenCalledTimes(1);
+      // The single-pass call keeps no state between calls (ADR 0099), so pollMs does not delay
+      // the next claim. A caller that loops on runOnce() waits after false.
+      expect(claim).toHaveBeenCalledTimes(4);
 
       now.mockReturnValue(15_000);
       await worker.runOnce();
-      expect(claim).toHaveBeenCalledTimes(2);
+      expect(tick).toHaveBeenCalledTimes(4);
+      expect(claim).toHaveBeenCalledTimes(5);
     } finally {
       now.mockRestore();
       tick.mockRestore();

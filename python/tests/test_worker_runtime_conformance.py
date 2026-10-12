@@ -1102,15 +1102,22 @@ def execute_missing_handler_fixture(
         lease_ms=fixture["leaseMs"],
         poll_ms=fixture["pollMs"],
     ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
-    older.run_once()
+    # A pass that released each task that it claimed made no progress, so it returns False.
+    released_pass_progress = fixture["expectedReleasedPassOutcome"] != "unprocessed"
+    assert older.run_once() is released_pass_progress
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
     attempts, releases = release_evidence(connection, task_id)
     # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
     assert attempts == fixture["expectedAttempts"]
     assert releases == fixture["expectedReleaseEvents"]
-    # The released task is ready again, so a worker that reported the release as progress would
-    # claim and release it without waiting. The next pass makes none.
-    assert older.run_once() is (fixture["expectedRunOutcomeAfterRelease"] != "unprocessed")
+    # The worker keeps no state between calls. The next call claims the ready task again at once,
+    # inside the poll interval, releases it, and returns False again.
+    assert older.run_once() is released_pass_progress
+    assert release_evidence(connection, task_id) == (
+        fixture["expectedAttempts"],
+        fixture["expectedReleaseEventsAfterNextPass"],
+    )
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
 
     handled: list[object] = []
 
@@ -1500,16 +1507,22 @@ async def execute_async_missing_handler_fixture(
         poll_ms=fixture["pollMs"],
     ) as older:
         older.handle(fixture["registeredTaskType"], registered)
-        await older.run_once()
+        # A pass that released each task that it claimed made no progress, so it returns False.
+        released_pass_progress = fixture["expectedReleasedPassOutcome"] != "unprocessed"
+        assert await older.run_once() is released_pass_progress
         assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
         attempts, releases = await async_release_evidence(connection, task_id)
         # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
         assert attempts == fixture["expectedAttempts"]
         assert releases == fixture["expectedReleaseEvents"]
-        # The released task is ready again, so a worker that reported the release as progress would
-        # claim and release it without waiting. The next pass makes none.
-        made_progress = fixture["expectedRunOutcomeAfterRelease"] != "unprocessed"
-        assert await older.run_once() is made_progress
+        # The worker keeps no state between calls. The next call claims the ready task again at
+        # once, inside the poll interval, releases it, and returns False again.
+        assert await older.run_once() is released_pass_progress
+        assert await async_release_evidence(connection, task_id) == (
+            fixture["expectedAttempts"],
+            fixture["expectedReleaseEventsAfterNextPass"],
+        )
+        assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterRelease"]})
 
     handled: list[object] = []
 

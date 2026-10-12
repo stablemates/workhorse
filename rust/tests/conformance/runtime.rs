@@ -1258,8 +1258,34 @@ async fn missing_handler(database: &ScratchDatabase, fixture: &Value) -> Checked
         },
     )?;
     worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
-    run_once(&worker, false).await?;
+    // A pass that released each task that it claimed made no progress, so it returns false.
+    let released_pass_progress = text(fixture, "expectedReleasedPassOutcome") != "unprocessed";
+    run_once(&worker, released_pass_progress).await?;
     assert_state(&client, task, &fixture["expectedAfterRelease"]).await?;
+    let evidence = release_evidence(&client, task).await?;
+    let expected = (number(fixture, "expectedAttempts"), number(fixture, "expectedReleaseEvents"));
+    check(evidence == expected, || {
+        format!("(attempts, release events) = {evidence:?}, want {expected:?}")
+    })?;
+    // The worker keeps no state between calls. The next call claims the ready task again at once,
+    // inside the poll interval, releases it, and returns false again.
+    run_once(&worker, released_pass_progress).await?;
+    let evidence = release_evidence(&client, task).await?;
+    let expected = (
+        number(fixture, "expectedAttempts"),
+        number(fixture, "expectedReleaseEventsAfterNextPass"),
+    );
+    check(evidence == expected, || {
+        format!("after the next pass (attempts, release events) = {evidence:?}, want {expected:?}")
+    })?;
+    assert_state(&client, task, &fixture["expectedAfterRelease"]).await?;
+    worker.handle(task_type, |_: Value, _| async { Ok(Value::Null) });
+    run_once(&worker, true).await?;
+    assert_state(&client, task, &fixture["expectedAfterHandled"]).await
+}
+
+/// Counts the attempts and the `released` events of a task.
+async fn release_evidence(client: &Client, task: Uuid) -> Checked<(i64, i64)> {
     let row = client
         .query_one(
             "SELECT
@@ -1270,14 +1296,7 @@ async fn missing_handler(database: &ScratchDatabase, fixture: &Value) -> Checked
         )
         .await
         .map_err(sql)?;
-    let evidence: (i64, i64) = (row.get(0), row.get(1));
-    let expected = (number(fixture, "expectedAttempts"), number(fixture, "expectedReleaseEvents"));
-    check(evidence == expected, || {
-        format!("(attempts, release events) = {evidence:?}, want {expected:?}")
-    })?;
-    worker.handle(task_type, |_: Value, _| async { Ok(Value::Null) });
-    run_once(&worker, true).await?;
-    assert_state(&client, task, &fixture["expectedAfterHandled"]).await
+    Ok((row.get(0), row.get(1)))
 }
 
 /// Runs a listening worker that has no handler for the one ready task. Each release wakes the
