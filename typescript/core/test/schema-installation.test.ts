@@ -409,6 +409,7 @@ describe("schema installation", () => {
       { name: "create_child_v2" },
       { name: "create_single_child_v2" },
       { name: "fire_due_schedules_v2" },
+      { name: "save_checkpoint_v2" },
       { name: "sync_queue_health_policy_v2" },
       { name: "sync_schedule_definitions_v2" },
     ]);
@@ -580,6 +581,10 @@ describe("schema installation", () => {
       {
         version: 67,
         description: "read the newest task group events",
+      },
+      {
+        version: 68,
+        description: "check the input of a checkpoint on replay",
       },
     ]);
 

@@ -56,19 +56,8 @@ describe("schema floor", () => {
     const floor = await floorFor(catalogues);
 
     expect({ required: floor.version, introducedBy: floor.introducedBy }).toEqual({
-      required: 65,
-      introducedBy: [
-        "add_task_group_members_v1",
-        "cancel_task_group_v1",
-        "create_task_group_v1",
-        "get_task_group_v1",
-        "list_task_group_drift_v1",
-        "list_task_group_events_v1",
-        "list_task_group_members_v1",
-        "repair_task_group_drift_v1",
-        "seal_task_group_v1",
-        "task_group_for_task_v1",
-      ],
+      required: 68,
+      introducedBy: ["save_checkpoint_v2"],
     });
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });

@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 67;
-export const MINIMUM_SCHEMA_VERSION = 67;
-export const MAXIMUM_SCHEMA_VERSION = 67;
+export const WORKHORSE_SCHEMA_VERSION = 68;
+export const MINIMUM_SCHEMA_VERSION = 68;
+export const MAXIMUM_SCHEMA_VERSION = 68;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -44,7 +44,7 @@ export const SQL_STATEMENTS = {
   fire_due_schedules_v2:
     "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
   get_checkpoint:
-    "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
+    "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
   get_contract_definition_v1:
     "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition",
   get_task:
@@ -60,7 +60,7 @@ export const SQL_STATEMENTS = {
   list_checkpoint:
     "SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text",
   list_checkpoints:
-    "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
+    "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
   list_concurrency_policies:
     "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name",
   list_dead_letters:
@@ -104,6 +104,8 @@ export const SQL_STATEMENTS = {
   run_maintenance_v1: "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
   save_checkpoint_v1:
     "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+  save_checkpoint_v2:
+    "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
   schedule_wait_v1:
     "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
   schema_version: "SELECT version FROM workhorse.schema_version ORDER BY version",

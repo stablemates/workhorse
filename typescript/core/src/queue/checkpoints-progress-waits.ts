@@ -2,7 +2,15 @@ import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { queryFencedWrite } from "./fenced-write.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { taskSpanAttributes, logDebug, logInfo } from "../telemetry.js";
-import type { ClaimedTask, TaskCheckpoint, TaskProgress, TaskWait, Json } from "../types.js";
+import type {
+  ClaimedTask,
+  SaveCheckpointOptions,
+  TaskCheckpoint,
+  TaskProgress,
+  TaskWait,
+  Json,
+} from "../types.js";
+import { CHECKPOINT_INPUT_FINGERPRINT_PATTERN } from "../checkpoint-fingerprint.js";
 import { MAX_WAIT_DURATION_MS } from "../types.js";
 import { QueueModule } from "./module-context.js";
 
@@ -14,10 +22,11 @@ type CheckpointRow = {
   fence_token: string;
   worker_id: string;
   created_at: Date;
+  input_fingerprint: string | null;
 };
 
 type SaveCheckpointRow = Omit<CheckpointRow, "task_id" | "checkpoint_name"> & {
-  status: "saved" | "existing" | "conflict" | "stale";
+  status: "saved" | "existing" | "conflict" | "input_conflict" | "stale";
 };
 
 export type ProgressRow = {
@@ -71,6 +80,7 @@ function checkpointRecord<TValue extends Json>(row: CheckpointRow): TaskCheckpoi
     fenceToken: BigInt(row.fence_token),
     workerId: row.worker_id,
     createdAt: row.created_at,
+    inputFingerprint: row.input_fingerprint,
   };
 }
 
@@ -142,6 +152,22 @@ export class CheckpointConflictError extends WorkhorseError {
   constructor(taskId: string, checkpointName: string) {
     super(`Checkpoint ${checkpointName} for task ${taskId} already exists with a different value`);
     this.name = "CheckpointConflictError";
+  }
+}
+
+/**
+ * Raised when a checkpoint name is stored with the fingerprint of a different input. The stored
+ * value is the result of another input, so a retry of the same handler cannot succeed.
+ */
+export class CheckpointInputConflictError extends WorkhorseError {
+  constructor(
+    readonly taskId: string,
+    readonly checkpointName: string,
+    readonly storedFingerprint: string,
+    readonly requestedFingerprint: string,
+  ) {
+    super(`Checkpoint ${checkpointName} for task ${taskId} stores the result of a different input`);
+    this.name = "CheckpointInputConflictError";
   }
 }
 
@@ -223,15 +249,30 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     workerId: string,
     name: string,
     value: TValue,
+    options: SaveCheckpointOptions = {},
   ): Promise<TaskCheckpoint<TValue>> {
+    const fingerprint = options.inputFingerprint ?? null;
+    if (fingerprint !== null && !CHECKPOINT_INPUT_FINGERPRINT_PATTERN.test(fingerprint)) {
+      throw new TypeError(
+        "Checkpoint inputFingerprint must be 64 lowercase hexadecimal characters",
+      );
+    }
     const encodedValue = encodeFiniteJson(value, "Checkpoint");
     const result = await queryFencedWrite<SaveCheckpointRow>(
       this.context.database,
-      SQL_STATEMENTS["save_checkpoint_v1"],
-      [task.id, workerId, task.fenceToken.toString(), name, encodedValue],
+      SQL_STATEMENTS["save_checkpoint_v2"],
+      [task.id, workerId, task.fenceToken.toString(), name, encodedValue, fingerprint],
     );
-    const row = expectOneRow(result, "workhorse.save_checkpoint_v1");
+    const row = expectOneRow(result, "workhorse.save_checkpoint_v2");
     if (row.status === "stale") throw new CheckpointLeaseLostError(task.id, name);
+    if (row.status === "input_conflict") {
+      throw new CheckpointInputConflictError(
+        task.id,
+        name,
+        row.input_fingerprint as string,
+        fingerprint as string,
+      );
+    }
     if (row.status === "conflict") throw new CheckpointConflictError(task.id, name);
     if (row.status !== "saved" && row.status !== "existing") {
       throw new Error(`Unexpected checkpoint status: ${String(row.status)}`);

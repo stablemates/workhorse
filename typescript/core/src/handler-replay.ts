@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { WorkhorseError } from "./errors.js";
 import type {
+  CheckpointOptions,
   ChildOutcome,
   ChildOutcomes,
   ChildTaskOptions,
@@ -22,9 +24,13 @@ export interface DurableName {
   name: string;
 }
 
-/** A stored checkpoint. The entry is an object so that later fields can join the value. */
+/**
+ * A stored checkpoint. `inputFingerprint` is the stored fingerprint of the input, as
+ * `TaskCheckpoint.inputFingerprint` reads it. Omit it for a checkpoint saved without an input.
+ */
 export interface DurableStateCheckpoint {
   value: Json;
+  inputFingerprint?: string;
 }
 
 /**
@@ -190,7 +196,7 @@ class Replay {
   private readonly seen = new Map<DurableKind, Set<string>>(KINDS.map((kind) => [kind, new Set()]));
   private readonly replayed: DurableName[] = [];
   private readonly added: DurableName[] = [];
-  private readonly newCheckpoints = new Map<string, Json>();
+  private readonly newCheckpoints = new Map<string, { value: Json; fingerprint: string | null }>();
   // The first request for each name in this replay. A live handler compares an overlapping call
   // with the call in flight, in the same form as these values.
   private readonly childRequests = new Map<string, unknown>();
@@ -294,6 +300,7 @@ class Replay {
     const checkpointRow = <TValue extends Json>(
       name: string,
       value: Json,
+      inputFingerprint: string | null,
     ): TaskCheckpoint<TValue> => ({
       taskId: task.id,
       name,
@@ -302,18 +309,37 @@ class Replay {
       fenceToken: task.fenceToken,
       workerId: "replay",
       createdAt: new Date(0),
+      inputFingerprint,
     });
-    const inFlightCheckpoints = new Map<string, Promise<Json>>();
+    const inFlightCheckpoints = new Map<
+      string,
+      { execution: Promise<Json>; fingerprint: string | null }
+    >();
+    // As in a live handler, inputs are compared only when both sides carry a fingerprint.
+    const checkInput = (
+      name: string,
+      stored: string | null | undefined,
+      requested: string | null,
+      source: string,
+    ): void => {
+      if (stored == null || requested === null || stored === requested) return;
+      this.fail(
+        "conflict",
+        { kind: "checkpoint", name },
+        `the checkpoint input differs from the input of ${source}`,
+      );
+    };
     return {
       task,
       signal: new AbortController().signal,
       getCheckpoint: async <TValue extends Json>(name: string) => {
         this.read("checkpoint", name);
         const stored = this.stored("checkpoint", name);
-        if (stored !== undefined) return checkpointRow<TValue>(name, stored.value);
-        if (this.newCheckpoints.has(name)) {
-          return checkpointRow<TValue>(name, this.newCheckpoints.get(name) as Json);
+        if (stored !== undefined) {
+          return checkpointRow<TValue>(name, stored.value, stored.inputFingerprint ?? null);
         }
+        const added = this.newCheckpoints.get(name);
+        if (added !== undefined) return checkpointRow<TValue>(name, added.value, added.fingerprint);
         return null;
       },
       getWait: async (name: string): Promise<TaskWait | null> => {
@@ -353,24 +379,39 @@ class Replay {
       checkpoint: async <TValue extends Json>(
         name: string,
         operation: () => Promise<TValue> | TValue,
+        options: CheckpointOptions = {},
       ): Promise<TValue> => {
+        const fingerprint =
+          options.input === undefined ? null : checkpointInputFingerprint(options.input);
         const pending = inFlightCheckpoints.get(name);
-        if (pending) return (await pending) as TValue;
+        if (pending) {
+          this.throwProblem();
+          checkInput(name, pending.fingerprint, fingerprint, "an earlier call in this replay");
+          return (await pending.execution) as TValue;
+        }
         const execution = (async (): Promise<TValue> => {
           if (this.ask("checkpoint", name)) {
-            return (this.stored("checkpoint", name) as DurableStateCheckpoint).value as TValue;
+            const stored = this.stored("checkpoint", name) as DurableStateCheckpoint;
+            checkInput(name, stored.inputFingerprint, fingerprint, "the stored result");
+            return stored.value as TValue;
           }
-          if (this.newCheckpoints.has(name)) return this.newCheckpoints.get(name) as TValue;
+          const added = this.newCheckpoints.get(name);
+          if (added !== undefined) {
+            checkInput(name, added.fingerprint, fingerprint, "an earlier call in this replay");
+            return added.value as TValue;
+          }
           const value = await operation();
           this.stop();
-          this.newCheckpoints.set(name, value);
+          this.newCheckpoints.set(name, { value, fingerprint });
           return value;
         })();
-        inFlightCheckpoints.set(name, execution);
+        inFlightCheckpoints.set(name, { execution, fingerprint });
         try {
           return await execution;
         } finally {
-          if (inFlightCheckpoints.get(name) === execution) inFlightCheckpoints.delete(name);
+          if (inFlightCheckpoints.get(name)?.execution === execution) {
+            inFlightCheckpoints.delete(name);
+          }
         }
       },
       sleep: async (name: string) => this.timer(name, "relative", null),

@@ -1378,7 +1378,7 @@ describe("SQL protocol conformance fixtures", () => {
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(13);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(14);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint
@@ -1887,6 +1887,7 @@ describe("SQL protocol conformance fixtures", () => {
           fence_token: "17",
           worker_id: workerId,
           created_at: occurredAt,
+          input_fingerprint: null,
         },
       ],
       (queue) => queue.saveCheckpoint(adapterTask, workerId, "prepared", { step: 1 }),
@@ -1897,6 +1898,7 @@ describe("SQL protocol conformance fixtures", () => {
       "17",
       "prepared",
       '{"step":1}',
+      null,
     ]);
     expect(checkpoint.result).toMatchObject({
       taskId: adapterTask.id,

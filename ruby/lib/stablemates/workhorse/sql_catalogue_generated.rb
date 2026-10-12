@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 67
-      MAXIMUM_SCHEMA_VERSION = 67
+      MINIMUM_SCHEMA_VERSION = 68
+      MAXIMUM_SCHEMA_VERSION = 68
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -72,7 +72,7 @@ module Stablemates
   FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)'
 
       # `get_checkpoint` (admin)
-      GET_CHECKPOINT = 'SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text'
+      GET_CHECKPOINT = 'SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text'
 
       # `get_contract_definition_v1` (protocol)
       GET_CONTRACT_DEFINITION_V1 = 'SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition'
@@ -142,7 +142,7 @@ module Stablemates
       LIST_CHECKPOINT = 'SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text'
 
       # `list_checkpoints` (admin)
-      LIST_CHECKPOINTS = 'SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name'
+      LIST_CHECKPOINTS = 'SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name'
 
       # `list_concurrency_policies` (internal)
       LIST_CONCURRENCY_POLICIES = 'SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name'
@@ -270,6 +270,9 @@ module Stablemates
 
       # `save_checkpoint_v1` (protocol)
       SAVE_CHECKPOINT_V1 = 'SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)'
+
+      # `save_checkpoint_v2` (protocol)
+      SAVE_CHECKPOINT_V2 = 'SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)'
 
       # `schedule_wait_v1` (protocol)
       SCHEDULE_WAIT_V1 = 'SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)'

@@ -1,10 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
+import { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 import { FastTierUnsupportedError } from "./errors.js";
+import { CheckpointInputConflictError } from "./queue/checkpoints-progress-waits.js";
 import { ChildConflictError } from "./queue/child-tasks.js";
 import type { ExternalWaitOptions } from "./queue/external-waits.js";
 import type { TaskAttempt } from "./task-attempt.js";
 import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
+  CheckpointOptions,
   ChildTaskOptions,
   ChildTaskRequest,
   EnqueueRequest,
@@ -104,28 +107,53 @@ function createDurableHandlerContext(
     progressLoad = Promise.resolve(updated);
     return updated;
   };
-  const inFlightCheckpoints = new Map<string, Promise<Json>>();
+  const inFlightCheckpoints = new Map<
+    string,
+    { execution: Promise<Json>; fingerprint: string | null }
+  >();
+  // Inputs are compared only when both sides carry a fingerprint, so a handler that adds or
+  // removes an input keeps the stored result.
+  const checkInput = (name: string, stored: string | null, requested: string | null): void => {
+    if (stored !== null && requested !== null && stored !== requested) {
+      throw new CheckpointInputConflictError(task.id, name, stored, requested);
+    }
+  };
   const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
     name: string,
     operation: () => Promise<TValue> | TValue,
+    options: CheckpointOptions = {},
   ): Promise<TValue> => {
+    const fingerprint =
+      options.input === undefined ? null : checkpointInputFingerprint(options.input);
     const pending = inFlightCheckpoints.get(name);
-    if (pending) return (await pending) as TValue;
+    if (pending) {
+      checkInput(name, pending.fingerprint, fingerprint);
+      return (await pending.execution) as TValue;
+    }
     const execution = (async (): Promise<TValue> => {
       const checkpointCache = await loadCheckpoints();
       const existing = checkpointCache.get(name) as TaskCheckpoint<TValue> | undefined;
-      if (existing) return existing.value;
+      if (existing) {
+        checkInput(name, existing.inputFingerprint, fingerprint);
+        return existing.value;
+      }
       attempt.requireLease();
       const value = await operation();
-      const saved = await queue.saveCheckpoint(task, workerId, name, value);
+      const saved = await queue.saveCheckpoint(
+        task,
+        workerId,
+        name,
+        value,
+        fingerprint === null ? {} : { inputFingerprint: fingerprint },
+      );
       checkpointCache.set(name, saved);
       return saved.value;
     })();
-    inFlightCheckpoints.set(name, execution);
+    inFlightCheckpoints.set(name, { execution, fingerprint });
     try {
       return await execution;
     } finally {
-      if (inFlightCheckpoints.get(name) === execution) inFlightCheckpoints.delete(name);
+      if (inFlightCheckpoints.get(name)?.execution === execution) inFlightCheckpoints.delete(name);
     }
   };
   const inFlightWaits = new Map<string, Promise<void>>();

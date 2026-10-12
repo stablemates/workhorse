@@ -10,21 +10,21 @@ adds.
 
 ## Unreleased
 
-Requires **schema v67** and Go **1.25** or newer.
+Requires **schema v68** and Go **1.25** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **67**.
+1. Run `workhorse schema migrate`. The final schema version is **68**.
 2. Roll out the updated processes.
 
-The SDK compatibility floor is schema version **67**, which migration 0068 reaches. The floor rises
-from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds.
-The dashboard of each SDK calls `dashboard_task_groups_v1`, which migration 0067 adds, and
-`list_newest_task_group_events_v1`, which migration 0068 adds. An updated process refuses a schema
-below version 67 at startup. A 0.7 process keeps working on version 67,
-because a migration inside a major line only adds.
+The SDK compatibility floor is schema version **68**, which migration 0069 reaches. The floor rises
+from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds,
+and `save_checkpoint_v2`, which migration 0069 adds. The dashboard of each SDK calls
+`dashboard_task_groups_v1`, which migration 0067 adds, and `list_newest_task_group_events_v1`, which
+migration 0068 adds. An updated process refuses a schema below version 68 at startup. A 0.7 process
+keeps working on version 68, because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
 [ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
@@ -56,6 +56,15 @@ Migration 0068 (`0068-read-the-newest-task-group-events.sql`) adds
 than 1,000 events now shows its newest 100 events. `eventsTruncated` is true when the group has
 older events that the detail does not show. `list_task_group_events_v1` does not change. The
 migration changes no stored data.
+
+Migration 0069 (`0069-check-the-input-of-a-checkpoint-on-replay.sql`) adds the nullable column
+`task_checkpoint.input_fingerprint` and `save_checkpoint_v2` (SM-1211,
+[ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)).
+If a checkpoint name exists, `save_checkpoint_v2` returns `input_conflict` when the stored and the
+given input fingerprints are both present and differ. `save_checkpoint_v1` now calls
+`save_checkpoint_v2` with no fingerprint, so its results do not change. The checkpoint reads of each
+statement catalogue return the new column. Existing rows keep a NULL fingerprint. The migration adds
+the column without a table scan.
 
 `Queue` gains `CreateTaskGroup`, `AddToTaskGroup`, `SealTaskGroup`, the block form `TaskGroup`,
 `GetTaskGroup`, `ListTaskGroupMembers`, and `FindTaskGroup` (SM-1234). The block form creates,

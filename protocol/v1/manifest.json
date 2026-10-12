@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 67,
-    "minimumVersion": 67,
-    "maximumVersion": 67,
+    "installedVersion": 68,
+    "minimumVersion": 68,
+    "maximumVersion": 68,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -192,6 +192,11 @@
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
     },
     {
+      "name": "save_checkpoint_v2",
+      "arity": 6,
+      "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)"
+    },
+    {
       "name": "update_progress_v1",
       "arity": 4,
       "contract": "SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
@@ -374,7 +379,7 @@
     {
       "name": "get_checkpoint",
       "arity": 2,
-      "contract": "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
+      "contract": "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
       "catalogues": ["admin"]
     },
     {
@@ -425,7 +430,7 @@
       "name": "list_checkpoints",
       "pythonBinding": "list_checkpoints",
       "arity": 1,
-      "contract": "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
+      "contract": "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
       "catalogues": ["admin"]
     },
     {
@@ -574,6 +579,12 @@
       "pythonBinding": "save_checkpoint",
       "arity": 5,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "save_checkpoint_v2",
+      "arity": 6,
+      "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
       "catalogues": ["protocol"]
     },
     {

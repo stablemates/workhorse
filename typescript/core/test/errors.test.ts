@@ -8,6 +8,7 @@ import {
 } from "../src/errors.js";
 import {
   CheckpointConflictError,
+  CheckpointInputConflictError,
   ChildConflictError,
   HumanWaitAlreadyWaitingError,
   HumanWaitConflictError,
@@ -34,6 +35,10 @@ class AdapterError extends Error {
 describe("WorkhorseError", () => {
   it.each([
     ["CheckpointConflictError", new CheckpointConflictError("task", "checkpoint")],
+    [
+      "CheckpointInputConflictError",
+      new CheckpointInputConflictError("task", "checkpoint", "a".repeat(64), "b".repeat(64)),
+    ],
     ["ChildConflictError", new ChildConflictError("task", "child")],
     ["HumanWaitAlreadyWaitingError", new HumanWaitAlreadyWaitingError("task", "decision")],
     ["HumanWaitConflictError", new HumanWaitConflictError("task", "decision")],

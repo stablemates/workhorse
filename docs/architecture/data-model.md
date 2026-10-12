@@ -131,6 +131,7 @@ erDiagram
     bigint fence_token
     text worker_id
     timestamptz created_at
+    text input_fingerprint
   }
   task_progress {
     uuid task_id PK
@@ -1608,16 +1609,59 @@ This table stores insert-only named JSON results at explicit restart boundaries 
 - The primary key `(task_id, checkpoint_name)` makes each name immutable for the stable task
   identity, so retries can reuse completed checkpoints.
 - `checkpoint_name` holds 1 to 200 characters.
-- `save_checkpoint_v1` locks and verifies the exact active, unexpired worker/fence generation before
+- `save_checkpoint_v2` locks and verifies the exact active, unexpired worker/fence generation before
   inserting. That serializes the write against completion, failure, and lease recovery.
 - Attempt, fence, worker, and creation time preserve ownership provenance.
 - Equal repeated saves return the existing row. A different value conflicts.
+- `input_fingerprint` is NULL, or 64 lowercase hexadecimal characters. It is the SHA-256 digest of
+  the input that the handler gave
+  ([ADR 0098](../decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)). The column has no
+  `CHECK`, because migration 0069 adds it without a table scan. `save_checkpoint_v2`, the only
+  writer, refuses another format.
+- `save_checkpoint_v1` calls `save_checkpoint_v2` with a NULL fingerprint. Its results do not
+  change.
+
+`save_checkpoint_v2(task_id, worker_id, fence_token, name, value, input_fingerprint)` returns one
+row with a `status` and the stored checkpoint columns:
+
+| Status           | Condition                                                                     |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `stale`          | The caller does not own the active, unexpired lease. Nothing changes.         |
+| `saved`          | The name is new. The row and a `checkpoint_saved` event are inserted.         |
+| `input_conflict` | The name exists, both fingerprints are present, and they differ.              |
+| `conflict`       | The name exists, the fingerprints do not conflict, and the value differs.     |
+| `existing`       | The name exists, the fingerprints do not conflict, and the value is the same. |
+
+A NULL fingerprint on either side never conflicts. Thus a handler can add an input to code whose
+tasks already stored the name, or remove the input, and still read the stored value.
 
 #### Handler behavior
 
 `HandlerContext.checkpoint(name, operation)` reads an existing value before running user code. It
 coalesces overlapping calls for the same name inside one handler. A duplicate call receives the
 first call's result or error.
+
+In TypeScript, `HandlerContext.checkpoint(name, operation, { input })` also compares inputs:
+
+1. The worker computes `checkpointInputFingerprint(input)`: the SHA-256 digest of the RFC 8785
+   canonical JSON of the input. Object keys sort by UTF-16 code units, and numbers and strings use
+   the `JSON.stringify` form. A `toJSON` method applies first, as for a stored value. A value
+   that is not JSON with finite numbers, or a string or key with a lone surrogate, raises a
+   `TypeError`.
+2. If the name is stored with a different non-NULL fingerprint, the call raises
+   `CheckpointInputConflictError` and the operation does not run.
+3. A duplicate call that overlaps a call in flight with a different fingerprint raises the same
+   error.
+4. A new name runs the operation and saves the fingerprint with the value. If a concurrent writer
+   stored the name with a different fingerprint, `save_checkpoint_v2` returns `input_conflict`, and
+   the call raises the same error.
+
+`CheckpointInputConflictError` carries `taskId`, `checkpointName`, `storedFingerprint`, and
+`requestedFingerprint`. It is a terminal replay conflict; see
+[Schema and protocol: Durable replay conflicts](schema-and-protocol.md#durable-replay-conflicts).
+`TaskCheckpoint.inputFingerprint` returns the stored fingerprint, or null. `Queue.saveCheckpoint`
+accepts `{ inputFingerprint }` and refuses another format with a `TypeError`. The other SDKs do not
+give an input yet. Their checkpoint reads return the column and ignore it.
 
 In Go:
 

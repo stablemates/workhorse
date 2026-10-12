@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 67
-MAXIMUM_SCHEMA_VERSION = 67
+MINIMUM_SCHEMA_VERSION = 68
+MAXIMUM_SCHEMA_VERSION = 68
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -100,8 +100,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
     ),
     "get_checkpoint": (
-        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=%s::uuid AND checkpoint_name=%s::text",
-        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
+        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=%s::uuid AND checkpoint_name=%s::text",
+        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text",
     ),
     "get_contract_definition_v1": (
         "SELECT (definition).* FROM workhorse.get_contract_definition_v1(%s::text, %s::text) definition",
@@ -132,8 +132,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text",
     ),
     "list_checkpoints": (
-        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=%s::uuid ORDER BY created_at,checkpoint_name",
-        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
+        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=%s::uuid ORDER BY created_at,checkpoint_name",
+        "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name",
     ),
     "list_concurrency_policies": (
         "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT %s::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name",
@@ -226,6 +226,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "save_checkpoint_v1": (
         "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb)",
         "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+    ),
+    "save_checkpoint_v2": (
+        "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb, %s::text)",
+        "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
     ),
     "schedule_wait_v1": (
         "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::bigint, %s::timestamptz)",

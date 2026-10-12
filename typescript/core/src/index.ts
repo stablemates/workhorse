@@ -100,6 +100,7 @@ export type {
 export type { QueueHistorySettings, QueueTier } from "./queue/queue-administration.js";
 export {
   CheckpointConflictError,
+  CheckpointInputConflictError,
   CheckpointLeaseLostError,
   ChildConflictError,
   ChildLeaseLostError,
@@ -179,6 +180,7 @@ export type {
   WorkerQueueApi,
   WorkerRuntimeState,
 } from "./worker.js";
+export { checkpointInputFingerprint } from "./checkpoint-fingerprint.js";
 export { HandlerReplayError, replayHandler } from "./handler-replay.js";
 export type {
   DurableKind,
@@ -286,6 +288,8 @@ export type {
   EnqueueResult,
   ExpireOwnedStatus,
   ReleaseOwnedStatus,
+  CheckpointOptions,
+  SaveCheckpointOptions,
   TaskCheckpoint,
   TaskContractVersion,
   TaskTypeContracts,

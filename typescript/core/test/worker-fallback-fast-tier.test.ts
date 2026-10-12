@@ -139,7 +139,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
     expect(rejection).toBeInstanceOf(FastTierUnsupportedError);
     expect(rejection).toMatchObject({ queue: QUEUE, feature: "checkpoints" });
     expect(callbacks).toBe(0);
-    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v1)).toBe(0);
+    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v2)).toBe(0);
     expect(fake.count(SQL_STATEMENTS.list_checkpoints)).toBe(0);
   });
 
@@ -208,7 +208,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
     expect(rejections[1]).toMatchObject({ feature: "checkpoints" });
     expect(rejections.every((error) => error instanceof FastTierUnsupportedError)).toBe(true);
     expect(fake.count(SQL_STATEMENTS.update_progress_v1)).toBe(0);
-    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v1)).toBe(0);
+    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v2)).toBe(0);
   });
 
   it("shares one tier read across the tasks of a claim and concurrent calls", async () => {
@@ -251,7 +251,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
     expect(reads).toBe(2);
     expect(rejections[0]).toMatchObject({ message: "tier read failed" });
     expect(rejections[1]).toBeInstanceOf(FastTierUnsupportedError);
-    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v1)).toBe(0);
+    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v2)).toBe(0);
     expect(fake.count(SQL_STATEMENTS.list_checkpoints)).toBe(0);
   });
 
@@ -278,7 +278,7 @@ describe("worker fallback claims from a queue that became fast-tier", () => {
 
     expect(callbacks).toBe(1);
     expect(fake.count(SQL_STATEMENTS.list_checkpoints)).toBe(1);
-    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v1)).toBe(1);
+    expect(fake.count(SQL_STATEMENTS.save_checkpoint_v2)).toBe(1);
   });
 
   it("ends the probe interval when the read answers fast", async () => {
