@@ -1662,6 +1662,17 @@ In TypeScript, `HandlerContext.checkpoint(name, operation, { input })` also comp
 `TaskCheckpoint.inputFingerprint` returns the stored fingerprint, or null. `Queue.saveCheckpoint`
 accepts `{ inputFingerprint }` and refuses another format with a `TypeError`.
 
+In Rust, `HandlerContext::checkpoint_with_input(name, &input, op)` compares inputs in the same
+four cases as TypeScript:
+
+1. The worker computes `checkpoint_input_fingerprint(&input)`, which gives the same digest as
+   `checkpointInputFingerprint`. Each number is an IEEE 754 double in the ECMAScript form. A value
+   with a non-finite number raises `Error::InvalidArgument`, and the operation does not run.
+2. A conflict raises `Error::CheckpointInputConflict` with `task_id`, `name`,
+   `stored_fingerprint`, and `requested_fingerprint`. The worker settles it as
+   `CheckpointInputConflictError`. `BatchHandlerContext::checkpoint_with_input` behaves the same,
+   and `TaskCheckpoint::input_fingerprint` returns the stored fingerprint, or `None`.
+
 In Ruby, `HandlerContext#checkpoint(name, input:)` and `BatchHandlerContext#checkpoint` compare
 inputs as TypeScript does, with these Ruby details:
 

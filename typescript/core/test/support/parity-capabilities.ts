@@ -621,7 +621,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
       example:
         "fails the task at once when a replayed checkpoint input differs and keeps the attempt",
     },
-    rust: { planned: "SM-1263" },
+    rust: {
+      file: "durable_postgres.rs",
+      test: "a_changed_checkpoint_input_fails_the_task_on_replay",
+    },
     typescript: {
       file: "integration-checkpoints-progress-waits.test.ts",
       pattern: "CheckpointInputConflictError",

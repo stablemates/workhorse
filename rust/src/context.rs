@@ -15,6 +15,7 @@ use serde_json::Value;
 use tokio::sync::{watch, OnceCell};
 use tokio_postgres::Row;
 
+use crate::checkpoint_input::checkpoint_input_fingerprint;
 use crate::enqueue::EnqueueClient;
 use crate::fenced_write::fenced_rows;
 use crate::queue::{exactly_one, Executor};
@@ -69,7 +70,7 @@ impl HandlerContext {
             worker_id,
             suspended: AtomicBool::new(false),
             calls: InFlight::default(),
-            checkpoints: InFlight::default(),
+            checkpoints: InFlight::new(inputs_agree),
             task_group: OnceCell::new(),
             group_enqueue,
         };
@@ -116,15 +117,64 @@ impl HandlerContext {
     {
         self.fast_tier_guard("checkpoints").map_err(named)?;
         validate_name(name, "checkpoint")?;
+        self.shared_checkpoint(name, None, op).await
+    }
+
+    /// As [`HandlerContext::checkpoint`], and also stores the fingerprint of `input` with the
+    /// result (ADR 0098).
+    ///
+    /// If the stored checkpoint, or an overlapping call with the same name, has the fingerprint of
+    /// a different input, the call fails with [`Error::CheckpointInputConflict`] and `op` does not
+    /// run. A stored checkpoint or a call without an input is not compared.
+    /// [`checkpoint_input_fingerprint`] computes the fingerprint.
+    pub async fn checkpoint_with_input<T, I, F, Fut>(
+        &self,
+        name: &str,
+        input: &I,
+        op: F,
+    ) -> Result<T, HandlerError>
+    where
+        T: Serialize + DeserializeOwned,
+        I: Serialize + ?Sized,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, HandlerError>>,
+    {
+        self.fast_tier_guard("checkpoints").map_err(named)?;
+        validate_name(name, "checkpoint")?;
+        let fingerprint = checkpoint_input_fingerprint(input)?;
+        self.shared_checkpoint(name, Some(fingerprint), op).await
+    }
+
+    async fn shared_checkpoint<T, F, Fut>(
+        &self,
+        name: &str,
+        fingerprint: Option<String>,
+        op: F,
+    ) -> Result<T, HandlerError>
+    where
+        T: Serialize + DeserializeOwned,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, HandlerError>>,
+    {
+        // An overlapping call with one name joins the call in flight if their inputs agree.
+        let request = fingerprint.clone().unwrap_or_default();
+        let conflict = |stored: &str| self.input_conflict(name, stored, &request);
         let value = self
             .inner
             .checkpoints
-            .run(name, String::new(), unreachable_conflict, || self.run_checkpoint(name, op))
+            .run(name, request.clone(), conflict, || {
+                self.run_checkpoint(name, fingerprint.as_deref(), op)
+            })
             .await?;
         serde_json::from_value(value).map_err(HandlerError::from)
     }
 
-    async fn run_checkpoint<T, F, Fut>(&self, name: &str, op: F) -> Result<Value, HandlerError>
+    async fn run_checkpoint<T, F, Fut>(
+        &self,
+        name: &str,
+        fingerprint: Option<&str>,
+        op: F,
+    ) -> Result<Value, HandlerError>
     where
         T: Serialize,
         F: FnOnce() -> Fut,
@@ -132,17 +182,37 @@ impl HandlerContext {
     {
         self.check(Operation::Checkpoint).map_err(named)?;
         let task = &self.inner.task;
-        let rows = self.inner.pool.rows(sql::LIST_CHECKPOINT, &[&task.id, &name]).await?;
+        let rows = self.inner.pool.rows(sql::GET_CHECKPOINT, &[&task.id, &name]).await?;
         if let [row] = rows.as_slice() {
+            let stored = row.try_get::<_, Option<String>>("input_fingerprint")?;
+            if let (Some(stored), Some(requested)) = (stored.as_deref(), fingerprint) {
+                if !inputs_agree(stored, requested) {
+                    return Err(self.input_conflict(name, stored, requested));
+                }
+            }
             return Ok(row.try_get::<_, Value>("checkpoint_value")?);
         }
         let value = finite_json(&op().await?, "Checkpoint")?;
-        let row =
-            self.call(sql::SAVE_CHECKPOINT_V1, "save_checkpoint_v1", &[&name, &value]).await?;
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 3] = [&name, &value, &fingerprint];
+        let row = self.call(sql::SAVE_CHECKPOINT_V2, "save_checkpoint_v2", &params).await?;
         match status(&row)?.as_str() {
             "saved" | "existing" => Ok(row.try_get::<_, Value>("checkpoint_value")?),
+            "input_conflict" => {
+                let stored = row.try_get::<_, Option<String>>("input_fingerprint")?;
+                let stored = stored.unwrap_or_default();
+                Err(self.input_conflict(name, &stored, fingerprint.unwrap_or_default()))
+            }
             other => Err(named(self.refusal(Operation::Checkpoint, name, other))),
         }
+    }
+
+    fn input_conflict(&self, name: &str, stored: &str, requested: &str) -> HandlerError {
+        HandlerError::from(Error::CheckpointInputConflict {
+            task_id: self.inner.task.id,
+            name: name.to_owned(),
+            stored_fingerprint: stored.to_owned(),
+            requested_fingerprint: requested.to_owned(),
+        })
     }
 
     /// The task's latest progress, or `None` when no attempt has reported any.
@@ -252,7 +322,7 @@ impl HandlerContext {
         Fut: Future<Output = Result<Value, Error>>,
     {
         let name = key.split_once(':').map_or(key, |(_, name)| name);
-        let conflict = || Error::Conflict { operation, name: name.to_owned() };
+        let conflict = |_: &str| Error::Conflict { operation, name: name.to_owned() };
         self.inner.calls.run(key, request, conflict, drive).await
     }
 }
@@ -282,6 +352,22 @@ impl BatchHandlerContext {
         Fut: Future<Output = Result<T, HandlerError>>,
     {
         self.0.checkpoint(name, op).await
+    }
+
+    /// See [`HandlerContext::checkpoint_with_input`].
+    pub async fn checkpoint_with_input<T, I, F, Fut>(
+        &self,
+        name: &str,
+        input: &I,
+        op: F,
+    ) -> Result<T, HandlerError>
+    where
+        T: Serialize + DeserializeOwned,
+        I: Serialize + ?Sized,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, HandlerError>>,
+    {
+        self.0.checkpoint_with_input(name, input, op).await
     }
 
     /// See [`HandlerContext::get_progress`].
@@ -317,7 +403,7 @@ fn named(error: Error) -> HandlerError {
 ///
 /// `serde_json` encodes a non-finite float as `null`, so a value typed as a number would read
 /// back as `null` and fail to decode on every replay.
-fn finite_json<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<Value, Error> {
+pub(crate) fn finite_json<T: Serialize + ?Sized>(value: &T, label: &str) -> Result<Value, Error> {
     if let Err(Walk::NonFinite) = value.serialize(FiniteNumbers) {
         return Err(Error::invalid(format!("{label} value must contain only finite numbers")));
     }
@@ -554,8 +640,10 @@ pub(crate) fn validate_name(name: &str, label: &str) -> Result<(), Error> {
     }
 }
 
-fn unreachable_conflict() -> HandlerError {
-    HandlerError::new("checkpoint calls share one name without a request fingerprint")
+/// Whether two checkpoint input fingerprints agree. An empty fingerprint is a call or a stored
+/// checkpoint without an input, which never conflicts.
+fn inputs_agree(stored: &str, requested: &str) -> bool {
+    stored.is_empty() || requested.is_empty() || stored == requested
 }
 
 /// An error a waiting caller can receive a copy of.
@@ -581,11 +669,19 @@ type Calls<E> = Mutex<HashMap<String, (String, watch::Receiver<Outcome<E>>)>>;
 /// The calls in flight, by key, with the request each one was issued for.
 struct InFlight<E> {
     calls: Calls<E>,
+    /// Whether a caller with the second request can share a call issued for the first.
+    agree: fn(&str, &str) -> bool,
+}
+
+impl<E> InFlight<E> {
+    fn new(agree: fn(&str, &str) -> bool) -> Self {
+        Self { calls: Mutex::default(), agree }
+    }
 }
 
 impl<E> Default for InFlight<E> {
     fn default() -> Self {
-        Self { calls: Mutex::default() }
+        Self::new(|existing, request| existing == request)
     }
 }
 
@@ -609,13 +705,14 @@ enum Role<E> {
 impl<E: Shared> InFlight<E> {
     /// Drives `drive` as the first caller of `key`, or awaits the first caller's outcome.
     ///
-    /// A different request under a key already in flight is refused with `conflict`. When a
-    /// driver is dropped before it finishes, a waiter takes over and drives the call itself.
+    /// A request that does not agree with the one in flight under `key` is refused with
+    /// `conflict`, which receives the request in flight. When a driver is dropped before it
+    /// finishes, a waiter takes over and drives the call itself.
     async fn run<F, Fut>(
         &self,
         key: &str,
         request: String,
-        conflict: impl FnOnce() -> E,
+        conflict: impl FnOnce(&str) -> E,
         drive: F,
     ) -> Result<Value, E>
     where
@@ -624,14 +721,14 @@ impl<E: Shared> InFlight<E> {
     {
         loop {
             match self.join(key, &request) {
-                None => return Err(conflict()),
-                Some(Role::Drive(sender)) => {
+                Err(existing) => return Err(conflict(&existing)),
+                Ok(Role::Drive(sender)) => {
                     let _entry = Entry { calls: &self.calls, key };
                     let result = drive().await;
                     sender.send_replace(Some(share(&result)));
                     return result;
                 }
-                Some(Role::Wait(mut receiver)) => {
+                Ok(Role::Wait(mut receiver)) => {
                     // An error means the driver was dropped unfinished, so this caller drives.
                     if let Ok(outcome) = receiver.wait_for(Option::is_some).await {
                         return share(outcome.as_ref().expect("waited for an outcome"));
@@ -641,16 +738,17 @@ impl<E: Shared> InFlight<E> {
         }
     }
 
-    /// Registers the caller as the driver of `key`, or as a waiter; `None` is a conflict.
-    fn join(&self, key: &str, request: &str) -> Option<Role<E>> {
+    /// Registers the caller as the driver of `key`, or as a waiter. A conflict returns the
+    /// request in flight.
+    fn join(&self, key: &str, request: &str) -> Result<Role<E>, String> {
         let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
         match calls.get(key) {
-            Some((existing, _)) if existing != request => None,
-            Some((_, receiver)) => Some(Role::Wait(receiver.clone())),
+            Some((existing, _)) if !(self.agree)(existing, request) => Err(existing.clone()),
+            Some((_, receiver)) => Ok(Role::Wait(receiver.clone())),
             None => {
                 let (sender, receiver) = watch::channel(None);
                 calls.insert(key.to_owned(), (request.to_owned(), receiver));
-                Some(Role::Drive(sender))
+                Ok(Role::Drive(sender))
             }
         }
     }
@@ -814,6 +912,61 @@ mod tests {
         non_finite(batch.set_progress(&f64::NAN).await.unwrap_err(), "Progress");
         non_finite(batch.set_progress(&field).await.unwrap_err(), "Progress");
         non_finite(batch.set_progress(&list).await.unwrap_err(), "Progress");
+    }
+
+    // The first call waits on the stalled server, so an overlapping call with one name can only
+    // join it or conflict with it.
+    #[tokio::test]
+    async fn an_overlapping_checkpoint_with_a_different_input_conflicts() {
+        let (pool, server) = stalled_pool().await;
+        let context = context(false, CancellationToken::default(), pool);
+        let charge = json!({ "amountCents": 1000 });
+        let driver = tokio::spawn({
+            let context = context.clone();
+            let charge = charge.clone();
+            async move {
+                context.checkpoint_with_input("charge", &charge, || async { Ok(json!(1)) }).await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let discounted = json!({ "amountCents": 900 });
+        let conflict = context
+            .checkpoint_with_input::<Value, _, _, _>("charge", &discounted, || async {
+                panic!("a conflicting call ran its operation")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(conflict.name.as_deref(), Some("CheckpointInputConflictError"));
+        assert!(conflict.is_conflict(), "an input conflict must fail the task for good");
+        let expected = format!(
+            "Checkpoint charge for task {} stores the result of a different input",
+            context.task().id
+        );
+        assert_eq!(conflict.message, expected);
+
+        // The same input and a call without an input join the call in flight.
+        let bound = Duration::from_millis(100);
+        let same = context
+            .checkpoint_with_input::<Value, _, _, _>("charge", &charge, || async { Ok(json!(2)) });
+        assert!(tokio::time::timeout(bound, same).await.is_err(), "the same input did not join");
+        let plain = context.checkpoint::<Value, _, _>("charge", || async { Ok(json!(3)) });
+        assert!(tokio::time::timeout(bound, plain).await.is_err(), "a plain call did not join");
+        driver.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_input_with_a_non_finite_number_is_refused_without_a_round_trip() {
+        let context = context(false, CancellationToken::default(), unreachable_pool());
+        let refused = context
+            .checkpoint_with_input::<Value, _, _, _>("charge", &f64::NAN, || async {
+                panic!("a refused call ran its operation")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.message, "Checkpoint input value must contain only finite numbers");
+        assert!(!refused.is_conflict());
     }
 
     // Any round trip would wait on the stalled server, so only a check before the contract

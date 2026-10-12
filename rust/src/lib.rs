@@ -4,6 +4,7 @@
 //! protocol calls through a caller-supplied [`Executor`], so a transaction executor makes a
 //! call part of the caller's transaction.
 mod admin;
+mod checkpoint_input;
 mod children;
 pub mod compatibility;
 mod context;
@@ -25,6 +26,7 @@ mod waits;
 mod worker;
 
 pub use admin::*;
+pub use checkpoint_input::checkpoint_input_fingerprint;
 pub use children::{ChildOutcome, ChildTaskRequest, FailureEnvelope};
 pub use context::{BatchHandlerContext, HandlerContext};
 pub use deadpool_postgres;

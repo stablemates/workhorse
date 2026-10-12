@@ -520,6 +520,11 @@ pub workhorse::Error::AlreadyWaiting
 pub workhorse::Error::AlreadyWaiting::name: alloc::string::String
 pub workhorse::Error::AlreadyWaiting::operation: workhorse::Operation
 pub workhorse::Error::Cancelled(workhorse::CancelReason)
+pub workhorse::Error::CheckpointInputConflict
+pub workhorse::Error::CheckpointInputConflict::name: alloc::string::String
+pub workhorse::Error::CheckpointInputConflict::requested_fingerprint: alloc::string::String
+pub workhorse::Error::CheckpointInputConflict::stored_fingerprint: alloc::string::String
+pub workhorse::Error::CheckpointInputConflict::task_id: uuid::Uuid
 pub workhorse::Error::ChildResultLimitExceeded
 pub workhorse::Error::ChildResultLimitExceeded::limit_bytes: i64
 pub workhorse::Error::ChildResultLimitExceeded::result_bytes: i64
@@ -1167,6 +1172,7 @@ pub struct workhorse::BatchHandlerContext(_)
 impl workhorse::BatchHandlerContext
 pub fn workhorse::BatchHandlerContext::cancellation(&self) -> &workhorse::CancellationToken
 pub async fn workhorse::BatchHandlerContext::checkpoint<T, F, Fut>(&self, name: &str, op: F) -> core::result::Result<T, workhorse::HandlerError> where T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned, F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, workhorse::HandlerError>>
+pub async fn workhorse::BatchHandlerContext::checkpoint_with_input<T, I, F, Fut>(&self, name: &str, input: &I, op: F) -> core::result::Result<T, workhorse::HandlerError> where T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned, I: serde_core::ser::Serialize + ?core::marker::Sized, F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, workhorse::HandlerError>>
 pub async fn workhorse::BatchHandlerContext::get_progress<T: serde_core::de::DeserializeOwned>(&self) -> core::result::Result<core::option::Option<T>, workhorse::Error>
 pub async fn workhorse::BatchHandlerContext::set_progress<T: serde_core::ser::Serialize>(&self, progress: &T) -> core::result::Result<(), workhorse::Error>
 pub fn workhorse::BatchHandlerContext::task(&self) -> &workhorse::ClaimedTask
@@ -1775,6 +1781,7 @@ pub struct workhorse::HandlerContext
 impl workhorse::HandlerContext
 pub fn workhorse::HandlerContext::cancellation(&self) -> &workhorse::CancellationToken
 pub async fn workhorse::HandlerContext::checkpoint<T, F, Fut>(&self, name: &str, op: F) -> core::result::Result<T, workhorse::HandlerError> where T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned, F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, workhorse::HandlerError>>
+pub async fn workhorse::HandlerContext::checkpoint_with_input<T, I, F, Fut>(&self, name: &str, input: &I, op: F) -> core::result::Result<T, workhorse::HandlerError> where T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned, I: serde_core::ser::Serialize + ?core::marker::Sized, F: core::ops::function::FnOnce() -> Fut, Fut: core::future::future::Future<Output = core::result::Result<T, workhorse::HandlerError>>
 pub async fn workhorse::HandlerContext::get_progress<T: serde_core::de::DeserializeOwned>(&self) -> core::result::Result<core::option::Option<T>, workhorse::Error>
 pub async fn workhorse::HandlerContext::set_progress<T: serde_core::ser::Serialize>(&self, progress: &T) -> core::result::Result<(), workhorse::Error>
 pub fn workhorse::HandlerContext::task(&self) -> &workhorse::ClaimedTask
@@ -2160,6 +2167,7 @@ pub struct workhorse::TaskCheckpoint
 pub workhorse::TaskCheckpoint::attempt: i32
 pub workhorse::TaskCheckpoint::created_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
 pub workhorse::TaskCheckpoint::fence_token: i64
+pub workhorse::TaskCheckpoint::input_fingerprint: core::option::Option<alloc::string::String>
 pub workhorse::TaskCheckpoint::name: alloc::string::String
 pub workhorse::TaskCheckpoint::task_id: uuid::Uuid
 pub workhorse::TaskCheckpoint::value: serde_json::value::Value
@@ -2963,6 +2971,7 @@ impl workhorse::Executor for deadpool_postgres::Transaction<'_>
 impl workhorse::Executor for tokio_postgres::client::Client
 impl workhorse::Executor for tokio_postgres::transaction::Transaction<'_>
 impl<T: workhorse::Executor + ?core::marker::Sized> workhorse::Executor for &T
+pub fn workhorse::checkpoint_input_fingerprint<T: serde_core::ser::Serialize + ?core::marker::Sized>(input: &T) -> core::result::Result<alloc::string::String, workhorse::Error>
 pub async fn workhorse::run_worker_process(worker: &workhorse::Worker) -> core::result::Result<(), workhorse::Error>
 pub type workhorse::EnqueueRow = alloc::collections::btree::map::BTreeMap<alloc::string::String, workhorse::EnqueueValue>
 pub type workhorse::QueueHealth = serde_json::map::Map<alloc::string::String, serde_json::value::Value>
