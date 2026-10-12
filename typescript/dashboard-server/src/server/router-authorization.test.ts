@@ -46,6 +46,7 @@ const MUTATION_INPUTS: Readonly<Record<string, unknown>> = {
   },
   redriveTask: { id: TASK_ID, audit: AUDIT },
   redriveDeadLetters: { audit: AUDIT },
+  cancelTaskGroup: { id: TASK_ID, audit: AUDIT },
 };
 
 function readOnlyContext(): DashboardRpcContext {

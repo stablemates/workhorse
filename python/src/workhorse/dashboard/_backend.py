@@ -18,6 +18,7 @@ from ..admin import (
     DeadLetterFilter,
     RedriveResult,
 )
+from ..dashboard_v1 import _CANCEL_TASK_GROUP_SQL, _TASK_GROUP_DETAIL_SQL, _TASK_GROUPS_SQL
 from ._errors import DashboardRPCError
 
 # How long one health document serves nearby reads, in seconds. It matches the TypeScript host's
@@ -93,6 +94,9 @@ class DashboardBackend:
             "completeHumanWait": self.complete_human_wait,
             "redriveTask": self.redrive_task,
             "redriveDeadLetters": self.redrive_dead_letters,
+            "taskGroups": self.task_groups,
+            "taskGroupDetail": self.task_group_detail,
+            "cancelTaskGroup": self.cancel_task_group,
         }
 
     def _rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
@@ -563,6 +567,37 @@ class DashboardBackend:
                 else {"finishedAt": next_cursor.finished_at, "taskId": next_cursor.task_id}
             ),
         }
+
+    # The task group procedures (ADR 0095) run the statements that generate-bindings.ts copies
+    # from the TypeScript server, so every backend answers them with the same JSON.
+
+    def task_groups(self, input: object, _actor: str) -> object:
+        return self._json_result(_TASK_GROUPS_SQL, (json.dumps(input),))
+
+    def task_group_detail(self, input: object, _actor: str) -> object:
+        query = {**cast(Mapping[str, object], input), "canCancel": not self._read_only}
+        value = self._json_result(_TASK_GROUP_DETAIL_SQL, (json.dumps(query),))
+        if value is None:
+            raise DashboardRPCError(404, "NOT_FOUND", "Task group not found")
+        return value
+
+    def cancel_task_group(self, input: object, actor: str) -> object:
+        """Seal the group and cancel each member task that is not terminal.
+
+        The authenticated actor is the actor of the cancel.
+        """
+        value = cast(Mapping[str, object], input)
+        audit = _admin_audit(value, actor)
+        request = {
+            "id": value["id"],
+            "actor": audit.actor,
+            "reason": audit.reason,
+            "requestId": audit.request_id,
+        }
+        group = self._json_result(_CANCEL_TASK_GROUP_SQL, (json.dumps(request),))
+        if group is None:
+            raise DashboardRPCError(404, "NOT_FOUND", "Task group not found")
+        return group
 
 
 def _camel_to_snake(value: str) -> str:

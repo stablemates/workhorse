@@ -1,6 +1,6 @@
 import type { Admin, Queue } from "@stablemates/workhorse";
-import type { DeadLetterFilter, Json, RedriveResult } from "@stablemates/workhorse";
-import type { DashboardRedriveCursor } from "../wire.js";
+import type { DeadLetterFilter, Json, RedriveResult, TaskGroup } from "@stablemates/workhorse";
+import type { DashboardRedriveCursor, DashboardTaskGroup } from "../wire.js";
 import type {
   DashboardAuditContext,
   DashboardCancellationAuditContext,
@@ -45,6 +45,7 @@ export type DashboardOperatorAction =
       cursor: DashboardRedriveCursor | null;
       audit: DashboardAuditContext;
     }
+  | { kind: "cancelTaskGroup"; groupId: string; audit: DashboardAuditContext }
   | {
       kind: "setWorkerPaused";
       workerId: string;
@@ -77,6 +78,34 @@ function isoTimestamp(value: Date | string | null): string | null {
 
 function redriveResult(result: RedriveResult): DashboardRedriveResult {
   return { ...result, requestedAt: isoTimestamp(result.requestedAt) };
+}
+
+const taskGroupCallbackOrder = ["onFinish", "onSuccess", "onFailure"] as const;
+
+/**
+ * Project an `Admin` task group snapshot onto the wire.
+ *
+ * The other backends read the same snapshot through SQL, so the callbacks take the fixed order
+ * finish, success, failure that the shared statement writes.
+ */
+function dashboardTaskGroup(group: TaskGroup): DashboardTaskGroup {
+  return {
+    id: group.id,
+    state: group.state,
+    result: group.result,
+    counts: { ...group.counts },
+    createdAt: group.createdAt.toISOString(),
+    sealedAt: isoTimestamp(group.sealedAt),
+    finishedAt: isoTimestamp(group.finishedAt),
+    canceledAt: isoTimestamp(group.canceledAt),
+    canceledBy: group.canceledBy,
+    cancelReason: group.cancelReason,
+    callbacks: taskGroupCallbackOrder.flatMap((kind) =>
+      group.callbacks
+        .filter((callback) => callback.kind === kind)
+        .map((callback) => ({ kind, taskId: callback.taskId })),
+    ),
+  };
 }
 
 /**
@@ -194,6 +223,14 @@ export function createDashboardOperatorControllers(
             return { results: page.results.map(redriveResult), nextCursor: page.nextCursor };
           },
         ),
+      cancelTaskGroup: (groupId, audit) =>
+        options.run({ kind: "cancelTaskGroup", groupId, audit }, async ({ admin }) => {
+          const group = await admin.cancelTaskGroup(groupId, {
+            ...audit,
+            actor: requestedBy(audit),
+          });
+          return group === null ? null : dashboardTaskGroup(group);
+        }),
     },
     workerController: {
       setWorkerPaused: (workerId, paused, audit) =>

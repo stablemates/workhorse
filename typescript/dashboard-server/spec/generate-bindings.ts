@@ -2,6 +2,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import {
+  dashboardCancelTaskGroupStatement,
+  dashboardTaskGroupDetailStatement,
+  dashboardTaskGroupsStatement,
+} from "../src/server/task-group-statements.js";
 
 type Schema = Record<string, unknown>;
 
@@ -292,6 +297,38 @@ function inputSchemas(contract: DashboardContract): Record<string, Schema | null
   );
 }
 
+/**
+ * The shared task group statements, by their base name. Every backend runs the same text, so the
+ * five backends answer the task group procedures with the same JSON.
+ */
+const sharedStatements: ReadonlyArray<readonly [string, string]> = [
+  ["taskGroups", dashboardTaskGroupsStatement],
+  ["taskGroupDetail", dashboardTaskGroupDetailStatement],
+  ["cancelTaskGroup", dashboardCancelTaskGroupStatement],
+];
+
+/** Refuse a statement text that a language literal below cannot carry unchanged. */
+function checkedStatement(name: string, text: string): string {
+  for (const forbidden of ["`", "%", "?", '"""', "\\"]) {
+    if (text.includes(forbidden)) {
+      throw new Error(`The ${name} statement must not contain ${forbidden}`);
+    }
+  }
+  if ((text.match(/\$\d+/g) ?? []).join() !== "$1") {
+    throw new Error(`The ${name} statement must use the one parameter $1 exactly once`);
+  }
+  return text;
+}
+
+function goStatements(): string {
+  return sharedStatements
+    .map(
+      ([name, text]) =>
+        `// ${name}Statement is the shared SQL of the ${name} procedure.\nconst ${name}Statement = \`${checkedStatement(name, text)}\`\n`,
+    )
+    .join("\n");
+}
+
 function generateGo(contract: DashboardContract): string {
   const declarations = [
     ...Object.entries(contract.$defs)
@@ -320,6 +357,7 @@ import (
 )
 
 ${declarations}
+${goStatements()}
 var inputSchemas = func() map[string]any {
 	var schemas map[string]any
 	if err := json.Unmarshal([]byte(${JSON.stringify(schemas)}), &schemas); err != nil { panic(err) }
@@ -447,6 +485,12 @@ ${declarations}
 
 _INPUT_SCHEMAS: dict[str, object] = json.loads(${JSON.stringify(schemas)})
 
+${sharedStatements
+  .map(
+    ([name, text]) =>
+      `# The shared SQL of the ${name} procedure, with a psycopg placeholder.\n_${snakeName(name).toUpperCase()}_SQL = """${checkedStatement(name, text).replace("$1", "%s")}"""\n`,
+  )
+  .join("\n")}
 
 class DashboardInputValidationError(ValueError):
     """A dashboard request does not match its generated JSON Schema."""
@@ -568,7 +612,12 @@ ${procedures}
 
 /// Each procedure's JSON Schema 2020-12 request schema, or \`null\` when it accepts no input.
 pub(crate) const INPUT_SCHEMAS: &str = r${hashes}"${schemas}"${hashes};
-`;
+${sharedStatements
+  .map(
+    ([name, text]) =>
+      `\n/// The shared SQL of the \`${name}\` procedure.\npub(crate) const ${snakeName(name).toUpperCase()}: &str = r#"${checkedStatement(name, text)}"#;\n`,
+  )
+  .join("")}`;
 }
 
 function generateRuby(contract: DashboardContract): string {
@@ -594,7 +643,18 @@ ${procedures}
         INPUT_SCHEMAS = <<~'JSON'.chomp
           ${schemas}
         JSON
-      end
+${sharedStatements
+  .map(
+    ([name, text]) =>
+      `\n        # The shared SQL of the ${name} procedure.\n        ${snakeName(name).toUpperCase()} = <<~'SQL'.chomp\n${checkedStatement(
+        name,
+        text,
+      )
+        .split("\n")
+        .map((line) => (line === "" ? "" : `          ${line}`))
+        .join("\n")}\n        SQL\n`,
+  )
+  .join("")}      end
     end
   end
 end

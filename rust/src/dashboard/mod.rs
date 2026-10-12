@@ -254,7 +254,7 @@ where
 }
 
 /// Procedures that change state. Each needs a same-origin request and a writable dashboard.
-const MUTATIONS: [&str; 15] = [
+const MUTATIONS: [&str; 16] = [
     "enqueueTest",
     "setSchedulePaused",
     "setQueuePaused",
@@ -270,6 +270,7 @@ const MUTATIONS: [&str; 15] = [
     "completeHumanWait",
     "redriveTask",
     "redriveDeadLetters",
+    "cancelTaskGroup",
 ];
 
 /// Mutations only a host extension implements.

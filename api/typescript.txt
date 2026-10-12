@@ -447,6 +447,14 @@ interface DashboardTaskDetail
 type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
+interface DashboardTaskGroup
+interface DashboardTaskGroupCallback
+interface DashboardTaskGroupCounts
+interface DashboardTaskGroupDetail
+interface DashboardTaskGroupEvent
+interface DashboardTaskGroupMember
+type DashboardTaskGroupStateFilter
+interface DashboardTaskGroupsPage
 interface DashboardTaskRow
 interface DashboardTaskRowHumanWait
 type DashboardTaskSort
@@ -470,6 +478,9 @@ const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
 const dashboardTaskEventTypes
 const dashboardTaskFilters
+const dashboardTaskGroupEventLimit
+const dashboardTaskGroupPageSizes
+const dashboardTaskGroupStateFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
 const dashboardTaskValueKinds
@@ -634,6 +645,14 @@ interface DashboardTaskDetail
 type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
+interface DashboardTaskGroup
+interface DashboardTaskGroupCallback
+interface DashboardTaskGroupCounts
+interface DashboardTaskGroupDetail
+interface DashboardTaskGroupEvent
+interface DashboardTaskGroupMember
+type DashboardTaskGroupStateFilter
+interface DashboardTaskGroupsPage
 interface DashboardTaskRow
 interface DashboardTaskRowHumanWait
 type DashboardTaskSort
@@ -657,6 +676,9 @@ const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
 const dashboardTaskEventTypes
 const dashboardTaskFilters
+const dashboardTaskGroupEventLimit
+const dashboardTaskGroupPageSizes
+const dashboardTaskGroupStateFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
 const dashboardTaskValueKinds
@@ -1455,7 +1477,7 @@ interface DashboardDatabase {
   }>;
 }
 
-type DashboardDemoFeature = "ingress-routing" | "retry-policies" | "durable-checkpoints" | "durable-waits" | "progress" | "timing-controls" | "cancellation" | "dead-letters-redrive" | "task-dependencies" | "child-workflows" | "signals" | "human-decisions" | "keyed-debounce" | "keyed-throttle" | "priority-lanes" | "batch-handlers" | "payload-contracts";
+type DashboardDemoFeature = "ingress-routing" | "retry-policies" | "durable-checkpoints" | "durable-waits" | "progress" | "timing-controls" | "cancellation" | "dead-letters-redrive" | "task-dependencies" | "child-workflows" | "signals" | "human-decisions" | "keyed-debounce" | "keyed-throttle" | "priority-lanes" | "batch-handlers" | "payload-contracts" | "task-groups";
 
 type DashboardDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 
@@ -1908,6 +1930,10 @@ type DashboardOperatorAction = {
   filter: DashboardRedriveFilter;
   limit: number;
   cursor: DashboardRedriveCursor | null;
+  audit: DashboardAuditContext;
+} | {
+  kind: "cancelTaskGroup";
+  groupId: string;
   audit: DashboardAuditContext;
 } | {
   kind: "setWorkerPaused";
@@ -2463,6 +2489,11 @@ interface DashboardTaskController {
   redriveTask?: (taskId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
   /** Redrive a bounded page of the dead letters one filter selects. */
   redriveDeadLetters?: (filter: DashboardRedriveFilter, limit: number, cursor: DashboardRedriveCursor | null, audit: DashboardAuditContext) => Promise<DashboardRedriveBatch>;
+  /**
+  * Cancel one task group through `Admin.cancelTaskGroup`: seal it and cancel each member task that
+  * is not terminal. Returns the group snapshot, or null when the group does not exist.
+  */
+  cancelTaskGroup?: (groupId: string, audit: DashboardAuditContext) => Promise<DashboardTaskGroup | null>;
 }
 
 type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
@@ -2711,6 +2742,82 @@ interface DashboardTaskFacets {
 }
 
 type DashboardTaskFilter = (typeof dashboardTaskFilters)[number];
+
+interface DashboardTaskGroup {
+  id: string;
+  state: "open" | "sealed" | "finished";
+  /** `succeeded` or `failed` when the group is finished, else null. */
+  result: "succeeded" | "failed" | null;
+  counts: DashboardTaskGroupCounts;
+  createdAt: string;
+  sealedAt: string | null;
+  finishedAt: string | null;
+  canceledAt: string | null;
+  canceledBy: string | null;
+  cancelReason: string | null;
+  /** The requested callbacks in the order finish, success, failure. */
+  callbacks: DashboardTaskGroupCallback[];
+}
+
+interface DashboardTaskGroupCallback {
+  kind: "onFinish" | "onSuccess" | "onFailure";
+  /** The callback task, or null until the finished group enqueues it. */
+  taskId: string | null;
+}
+
+interface DashboardTaskGroupCounts {
+  total: number;
+  succeeded: number;
+  failed: number;
+  canceled: number;
+  pending: number;
+}
+
+interface DashboardTaskGroupDetail {
+  group: DashboardTaskGroup;
+  /** The member tasks after the requested position, in position order. */
+  members: DashboardTaskGroupMember[];
+  /** The position to send as `after` for the next member page, or null on the last page. */
+  nextAfter: number | null;
+  /** The newest group events first, at most `dashboardTaskGroupEventLimit`. */
+  events: DashboardTaskGroupEvent[];
+  /** True when the group has more events than this detail carries. */
+  eventsTruncated: boolean;
+  /** True when this dashboard can cancel the group: it is writable and has a cancel controller. */
+  canCancel: boolean;
+}
+
+interface DashboardTaskGroupEvent {
+  id: string;
+  type: string;
+  details: unknown;
+  occurredAt: string;
+}
+
+interface DashboardTaskGroupMember {
+  position: number;
+  taskId: string;
+  /** Queue and type of the task, or null when a purge or retention deleted the task row. */
+  queue: string | null;
+  taskType: string | null;
+  /** The live task state, or null when the task row is gone. */
+  state: TaskState | null;
+  /** The outcome that the group counted, or null while the member is pending. */
+  outcome: DashboardTerminalState | null;
+  addedAt: string;
+  countedAt: string | null;
+}
+
+type DashboardTaskGroupStateFilter = (typeof dashboardTaskGroupStateFilters)[number];
+
+interface DashboardTaskGroupsPage {
+  state: DashboardTaskGroupStateFilter;
+  page: number;
+  pageSize: number;
+  /** True when a later page has one or more groups. */
+  hasMore: boolean;
+  groups: DashboardTaskGroup[];
+}
 
 interface DashboardTaskRow extends Record<string, unknown> {
   id: string;
@@ -3458,7 +3565,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 65;
+const MINIMUM_SCHEMA_VERSION = 66;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -5804,6 +5911,26 @@ const dashboardRouter: {
       }>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskValue, import("../wire.js").DashboardTaskValue>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     humanWaits: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /** One page of task groups (ADR 0095), newest first, with an optional state filter. */
+    taskGroups: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+      state: z.ZodDefault<z.ZodEnum<{
+        all: "all";
+        open: "open";
+        sealed: "sealed";
+        finished: "finished";
+      }>>;
+      page: z.ZodDefault<z.ZodNumber>;
+      pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskGroupsPage, import("../wire.js").DashboardTaskGroupsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /**
+    * One task group with its progress counts, one page of its member tasks, its callbacks, and
+    * its newest events.
+    */
+    taskGroupDetail: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
+      id: z.ZodUUID;
+      after: z.ZodDefault<z.ZodNullable<z.ZodNumber>>;
+      pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskGroupDetail, import("../wire.js").DashboardTaskGroupDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     enqueueTest: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       kind: z.ZodEnum<{
         retry: "retry";
@@ -5839,6 +5966,7 @@ const dashboardRouter: {
         "priority-lanes": "priority-lanes";
         "batch-handlers": "batch-handlers";
         "payload-contracts": "payload-contracts";
+        "task-groups": "task-groups";
       }>>;
       priority: z.ZodDefault<z.ZodNumber>;
       audit: z.ZodObject<{
@@ -6051,6 +6179,21 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardRedriveBatch, import("./types.js").DashboardRedriveBatch>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /**
+    * Cancel one task group through `Admin.cancelTaskGroup`.
+    *
+    * Workhorse seals the group and cancels each member task that is not terminal. The canceled
+    * members count as not succeeded, so the group finishes as usual and its `onFinish` and
+    * `onFailure` callbacks run. A finished group does not change.
+    */
+    cancelTaskGroup: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
+      id: z.ZodUUID;
+      audit: z.ZodObject<{
+        actor: z.ZodString;
+        reason: z.ZodString;
+        requestId: z.ZodString;
+      }, z.core.$strip>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskGroup, import("../wire.js").DashboardTaskGroup>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
   };
 };
 
@@ -6077,6 +6220,12 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
 const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "released", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "dependency_counter_repaired", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
 
 const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"];
+
+const dashboardTaskGroupEventLimit = 100;
+
+const dashboardTaskGroupPageSizes: readonly [25, 50, 100];
+
+const dashboardTaskGroupStateFilters: readonly ["all", "open", "sealed", "finished"];
 
 const dashboardTaskPriorityMax = 100;
 

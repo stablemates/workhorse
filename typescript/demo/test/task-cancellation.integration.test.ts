@@ -181,6 +181,40 @@ describe("Workhorse demo", () => {
     ).resolves.toMatchObject({ rows: [{ reason: null }] });
   });
 
+  it("cancels a task group and audits its live member total", async () => {
+    // The task_group row keeps its counts at 0 until the group finishes (ADR 0096). The audit must
+    // record the four members that the group has, not that stored 0.
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const { group } = await new Queue(pool, "demo").taskGroup({}, (builder) => {
+      builder.add(
+        [1, 2, 3, 4].map((member) => ({
+          type: "demo.success",
+          payload: { label: `cancel-group-${member}` },
+          options: { queue: "cancel-task-group" },
+        })),
+      );
+    });
+
+    await expect(
+      client.dashboard.cancelTaskGroup({
+        id: group.id,
+        audit: { actor: "operator", reason: "Stop the import", requestId: "cancel-group-1" },
+      }),
+    ).resolves.toMatchObject({ id: group.id, canceledBy: "local-demo" });
+    const audit = await pool.query<{ target: string; status: string; before: unknown }>(
+      `SELECT target, status, before FROM public.workhorse_demo_audit WHERE request_id = $1`,
+      ["cancel-group-1"],
+    );
+    expect(audit.rows).toEqual([
+      {
+        target: `task-group:${group.id}`,
+        status: "succeeded",
+        before: { state: "sealed", total: 4 },
+      },
+    ]);
+  });
+
   it("cancels a future-scheduled task without waiting for its run time", async () => {
     const { app } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);

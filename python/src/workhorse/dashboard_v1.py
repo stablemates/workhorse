@@ -1160,6 +1160,68 @@ class DashboardTaskFacets(TypedDict, total=False):
     tags: Required[list[str]]
 
 
+class DashboardTaskGroup(TypedDict, total=False):
+    id: Required[str]
+    state: Required[Literal["finished", "open", "sealed"]]
+    result: Required[Literal["failed"] | Literal["succeeded"] | None]
+    counts: Required[DashboardTaskGroupCounts]
+    createdAt: Required[str]
+    sealedAt: Required[str | None]
+    finishedAt: Required[str | None]
+    canceledAt: Required[str | None]
+    canceledBy: Required[str | None]
+    cancelReason: Required[str | None]
+    callbacks: Required[list[DashboardTaskGroupCallback]]
+
+
+class DashboardTaskGroupCallback(TypedDict, total=False):
+    kind: Required[Literal["onFailure", "onFinish", "onSuccess"]]
+    taskId: Required[str | None]
+
+
+class DashboardTaskGroupCounts(TypedDict, total=False):
+    total: Required[float]
+    succeeded: Required[float]
+    failed: Required[float]
+    canceled: Required[float]
+    pending: Required[float]
+
+
+class DashboardTaskGroupDetail(TypedDict, total=False):
+    group: Required[DashboardTaskGroup]
+    members: Required[list[DashboardTaskGroupMember]]
+    nextAfter: Required[float | None]
+    events: Required[list[DashboardTaskGroupEvent]]
+    eventsTruncated: Required[bool]
+    canCancel: Required[bool]
+
+
+class DashboardTaskGroupEvent(TypedDict, total=False):
+    id: Required[str]
+    type: Required[str]
+    details: Required[object]
+    occurredAt: Required[str]
+
+
+class DashboardTaskGroupMember(TypedDict, total=False):
+    position: Required[float]
+    taskId: Required[str]
+    queue: Required[str | None]
+    taskType: Required[str | None]
+    state: Required[Literal["active"] | Literal["blocked"] | Literal["canceled"] | Literal["failed"] | Literal["ready"] | Literal["scheduled"] | Literal["succeeded"] | None]
+    outcome: Required[Literal["canceled"] | Literal["failed"] | Literal["succeeded"] | None]
+    addedAt: Required[str]
+    countedAt: Required[str | None]
+
+
+class DashboardTaskGroupsPage(TypedDict, total=False):
+    state: Required[Literal["all", "finished", "open", "sealed"]]
+    page: Required[float]
+    pageSize: Required[float]
+    hasMore: Required[bool]
+    groups: Required[list[DashboardTaskGroup]]
+
+
 class DashboardTaskRowRetryPolicyVariant2(TypedDict, total=False):
     type: Required[Literal["decorrelated-jitter"]]
     baseDelayMs: Required[float]
@@ -1502,6 +1564,24 @@ type HumanWaitsInput = None
 type HumanWaitsOutput = DashboardHumanWaitPage
 
 
+class TaskGroupsInput(TypedDict, total=False):
+    state: NotRequired[Literal["all", "open", "sealed", "finished"]]
+    page: NotRequired[int]
+    pageSize: NotRequired[Literal[25] | Literal[50] | Literal[100]]
+
+
+type TaskGroupsOutput = DashboardTaskGroupsPage
+
+
+class TaskGroupDetailInput(TypedDict, total=False):
+    id: Required[str]
+    after: NotRequired[int | None]
+    pageSize: NotRequired[Literal[25] | Literal[50] | Literal[100]]
+
+
+type TaskGroupDetailOutput = DashboardTaskGroupDetail
+
+
 class EnqueueTestInputAudit(TypedDict, total=False):
     actor: Required[str]
     reason: Required[str]
@@ -1511,7 +1591,7 @@ class EnqueueTestInputAudit(TypedDict, total=False):
 class EnqueueTestInput(TypedDict, total=False):
     kind: Required[Literal["success", "retry", "durable", "timer", "failure", "idempotent", "long-running", "redrive", "feature"]]
     scenario: NotRequired[Literal["order-fulfillment", "customer-onboarding", "report-publication"]]
-    feature: NotRequired[Literal["ingress-routing", "retry-policies", "durable-checkpoints", "durable-waits", "progress", "timing-controls", "cancellation", "dead-letters-redrive", "task-dependencies", "child-workflows", "signals", "human-decisions", "keyed-debounce", "keyed-throttle", "priority-lanes", "batch-handlers", "payload-contracts"]]
+    feature: NotRequired[Literal["ingress-routing", "retry-policies", "durable-checkpoints", "durable-waits", "progress", "timing-controls", "cancellation", "dead-letters-redrive", "task-dependencies", "child-workflows", "signals", "human-decisions", "keyed-debounce", "keyed-throttle", "priority-lanes", "batch-handlers", "payload-contracts", "task-groups"]]
     priority: NotRequired[int]
     audit: Required[EnqueueTestInputAudit]
 
@@ -1763,7 +1843,160 @@ class RedriveDeadLettersInput(TypedDict, total=False):
 type RedriveDeadLettersOutput = DashboardRedriveBatch
 
 
-_INPUT_SCHEMAS: dict[str, object] = json.loads("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"rangeStart\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},{\"type\":\"null\"}]},\"rangeEnd\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":44,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"released\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"dependency_counter_repaired\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"taskId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"taskDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"checkpointValue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"required\":[\"id\",\"name\"]},\"taskValue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"kind\":{\"type\":\"string\",\"enum\":[\"payload\",\"result\"]}},\"required\":[\"id\",\"kind\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"task-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setSchedulePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"paused\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"taskIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"taskEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalTaskPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},\"taskId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"taskId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]}}")
+class CancelTaskGroupInputAudit(TypedDict, total=False):
+    actor: Required[str]
+    reason: Required[str]
+    requestId: Required[str]
+
+
+class CancelTaskGroupInput(TypedDict, total=False):
+    id: Required[str]
+    audit: Required[CancelTaskGroupInputAudit]
+
+
+type CancelTaskGroupOutput = DashboardTaskGroup
+
+
+_INPUT_SCHEMAS: dict[str, object] = json.loads("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"rangeStart\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},{\"type\":\"null\"}]},\"rangeEnd\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":44,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"released\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"dependency_counter_repaired\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"taskId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"taskDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"checkpointValue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"required\":[\"id\",\"name\"]},\"taskValue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"kind\":{\"type\":\"string\",\"enum\":[\"payload\",\"result\"]}},\"required\":[\"id\",\"kind\"]},\"humanWaits\":null,\"taskGroups\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"state\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"open\",\"sealed\",\"finished\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"taskGroupDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"after\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000},{\"type\":\"null\"}]},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}},\"required\":[\"id\"]},\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"task-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\",\"task-groups\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setSchedulePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"paused\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"taskIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"taskEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalTaskPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z))$\"},\"taskId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"taskId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]},\"cancelTaskGroup\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]}}")
+
+# The shared SQL of the taskGroups procedure, with a psycopg placeholder.
+_TASK_GROUPS_SQL = """SELECT workhorse.dashboard_task_groups_v1(%s::jsonb) AS result"""
+
+# The shared SQL of the taskGroupDetail procedure, with a psycopg placeholder.
+_TASK_GROUP_DETAIL_SQL = """WITH input AS (
+  SELECT %s::jsonb AS document
+), request AS (
+  SELECT (input.document ->> 'id')::uuid AS group_id,
+         COALESCE((input.document ->> 'after')::integer, 0) AS after_position,
+         COALESCE((input.document ->> 'pageSize')::integer, 50) AS page_size,
+         COALESCE((input.document ->> 'canCancel')::boolean, false) AS can_cancel
+    FROM input
+), members AS (
+  SELECT member.*, row_number() OVER (ORDER BY member.member_position) AS ordinal
+    FROM request
+    CROSS JOIN LATERAL workhorse.list_task_group_members_v1(
+      request.group_id, request.after_position, request.page_size + 1
+    ) member
+), events AS (
+  SELECT event.*,
+         row_number() OVER (ORDER BY event.occurred_at DESC, event.event_id DESC) AS ordinal
+    FROM request
+    CROSS JOIN LATERAL workhorse.list_task_group_events_v1(
+      request.group_id, 1000
+    ) event
+)
+SELECT (
+  SELECT jsonb_build_object(
+    'group', jsonb_build_object(
+    'id', snapshot.group_id,
+    'state', snapshot.state,
+    'result', snapshot.result,
+    'counts', jsonb_build_object(
+      'total', snapshot.total,
+      'succeeded', snapshot.succeeded,
+      'failed', snapshot.failed,
+      'canceled', snapshot.canceled,
+      'pending', snapshot.pending
+    ),
+    'createdAt', to_char((snapshot.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sealedAt', to_char((snapshot.sealed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'finishedAt', to_char((snapshot.finished_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'canceledAt', to_char((snapshot.canceled_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'canceledBy', snapshot.canceled_by,
+    'cancelReason', snapshot.cancel_reason,
+    'callbacks', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+               'kind', callback.kind,
+               'taskId', snapshot.callbacks -> callback.name ->> 'taskId'
+             ) ORDER BY callback.ordinal), '[]'::jsonb)
+        FROM (VALUES
+          (1, 'on_finish', 'onFinish'),
+          (2, 'on_success', 'onSuccess'),
+          (3, 'on_failure', 'onFailure')
+        ) callback(ordinal, name, kind)
+       WHERE snapshot.callbacks -> callback.name IS NOT NULL
+    )
+  ),
+    'members', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+               'position', members.member_position,
+               'taskId', members.task_id,
+               'queue', members.queue_name,
+               'taskType', members.task_type,
+               'state', members.state,
+               'outcome', members.outcome,
+               'addedAt', to_char((members.added_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+               'countedAt', to_char((members.counted_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+             ) ORDER BY members.ordinal), '[]'::jsonb)
+        FROM members
+       WHERE members.ordinal <= request.page_size
+    ),
+    'nextAfter', (
+      SELECT members.member_position
+        FROM members
+       WHERE members.ordinal = request.page_size
+         AND EXISTS (SELECT 1 FROM members later WHERE later.ordinal > request.page_size)
+    ),
+    'events', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+               'id', events.event_id,
+               'type', events.event_type,
+               'details', events.details,
+               'occurredAt', to_char((events.occurred_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+             ) ORDER BY events.ordinal), '[]'::jsonb)
+        FROM events
+       WHERE events.ordinal <= 100
+    ),
+    'eventsTruncated', (SELECT count(*) FROM events) > 100,
+    'canCancel', request.can_cancel
+  )
+    FROM workhorse.get_task_group_v1(request.group_id) snapshot
+) AS result
+  FROM request"""
+
+# The shared SQL of the cancelTaskGroup procedure, with a psycopg placeholder.
+_CANCEL_TASK_GROUP_SQL = """WITH input AS (
+  SELECT %s::jsonb AS document
+)
+SELECT (
+  SELECT jsonb_build_object(
+    'id', snapshot.group_id,
+    'state', snapshot.state,
+    'result', snapshot.result,
+    'counts', jsonb_build_object(
+      'total', snapshot.total,
+      'succeeded', snapshot.succeeded,
+      'failed', snapshot.failed,
+      'canceled', snapshot.canceled,
+      'pending', snapshot.pending
+    ),
+    'createdAt', to_char((snapshot.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'sealedAt', to_char((snapshot.sealed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'finishedAt', to_char((snapshot.finished_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'canceledAt', to_char((snapshot.canceled_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'canceledBy', snapshot.canceled_by,
+    'cancelReason', snapshot.cancel_reason,
+    'callbacks', (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+               'kind', callback.kind,
+               'taskId', snapshot.callbacks -> callback.name ->> 'taskId'
+             ) ORDER BY callback.ordinal), '[]'::jsonb)
+        FROM (VALUES
+          (1, 'on_finish', 'onFinish'),
+          (2, 'on_success', 'onSuccess'),
+          (3, 'on_failure', 'onFailure')
+        ) callback(ordinal, name, kind)
+       WHERE snapshot.callbacks -> callback.name IS NOT NULL
+    )
+  )
+    FROM workhorse.cancel_task_group_v1(
+      (input.document ->> 'id')::uuid,
+      input.document ->> 'actor',
+      input.document ->> 'reason',
+      input.document ->> 'requestId'
+    ) snapshot
+) AS result
+  FROM input"""
 
 
 class DashboardInputValidationError(ValueError):
@@ -1836,6 +2069,12 @@ def validate_task_value_input(value: object) -> None:
 def validate_human_waits_input(value: object) -> None:
     validate_input("humanWaits", value)
 
+def validate_task_groups_input(value: object) -> None:
+    validate_input("taskGroups", value)
+
+def validate_task_group_detail_input(value: object) -> None:
+    validate_input("taskGroupDetail", value)
+
 def validate_enqueue_test_input(value: object) -> None:
     validate_input("enqueueTest", value)
 
@@ -1880,6 +2119,9 @@ def validate_redrive_task_input(value: object) -> None:
 
 def validate_redrive_dead_letters_input(value: object) -> None:
     validate_input("redriveDeadLetters", value)
+
+def validate_cancel_task_group_input(value: object) -> None:
+    validate_input("cancelTaskGroup", value)
 
 
 def _validate_schema(schema: object, root: object, value: object, path: str) -> None:
@@ -1961,6 +2203,9 @@ def _validate_schema(schema: object, root: object, value: object, path: str) -> 
 __all__ = [
     "ActivityInput",
     "ActivityOutput",
+    "CancelTaskGroupInput",
+    "CancelTaskGroupInputAudit",
+    "CancelTaskGroupOutput",
     "CancelTaskInput",
     "CancelTaskInputAudit",
     "CancelTaskOutput",
@@ -2121,6 +2366,13 @@ __all__ = [
     "DashboardTaskDetailTruncated",
     "DashboardTaskDetailWaitsItem",
     "DashboardTaskFacets",
+    "DashboardTaskGroup",
+    "DashboardTaskGroupCallback",
+    "DashboardTaskGroupCounts",
+    "DashboardTaskGroupDetail",
+    "DashboardTaskGroupEvent",
+    "DashboardTaskGroupMember",
+    "DashboardTaskGroupsPage",
     "DashboardTaskRow",
     "DashboardTaskRowDurability",
     "DashboardTaskRowHumanWait",
@@ -2198,6 +2450,10 @@ __all__ = [
     "TaskDetailOutput",
     "TaskFacetsInput",
     "TaskFacetsOutput",
+    "TaskGroupDetailInput",
+    "TaskGroupDetailOutput",
+    "TaskGroupsInput",
+    "TaskGroupsOutput",
     "TaskValueInput",
     "TaskValueOutput",
     "TasksCursorInput",
@@ -2208,6 +2464,7 @@ __all__ = [
     "WorkersInput",
     "WorkersOutput",
     "validate_activity_input",
+    "validate_cancel_task_group_input",
     "validate_cancel_task_input",
     "validate_checkpoint_value_input",
     "validate_complete_human_wait_input",
@@ -2237,6 +2494,8 @@ __all__ = [
     "validate_task_counts_input",
     "validate_task_detail_input",
     "validate_task_facets_input",
+    "validate_task_group_detail_input",
+    "validate_task_groups_input",
     "validate_task_value_input",
     "validate_tasks_cursor_input",
     "validate_tasks_input",

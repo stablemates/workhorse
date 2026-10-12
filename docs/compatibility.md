@@ -357,7 +357,7 @@ rest are optional TypeScript packages.
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 65 are their compatibility boundary instead. Their version numbers still match the npm
+5 and schema version 66 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
@@ -1051,10 +1051,10 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
-The unreleased SDKs require schema version 65 before workers start. Migration
+The unreleased SDKs require schema version 66 before workers start. Migration
 `0066-add-task-groups-with-completion-callbacks.sql` adds the task group functions that every SDK
-statement catalogue calls. Run `workhorse schema migrate` before you start updated processes. A
-0.7 process keeps working on version 65, because a migration inside a major line only adds.
-Migration `0067-count-task-group-outcomes-in-counter-shards.sql` moves the task group counts into
-counter shards. It adds no function that an SDK statement catalogue calls, so the floor stays at
-schema version 65.
+statement catalogue calls. Migration `0067-count-task-group-outcomes-in-counter-shards.sql` moves
+the task group counts into counter shards. It also adds `dashboard_task_groups_v1`, which the
+dashboard of each SDK calls, so the floor is schema version 66. Run `workhorse schema migrate`
+before you start updated processes. A 0.7 process keeps working on version 66, because a migration
+inside a major line only adds.

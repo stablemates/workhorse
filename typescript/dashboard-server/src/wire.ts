@@ -7,6 +7,7 @@ import type {
   QueueHealthReason,
   RetentionPolicy,
   RetryPolicy,
+  TaskState,
 } from "@stablemates/workhorse";
 
 export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
@@ -992,7 +993,8 @@ export type DashboardDemoFeature =
   | "keyed-throttle"
   | "priority-lanes"
   | "batch-handlers"
-  | "payload-contracts";
+  | "payload-contracts"
+  | "task-groups";
 
 /** Which of the two append-only history tables a feed row came from. */
 export type DashboardEventKind = "event" | "attempt";
@@ -1406,4 +1408,100 @@ export interface DashboardHumanWaitPage {
   diagnostics: Awaited<ReturnType<Queue["health"]>>["externalWaits"];
   waits: DashboardHumanWaitRow[];
   signalWaits: DashboardSignalWaitRow[];
+}
+
+/** The states a task group lists by. `all` applies no state filter. */
+export const dashboardTaskGroupStateFilters = ["all", "open", "sealed", "finished"] as const;
+export type DashboardTaskGroupStateFilter = (typeof dashboardTaskGroupStateFilters)[number];
+
+/** The page sizes of the task group list and of the member list of one group. */
+export const dashboardTaskGroupPageSizes = [25, 50, 100] as const;
+
+/** The most events one task group detail carries, newest first. */
+export const dashboardTaskGroupEventLimit = 100;
+
+/** The counters of one task group. `pending` is the member tasks that are not finished. */
+export interface DashboardTaskGroupCounts {
+  total: number;
+  succeeded: number;
+  failed: number;
+  canceled: number;
+  pending: number;
+}
+
+/** One callback that the group creator requested, and the task when the group enqueued it. */
+export interface DashboardTaskGroupCallback {
+  kind: "onFinish" | "onSuccess" | "onFailure";
+  /** The callback task, or null until the finished group enqueues it. */
+  taskId: string | null;
+}
+
+/**
+ * The snapshot of one task group (ADR 0095), as `get_task_group_v1` reads it.
+ *
+ * The cancel fields are all set or all null. A canceled group still finishes through its member
+ * outcomes, so `state` and `canceledAt` are independent facts.
+ */
+export interface DashboardTaskGroup {
+  id: string;
+  state: "open" | "sealed" | "finished";
+  /** `succeeded` or `failed` when the group is finished, else null. */
+  result: "succeeded" | "failed" | null;
+  counts: DashboardTaskGroupCounts;
+  createdAt: string;
+  sealedAt: string | null;
+  finishedAt: string | null;
+  canceledAt: string | null;
+  canceledBy: string | null;
+  cancelReason: string | null;
+  /** The requested callbacks in the order finish, success, failure. */
+  callbacks: DashboardTaskGroupCallback[];
+}
+
+/** One page of task groups, newest first. */
+export interface DashboardTaskGroupsPage {
+  state: DashboardTaskGroupStateFilter;
+  page: number;
+  pageSize: number;
+  /** True when a later page has one or more groups. */
+  hasMore: boolean;
+  groups: DashboardTaskGroup[];
+}
+
+/** One member task of a task group, in the order of the add. */
+export interface DashboardTaskGroupMember {
+  position: number;
+  taskId: string;
+  /** Queue and type of the task, or null when a purge or retention deleted the task row. */
+  queue: string | null;
+  taskType: string | null;
+  /** The live task state, or null when the task row is gone. */
+  state: TaskState | null;
+  /** The outcome that the group counted, or null while the member is pending. */
+  outcome: DashboardTerminalState | null;
+  addedAt: string;
+  countedAt: string | null;
+}
+
+/** One entry of the group history. `details` is the JSON object that Workhorse wrote. */
+export interface DashboardTaskGroupEvent {
+  id: string;
+  type: string;
+  details: unknown;
+  occurredAt: string;
+}
+
+/** One task group with one page of its member tasks and its newest events. */
+export interface DashboardTaskGroupDetail {
+  group: DashboardTaskGroup;
+  /** The member tasks after the requested position, in position order. */
+  members: DashboardTaskGroupMember[];
+  /** The position to send as `after` for the next member page, or null on the last page. */
+  nextAfter: number | null;
+  /** The newest group events first, at most `dashboardTaskGroupEventLimit`. */
+  events: DashboardTaskGroupEvent[];
+  /** True when the group has more events than this detail carries. */
+  eventsTruncated: boolean;
+  /** True when this dashboard can cancel the group: it is writable and has a cancel controller. */
+  canCancel: boolean;
 }

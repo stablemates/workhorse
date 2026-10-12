@@ -176,6 +176,100 @@
         }
       }
     },
+    "cancelTaskGroup": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "callbacks": {
+          "type": "array"
+        },
+        "callbacks[]": {
+          "type": "object"
+        },
+        "callbacks[].kind": {
+          "type": "enum",
+          "enum": [
+            "onFailure",
+            "onFinish",
+            "onSuccess"
+          ]
+        },
+        "callbacks[].taskId": {
+          "type": "null|string"
+        },
+        "cancelReason": {
+          "type": "null|string"
+        },
+        "canceledAt": {
+          "type": "null|string"
+        },
+        "canceledBy": {
+          "type": "null|string"
+        },
+        "counts": {
+          "type": "object"
+        },
+        "counts.canceled": {
+          "type": "number"
+        },
+        "counts.failed": {
+          "type": "number"
+        },
+        "counts.pending": {
+          "type": "number"
+        },
+        "counts.succeeded": {
+          "type": "number"
+        },
+        "counts.total": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": "null|string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "result": {
+          "type": "null|unknown"
+        },
+        "sealedAt": {
+          "type": "null|string"
+        },
+        "state": {
+          "type": "enum",
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        }
+      }
+    },
     "checkpointValue": {
       "mutation": false,
       "request": {
@@ -532,6 +626,7 @@
             "retry-policies",
             "signals",
             "task-dependencies",
+            "task-groups",
             "timing-controls"
           ],
           "required": false
@@ -3712,6 +3807,278 @@
         },
         "workers[]": {
           "type": "string"
+        }
+      }
+    },
+    "taskGroupDetail": {
+      "mutation": false,
+      "request": {
+        "after": {
+          "type": "integer|null",
+          "required": false
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "pageSize": {
+          "type": "number",
+          "enum": [
+            "100",
+            "25",
+            "50"
+          ],
+          "required": false
+        }
+      },
+      "response": {
+        "canCancel": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "array"
+        },
+        "eventsTruncated": {
+          "type": "boolean"
+        },
+        "events[]": {
+          "type": "object"
+        },
+        "events[].details": {
+          "type": "unknown"
+        },
+        "events[].id": {
+          "type": "string"
+        },
+        "events[].occurredAt": {
+          "type": "string"
+        },
+        "events[].type": {
+          "type": "string"
+        },
+        "group": {
+          "type": "object"
+        },
+        "group.callbacks": {
+          "type": "array"
+        },
+        "group.callbacks[]": {
+          "type": "object"
+        },
+        "group.callbacks[].kind": {
+          "type": "enum",
+          "enum": [
+            "onFailure",
+            "onFinish",
+            "onSuccess"
+          ]
+        },
+        "group.callbacks[].taskId": {
+          "type": "null|string"
+        },
+        "group.cancelReason": {
+          "type": "null|string"
+        },
+        "group.canceledAt": {
+          "type": "null|string"
+        },
+        "group.canceledBy": {
+          "type": "null|string"
+        },
+        "group.counts": {
+          "type": "object"
+        },
+        "group.counts.canceled": {
+          "type": "number"
+        },
+        "group.counts.failed": {
+          "type": "number"
+        },
+        "group.counts.pending": {
+          "type": "number"
+        },
+        "group.counts.succeeded": {
+          "type": "number"
+        },
+        "group.counts.total": {
+          "type": "number"
+        },
+        "group.createdAt": {
+          "type": "string"
+        },
+        "group.finishedAt": {
+          "type": "null|string"
+        },
+        "group.id": {
+          "type": "string"
+        },
+        "group.result": {
+          "type": "null|unknown"
+        },
+        "group.sealedAt": {
+          "type": "null|string"
+        },
+        "group.state": {
+          "type": "enum",
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        },
+        "members": {
+          "type": "array"
+        },
+        "members[]": {
+          "type": "object"
+        },
+        "members[].addedAt": {
+          "type": "string"
+        },
+        "members[].countedAt": {
+          "type": "null|string"
+        },
+        "members[].outcome": {
+          "type": "null|unknown"
+        },
+        "members[].position": {
+          "type": "number"
+        },
+        "members[].queue": {
+          "type": "null|string"
+        },
+        "members[].state": {
+          "type": "null|unknown"
+        },
+        "members[].taskId": {
+          "type": "string"
+        },
+        "members[].taskType": {
+          "type": "null|string"
+        },
+        "nextAfter": {
+          "type": "null|number"
+        }
+      }
+    },
+    "taskGroups": {
+      "mutation": false,
+      "request": {
+        "page": {
+          "type": "integer",
+          "required": false
+        },
+        "pageSize": {
+          "type": "number",
+          "enum": [
+            "100",
+            "25",
+            "50"
+          ],
+          "required": false
+        },
+        "state": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "finished",
+            "open",
+            "sealed"
+          ],
+          "required": false
+        }
+      },
+      "response": {
+        "groups": {
+          "type": "array"
+        },
+        "groups[]": {
+          "type": "object"
+        },
+        "groups[].callbacks": {
+          "type": "array"
+        },
+        "groups[].callbacks[]": {
+          "type": "object"
+        },
+        "groups[].callbacks[].kind": {
+          "type": "enum",
+          "enum": [
+            "onFailure",
+            "onFinish",
+            "onSuccess"
+          ]
+        },
+        "groups[].callbacks[].taskId": {
+          "type": "null|string"
+        },
+        "groups[].cancelReason": {
+          "type": "null|string"
+        },
+        "groups[].canceledAt": {
+          "type": "null|string"
+        },
+        "groups[].canceledBy": {
+          "type": "null|string"
+        },
+        "groups[].counts": {
+          "type": "object"
+        },
+        "groups[].counts.canceled": {
+          "type": "number"
+        },
+        "groups[].counts.failed": {
+          "type": "number"
+        },
+        "groups[].counts.pending": {
+          "type": "number"
+        },
+        "groups[].counts.succeeded": {
+          "type": "number"
+        },
+        "groups[].counts.total": {
+          "type": "number"
+        },
+        "groups[].createdAt": {
+          "type": "string"
+        },
+        "groups[].finishedAt": {
+          "type": "null|string"
+        },
+        "groups[].id": {
+          "type": "string"
+        },
+        "groups[].result": {
+          "type": "null|unknown"
+        },
+        "groups[].sealedAt": {
+          "type": "null|string"
+        },
+        "groups[].state": {
+          "type": "enum",
+          "enum": [
+            "finished",
+            "open",
+            "sealed"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "state": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "finished",
+            "open",
+            "sealed"
+          ]
         }
       }
     },

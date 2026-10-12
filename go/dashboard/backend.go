@@ -67,6 +67,8 @@ func (service *backend) procedures() map[string]Procedure {
 		"runTaskNow":                service.runTaskNow, "cancelTask": service.cancelTask,
 		"signalTask": service.signalTask, "completeHumanWait": service.completeHumanWait,
 		"redriveTask": service.redriveTask, "redriveDeadLetters": service.redriveDeadLetters,
+		"taskGroups": service.taskGroups, "taskGroupDetail": service.taskGroupDetail,
+		"cancelTaskGroup": service.cancelTaskGroup,
 	}
 }
 

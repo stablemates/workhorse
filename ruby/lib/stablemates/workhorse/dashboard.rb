@@ -51,6 +51,7 @@ module Stablemates
         enqueueTest setSchedulePaused setQueuePaused purgeQueue setWorkerPaused
         overrideMaintenancePolicy revertMaintenancePolicy overrideRetentionPolicy revertRetentionPolicy
         runTaskNow cancelTask signalTask completeHumanWait redriveTask redriveDeadLetters
+        cancelTaskGroup
       ].freeze
       OPTIONAL_MUTATIONS = %w[enqueueTest setSchedulePaused].freeze
       CONTENT_TYPES = {

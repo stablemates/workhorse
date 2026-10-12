@@ -10,7 +10,7 @@ adds.
 
 ## Unreleased
 
-Requires **schema v65** and Python **3.12** or newer.
+Requires **schema v66** and Python **3.12** or newer.
 
 ### Upgrade steps
 
@@ -19,10 +19,11 @@ Requires **schema v65** and Python **3.12** or newer.
 1. Run `workhorse schema migrate`. The final schema version is **66**.
 2. Roll out the updated processes.
 
-The SDK compatibility floor is schema version **65**, which migration 0066 reaches. The floor rises
-from 54, because every SDK statement catalogue now names the task group functions that migration
-0066 adds. An updated process refuses a schema below version 65 at startup. A 0.7 process keeps
-working on version 65, because a migration inside a major line only adds.
+The SDK compatibility floor is schema version **66**, which migration 0067 reaches. The floor rises
+from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds,
+and the dashboard of each SDK calls `dashboard_task_groups_v1`, which migration 0067 adds. An updated
+process refuses a schema below version 66 at startup. A 0.7 process keeps working on version 66,
+because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
 [ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
@@ -45,8 +46,9 @@ shard row at commit. The outcome locks the group row only when the pending count
 becomes 0. The migration moves the counts of existing groups into the shards. It locks `task_group`
 in `EXCLUSIVE` mode while it runs, so task group changes wait for it. The counts on a `task_group`
 row stay 0 until the group finishes, so read the counts through `get_task_group_v1`. The migration
-also adds `dashboard_task_groups_v1`, which lists task groups one page at a time. It adds no function
-that an SDK statement catalogue calls, so the compatibility floor stays at schema version 65.
+also adds `dashboard_task_groups_v1`, which lists task groups one page at a time. The dashboard of
+each SDK reads the task group list through it (SM-1237), so the compatibility floor is schema
+version 66.
 
 ### Task groups
 

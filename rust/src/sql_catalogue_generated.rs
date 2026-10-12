@@ -5,7 +5,7 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 65;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 66;
 pub const MAXIMUM_SCHEMA_VERSION: i32 = 66;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
