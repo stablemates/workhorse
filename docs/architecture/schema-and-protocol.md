@@ -806,8 +806,8 @@ handler.
 - `max_size` accepts integers from 1 through 100 and cannot exceed `Worker.concurrency`.
 - `linger_ms` accepts integers from 0 through 60,000.
 
-Each task uses one worker slot while it waits for a full group or the linger deadline. The
-coordinator groups one type and queue. It then orders the selected members by descending
+Each task uses one worker slot while it waits for a full batch or the linger deadline. A batch
+holds one type and queue. The coordinator then orders the selected tasks by descending
 `ClaimedTask.priority` and by worker claim order.
 
 Each task uses its own handler thread. Thus the dispatcher stamps a claim sequence before that
@@ -819,15 +819,15 @@ The handler receives a sequence of `BatchHandlerItem` values. Each item contains
 `BatchHandlerContext` with `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`,
 and `set_progress`.
 
-`BatchHandlerContext` has no `sleep` or `sleep_until` methods. Thus one member cannot suspend the
-shared invocation.
+`BatchHandlerContext` has no `sleep` or `sleep_until` methods. Thus one task in the batch cannot
+suspend the shared invocation. It also has no task group calls.
 
 The handler returns one `BatchHandlerOutcome` mapping per item:
 
 - Status `succeeded` requires `result`.
 - Status `failed` requires an `Exception` under `error`.
 
-These fail every member: a thrown exception, a non-sequence return, the wrong outcome count, or an
+These fail every task in the batch: a thrown exception, a non-sequence return, the wrong outcome count, or an
 invalid mapping.
 
 #### Evidence and settlement
@@ -835,7 +835,7 @@ invalid mapping.
 Before invocation, the coordinator calls `record_batch_dispatch_v1` with the ordered task IDs,
 attempts, fence tokens, and worker ID. A shared callback failure also calls
 `record_batch_failure_v1`. Evidence writes are best effort. They never replace the settlement of
-each member.
+each task in the batch.
 
 Every handler thread keeps its own outcome arbiter, cancellation token, fence token, retry budget,
 completion call, and failure call.
@@ -883,7 +883,7 @@ integer of at least 100 milliseconds.
 
 Async handlers run on the run loop and receive `AsyncHandlerContext`. Its durability methods are
 awaitable views of the same `_HandlerDurability` instance. Thus row mapping, attempt arbitration,
-batch grouping, error settlement, telemetry, and drain have no second async implementation.
+batch selection, error settlement, telemetry, and drain have no second async implementation.
 
 `AsyncWorker.handle(type, handler)` receives `(Json, AsyncHandlerContext)`. The context exposes
 these awaitable methods:
@@ -955,8 +955,8 @@ connection. Only then does it close the bridge threads and clear `_running`.
 #### Async batch handlers
 
 `AsyncWorker.handle_batch` accepts an async callback and supplies `AsyncBatchHandlerItem` values.
-The shared coordinator still owns group selection, priority order, evidence writes, and the
-settlement of each member.
+The shared coordinator still owns batch selection, priority order, evidence writes, and the
+settlement of each task in the batch.
 
 `AsyncBatchHandlerContext.get_progress()` and `set_progress(value)` are awaitable, as its checkpoint
 methods are. These operations run on the application loop. The shared durability core owns replay
@@ -1515,25 +1515,26 @@ writes.
 - `BatchHandlerOptions.MaxSize` accepts 1 through 100 and cannot exceed `WorkerOptions.Concurrency`.
 - `BatchHandlerOptions.Linger` accepts whole millisecond durations from zero through 60 seconds.
 
-The process-local coordinator groups one queue and task type. It then orders members by descending
-`ClaimedTask.Priority` and by arrival order.
+The process-local coordinator makes each batch from one queue and task type. It then orders the
+tasks in the batch by descending `ClaimedTask.Priority` and by arrival order.
 
 The Go callback receives `[]BatchHandlerItem` and returns `[]BatchHandlerOutcome` in the same order.
 Each item contains `Payload` and a `BatchHandlerContext` with `Task`, the standard cancellation
 `Context`, `Checkpoint`, `GetProgress`, and `SetProgress`. The batch context omits `Sleep` and
-`SleepUntil`. Thus one member cannot suspend the shared invocation.
+`SleepUntil`, and it has no task group calls. Thus one task in the batch cannot suspend the shared
+invocation.
 
-- `BatchSucceeded{Result: value}` completes one member.
-- `BatchFailed{Error: err}` sends the failure of that member through its own retry budget.
-- These fail every member: a panic, a wrong outcome count, a nil outcome, or `BatchFailed` with a
+- `BatchSucceeded{Result: value}` completes one task.
+- `BatchFailed{Error: err}` sends the failure of that task through its own retry budget.
+- These fail every task in the batch: a panic, a wrong outcome count, a nil outcome, or `BatchFailed` with a
   nil error.
 
 Before the callback, the Go coordinator calls `record_batch_dispatch_v1` with one generated UUID and
-the ordered tasks. If the callback fails as a group, it calls `record_batch_failure_v1` with the
-same members. Both evidence writes are best effort.
+the ordered tasks. If the callback fails as a whole, it calls `record_batch_failure_v1` with the
+same tasks. Both evidence writes are best effort.
 
 Each ordinary Go execution path still owns the heartbeat, cancellation context, fence token,
-completion, and failure settlement of the member.
+completion, and failure settlement of its task.
 
 ### Go process signals
 
@@ -1721,39 +1722,39 @@ If the handler catches the suspension and returns, the worker ignores the return
 - `max_size` accepts integers from 1 through 100 and cannot exceed `concurrency`.
 - `linger` accepts a Numeric count of seconds from 0 through 60, rounded to whole milliseconds.
 
-#### Grouping
+#### Batch selection
 
 Each claimed task occupies its own handler thread and slot while it waits in the type's
 `BatchCoordinator`. That coordinator keeps one waiting list per queue.
 
-- A full group dispatches at once.
-- Otherwise, the linger deadline of the first member dispatches every group ahead of the waiting
-  member, and then its own group.
-- The coordinator orders members by descending `ClaimedTask#priority`. Then it orders them by the
+- A full batch dispatches at once.
+- Otherwise, the linger deadline of the first waiting task dispatches every batch ahead of that
+  task, and then its own batch.
+- The coordinator orders the tasks in a batch by descending `ClaimedTask#priority`. Then it orders them by the
   claim order that dispatch stamped in `admit`.
 
-When `drain` starts, it calls `BatchCoordinator#flush!`. From then on, a waiting member stops
+When `drain` starts, it calls `BatchCoordinator#flush!`. From then on, a waiting task stops
 lingering when `Worker#batch_arrivals_complete?` finds every admitted task of its type and queue in
 the coordinator. It checks again every 50 ms.
 
 #### Items and outcomes
 
-The worker calls the block as `handler.call(items)`, with one `BatchHandlerItem` for each member in
-that order. Each item holds the `payload` of the member and its own `BatchHandlerContext` in
+The worker calls the block as `handler.call(items)`, with one `BatchHandlerItem` for each task in
+that order. Each item holds the `payload` of the task and its own `BatchHandlerContext` in
 `ruby/lib/stablemates/workhorse/batch_context.rb`.
 
-That context wraps the `HandlerContext` of the member. It exposes only `task`, `cancellation`,
-`get_checkpoint`, `checkpoint`, `get_progress`, and `set_progress`. Each write is fenced on the
-lease of that member. Each member has its own cancellation token. The checkpoint of a member
-replays in each batch that a retry puts it in.
+That context wraps the `HandlerContext` of the task. It exposes only `task`, `task_group`,
+`cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, and `set_progress`. Each write is
+fenced on the lease of that task. Each task in the batch has its own cancellation token. The
+checkpoint of a task replays in each batch that a retry puts it in.
 
 The block returns one Hash for each item, in the same order: `{status: :succeeded, result:}` or
 `{status: :failed, error:}` with an `Exception`.
 
-- A raised error, a non-Array return, a wrong count, or an invalid outcome fails every member.
-- If an error outside `StandardError` is raised or returned, it fails its members with a
+- A raised error, a non-Array return, a wrong count, or an invalid outcome fails every task in the batch.
+- If an error outside `StandardError` is raised or returned, it fails the tasks in the batch with a
   `RuntimeError` that names it.
-- Every member still settles under its own lease and fence.
+- Every task in the batch still settles under its own lease and fence.
 
 #### Evidence and metrics
 
@@ -2045,19 +2046,19 @@ payload fails to decode, it fails the attempt through the retry policy of the ta
 - Its `linger` accepts whole milliseconds from zero through 60 seconds.
 - Both methods panic on an empty task type. `handle_batch` panics on invalid options.
 
-A batch can become full, or its linger time can end. The member whose arrival causes this runs the
-callback inside its own execution, as Go does. That member keeps its slot until the callback
-returns, even when the member is cancelled. The shutdown drain counts it in the same way.
+A batch can become full, or its linger time can end. The task whose arrival causes this runs the
+callback inside its own execution, as Go does. That task keeps its slot until the callback
+returns, even when the task is cancelled. The shutdown drain counts it in the same way.
 
-A member that waits for its batch holds a `Registration` guard in `rust/src/worker/batch.rs`. If the
+A task that waits for its batch holds a `Registration` guard in `rust/src/worker/batch.rs`. If the
 execution is dropped, for example when `run` or `run_once` is dropped, the guard is dropped. That
-removes the member from its queue immediately. The worker keeps its batch coordinator. Thus a later
-batch on the same worker never receives the abandoned member. If a callback already took the member
+removes the task from its queue immediately. The worker keeps its batch coordinator. Thus a later
+batch on the same worker never receives the abandoned task. If a callback already took the task
 of a guard, the guard finds nothing to remove.
 
 A batch coordinator holds only a weak reference to its worker. Thus, if the last `Worker` handle is
 dropped, the worker, its handlers, and all values that they captured are freed. If a batch
-dispatches after that, it rejects each member with `BatchAbandoned` and does not call the handler.
+dispatches after that, it rejects each task in the batch with `BatchAbandoned` and does not call the handler.
 
 #### Panics
 
@@ -2068,7 +2069,7 @@ that future is polled.
 A caught panic fails the attempt with `HandlerPanic` and one of these messages:
 
 - `handler for <type> panicked: <detail>`;
-- `batch handler for <type> panicked: <detail>`, for every member of a batch.
+- `batch handler for <type> panicked: <detail>`, for every task in a batch.
 
 A batch panic also calls `record_batch_failure_v1`.
 

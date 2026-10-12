@@ -411,8 +411,8 @@ handles oversized results in these steps:
 3. The task's retry policy then schedules another attempt or finishes it as failed.
 4. The function leaves those tasks out of the returned IDs.
 5. Since migration 0060 (schema version 59), it then reads the clock again
-   ([Clock sample after the lock](#clock-sample-after-the-lock)). It completes each other member
-   whose lease, deadline, and attempt timeout are still live at that reading.
+   ([Clock sample after the lock](#clock-sample-after-the-lock)). It completes each other task in the
+   completion batch whose lease, deadline, and attempt timeout are still live at that reading.
 
 `complete_many_and_claim_v1` still runs its claim.
 
@@ -466,7 +466,7 @@ Since migration 0060 (schema version 59), `fast_complete_many_v1` samples the cl
 That sample follows the oversized failures and precedes the completion `DELETE`.
 The failure of an oversized result writes an outcome row. That write can wait, for example behind
 partition maintenance. The `DELETE` and `finished_at` use the later sample. Thus the function
-rejects a member whose lease expired during that wait.
+rejects a task in the completion batch whose lease expired during that wait.
 
 Since the same migration, `fast_acknowledge_cancel_v1` checks the lease after its row lock, as
 `acknowledge_cancel_v1` does on the full tier. Before that migration, it filtered on `expires_at` in
@@ -712,8 +712,8 @@ pool, so its default is not capped. An explicit `cohorts` is never capped.
 - A fused claim asks for at most its cohort's free slots, and the tasks it leases join that cohort.
 - While no claim is in flight, a plain claim fills the cohort with the most free slots.
 - The first claim asks for one cohort's share.
-- While any configured queue answers full-tier, the worker ignores cohorts and dispatches as one
-  group.
+- While any configured queue answers full-tier, the worker ignores cohorts and treats all its
+  slots as one cohort.
 
 #### Python worker
 
@@ -748,8 +748,8 @@ The Go worker splits its slots the same way.
   set, minus 1 for the heartbeat connection unless `SharedHeartbeats` is set.
 - An explicit `Cohorts` is never capped.
 
-The worker's `completionBatcher` groups concurrent fast-tier completions by queue and cohort. It
-keeps one `complete_many_and_claim_v1` call in flight per group.
+The worker's `completionBatcher` collects concurrent fast-tier completions by queue and cohort. It
+keeps one `complete_many_and_claim_v1` call in flight for each queue and cohort.
 
 - A call carries at most `completionBatchLimit` (100) completions, and its claim limits sum to at
   most 100.
@@ -842,7 +842,7 @@ set:
 The context validates every other argument after the tier check. That includes a checkpoint's block,
 a sleep's duration or time, a wait's timeout, and a human wait's context.
 
-`get_checkpoint` and `get_progress` stay reads and still answer. A Ruby batch member's
+`get_checkpoint` and `get_progress` stay reads and still answer. For a task in a batch, the Ruby
 `BatchHandlerContext` delegates to its `HandlerContext`, so its `checkpoint` and `set_progress`
 raise the same error before any durable write.
 
@@ -871,8 +871,8 @@ The TypeScript worker does the same:
   write, or callback.
 - The read reaches `QueueAdministration.queueTier` through the internal `workerQueueTierRead`
   capability.
-- A batch member's context comes from the same `createHandlerContext`, so its `checkpoint` and
-  `setProgress` reject the same way.
+- The context of a task in a batch comes from the same `createHandlerContext`, so its `checkpoint`
+  and `setProgress` reject the same way.
 
 The read runs inside the handler, where the heartbeat already renews the lease.
 

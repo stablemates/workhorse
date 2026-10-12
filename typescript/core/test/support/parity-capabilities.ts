@@ -147,6 +147,21 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     go: { file: "queue_test.go", pattern: "EnqueueMany" },
   },
   {
+    capability: "Task groups with completion callbacks",
+    ruby: {
+      file: "integration/task_group_spec.rb",
+      example:
+        "creates, adds, and seals in one statement and enqueues the callbacks the result selects",
+    },
+    rust: {
+      file: "task_groups_postgres.rs",
+      test: "a_sealed_group_runs_its_callback_after_a_member_adds_a_task",
+    },
+    typescript: { file: "integration-task-groups.test.ts", pattern: "queue\\.taskGroup\\(" },
+    python: { file: "test_task_groups.py", pattern: "\\.task_group\\(" },
+    go: { file: "task_groups_test.go", pattern: "\\.TaskGroup\\(" },
+  },
+  {
     capability: "Delayed enqueue (`runAt` / `run_at`)",
     ruby: {
       file: "integration/enqueue_spec.rb",
@@ -629,6 +644,20 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     go: { file: "child_tasks_test.go", pattern: "hild" },
   },
   {
+    capability: "Task group reads and adds from a handler",
+    ruby: {
+      file: "integration/task_group_spec.rb",
+      example: "lets a running member task add tasks after the seal",
+    },
+    rust: {
+      file: "task_groups_postgres.rs",
+      test: "a_success_callback_reads_the_counts_of_its_group",
+    },
+    typescript: { file: "integration-task-groups.test.ts", pattern: "context.taskGroup.add" },
+    python: { file: "test_task_groups.py", pattern: "context.task_group.add" },
+    go: { file: "task_groups_test.go", pattern: "handler.AddToTaskGroup" },
+  },
+  {
     capability: "Latest-value progress reporting",
     ruby: {
       file: "integration/worker_spec.rb",
@@ -782,6 +811,31 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
     typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.redrive" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "Redrive" },
+  },
+  {
+    capability: "Task group cancel",
+    ruby: {
+      file: "integration/task_group_spec.rb",
+      example: "cancels a group, reads its events, and repairs a counter that drifted",
+    },
+    rust: {
+      file: "task_groups_postgres.rs",
+      test: "an_operator_cancel_finishes_an_open_group_with_its_failure_callback",
+    },
+    typescript: { file: "integration-task-groups.test.ts", pattern: "cancelTaskGroup" },
+    python: { file: "test_task_groups.py", pattern: "cancel_task_group" },
+    go: { file: "task_groups_test.go", pattern: "CancelTaskGroup" },
+  },
+  {
+    capability: "Task group drift listing and repair",
+    ruby: {
+      file: "integration/task_group_spec.rb",
+      example: "cancels a group, reads its events, and repairs a counter that drifted",
+    },
+    rust: { file: "task_groups_postgres.rs", test: "a_drifted_counter_is_listed_and_repaired" },
+    typescript: { file: "integration-task-groups.test.ts", pattern: "repairTaskGroupDrift" },
+    python: { file: "test_task_groups.py", pattern: "repair_task_group_drift" },
+    go: { file: "task_groups_test.go", pattern: "RepairTaskGroupDrift" },
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
@@ -983,6 +1037,17 @@ export const ACTIVE_JOB_PARITY_ROWS: readonly ActiveJobParityRow[] = [
     defaultJob: { nativeOnly: "`retry_job` re-enqueues the same `job_id`" },
     typedJob: noOption,
   })),
+  {
+    capability: "Task groups with completion callbacks",
+    defaultJob: {
+      file: activeJobSpec,
+      example: "makes the jobs enqueued inside a task group block its member tasks",
+    },
+    typedJob: {
+      file: activeJobSpec,
+      example: "makes the jobs enqueued inside a task group block its member tasks",
+    },
+  },
   {
     capability: "Task dependencies with terminal policies",
     defaultJob: noWaiting,
@@ -1387,6 +1452,34 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       value: "`retry_delay`, unset",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "retry_delay: nil,",
+    },
+  },
+  {
+    setting: "Queue of a handler task group add without a queue",
+    rust: {
+      value: "`default`",
+      file: "rust/src/context.rs",
+      pattern: 'group_enqueue: EnqueueClient::new("default"),',
+    },
+    typescript: {
+      value: "The `defaultQueue` of the worker's `Queue`",
+      file: "typescript/core/src/queue/enqueue-contracts.ts",
+      pattern: "request.options?.queue ?? this.context.defaultQueue",
+    },
+    python: {
+      value: "`default`",
+      file: "python/src/workhorse/worker.py",
+      pattern: "self._task_groups = Queue._from_executor(self._executor)",
+    },
+    go: {
+      value: "`default`",
+      file: "go/task_groups.go",
+      pattern: "defaultQueue: defaultWorkerQueueValue",
+    },
+    ruby: {
+      value: "The first queue of the worker",
+      file: "ruby/lib/stablemates/workhorse/worker.rb",
+      pattern: "@queue = Queue.new(@executor, default_queue: @queues.first)",
     },
   },
 ];

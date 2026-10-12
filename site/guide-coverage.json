@@ -14,6 +14,7 @@
     "150-priority": "priority",
     "160-task-dependencies": "task-dependencies",
     "170-child-tasks": "child-tasks",
+    "175-task-groups": "task-groups",
     "180-agentic-flow": "agentic-flow",
     "200-transactional-enqueue": "enqueue",
     "210-enqueue-idempotency": "idempotency",

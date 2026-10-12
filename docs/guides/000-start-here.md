@@ -45,6 +45,7 @@ How a task operates while a worker runs it.
 | [150 Priority](150-priority.md)                             | How to run urgent work before usual FIFO tasks            |
 | [160 Task dependencies](160-task-dependencies.md)           | How to wait for prerequisite tasks before dispatch        |
 | [170 Child tasks](170-child-tasks.md)                       | How to start child tasks and use their durable results    |
+| [175 Task groups](175-task-groups.md)                       | How to run one task after many tasks finish               |
 | [180 Agentic flow](180-agentic-flow.md)                     | How to build an agent loop that is safe to run again      |
 
 ## Getting work in
