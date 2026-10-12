@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { cpus, platform, release, totalmem } from "node:os";
+import { fileURLToPath } from "node:url";
 import type { Pool } from "pg";
 import {
   runComparativeBenchmark,
@@ -80,22 +81,36 @@ const recordedPostgresSettings = [
   "work_mem",
 ] as const;
 
+/**
+ * The `typescript/core` package that holds this module. Git resolves the source paths below from
+ * this directory, so the result does not depend on the directory that started the benchmark.
+ */
+const benchmarkPackageDirectory = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * Executable benchmark inputs, as Git pathspecs relative to the package directory. The `:(top)`
+ * paths are repository-root inputs: the schema SQL, the lockfile, and the shared build and test
+ * configuration.
+ */
 const benchmarkSourcePaths = [
   "benchmarks",
   "src",
-  "sql",
   "test",
   "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "tsconfig.build.json",
-  "vitest.config.ts",
+  "tsconfig.source.json",
+  "tsconfig.typecheck.json",
+  ":(top)sql",
+  ":(top)pnpm-lock.yaml",
+  ":(top)tsconfig.json",
+  ":(top)tsconfig.build.json",
+  ":(top)tsconfig.source-paths.json",
+  ":(top)vitest.config.ts",
 ] as const;
 
-function gitOutput(arguments_: string[]): string | null {
+function gitOutput(arguments_: string[], cwd: string): string | null {
   try {
     return execFileSync("git", arguments_, {
-      cwd: process.cwd(),
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -104,18 +119,24 @@ function gitOutput(arguments_: string[]): string | null {
   }
 }
 
-export function captureBenchmarkProvenance(): BenchmarkReportV3["provenance"] {
+/**
+ * Records the command, the runtime, and the source revision of a benchmark run.
+ *
+ * `packageDirectory` exists for tests. It must name the `typescript/core` directory of a Git
+ * checkout.
+ */
+export function captureBenchmarkProvenance(
+  packageDirectory: string = benchmarkPackageDirectory,
+): BenchmarkReportV3["provenance"] {
   const cpuList = cpus();
-  const commit = gitOutput(["rev-parse", "HEAD"]);
+  const commit = gitOutput(["rev-parse", "HEAD"], packageDirectory);
   // Include untracked executable inputs while excluding generated result artifacts and unrelated
   // workspace files. Otherwise an untracked benchmark module could silently produce a "clean" run.
-  const status = gitOutput([
-    "status",
-    "--porcelain",
-    "--untracked-files=all",
-    "--",
-    ...benchmarkSourcePaths,
-  ]);
+  // Git omits ignored files, so the ignored `benchmark*.json` reports never mark a run dirty.
+  const status = gitOutput(
+    ["status", "--porcelain", "--untracked-files=all", "--", ...benchmarkSourcePaths],
+    packageDirectory,
+  );
   return {
     command: [...process.argv],
     runtime: {
