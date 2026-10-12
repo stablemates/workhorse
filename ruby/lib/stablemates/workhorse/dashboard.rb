@@ -79,8 +79,16 @@ module Stablemates
         "issues" => [{"code" => "custom", "path" => ["feature"],
                       "message" => "The feature demo kind requires a feature family"}]
       }.freeze
+      # The audit request ID bound of the SQL audit functions, in UTF-8 bytes. JSON Schema measures
+      # strings in characters, so the request schema cannot state this bound.
+      MAX_REQUEST_ID_BYTES = 512
+      OVERSIZED_REQUEST_ID = {
+        "issues" => [{"code" => "custom", "path" => ["audit", "requestId"],
+                      "message" => "The request ID must contain at most 512 UTF-8 bytes"}]
+      }.freeze
       private_constant :MUTATIONS, :OPTIONAL_MUTATIONS, :CONTENT_TYPES, :JSON_TYPE, :MAX_REQUEST_BYTES,
-        :UNVERIFIED_COMPATIBILITY, :DEFAULT_PORTS, :SCRIPT_ESCAPES, :TOO_SMALL_PAGE, :MISSING_FEATURE
+        :UNVERIFIED_COMPATIBILITY, :DEFAULT_PORTS, :SCRIPT_ESCAPES, :TOO_SMALL_PAGE, :MISSING_FEATURE,
+        :MAX_REQUEST_ID_BYTES, :OVERSIZED_REQUEST_ID
 
       attr_reader :base_path
 
@@ -223,6 +231,9 @@ module Stablemates
           if procedure == "enqueueTest" && input.is_a?(Hash) && input["kind"] == "feature" && !input.key?("feature")
             raise RpcError.new(400, "BAD_REQUEST", "Input validation failed", MISSING_FEATURE)
           end
+          if MUTATIONS.include?(procedure) && oversized_request_id?(input)
+            raise RpcError.new(400, "BAD_REQUEST", "Input validation failed", OVERSIZED_REQUEST_ID)
+          end
 
           input = input.merge("audit" => input["audit"].merge("actor" => actor)) if input.is_a?(Hash) && input["audit"].is_a?(Hash)
           result = handler.call(input, actor)
@@ -243,6 +254,11 @@ module Stablemates
       end
 
       # At most MAX_REQUEST_BYTES of the request body, or nil for a body that is larger.
+      def oversized_request_id?(input)
+        request_id = input.is_a?(Hash) && input["audit"].is_a?(Hash) && input["audit"]["requestId"]
+        request_id.is_a?(String) && request_id.bytesize > MAX_REQUEST_ID_BYTES
+      end
+
       def read_body(env)
         declared = env["CONTENT_LENGTH"].to_s
         unless declared.empty?

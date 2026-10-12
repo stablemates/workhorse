@@ -106,6 +106,14 @@ by the request schema), `FORBIDDEN` (403, mutation on a read-only dashboard), `N
 Schema — for example `enqueueTest` requiring `feature` when `kind` is `"feature"` — are enforced
 server-side and answer `BAD_REQUEST`.
 
+Every mutation limits `audit.requestId` to 512 UTF-8 bytes, the bound of the SQL functions that
+write the audit. JSON Schema measures a string in characters, so the request schema states this
+bound only in its `description`. The backend measures the value as the client sent it, before it
+removes leading and trailing whitespace. If the value is longer, the backend answers `BAD_REQUEST`
+with one `custom` issue at the path `["audit", "requestId"]`, before any SQL runs. A read procedure
+does not check an `audit` member. The `error-envelope` conformance exchanges whose names contain
+`request-id` fix these responses.
+
 ## Request handling order
 
 The reference host processes every owned request in this order; a conforming backend must not
