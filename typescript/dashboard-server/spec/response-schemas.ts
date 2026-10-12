@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -24,6 +24,7 @@ export interface ResponseSchemas {
 }
 
 const specDirectory = dirname(fileURLToPath(import.meta.url));
+const repositoryDirectory = join(specDirectory, "..", "..", "..");
 
 const excludedReferenceNames = new Set(["Array", "ReadonlyArray", "Record", "__type", "__object"]);
 
@@ -35,6 +36,71 @@ function dashboardDefinitionName(symbolName: string): string {
   return symbolName.startsWith(dashboardDefinitionPrefix)
     ? symbolName
     : `${dashboardDefinitionPrefix}${symbolName}`;
+}
+
+/**
+ * The earliest declaration of a property, as its file path and its offset in that file.
+ *
+ * The path is relative to the repository root, so the order does not depend on where the checkout
+ * is. The checker gives each source file its real path, so a symbolic link does not change it.
+ */
+function declarationPosition(property: ts.Symbol): { file: string; offset: number } | undefined {
+  let earliest: { file: string; offset: number } | undefined;
+  for (const declaration of property.declarations ?? []) {
+    const file = relative(repositoryDirectory, declaration.getSourceFile().fileName)
+      .split(sep)
+      .join("/");
+    const position = { file, offset: declaration.pos };
+    if (
+      earliest === undefined ||
+      position.file < earliest.file ||
+      (position.file === earliest.file && position.offset < earliest.offset)
+    ) {
+      earliest = position;
+    }
+  }
+  return earliest;
+}
+
+/**
+ * Put the properties of an object type in the order of their declarations in the source.
+ *
+ * The checker lists the properties of an `Omit`, a `Pick`, or another mapped type in the order of
+ * its key union, and it orders a union by the order in which it created the member types. A change
+ * to an unrelated exported type can therefore move a key, which rewrites the generated artifacts
+ * with no change to the wire contract. The emitted order is fixed instead:
+ *
+ * 1. A property with a declaration comes first. Properties sort by the file path of their earliest
+ *    declaration, then by the offset of that declaration in the file. Thus the properties of one
+ *    interface keep the order in which the source writes them. If a file declares a base type
+ *    before an interface that extends it, the base members come first.
+ * 2. A property with no declaration, such as a key of `Record<"a" | "b", T>`, comes last, in name
+ *    order.
+ */
+function inDeclarationOrder(properties: readonly ts.Symbol[]): ts.Symbol[] {
+  const keyed = properties.map((property) => ({
+    property,
+    position: declarationPosition(property),
+  }));
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  keyed.sort((left, right) => {
+    if (left.position && right.position) {
+      if (left.position.file !== right.position.file) {
+        return left.position.file < right.position.file ? -1 : 1;
+      }
+      if (left.position.offset !== right.position.offset) {
+        return left.position.offset - right.position.offset;
+      }
+    } else if (left.position || right.position) {
+      return left.position ? -1 : 1;
+    }
+    return left.property.name < right.property.name
+      ? -1
+      : left.property.name > right.property.name
+        ? 1
+        : 0;
+  });
+  return keyed.map(({ property }) => property);
 }
 
 class ResponseSchemaBuilder {
@@ -176,7 +242,7 @@ class ResponseSchemaBuilder {
     }
     const properties: Record<string, JsonSchema> = {};
     const required: string[] = [];
-    for (const property of this.checker.getPropertiesOfType(type)) {
+    for (const property of inDeclarationOrder(this.checker.getPropertiesOfType(type))) {
       const declared = this.checker.getTypeOfSymbolAtLocation(property, this.location);
       const optional =
         (property.flags & ts.SymbolFlags.Optional) !== 0 ||
@@ -217,8 +283,6 @@ export function generateResponseSchemas(): ResponseSchemas {
     incremental: false,
     tsBuildInfoFile: undefined,
   });
-  const source = program.getSourceFile(entry);
-  if (!source) throw new Error(`Missing spec entry point: ${entry}`);
   const errors = ts
     .getPreEmitDiagnostics(program)
     .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
@@ -228,12 +292,29 @@ export function generateResponseSchemas(): ResponseSchemas {
       .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
     throw new Error(`The spec type program does not compile:\n${messages.join("\n")}`);
   }
+  return responseSchemasOf(program, entry, "DashboardV1Responses");
+}
+
+/**
+ * Emit the JSON Schemas of one type alias in a compiled program.
+ *
+ * `generateResponseSchemas` uses this for `DashboardV1Responses`. A test uses it for a small
+ * fixture program, so it can show that the emitted order does not follow the checker's type
+ * creation order.
+ */
+export function responseSchemasOf(
+  program: ts.Program,
+  entry: string,
+  aliasName: string,
+): ResponseSchemas {
+  const source = program.getSourceFile(entry);
+  if (!source) throw new Error(`Missing spec entry point: ${entry}`);
   const checker = program.getTypeChecker();
   for (const statement of source.statements) {
-    if (ts.isTypeAliasDeclaration(statement) && statement.name.text === "DashboardV1Responses") {
+    if (ts.isTypeAliasDeclaration(statement) && statement.name.text === aliasName) {
       const type = checker.getTypeAtLocation(statement.name);
       return new ResponseSchemaBuilder(checker, statement.name).build(type);
     }
   }
-  throw new Error("responses.ts no longer declares DashboardV1Responses");
+  throw new Error(`${entry} no longer declares ${aliasName}`);
 }
