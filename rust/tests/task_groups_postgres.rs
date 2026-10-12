@@ -76,7 +76,7 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
         if payload["spawn"] == json!(true) {
             let added = context
                 .task_group()
-                // A request without a queue goes to `default`, as a child task request does.
+                // The request names its queue.
                 .add(vec![request("import", json!({ "spawn": false })).with_options(
                     EnqueueOptions {
                         queue: Some(QUEUE.into()),

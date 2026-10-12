@@ -184,13 +184,13 @@ describe("child tasks", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    const accepted = await queue.claim("settled-child-worker");
+    const accepted = await queue.claim("settled-child-worker", { queue: "settled-parents" });
     expect(await queue.complete(accepted!, "settled-child-worker", { value: 1 })).toBe(true);
-    const rejected = await queue.claim("settled-child-worker");
+    const rejected = await queue.claim("settled-child-worker", { queue: "settled-parents" });
     expect(await queue.fail(rejected!, "settled-child-worker", new Error("rejected"))).toBe(
       "failed",
     );
-    const skipped = await queue.claim("settled-child-worker");
+    const skipped = await queue.claim("settled-child-worker", { queue: "settled-parents" });
     expect((await queue.cancel(skipped!.id)).status).toBe("cancel_requested");
     expect(await queue.acknowledgeCancel(skipped!, "settled-child-worker")).toBe(true);
 
@@ -205,6 +205,85 @@ describe("child tasks", () => {
       },
     });
   });
+
+  it("puts a child request without a queue on the queue of the parent task", async () => {
+    const parentId = await queue.enqueue("default-child-parent", null, {
+      queue: "default-child-parents",
+    });
+    const worker = new Worker(queue, {
+      queue: "default-child-parents",
+      workerId: "default-child-parent-worker",
+    });
+    worker.handle("default-child-parent", async (_payload, context) =>
+      context.runChildren([
+        // The request names no queue, so the child goes to the queue of the parent task.
+        { name: "unnamed", type: "default-child", payload: null, options: { maxAttempts: 1 } },
+        {
+          name: "named",
+          type: "default-child",
+          payload: null,
+          options: { queue: "default-child-named", maxAttempts: 1 },
+        },
+      ]),
+    );
+    expect(await worker.runOnce()).toBe(true);
+
+    const lineage = await admin.getChildLineage(parentId);
+    const queues = await Promise.all(
+      lineage.records.map(async (record) => [
+        record.name,
+        (await admin.getTask(record.childTaskId))?.queue,
+      ]),
+    );
+    expect(Object.fromEntries(queues)).toEqual({
+      unnamed: "default-child-parents",
+      named: "default-child-named",
+    });
+  });
+
+  it.each([false, true])(
+    "replays a child request without a queue against a stored child on another queue (set=%s)",
+    async (set) => {
+      // An earlier SDK put a child with no queue on the queue `default`.
+      const parentQueue = `legacy-child-parents-${set}`;
+      const parentId = await queue.enqueue("legacy-child-parent", null, { queue: parentQueue });
+      const parent = await queue.claim("legacy-parent-worker", { queue: parentQueue });
+      const stored = { queue: "default", maxAttempts: 1 };
+      if (set) {
+        await queue.createChildren(parent!, "legacy-parent-worker", [
+          { name: "charge", type: "legacy-child", payload: null, options: stored },
+        ]);
+      } else {
+        await queue.createChild(
+          parent!,
+          "legacy-parent-worker",
+          "charge",
+          "legacy-child",
+          null,
+          stored,
+        );
+      }
+      const child = await queue.claim("legacy-child-worker", { queue: "default" });
+      expect(await queue.complete(child!, "legacy-child-worker", { receipt: 1 })).toBe(true);
+
+      const worker = new Worker(queue, { queue: parentQueue, workerId: "legacy-parent-worker" });
+      worker.handle("legacy-child-parent", async (_payload, context) => {
+        // The replay names no queue. It keeps the queue of the stored child.
+        const options = { maxAttempts: 1 };
+        if (set) {
+          return context.runChildren([
+            { name: "charge", type: "legacy-child", payload: null, options },
+          ]);
+        }
+        return context.runChild("charge", "legacy-child", null, options);
+      });
+      expect(await worker.runOnce()).toBe(true);
+      await expect(admin.getTask(parentId)).resolves.toMatchObject({
+        state: "succeeded",
+        result: set ? { charge: { status: "succeeded", result: { receipt: 1 } } } : { receipt: 1 },
+      });
+    },
+  );
 
   it.each([
     ["failed", "failed"],
@@ -256,7 +335,9 @@ describe("child tasks", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    const child = await queue.claim("retrying-fan-out-child-worker");
+    const child = await queue.claim("retrying-fan-out-child-worker", {
+      queue: "retrying-fan-out-parents",
+    });
     expect(await queue.complete(child!, "retrying-fan-out-child-worker", { value: 7 })).toBe(true);
     await expect(
       pool.query(`SELECT workhorse.release_dependents_v1($1::uuid) AS count`, [child!.id]),
@@ -1201,9 +1282,9 @@ describe("child tasks", () => {
       },
     });
 
-    const first = await queue.claim("observed-child-worker");
+    const first = await queue.claim("observed-child-worker", { queue: "observed-parents" });
     expect(await queue.complete(first!, "observed-child-worker", { value: 1 })).toBe(true);
-    const second = await queue.claim("observed-child-worker");
+    const second = await queue.claim("observed-child-worker", { queue: "observed-parents" });
     expect(await queue.fail(second!, "observed-child-worker", new Error("failed"))).toBe("failed");
     await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "failed" });
     await expect(queue.health()).resolves.toMatchObject({

@@ -347,7 +347,7 @@ RSpec.describe W::HandlerContext do
     executor = FakeExecutor.new do |sql, _params|
       case sql
       when W::SqlCatalogue::TASK_CHILD then [{"parent_task_id" => task.id, "child_task_id" => child, "child_name" => "c"}]
-      when W::SqlCatalogue::GET_TASK then [{"contract_version" => nil}]
+      when W::SqlCatalogue::GET_TASK then [{"contract_version" => nil, "queue_name" => task.queue}]
       else [{"status" => "conflict"}]
       end
     end

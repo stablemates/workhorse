@@ -23,12 +23,18 @@ import {
 } from "./enqueue-contracts.js";
 
 // Missing or changed children use the current contract; null preserves an uncontracted child.
-type ChildVersions = ReadonlyMap<string, { type: string; version: string | null }>;
+// The queue lets a replay of a request with no queue keep the queue of its stored child.
+type ChildVersions = ReadonlyMap<string, { type: string; version: string | null; queue: string }>;
 type BuildChildRequest = (versions?: ChildVersions) => Promise<string>;
 
 function childVersion(versions: ChildVersions | undefined, name: string, type: string) {
   const stored = versions?.get(name);
   return stored?.type === type ? stored.version : undefined;
+}
+
+function childQueue(versions: ChildVersions | undefined, name: string, type: string) {
+  const stored = versions?.get(name);
+  return stored?.type === type ? stored.queue : undefined;
 }
 
 function contractRejected(error: unknown): boolean {
@@ -141,6 +147,7 @@ export class ChildTasksModule extends QueueModule {
     payload: TPayload,
     options: ChildTaskOptions,
     version?: string | null,
+    storedQueue?: string,
   ): Promise<Record<string, unknown>> {
     const unsafe = options as EnqueueOptions;
     if (
@@ -154,7 +161,9 @@ export class ChildTasksModule extends QueueModule {
     }
     const acceptance = await this.enqueueContracts.taskAcceptance(type, payload, version);
     return {
-      queue: options.queue ?? this.context.defaultQueue,
+      // A request with no queue goes to the queue of the parent task. A replay keeps the queue of
+      // the stored child, so a child created before that rule does not conflict.
+      queue: options.queue ?? storedQueue ?? parent.queue,
       type,
       payload,
       priority: validateTaskPriority(options.priority),
@@ -180,16 +189,18 @@ export class ChildTasksModule extends QueueModule {
       child_name: string;
       child_type: string;
     }>(SQL_STATEMENTS["task_child"], [parentTaskId, 101]);
-    const versions = new Map<string, { type: string; version: string | null }>();
+    const versions = new Map<string, { type: string; version: string | null; queue: string }>();
     for (const edge of edges.rows) {
       if (edge.parent_task_id.toLowerCase() !== parentTaskId.toLowerCase()) continue;
-      const child = await this.context.database.query<{ contract_version: string | null }>(
-        SQL_STATEMENTS["get_task"],
-        [edge.child_task_id],
-      );
+      const child = await this.context.database.query<{
+        contract_version: string | null;
+        queue_name: string;
+      }>(SQL_STATEMENTS["get_task"], [edge.child_task_id]);
+      const row = expectOneRow(child, "get_task");
       versions.set(edge.child_name, {
         type: edge.child_type,
-        version: expectOneRow(child, "get_task").contract_version,
+        version: row.contract_version,
+        queue: row.queue_name,
       });
     }
     return versions;
@@ -250,7 +261,14 @@ export class ChildTasksModule extends QueueModule {
     }
     const build: BuildChildRequest = async (versions) =>
       JSON.stringify(
-        await this.childRequest(parent, type, payload, options, childVersion(versions, name, type)),
+        await this.childRequest(
+          parent,
+          type,
+          payload,
+          options,
+          childVersion(versions, name, type),
+          childQueue(versions, name, type),
+        ),
       );
     const request = await this.initialChildRequest(parent.id, build);
     const write = async (encoded: string): Promise<CreateChildRow> => {
@@ -327,6 +345,7 @@ export class ChildTasksModule extends QueueModule {
               payload,
               options,
               childVersion(versions, name, type),
+              childQueue(versions, name, type),
             ),
           })),
         ),

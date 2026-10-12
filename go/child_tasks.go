@@ -417,9 +417,18 @@ func (handler *HandlerContext) createChildren(
 	}
 }
 
-// childVersions maps a child name to the contract version its existing task carries. A nil version
-// records a child created without a contract, and a name it omits takes the current contract.
-type childVersions map[string]*string
+// childVersions maps a child name to the contract version and the queue its existing task carries.
+// A nil version records a child created without a contract, and a name it omits takes the current
+// contract.
+type childVersions map[string]storedChild
+
+// storedChild is the contract version and the queue of an existing child. A replayed request with no
+// queue keeps that queue, so a child created before the queue of the parent became the default does
+// not conflict.
+type storedChild struct {
+	version *string
+	queue   string
+}
 
 type childContractKey struct {
 	taskType string
@@ -501,7 +510,8 @@ func (handler *HandlerContext) replayedChildRequest(
 	return write(accepted)
 }
 
-// acceptedChildVersions returns the contract version of each child this task created, by name.
+// acceptedChildVersions returns the contract version and the queue of each child this task created,
+// by name.
 func (handler *HandlerContext) acceptedChildVersions() (childVersions, error) {
 	edges, err := handler.executor.Query(
 		handler.context,
@@ -526,13 +536,14 @@ func (handler *HandlerContext) acceptedChildVersions() (childVersions, error) {
 		if err != nil {
 			return nil, err
 		}
-		var version *string
+		var stored storedChild
 		if len(rows) == 1 {
 			if value, ok := rows[0][rowContractVersionField].(string); ok {
-				version = &value
+				stored.version = &value
 			}
+			stored.queue, _ = rows[0][rowQueueNameField].(string)
 		}
-		versions[name] = version
+		versions[name] = stored
 	}
 	return versions, nil
 }
@@ -555,8 +566,12 @@ func (handler *HandlerContext) serializeChildRequest(
 		return childEnqueueInput{}, fmt.Errorf(childKeyedOptionsMessage, ErrInvalidEnqueueOptions)
 	}
 	queueName := options.Queue
+	if stored, ok := versions[name]; ok && queueName == emptyString {
+		queueName = stored.queue
+	}
 	if queueName == emptyString {
-		queueName = defaultWorkerQueueValue
+		// A request with no queue goes to the queue of the parent task.
+		queueName = handler.Task.Queue
 	}
 	maxAttempts := options.MaxAttempts
 	if maxAttempts == 0 {
@@ -604,7 +619,8 @@ func (handler *HandlerContext) childContract(
 	versions childVersions,
 	contracts childContracts,
 ) (*payloadContract, error) {
-	version, pinned := versions[name]
+	stored, pinned := versions[name]
+	version := stored.version
 	key := childContractKey{taskType: taskType, pinned: pinned}
 	var requested any
 	if pinned {

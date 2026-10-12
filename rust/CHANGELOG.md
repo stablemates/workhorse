@@ -77,6 +77,18 @@ migration changes no stored data.
   `TaskGroupMembershipConflict` (`P1010`), with their `DETAIL` documents. `Operation` gains
   `AddToTaskGroup`.
 
+### Behaviour changes
+
+- If a child task request names no queue, `HandlerContext::run_child`, `run_children`, and
+  `run_children_all` put the child in the queue of the parent task (SM-1260,
+  [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
+  Before, the child went to the queue `default`. If no worker served `default`, the child stayed
+  `ready`, and the parent task did not continue. To keep the old queue, name it on the request, for
+  example `EnqueueOptions { queue: Some("default".into()), ..Default::default() }`.
+  A parent task that created a child before the upgrade can replay that request after the upgrade.
+  If the replayed request names no queue, it keeps the queue of the stored child, so the parent
+  task joins its child.
+
 ## 0.7.1 — 2026-10-09
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

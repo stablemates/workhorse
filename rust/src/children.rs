@@ -16,9 +16,17 @@ use crate::{ClaimedTask, EnqueueOptions, Error, HandlerContext, Operation};
 
 const MAX_CHILDREN: usize = 100;
 
-/// The contract version to stamp on a child, by child name. A child absent from the map takes its
-/// type's current contract, and a `None` version stamps no contract.
-type Versions = HashMap<String, Option<String>>;
+/// The stored contract version and queue of each existing child, by child name. A child absent from
+/// the map takes its type's current contract, and a `None` version stamps no contract.
+type Versions = HashMap<String, Stored>;
+
+/// The contract version and the queue of an existing child. A replayed request with no queue keeps
+/// that queue, so a child created before the queue of the parent became the default does not
+/// conflict.
+struct Stored {
+    version: Option<String>,
+    queue: Option<String>,
+}
 
 /// How the children of one call are sent: one bare request, or a set of named requests.
 #[derive(Clone, Copy)]
@@ -285,7 +293,8 @@ impl HandlerContext {
         let mut contracts = HashMap::new();
         let mut requests = Vec::with_capacity(children.len());
         for child in children {
-            let version = versions.get(&child.name);
+            let stored = versions.get(&child.name);
+            let version = stored.map(|stored| &stored.version);
             let key = (child.task_type.as_str(), version);
             let contract: Option<Arc<PayloadContract>> = match contracts.get(&key) {
                 Some(contract) => Option::clone(contract),
@@ -302,7 +311,8 @@ impl HandlerContext {
                     loaded
                 }
             };
-            requests.push(child_request(self.task(), child, contract.as_ref())?);
+            let stored_queue = stored.and_then(|stored| stored.queue.as_deref());
+            requests.push(child_request(self.task(), child, contract.as_ref(), stored_queue)?);
         }
         shaped(children, shape, requests)
     }
@@ -311,11 +321,11 @@ impl HandlerContext {
     /// stamps. A contract change between two such calls must not make them conflict, since the
     /// call that reaches PostgreSQL reconciles its stamps with the accepted ones.
     fn identity(&self, children: &[ChildTaskRequest], shape: Shape) -> Result<Value, Error> {
-        let requests = children.iter().map(|child| child_request(self.task(), child, None));
+        let requests = children.iter().map(|child| child_request(self.task(), child, None, None));
         shaped(children, shape, requests.collect::<Result<_, _>>()?)
     }
 
-    /// The contract version of each child this task created, by child name.
+    /// The contract version and the queue of each child this task created, by child name.
     async fn accepted_contract_versions(&self) -> Result<Versions, Error> {
         let task_id = self.task().id;
         let limit = MAX_CHILDREN as i32 + 1;
@@ -327,11 +337,14 @@ impl HandlerContext {
             }
             let child: Uuid = edge.try_get("child_task_id")?;
             let rows = self.pool().rows(sql::GET_TASK, &[&child]).await?;
-            let version = match rows.first() {
-                Some(row) => row.try_get::<_, Option<String>>("contract_version")?,
-                None => None,
+            let stored = match rows.first() {
+                Some(row) => Stored {
+                    version: row.try_get("contract_version")?,
+                    queue: Some(row.try_get("queue_name")?),
+                },
+                None => Stored { version: None, queue: None },
             };
-            versions.insert(edge.try_get("child_name")?, version);
+            versions.insert(edge.try_get("child_name")?, stored);
         }
         Ok(versions)
     }
@@ -375,15 +388,17 @@ fn validate_child_options(options: &EnqueueOptions) -> Result<(), Error> {
 }
 
 /// The enqueue request PostgreSQL creates a child from, which inherits the parent's trace and
-/// carries the child's contract stamp.
+/// carries the child's contract stamp. A request with no queue goes to `stored_queue`, the queue of
+/// the child a replay finds, or else to the queue of the parent task.
 fn child_request(
     parent: &ClaimedTask,
     child: &ChildTaskRequest,
     contract: Option<&Arc<PayloadContract>>,
+    stored_queue: Option<&str>,
 ) -> Result<Value, Error> {
     let options = &child.options;
     let mut input: Map<String, Value> = task_input(
-        "default",
+        stored_queue.unwrap_or(&parent.queue),
         &child.task_type,
         &child.payload,
         options.queue.as_deref(),
@@ -450,16 +465,30 @@ mod tests {
     }
 
     #[test]
-    fn a_child_goes_to_default_unless_its_options_name_a_queue() {
+    fn a_child_goes_to_the_queue_of_its_parent_unless_its_options_name_a_queue() {
         let queue = |options: &EnqueueOptions| {
             let child = ChildTaskRequest {
                 options: options.clone(),
                 ..ChildTaskRequest::new("invoice", "invoice.create", &json!({})).unwrap()
             };
-            child_request(&parent(), &child, None).unwrap()["queue"].clone()
+            child_request(&parent(), &child, None, None).unwrap()["queue"].clone()
+        };
+        assert_eq!(queue(&EnqueueOptions::default()), json!("orders"));
+        let invoices = EnqueueOptions { queue: Some("invoices".into()), ..Default::default() };
+        assert_eq!(queue(&invoices), json!("invoices"));
+    }
+
+    #[test]
+    fn a_replayed_child_without_a_queue_keeps_the_queue_of_the_stored_child() {
+        let queue = |options: &EnqueueOptions| {
+            let child = ChildTaskRequest {
+                options: options.clone(),
+                ..ChildTaskRequest::new("invoice", "invoice.create", &json!({})).unwrap()
+            };
+            child_request(&parent(), &child, None, Some("default")).unwrap()["queue"].clone()
         };
         assert_eq!(queue(&EnqueueOptions::default()), json!("default"));
-        let orders = EnqueueOptions { queue: Some("orders".into()), ..Default::default() };
-        assert_eq!(queue(&orders), json!("orders"));
+        let invoices = EnqueueOptions { queue: Some("invoices".into()), ..Default::default() };
+        assert_eq!(queue(&invoices), json!("invoices"));
     }
 }

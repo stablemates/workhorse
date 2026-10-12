@@ -238,7 +238,7 @@ module Stablemates
         durable!("child tasks")
         build = lambda do |versions = {}|
           canonical_json(@queue.serialize_child_request(@task, task_type, payload, enqueue_options, {},
-            version: versions.fetch(name, :current)))
+            **stored_child(versions, name)))
         end
         encoded = initial(build)
         once(:run_child, name, encoded) do
@@ -343,7 +343,7 @@ module Stablemates
           canonical_json(children.map do |child|
             {"name" => child.name,
              "request" => @queue.serialize_child_request(@task, child.task_type, child.payload, child.options,
-               contracts, version: versions.fetch(child.name, :current))}
+               contracts, **stored_child(versions, child.name))}
           end)
         end
         encoded = initial(build)
@@ -389,7 +389,7 @@ module Stablemates
       # PostgreSQL compares a replayed child request with the one it accepted, contract stamp
       # included. After a contract change, a +conflict+ retries once with each existing child
       # stamped with the contract version it was created under. +build+ renders the request from a
-      # map of child name to version.
+      # map of child name to version and queue.
       def replayed(row, encoded, build)
         return row unless row.fetch("status") == "conflict"
 
@@ -404,13 +404,21 @@ module Stablemates
         (accepted == encoded) ? row : yield(accepted)
       end
 
-      # The contract version of each child this task created, by child name.
+      # The contract version and the queue of each child this task created, by child name.
       def accepted_contract_versions
         edges = @executor.rows(SqlCatalogue::TASK_CHILD, [@task.id, MAX_CHILDREN + 1])
         edges.select { |edge| edge.fetch("parent_task_id") == @task.id }.to_h do |edge|
           task = @executor.rows(SqlCatalogue::GET_TASK, [edge.fetch("child_task_id")]).first
-          [edge.fetch("child_name"), task&.fetch("contract_version")]
+          [edge.fetch("child_name"), [task&.fetch("contract_version"), task&.fetch("queue_name")]]
         end
+      end
+
+      # The serialize_child_request keywords for the child +name+. A stored child pins its contract
+      # version, and a request with no queue keeps its queue, so a child created before the queue of
+      # the parent became the default does not conflict.
+      def stored_child(versions, name)
+        version, queue = versions.fetch(name) { return {version: :current} }
+        {version: version, stored_queue: queue}
       end
 
       def joined(children, mode)

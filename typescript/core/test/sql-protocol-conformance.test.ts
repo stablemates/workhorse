@@ -1961,7 +1961,8 @@ describe("SQL protocol conformance fixtures", () => {
       {
         name: "only",
         request: expect.objectContaining({
-          queue: "default",
+          // A child request with no queue goes to the queue of the parent task.
+          queue: adapterTask.queue,
           type: "protocol.child",
           payload: { value: 2 },
           runAt: occurredAt,
