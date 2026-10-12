@@ -845,7 +845,13 @@ module Conformance
       started = Concurrent::Event.new
       reasons = Concurrent::Array.new
       rejected = Concurrent::Array.new
-      with_pool do |pool|
+      # A heartbeat locks the task's runtime row, and recovery skips a locked row. A heartbeat that
+      # started just after the expiry would make the recovery below find no lease. Hold every
+      # heartbeat until the recovery ends, as the Go fixture does. The first heartbeat after that
+      # finds the recovered task and reports the lease as stale. If a full lease passes first, the
+      # worker's lease watchdog ends the attempt with the same reason and writes nothing.
+      recovery_ended = Concurrent::Event.new
+      with_pool(on_connect: ->(connection) { hold_heartbeats(connection, recovery_ended) }) do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
         subject.handle(fixture["taskType"]) do |_payload, context|
           started.set
@@ -867,8 +873,11 @@ module Conformance
           @connection.exec_params("UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - " \
             "interval '1 millisecond' WHERE task_id = $1", [task_id])
           recovered = value("SELECT rows_affected FROM workhorse.recover_expired_telemetry_v1(100, 0)")
+          recovery_ended.set
           check(recovered == "1", "recovery expired #{Matcher.render(recovered)} leases, want 1")
           check(result.call == true, "the worker did not report the lost run")
+        ensure
+          recovery_ended.set
         end
       end
       check(fixture["expectedRunOutcome"] == "processed", "unexpected run outcome #{fixture["expectedRunOutcome"]}")
@@ -889,13 +898,29 @@ module Conformance
         disable_registry: true, poll_interval: 0.005, **options)
     end
 
-    def with_pool(size = 4)
+    # Yields a pool of +size+ connections. +on_connect+ receives each new connection.
+    def with_pool(size = 4, on_connect: nil)
       pool = ConnectionPool.new(size: size, timeout: 5) do
-        PG.connect(@url, connect_timeout: ScratchDatabase::CONNECT_TIMEOUT)
+        connection = PG.connect(@url, connect_timeout: ScratchDatabase::CONNECT_TIMEOUT)
+        on_connect&.call(connection)
+        connection
       end
       yield pool
     ensure
       pool&.shutdown(&:close)
+    end
+
+    # Makes each heartbeat_many_v1 call on +connection+ wait until +released+ is set. The call
+    # waits before it reaches PostgreSQL, so it holds no row lock while it waits. A dedicated
+    # heartbeat sends with send_query_params, and a shared heartbeat with exec_params.
+    def hold_heartbeats(connection, released)
+      %i[exec_params send_query_params].each do |name|
+        connection.define_singleton_method(name) do |sql, *rest|
+          raise "a held heartbeat was never released" if sql == W::SqlCatalogue::HEARTBEAT_MANY_V1 && !released.wait(5)
+
+          super(sql, *rest)
+        end
+      end
     end
 
     # Waits until no heartbeat round from an earlier attempt is still running. Such a round can
