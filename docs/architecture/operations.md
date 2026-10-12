@@ -676,6 +676,7 @@ connection.
 | ------------------------------------------- | ---------------------------------------------------------------- |
 | Notification-capable `Worker.run()`         | 5,000 ms default fallback poll, ±10% jitter                      |
 | Notification after an empty claim           | Random delay from 0 through 50 ms before claiming                |
+| Claim that released every task              | The next empty wait; a notification does not end it              |
 | Explicit `pollMs`                           | Replaces the fallback base                                       |
 | No active listener, consecutive empty waits | Double through a 5,000 ms cap, ±10% jitter                       |
 | Query-only adapters                         | Start at 250 ms                                                  |

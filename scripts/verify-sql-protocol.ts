@@ -237,6 +237,23 @@ export interface MissingHandlerRuntimeFixture extends RuntimeFixtureBase {
   expectedAfterHandled: ExpectedRuntimeState;
 }
 
+/**
+ * A listening worker that cannot run a ready task claims it at most once in each poll interval.
+ * The notification that each release sends does not end the wait that the release started.
+ */
+export interface ReleaseWaitRuntimeFixture extends RuntimeFixtureBase {
+  kind: "release-wait";
+  registeredTaskType: string;
+  leaseMs: number;
+  pollMs: number;
+  /** How long the continuous loop runs before the runner counts the releases. */
+  runMs: number;
+  expectedMinimumReleases: number;
+  expectedMaximumReleases: number;
+  /** The poll interval less its jitter: the least time between two releases of the task. */
+  expectedMinimumReleaseGapMs: number;
+}
+
 /** Every JSON value a payload may carry reaches the handler and returns as the result unchanged. */
 export interface JsonRoundTripRuntimeFixture extends RuntimeFixtureBase {
   kind: "json-round-trip";
@@ -346,6 +363,7 @@ export type RuntimeFixture =
   | TracePropagationRuntimeFixture
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture
+  | ReleaseWaitRuntimeFixture
   | JsonRoundTripRuntimeFixture
   | OversizedResultRuntimeFixture
   | ShutdownCancellationRuntimeFixture

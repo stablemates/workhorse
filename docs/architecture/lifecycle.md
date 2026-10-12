@@ -36,15 +36,16 @@ stateDiagram-v2
 - A request can carry an optional priority, persisted retry policies, and up to 100 dependency
   identities.
 - Priority defaults to 0 and must be an integer from 0 through 100.
-- If one member is invalid, `enqueue_batch_v1` rolls back the full batch.
+- If a request in the batch is invalid, `enqueue_batch_v1` rolls back the full batch.
 
 `enqueue_batch_v1` returns `(ordinal, task_id, accepted)` for each input. `accepted` is true only
 when the statement created the durable task. The input order controls the returned IDs and the
 allocation of ready sequences.
 
-If a batch has more than one invalid member, these rules select the member that the error reports:
+If a batch has more than one invalid request, these rules select the request that the error
+reports:
 
-- The request loop reports the first member that it rejects in input order.
+- The request loop reports the first request that it rejects in input order.
 - The loop runs before the edge insert. Thus a rejection in the loop has precedence over a
   dependency bound.
 - Each bound check names the lowest task identity that exceeds the bound, in any input order.
@@ -839,12 +840,12 @@ One worker identity, pause state, and `concurrency` budget cover the complete co
 
 #### Dispatch loop
 
-Each claim requests a number of slots through `claim_many_v1`. Every member passes ordering, policy,
-rate-token, and fence checks inside that call. The batch admits its members in rounds
-([Claim](#claim)). The worker advances the queue cursor after every batched queue attempt. Each
-claimed task starts one independent per-task handler task. On a queue whose tier probe answers fast,
-the worker claims and completes through `complete_many_and_claim_v1` instead ([Workers on a
-fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue)).
+Each claim requests a number of slots through `claim_many_v1`. Every task in the batch passes
+ordering, policy, rate-token, and fence checks inside that call. The batch admits the tasks in the
+batch in rounds ([Claim](#claim)). The worker advances the queue cursor after every batched queue
+attempt. Each claimed task starts one independent per-task handler task. On a queue whose tier
+probe answers fast, the worker claims and completes through `complete_many_and_claim_v1` instead
+([Workers on a fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue)).
 
 `dispatchLoop` in `typescript/core/src/worker.ts` keeps more than one claim in flight, as [ADR
 0076](../decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md) decides
@@ -891,42 +892,43 @@ type.
 - `maxSize` is a safe integer from 1 through 100 and cannot exceed `WorkerOptions.concurrency`.
 - `lingerMs` is a safe integer from 0 through 60,000.
 
-Tasks in ordinary active slots rendezvous in the type's process-local coordinator. A full group
-dispatches immediately. A partial group dispatches after its first member has waited `lingerMs`.
+Tasks in ordinary active slots rendezvous in the type's process-local coordinator. A full batch
+dispatches immediately. A partial batch dispatches after its first task has waited `lingerMs`.
 This timer does not depend on `LISTEN` notifications.
 
 Every `BatchHandlerItem` keeps its payload and a `BatchHandlerContext`. This context omits `sleep`,
-`sleepUntil`, `waitForSignal`, `waitForHuman`, `runChild`, and `runChildren`. One member cannot
-suspend while the shared callback owes an outcome for every member. The context keeps the task,
-abort signal, checkpoint reads and writes, wait reads, and progress reads and writes.
+`sleepUntil`, `waitForSignal`, `waitForHuman`, `runChild`, and `runChildren`. A task in the batch
+cannot suspend while the shared callback owes an outcome for every task in the batch. The context
+keeps the task, abort signal, checkpoint reads and writes, wait reads, and progress reads and
+writes.
 
-The coordinator sorts members by priority descending and coordinator arrival order. One invocation
-contains only members of the same configured queue and registered task type.
+The coordinator sorts the tasks in the batch by priority descending and coordinator arrival order.
+One invocation contains only tasks of the same configured queue and registered task type.
 
-The handler returns one `BatchHandlerOutcome` per member in the same order:
+The handler returns one `BatchHandlerOutcome` for each task in the batch, in the same order:
 
-- `{ status: "succeeded", result }` submits that member's result.
-- `{ status: "failed", error }` submits that member's failure through its persisted retry policy and
-  remaining attempt budget.
-- A thrown error, non-array return, wrong outcome count, or invalid outcome rejects every member.
-  Each per-task execution path still submits that failure under its own fence.
+- `{ status: "succeeded", result }` submits the result of that task.
+- `{ status: "failed", error }` submits the failure of that task through its persisted retry policy
+  and remaining attempt budget.
+- A thrown error, non-array return, wrong outcome count, or invalid outcome rejects every task in
+  the batch. Each per-task execution path still submits that failure under its own fence.
 
 ##### Batch admission
 
-PostgreSQL admits each member inside `claim_many_v1` before the process-local rendezvous. The batch
-is not an atomic admission unit. Every admitted member consumes:
+PostgreSQL admits each task in the batch inside `claim_many_v1` before the process-local
+rendezvous. The batch is not an atomic admission unit. Every admitted task in the batch consumes:
 
 - one worker slot;
 - one queue or keyed active count;
 - one queue rate token and one keyed rate token, when the matching policy applies.
 
-Thus a policy can produce a partial batch. During linger time, each admitted member continues to
-consume its lease and policy capacity. Priority controls PostgreSQL admission first. The sort of the
-coordinator only orders members that PostgreSQL already admitted.
+Thus a policy can produce a partial batch. During linger time, each admitted task in the batch
+continues to consume its lease and policy capacity. Priority controls PostgreSQL admission first.
+The sort of the coordinator only orders the tasks in the batch that PostgreSQL already admitted.
 
-The fenced SQL transitions release each member's policy capacity after completion, failure,
-cancellation, expiry, or recovery. A stale fence rejects only its member. `Worker.stop()` drains
-admitted members and their heartbeats but prevents another claim pass.
+The fenced SQL transitions release the policy capacity of each task in the batch after completion,
+failure, cancellation, expiry, or recovery. A stale fence rejects only its task. `Worker.stop()`
+drains the admitted tasks in the batch and their heartbeats but prevents another claim pass.
 
 ##### Batch evidence
 
@@ -935,35 +937,36 @@ At dispatch, the coordinator generates one UUID. It calls
 the callback.
 
 - The function accepts 1 through 100 unique task IDs with equal-length attempt and fence arrays.
-- PostgreSQL verifies every member against its immutable `claimed` event. Cancellation or lease loss
-  during the linger therefore does not erase an actual dispatch.
-- The wrapper delegates to `record_batch_event_v1`, which validates all members before it writes any
-  event.
-- The helper locks the batch ID while it writes. Thus a retry returns the original member count and
-  does not append duplicate evidence.
+- PostgreSQL verifies every task in the batch against its immutable `claimed` event. Cancellation
+  or lease loss during the linger therefore does not erase an actual dispatch.
+- The wrapper delegates to `record_batch_event_v1`, which validates all the tasks in the batch
+  before it writes any event.
+- The helper locks the batch ID while it writes. Thus a retry returns the original number of tasks
+  in the batch and does not append duplicate evidence.
 - The `task_event_batch_id_idx` partial expression index limits the lookup to matching batch
   evidence.
-- Dispatch and failure evidence must name identical members. If the same batch ID already names
-  different evidence, PostgreSQL rejects the write.
+- Dispatch and failure evidence must name identical tasks in the batch. If the same batch ID
+  already names different evidence, PostgreSQL rejects the write.
 
-PostgreSQL then appends one `batch_dispatched` `task_event` per member. Each event records
-`batch_id`, ordered `members` containing `task_id` and `attempt`, `size`, `worker_id`, and that
-member's `fence_token`.
+PostgreSQL then appends one `batch_dispatched` `task_event` for each task in the batch. Each event
+records `batch_id`, ordered `members` containing `task_id` and `attempt`, `size`, `worker_id`, and
+the `fence_token` of that task.
 
 `Worker` serializes these announcements. But callbacks run with the ordinary concurrency of the
 `Worker`. If PostgreSQL rejects the evidence write, `Worker` logs the failure and still calls the
 callback. Thus an observability failure does not become a task failure.
 
 If the callback throws or returns an invalid outcome list, `Worker` calls `record_batch_failure_v1`
-before it rejects the members. PostgreSQL appends one `batch_failed` event per claimed member with
-the same batch fields. A failure to append this evidence does not replace the callback error or
-prevent per-task settlement.
+before it rejects the tasks in the batch. PostgreSQL appends one `batch_failed` event for each
+claimed task in the batch, with the same batch fields. A failure to append this evidence does not
+replace the callback error or prevent per-task settlement.
 
 `DashboardTaskDetail.batchExecutions` projects every retained `batch_dispatched` event for the
 selected task. Each execution includes the batch ID, selected attempt, dispatch time, and ordered
-member identities. If a member's matching attempt has closed, the execution also includes its
-outcome and error. The task drawer links the other member identities. It labels a batch-wide failure
-only if the selected task has a retained `batch_failed` event for that batch ID.
+task identities in the batch. If the matching attempt of a task in the batch has closed, the
+execution also includes its outcome and error. The task drawer links the other task identities in
+the batch. It labels a batch-wide failure only if the selected task has a retained `batch_failed`
+event for that batch ID.
 
 Two logs cover batches, without payloads or task IDs:
 
@@ -1456,39 +1459,50 @@ released task. Also, `terminalize_deadline_v1` rolled back the whole recovery pa
 released task.
 
 Each SDK releases a task of an unregistered type through `release_owned_v1` and records the
-`released` handler outcome. A claim whose tasks were all released counts as empty. But the release
-also sends a notification, so the empty wait does not always control when a worker claims that task
-again.
+`released` handler outcome. A claim whose tasks were all released counts as empty. The release also
+sends a notification, so the continuous loop starts a release wait that a notification does not end.
 
 ##### Continuous loop
 
 The continuous loop is TypeScript `Worker.run()`, Python `Worker.run()` and `AsyncWorker.run()`, Go
-`Worker.Run`, Rust `Worker::run`, and Ruby `Worker#run`. All five do the same steps while the
-worker's listener is active:
+`Worker.Run`, Rust `Worker::run`, and Ruby `Worker#run`. All five do the same steps:
 
-1. The worker claims a task that it has no handler for. The claim counts as empty, and the loop
-   starts its empty wait with the base poll interval.
-2. The worker releases the task. `release_owned_v1` sets the task to `ready` and calls
+1. The worker claims a task that it has no handler for. The claim counts as empty.
+2. The loop starts a release wait. Its deadline is the next empty wait: the base poll interval
+   while the listener is active, or the poll backoff without a listener.
+3. The worker releases the task. `release_owned_v1` sets the task to `ready` and calls
    `pg_notify('workhorse_tasks', queue_name)`.
-3. The worker's own listener gets the notification and wakes dispatch. The wake is newer than the
-   claim, so the empty wait ends at once. In TypeScript, `wakeDispatch()` increments
-   `dispatchWakeVersion`, and the `emptyWait` check in `Worker.run()` sees the change.
-4. The count of consecutive empty claims is above zero, so the next claim waits the notification
-   claim delay first. That delay is a random time from 0 through 50 ms.
-5. The worker claims again. If the task is first in its queue, the worker gets it and releases it
-   again.
+4. The worker's own listener gets the notification and wakes dispatch. The wake does not end the
+   release wait. The wait ends only at its deadline, on stop, or on pause.
+5. After the deadline, the worker claims again. If the task is first in its queue, the worker gets
+   it and releases it again.
 
-Thus, while a listener is active, a worker that has no handler for a ready task claims and releases
-it again after the notification claim delay plus the database round trips. It does not wait for the
-poll interval. Each release also wakes every other listening worker on that queue. A worker without
-an active listener gets no notification, so it waits for its poll backoff between these claims. The
-[Polling cadence](operations.md#polling-cadence) table gives both delays. SM-1247 tracks this
-behavior.
+Thus a worker that has no handler for a ready task claims it at most once in each empty wait. With
+the default 5,000 ms poll interval and an active listener, a fleet of N such workers claims the task
+at most N times in about 5 s. The [Polling cadence](operations.md#polling-cadence) table gives the
+wait.
 
-The SDKs name the notification claim delay `NOTIFICATION_CLAIM_DELAY_MS` (TypeScript),
+The release wait replaces an empty wait that a notification could end. Thus the notification of the
+release cannot end the wait early. While the release wait is active, a notification for new work
+does not start a claim. The worker claims that work at the deadline. Workers that did not release
+the task react to the notification as usual.
+
+An empty claim that returned no task keeps the earlier rule: a notification that arrives after the
+claim started ends its empty wait. The next claim then waits the notification claim delay, a random
+time from 0 through 50 ms. The SDKs name that delay `NOTIFICATION_CLAIM_DELAY_MS` (TypeScript),
 `_NOTIFICATION_CLAIM_DELAY_SECONDS` (Python), `notificationClaimDelay` (Go),
 `MAX_NOTIFICATION_DELAY_MS` (Rust), and `NOTIFICATION_CLAIM_DELAY` (Ruby). Rust picks the delay in
 whole milliseconds.
+
+The SDKs mark the release wait in the empty-wait state of the loop. TypeScript and Go set a
+`release` flag on `emptyWait`. Python, Rust, and Ruby store no wake version (`None` or `nil`) in
+`empty_wait`. The shared runtime fixture
+`a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval` runs a listening
+worker with a 1,000 ms poll interval for 2,500 ms. It requires 2 or 3 releases, at least 900 ms
+apart. Each runner also requires a session in `pg_stat_activity` whose last query is
+`LISTEN workhorse_tasks`, because the fixture proves nothing without a listener.
+
+A pause ends a release wait. Thus a resume claims at once, as it does after an ordinary empty wait.
 
 A fused completion claim does not start while an empty wait is active. In every SDK, a fused claim
 that returns only tasks of unregistered types releases them and does not change the backoff.
@@ -1506,8 +1520,8 @@ pass whose claims were all released in two different ways:
 | Rust       | `Worker::run_once` | `false`                           | Claims again at once                                                 |
 | Ruby       | `run_once`         | `false`                           | Claims again at once                                                 |
 
-In Python, Go, Rust, and Ruby, only the `false` result tells the caller to wait. SM-1247 tracks
-the difference.
+In Python, Go, Rust, and Ruby, only the `false` result tells the caller to wait. The release wait
+does not change this difference. SM-1259 tracks it.
 
 The shared `missing-handler` runtime fixture checks the single-pass call in two ways:
 

@@ -88,6 +88,10 @@ type workerRuntimeFixture struct {
 	ExpectedReleaseEvents                int                               `json:"expectedReleaseEvents"`
 	ExpectedRunOutcomeAfterRelease       string                            `json:"expectedRunOutcomeAfterRelease"`
 	ExpectedAfterHandled                 workerFixtureTaskState            `json:"expectedAfterHandled"`
+	RunMS                                int                               `json:"runMs"`
+	ExpectedMinimumReleases              int                               `json:"expectedMinimumReleases"`
+	ExpectedMaximumReleases              int                               `json:"expectedMaximumReleases"`
+	ExpectedMinimumReleaseGapMS          float64                           `json:"expectedMinimumReleaseGapMs"`
 	Payload                              any                               `json:"payload"`
 	Injection                            workerFixtureInjection            `json:"injection"`
 	ExpectedMinimumFailedRounds          int                               `json:"expectedMinimumFailedRounds"`

@@ -290,13 +290,13 @@ filter by task type. Thus a version 1 worker can claim a task that it has no han
 
 1. A version 1 worker claims an `order.ship-v2` task. It has no handler for that type.
 2. The worker gives the task back to the queue. The attempt stays the same.
-3. The release wakes the listening version 1 workers. After a short random delay, a version 1
-   worker can claim the task and give it back again.
+3. The release wakes the listening version 1 workers. Another version 1 worker can claim the task
+   and give it back. The first worker waits for its poll interval before it claims again.
 4. A version 2 worker claims the task and runs it.
 
 Thus the task runs, but later than necessary. Until a version 2 worker claims the task, version 1
-workers can claim and give it back many times. They do not wait for the poll interval between
-these claims. The worker logs `workhorse.handler.missing` for each release. Each release uses a
+workers can claim and give it back again. Each version 1 worker claims it at most once in each poll
+interval. The worker logs `workhorse.handler.missing` for each release. Each release uses a
 slot of an old worker. The time for which an old worker held the task counts against the
 execution timeout of the task. A new queue keeps the old workers away from the new tasks.
 
@@ -307,10 +307,11 @@ execution timeout of the task. A new queue keeps the old workers away from the n
 - `release_owned_v1` sets the task to `ready` without a change to `current_attempt`. It adds the
   elapsed lease to `execution_used_ms` and appends a `released` event.
 - If each claim of a pass had no handler, the pass counts as empty for the poll backoff.
-- `release_owned_v1` notifies `workhorse_tasks`. In `Worker.run()` and the run loop of each other
-  SDK, that notification ends the empty wait of a listening worker. The next claim then waits a
-  random delay from 0 through 50 ms, not the poll interval.
-- A worker without an active listener waits for its poll backoff between these claims.
+- If every task of a claim was released, the run loop of each SDK starts a release wait. It ends
+  only at its deadline, on stop, or on pause.
+- `release_owned_v1` notifies `workhorse_tasks`. That notification does not end the release wait.
+- A listening worker waits for its poll interval between these claims: 5,000 ms by default, ±10%
+  jitter. A worker without an active listener waits for its poll backoff.
 
 More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release) and [Operations: Polling cadence](../architecture/operations.md#polling-cadence).
 

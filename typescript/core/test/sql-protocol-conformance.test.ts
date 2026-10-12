@@ -53,6 +53,7 @@ import type {
   OversizedResultRuntimeFixture,
   ShutdownCancellationRuntimeFixture,
   PollCadenceRuntimeFixture,
+  ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
   RuntimeFunctionInjection,
   RuntimeWriteOperation,
@@ -869,6 +870,56 @@ async function executeMissingHandlerRuntimeFixture(
   });
 }
 
+async function executeReleaseWaitRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: ReleaseWaitRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
+  // The worker listens on its queue, so each release wakes it. It has no handler for the task.
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    pollMs: fixture.pollMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.registeredTaskType, async () => null);
+  const running = worker.run();
+  let listeners = 0;
+  try {
+    await sleep(fixture.runMs);
+    // Without a listener, the worker gets no notification, and the fixture proves nothing.
+    const listening = await database.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM pg_stat_activity
+        WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'`,
+    );
+    listeners = listening.rows[0]!.count;
+  } finally {
+    worker.stop();
+    await running;
+  }
+  expect(listeners, "sessions that listen while the worker runs").toBeGreaterThan(0);
+  const released = await database.query<{ at_ms: number }>(
+    `SELECT (extract(epoch FROM occurred_at) * 1000)::float8 AS at_ms
+       FROM workhorse.task_event
+      WHERE task_id = $1 AND event_type = 'released'
+      ORDER BY occurred_at`,
+    [id],
+  );
+  const times = released.rows.map((row) => Number(row.at_ms));
+  expect(times.length, "releases while the worker ran").toBeGreaterThanOrEqual(
+    fixture.expectedMinimumReleases,
+  );
+  expect(times.length, "releases while the worker ran").toBeLessThanOrEqual(
+    fixture.expectedMaximumReleases,
+  );
+  const gaps = times.slice(1).map((time, index) => time - times[index]!);
+  expect(Math.min(...gaps), "least time between two releases").toBeGreaterThanOrEqual(
+    fixture.expectedMinimumReleaseGapMs,
+  );
+}
+
 async function executeJsonRoundTripRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -1473,6 +1524,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "missing-handler":
             await executeMissingHandlerRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
+            break;
+          case "release-wait":
+            await executeReleaseWaitRuntimeFixture(queue, runtimeDatabase.pool, fixture);
             break;
           case "json-round-trip":
             await executeJsonRoundTripRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);

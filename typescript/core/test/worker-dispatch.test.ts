@@ -392,6 +392,44 @@ describe("worker dispatch", () => {
     await running;
   });
 
+  // SM-1247: each release notifies the queue. If that notification ended the wait, the worker
+  // claimed and released the same task again after the notification delay only.
+  it("keeps a release wait through a notification and ends it on pause", async () => {
+    const fake = fakeQueue();
+    let notify: (() => void) | undefined;
+    const queue = {
+      ...fake.queue,
+      subscribeToTaskNotifications: async (_queue: string, onNotification: () => void) => {
+        notify = onNotification;
+        return { close: async () => {} };
+      },
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, {
+      concurrency: 2,
+      registryIntervalMs: 0,
+      pollMs: 60_000,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+    await fake.claimsReceived(1);
+    fake.held[0]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
+    await settle();
+    expect(fake.released).toEqual(["unknown-1"]);
+
+    notify?.();
+    await sleep(100);
+    expect(fake.limits).toHaveLength(1);
+
+    // A resume claims at once, without the rest of the release wait.
+    worker.pause();
+    await settle();
+    worker.resume();
+    await fake.claimsReceived(2);
+
+    worker.stop();
+    fake.held[1]!.answer.resolve([]);
+    await running;
+  });
+
   // SM-933: a dependency release notifies the queue on every completion. A busy worker that paid
   // the notification delay on each of those claims spent most of its time asleep.
   it("delays a notified claim only after a claim that found nothing", async () => {

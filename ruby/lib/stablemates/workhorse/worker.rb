@@ -452,13 +452,17 @@ module Stablemates
             if paused?
               break unless continuous
 
+              # A pause ends the empty wait, so a resume claims at once. A release wait ignores the
+              # wake of the resume, so it must end here.
+              @state_lock.synchronize { slots.empty_wait = nil }
               @wake.wait(dispatch_wait(empty, listener))
               next
             end
             if empty_wait
               deadline, seen_version = empty_wait
               remaining = deadline - monotonic
-              if remaining <= 0 || seen_version != wake_version
+              # A nil version marks a release wait, which a wake does not end.
+              if remaining <= 0 || (!seen_version.nil? && seen_version != wake_version)
                 @state_lock.synchronize { slots.empty_wait = nil if slots.empty_wait.equal?(empty_wait) }
               else
                 @wake.wait(remaining)
@@ -504,7 +508,14 @@ module Stablemates
           # empty claim does instead of spinning on a task no handler here runs.
           slots.empty += 1
           slots.pass_ended = true
-          slots.empty_wait ||= [monotonic + dispatch_wait(slots.empty, slots.listener), claimed_version]
+          deadline = monotonic + dispatch_wait(slots.empty, slots.listener)
+          if claimed.empty?
+            slots.empty_wait ||= [deadline, claimed_version]
+          elsif slots.empty_wait.nil? || !slots.empty_wait[1].nil?
+            # A release wait. Each release notifies the queue, so a wake does not end this wait:
+            # only its deadline, a stop, or a pause does.
+            slots.empty_wait = [deadline, nil]
+          end
         end
       end
 

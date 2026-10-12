@@ -72,6 +72,7 @@ module Conformance
       when "slot-refill" then slot_refill(fixture)
       when "budget-admission-race" then budget_race(fixture)
       when "missing-handler" then missing_handler(fixture)
+      when "release-wait" then release_wait(fixture)
       when "json-round-trip" then json_round_trip(fixture)
       when "oversized-result" then oversized_result(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
@@ -648,6 +649,39 @@ module Conformance
       end
       check(handled.to_a == [{"index" => 1}], "the handler received #{handled.to_a}")
       expect_state(task_id, fixture["expectedAfterHandled"])
+    end
+
+    # Runs a listening worker that has no handler for the one ready task. Each release wakes the
+    # worker, so the gap between two releases shows its bound.
+    def release_wait(fixture)
+      name = queue_name(fixture)
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: name).task_id
+      with_pool do |pool|
+        subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true,
+          lease: fixture["leaseMs"] / 1000.0, poll_interval: fixture["pollMs"] / 1000.0)
+          .handle(fixture["registeredTaskType"]) { nil }
+        thread = Thread.new { subject.run }
+        begin
+          sleep(fixture["runMs"] / 1000.0)
+          # Without a listener, the worker gets no notification, and the fixture proves nothing.
+          listeners = Integer(value("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " \
+            "AND query = 'LISTEN workhorse_tasks'"), 10)
+        ensure
+          subject.stop
+          check(thread.join(10), "the worker did not stop")
+        end
+        thread.value
+        check(listeners.positive?, "no session listened while the worker ran")
+      end
+      times = @connection.exec_params("SELECT (extract(epoch FROM occurred_at) * 1000)::float8 AS at_ms " \
+        "FROM workhorse.task_event WHERE task_id = $1 AND event_type = 'released' ORDER BY occurred_at", [task_id])
+        .map { |row| Float(row["at_ms"]) }
+      check(times.size.between?(fixture["expectedMinimumReleases"], fixture["expectedMaximumReleases"]),
+        "the worker released the task #{times.size} times while it ran")
+      times.each_cons(2) do |earlier, later|
+        check(later - earlier >= fixture["expectedMinimumReleaseGapMs"],
+          "the worker released the task again after #{(later - earlier).round} ms")
+      end
     end
 
     def json_round_trip(fixture)

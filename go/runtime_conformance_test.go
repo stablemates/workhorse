@@ -95,6 +95,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"trace-propagation":        executeWorkerTracePropagationFixture,
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 		"missing-handler":          executeWorkerMissingHandlerFixture,
+		"release-wait":             executeWorkerReleaseWaitFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
 		"oversized-result":         executeWorkerOversizedResultFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
@@ -840,6 +841,75 @@ func executeWorkerMissingHandlerFixture(t *testing.T, fixture workerRuntimeFixtu
 		t.Fatalf("unexpected payload %#v", received)
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterHandled)
+}
+
+// executeWorkerReleaseWaitFixture runs a listening worker that has no handler for the one ready
+// task. Each release wakes the worker, so the gap between two releases shows its bound.
+func executeWorkerReleaseWaitFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-release-wait")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
+		PollInterval:  time.Duration(fixture.PollMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle(fixture.RegisteredTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	defer stop()
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	time.Sleep(time.Duration(fixture.RunMS) * time.Millisecond)
+	// Without a listener, the worker gets no notification, and the fixture proves nothing.
+	var listeners int
+	listenErr := pool.QueryRow(ctx, `SELECT count(*)::integer FROM pg_stat_activity
+		WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'`).Scan(&listeners)
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+	if listenErr != nil {
+		t.Fatal(listenErr)
+	}
+	if listeners == 0 {
+		t.Fatal("no session listened while the worker ran")
+	}
+
+	rows, err := pool.Query(ctx, `SELECT (extract(epoch FROM occurred_at) * 1000)::float8
+		FROM workhorse.task_event
+		WHERE task_id = $1::uuid AND event_type = 'released'
+		ORDER BY occurred_at`, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	times, err := pgx.CollectRows(rows, pgx.RowTo[float64])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(times) < fixture.ExpectedMinimumReleases || len(times) > fixture.ExpectedMaximumReleases {
+		t.Fatalf("the worker released the task %d times while it ran", len(times))
+	}
+	for index := 1; index < len(times); index++ {
+		if gap := times[index] - times[index-1]; gap < fixture.ExpectedMinimumReleaseGapMS {
+			t.Fatalf("the worker released the task again after %.0f ms", gap)
+		}
+	}
 }
 
 // executeWorkerOversizedResultFixture returns an array of zeros, whose jsonb text is longer than its
