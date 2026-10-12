@@ -469,9 +469,15 @@ def test_drift_is_listed_and_repaired(database_url: str) -> None:
             "WHERE group_id = %s",
             (group_id,),
         )
+        # The counts of a group that is not finished live in its shard rows (ADR 0096). The two
+        # members are in shards 0 and 1, so two shards are pending.
+        connection.execute(
+            "UPDATE workhorse.task_group_shard SET succeeded_count = 0 WHERE group_id = %s",
+            (group_id,),
+        )
         connection.execute(
             "UPDATE workhorse.task_group SET state = 'sealed', result = NULL, finished_at = NULL, "
-            "succeeded_count = 0 WHERE id = %s",
+            "total_count = 0, succeeded_count = 0, pending_shard_count = 2 WHERE id = %s",
             (group_id,),
         )
         connection.execute(
@@ -517,9 +523,11 @@ def test_the_member_limit_is_checked_under_the_group_lock(database_url: str) -> 
     with clients(database_url) as (connection, queue, _admin):
         group = queue.create_task_group()
         queue.add_to_task_group(group.id, [member("limit-members", 1)])
+        # The member count is the sum of the shard totals (ADR 0096). Member 1 is in shard 0.
         connection.execute(
-            "UPDATE workhorse.task_group SET total_count = %s WHERE id = %s",
-            (MAX_TASK_GROUP_MEMBERS - 1, group.id),
+            "UPDATE workhorse.task_group_shard SET total_count = total_count + %s "
+            "WHERE group_id = %s AND shard = 1",
+            (MAX_TASK_GROUP_MEMBERS - 2, group.id),
         )
         with pytest.raises(TaskGroupLimitExceededError) as refusal:
             queue.add_to_task_group(

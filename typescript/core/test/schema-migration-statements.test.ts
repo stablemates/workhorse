@@ -27,6 +27,10 @@ const EXCLUSIVE_SCANS_SHIPPED = new Map([
     "0065-give-the-terminal-cleanup-backlog-reason-its-own-health-budget.sql",
     "queue_health_policy holds one singleton row",
   ],
+  [
+    "0067-count-task-group-outcomes-in-counter-shards.sql",
+    "task_group holds one row per task group, and ADR 0096 moves the group counts into shards in the transaction that adds the shard columns",
+  ],
 ]);
 
 /** The work in one transactional step that holds a table's ACCESS EXCLUSIVE for time its size sets. */

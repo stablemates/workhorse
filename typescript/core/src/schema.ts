@@ -467,6 +467,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "add task groups with completion callbacks",
     kind: "additive",
   },
+  {
+    fromVersion: 65,
+    toVersion: 66,
+    file: "0067-count-task-group-outcomes-in-counter-shards.sql",
+    description: "count task group outcomes in counter shards",
+    kind: "additive",
+  },
 ];
 
 /**

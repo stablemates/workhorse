@@ -224,10 +224,14 @@ async fn a_drifted_counter_is_listed_and_repaired() {
     let group = harness.queue.create_task_group(TaskGroupCallbacks::default()).await.unwrap();
     harness.queue.add_to_task_group(group.id, vec![request("import", json!({}))]).await.unwrap();
     harness.queue.seal_task_group(group.id).await.unwrap();
-    // Make the recorded counter disagree with the one pending member.
+    // Make the recorded counter disagree with the one pending member. The counts of a group that
+    // is not finished live in its shard rows (ADR 0096), and the member is in shard 0.
     let client = harness.database.connect().await;
     client
-        .execute("UPDATE workhorse.task_group SET total_count = 2 WHERE id = $1", &[&group.id])
+        .execute(
+            "UPDATE workhorse.task_group_shard SET total_count = 2 WHERE group_id = $1 AND shard = 0",
+            &[&group.id],
+        )
         .await
         .unwrap();
 

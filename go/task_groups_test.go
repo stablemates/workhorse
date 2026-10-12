@@ -539,7 +539,10 @@ func TestTaskGroupAdminFindsAndRepairsDrift(t *testing.T) {
 	fixture.runGroupWorker(t, "drift-members", succeedMember)
 	for _, statement := range []string{
 		"UPDATE workhorse.task_group_member SET outcome = NULL, counted_at = NULL WHERE group_id = $1",
-		"UPDATE workhorse.task_group SET state = 'sealed', result = NULL, finished_at = NULL, succeeded_count = 0 WHERE id = $1",
+		// The counts of a group that is not finished live in its shard rows (ADR 0096). The two
+		// members are in shards 0 and 1, so two shards are pending.
+		"UPDATE workhorse.task_group_shard SET succeeded_count = 0 WHERE group_id = $1",
+		"UPDATE workhorse.task_group SET state = 'sealed', result = NULL, finished_at = NULL, total_count = 0, succeeded_count = 0, pending_shard_count = 2 WHERE id = $1",
 		"DELETE FROM workhorse.task_group_callback WHERE group_id = $1",
 	} {
 		if _, err := fixture.pool.Exec(fixture.ctx, statement, block.Group.ID); err != nil {

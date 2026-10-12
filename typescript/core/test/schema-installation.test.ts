@@ -573,6 +573,10 @@ describe("schema installation", () => {
         version: 65,
         description: "add task groups with completion callbacks",
       },
+      {
+        version: 66,
+        description: "count task group outcomes in counter shards",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
