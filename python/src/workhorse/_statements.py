@@ -639,6 +639,14 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1(%s::uuid, %s::integer)",
         "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)",
     ),
+    "list_newest_task_group_events_v1": (
+        "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_newest_task_group_events_v1(%s::uuid, %s::integer)",
+        "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_newest_task_group_events_v1($1::uuid, $2::integer)",
+    ),
+    "dashboard_task_groups_v1": (
+        "SELECT workhorse.dashboard_task_groups_v1(%s::jsonb) AS result",
+        "SELECT workhorse.dashboard_task_groups_v1($1::jsonb) AS result",
+    ),
     "cancel_task_group_v1": (
         "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1(%s::uuid, %s::text, %s::text, %s::text)",
         "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)",

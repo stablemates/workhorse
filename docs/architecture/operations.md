@@ -198,13 +198,15 @@ Operators inspect and change Workhorse state through the administrative CLI and 
 `workhorse admin` and `workhorse tui` are thin front ends over one shared client. That client is
 `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`.
 
-| Backing API | Client operations                                                                                                                                                                                                                                                                                                                |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Admin`     | `listTasks`, `getTask`, `getTaskTimeline`, `listDeadLetters`, `queueMetricSnapshot`, `schedules`, `listWorkers`, `listCheckpoints`, `getCheckpoint`, `listWaits`, `getWait`, `listHumanWaits`, `listSignalWaits`, policy reads, `redrive`, `redriveMany`, `pauseQueue`, `resumeQueue`, `purgeQueue`, `setWorkerPaused`, `health` |
-| `Queue`     | `cancel`, `sendSignal`, `completeHumanWait`                                                                                                                                                                                                                                                                                      |
+| Backing API | Client operations                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Admin`     | `listTasks`, `getTask`, `getTaskTimeline`, `listDeadLetters`, `queueMetricSnapshot`, `schedules`, `listWorkers`, `listCheckpoints`, `getCheckpoint`, `listWaits`, `getWait`, `listHumanWaits`, `listSignalWaits`, policy reads, `redrive`, `redriveMany`, `pauseQueue`, `resumeQueue`, `purgeQueue`, `setWorkerPaused`, `health`, `getTaskGroup`, `listTaskGroupMembers`, `cancelTaskGroup` |
+| `Queue`     | `cancel`, `sendSignal`, `completeHumanWait`                                                                                                                                                                                                                                                                                                                                                 |
 
 Queue status still merges metric snapshots with `workhorse.queue_control`. Namespace discovery
-reads `workhorse.schedule_definition`.
+reads `workhorse.schedule_definition`. No `Admin` call lists task groups or reads the newest events
+of a group. Thus the client calls `dashboard_task_groups_v1` and `list_newest_task_group_events_v1`
+through the `admin` statement catalogue, the same functions that the dashboard calls.
 
 ### Inspection commands
 
@@ -221,6 +223,8 @@ The inspection commands are:
 - `admin schedules`
 - `admin workers`
 - `admin maintenance`
+- `admin task-groups`
+- `admin task-group <group-id>`
 
 By default, each command renders an aligned text table or a key/value list. With `--json`, each
 command emits the result of the API call that it makes. The JSON output gives bigint fence tokens
@@ -263,6 +267,42 @@ Each list has its own pages, because the scope of `ExternalWaitCursor` is one li
 `--human-cursor` and `--signal-cursor` each take the exact JSON `nextCursor` object that the
 previous page printed. If the value is not an object with string `createdAt`, `taskId`, and `name`
 fields, the command reports a usage error and exits 64.
+
+#### Task groups
+
+`admin task-groups` calls `WorkhorseAdminClient.listTaskGroups` over `dashboard_task_groups_v1`. It
+lists groups newest first. With `--json`, it emits `AdminTaskGroupPage`:
+`{state, page, pageSize, hasMore, groups}`. Each group has the `TaskGroup` shape of
+`Admin.getTaskGroup`, with dates as ISO strings.
+
+| Flag      | Values                                                     | Default |
+| --------- | ---------------------------------------------------------- | ------- |
+| `--state` | One of `open`, `sealed`, or `finished`. Omit it for all.   | All     |
+| `--limit` | 1 through 100                                              | 50      |
+| `--page`  | 1 through 1,000. Read `page + 1` when `hasMore` is `true`. | 1       |
+
+The function pages by number, not by cursor. Thus a group that is created between two reads moves
+the later pages by one group.
+
+`admin task-group <group-id>` calls `WorkhorseAdminClient.getTaskGroupDetail`. It reads the
+group through `Admin.getTaskGroup`. Then it reads one member page through
+`Admin.listTaskGroupMembers` and the newest 101 events through
+`list_newest_task_group_events_v1`, concurrently. With `--json`, it emits `AdminTaskGroupDetail`:
+
+- `group`, the `TaskGroup` snapshot with its counts and callbacks;
+- `members`, at most `--limit` members after the position `--after` (default 0);
+- `nextAfter`, the `--after` value of the next member page, or `null` on the last page;
+- `events`, the newest 100 events, newest first;
+- `eventsTruncated`, `true` when the group has older events than these 100.
+
+`--limit` is from 1 through `MAX_TASK_GROUP_PAGE_SIZE` (1,000). Its default is 100. `--after` is from
+0 through 2,147,483,647, the range of a PostgreSQL `integer`. `Admin.listTaskGroupMembers` gives a
+next position for each full page. Thus, after a full page, the client reads one more member after
+the last position, and it sets `nextAfter` to `null` when no member follows. The reads are separate
+statements, so the detail is not one snapshot.
+
+The group id must be a UUID. Any other value is a usage error and exits 64. An unknown group prints
+`was not found` to stderr and exits 1.
 
 ### Pagination and range filters
 
@@ -314,6 +354,7 @@ The guarded commands are:
 - `admin resume-worker <worker-id>`
 - `admin redrive-many`
 - `admin repair-dependencies`
+- `admin cancel-task-group <group-id>`
 - `admin signal <task-id>`
 - `admin complete-human <task-id>`
 
@@ -331,7 +372,7 @@ Two independent checks protect every mutation:
      client requires that token as its first parameter. Thus no front end can get to a destructive
      operation without the check.
 2. **Confirmation.** Without `--yes`, an interactive session must type the exact target again at a
-   prompt on stderr. The target is a task id, a queue name, or a worker id.
+   prompt on stderr. The target is a task id, a queue name, a worker id, or a group id.
    `admin repair-dependencies` asks for the literal target `dependencies`.
    - A mismatched answer changes nothing and exits 1.
    - A non-interactive session without `--yes` is a usage error.
@@ -401,6 +442,44 @@ During execution, `--request-id` defaults to a random UUID. The request id corre
 It is not an idempotency key.
 [Data model: Governed drift repair](data-model.md#governed-drift-repair-schema-version-40) owns the
 functions and audit fields.
+
+#### Task group cancel
+
+`admin cancel-task-group <group-id>` requires `--reason`. It calls
+`WorkhorseAdminClient.cancelTaskGroup` with `--actor` and `--request-id`, which defaults to a
+random UUID. The request id correlates the `canceled` event. It is not an idempotency key.
+
+`cancel_task_group_v1` returns the unchanged snapshot of a finished group. An earlier cancel can
+also set `canceledAt` on that snapshot. Thus the snapshot does not show whether this call changed
+the group. The function writes a `canceled` event only when it does work, and the event records
+`request_id_digest`, the first 12 hex digits of the SHA-256 of the request id. The client uses this
+event:
+
+1. It reads the newest 1,000 events through `list_newest_task_group_events_v1`, and keeps the ids
+   of the `canceled` events.
+2. It calls `Admin.cancelTaskGroup`.
+3. It reads the newest 1,000 events again. If a new `canceled` event has the digest of its request
+   id, the call canceled the group.
+
+With `--json`, the command emits `AdminTaskGroupCancelResult`, `{status, group}`:
+
+| `status`           | Meaning                                                           | Exit |
+| ------------------ | ----------------------------------------------------------------- | ---- |
+| `canceled`         | The cancel sealed the group and canceled each pending member task | 0    |
+| `already_finished` | The group was finished when the cancel ran, so nothing changed    | 1    |
+| `not_found`        | No group has this id. `group` is `null`.                          | 1    |
+
+If the group finishes after the first read and before the cancel, the function writes no event.
+The command then reports `already_finished`, also for a group that an earlier cancel canceled.
+
+The check has two limits. The digest names the request, not the call. Thus two calls with the same
+`--request-id` at the same time can both report `canceled`. If more than 1,000 events follow the
+new `canceled` event before the second read, the command reports `already_finished` for a call
+that canceled the group.
+
+After a `canceled` result, an active member task gets a cancel request. The group stays `sealed`
+until that task stops, and the text output gives the number of pending member tasks.
+[Task groups: Cancel](task-groups.md#cancel) owns the function.
 
 #### Signal and human-wait delivery
 
@@ -493,8 +572,8 @@ function clears the pause. Thus a restarted worker starts unpaused.
 
 #### Non-mutating outcomes
 
-The outcome statuses `not_found`, `already_terminal`, and `not_failed` mean that the command
-changed nothing. These statuses exit 1. Malformed usage exits 64. This agrees with the CLI-wide
+The outcome statuses `not_found`, `already_terminal`, `already_finished`, and `not_failed` mean
+that the command changed nothing. These statuses exit 1. Malformed usage exits 64. This agrees with the CLI-wide
 convention in `typescript/core/src/cli/arguments.ts`.
 
 ### TUI

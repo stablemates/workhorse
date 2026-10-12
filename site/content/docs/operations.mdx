@@ -1038,6 +1038,8 @@ These inspection commands only read:
 - `admin schedules`
 - `admin workers`
 - `admin maintenance`
+- `admin task-groups`
+- `admin task-group`
 
 You can run them on production, as you run `queue.health` from code.
 
@@ -1052,19 +1054,21 @@ workhorse admin failures --queue billing --json | jq '.items[].taskId'
 <details>
 <summary>Reference: inspection commands</summary>
 
-| Command                       | Reads                                                           |
-| ----------------------------- | --------------------------------------------------------------- |
-| `admin tasks`                 | `Admin.listTasks`                                               |
-| `admin task <id>`             | `Admin.getTask`                                                 |
-| `admin timeline <id>`         | `Admin.getTaskTimeline`                                         |
-| `admin checkpoints <task-id>` | `Admin.listCheckpoints`, or `Admin.getCheckpoint` with `--name` |
-| `admin waits <task-id>`       | `Admin.listWaits`, or `Admin.getWait` with `--name`             |
-| `admin external-waits`        | `Admin.listHumanWaits` and `Admin.listSignalWaits`              |
-| `admin failures`              | `Admin.listDeadLetters`                                         |
-| `admin queues`                | `Admin.queueMetricSnapshot` and `workhorse.queue_control`       |
-| `admin schedules`             | `Admin.schedules`                                               |
-| `admin workers`               | `Admin.listWorkers`                                             |
-| `admin maintenance`           | `Admin.getMaintenancePolicy` and `Admin.getRetentionPolicy`     |
+| Command                       | Reads                                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| `admin tasks`                 | `Admin.listTasks`                                                                      |
+| `admin task <id>`             | `Admin.getTask`                                                                        |
+| `admin timeline <id>`         | `Admin.getTaskTimeline`                                                                |
+| `admin checkpoints <task-id>` | `Admin.listCheckpoints`, or `Admin.getCheckpoint` with `--name`                        |
+| `admin waits <task-id>`       | `Admin.listWaits`, or `Admin.getWait` with `--name`                                    |
+| `admin external-waits`        | `Admin.listHumanWaits` and `Admin.listSignalWaits`                                     |
+| `admin failures`              | `Admin.listDeadLetters`                                                                |
+| `admin queues`                | `Admin.queueMetricSnapshot` and `workhorse.queue_control`                              |
+| `admin schedules`             | `Admin.schedules`                                                                      |
+| `admin workers`               | `Admin.listWorkers`                                                                    |
+| `admin maintenance`           | `Admin.getMaintenancePolicy` and `Admin.getRetentionPolicy`                            |
+| `admin task-groups`           | `dashboard_task_groups_v1`                                                             |
+| `admin task-group <group-id>` | `Admin.getTaskGroup`, `Admin.listTaskGroupMembers`, `list_newest_task_group_events_v1` |
 
 - Listing filters: `--queue`, `--type`, `--state` (repeatable or comma-separated), `--limit`, and
   `--namespace` for schedules.
@@ -1193,6 +1197,7 @@ These guarded commands change a live system:
 - `admin resume-worker`
 - `admin redrive-many`
 - `admin repair-dependencies`
+- `admin cancel-task-group`
 - `admin signal`
 - `admin complete-human`
 
@@ -1200,8 +1205,8 @@ A guarded command has two separate checks:
 
 1. **The database name.** `--env` must give the name of the database. The client compares it with
    the database that it connected to. No flag stops this check.
-2. **The confirmation.** In an interactive session, you type the task ID, queue name, or worker ID
-   again. In a script, you give `--yes`. Thus, the author of the script decides that the command can
+2. **The confirmation.** In an interactive session, you type the task ID, queue name, worker ID, or
+   group ID again. In a script, you give `--yes`. Thus, the author of the script decides that the command can
    run without a person.
 
 ```sh
@@ -1239,7 +1244,8 @@ A queue pause or resume also must have a reason, and it keeps the audit identity
 - Redrive and purge use the request identity for idempotency.
 - Queue and worker pause keep a request preview, digest, and length with the actor and reason.
 
-**Exit codes.** A non-mutating outcome (`not_found`, `already_terminal`, `not_failed`) exits 1.
+**Exit codes.** A non-mutating outcome (`not_found`, `already_terminal`, `already_finished`,
+`not_failed`) exits 1.
 Malformed usage exits 64.
 
 More detail: [Operations and CLI: Safety checks](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#safety-checks), [Operations and CLI: Audit fields and request identity](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#audit-fields-and-request-identity), and [Operations and CLI: Non-mutating outcomes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#non-mutating-outcomes).
@@ -1491,6 +1497,57 @@ that it does not know. Thus, the command shows a warning if no known queue has t
 `HISTORY` column is `all` on the full tier, else `none` or the enabled switches.
 
 More detail: [Operations and CLI: Queue tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#queue-tier).
+
+</details>
+
+### Cancel a task group that does not finish
+
+A task group is a set of tasks that Workhorse tracks as one unit. The group runs its callback tasks
+only after every member task is finished. Thus one member task that never finishes stops the group.
+[Task groups](/docs/task-groups) explains the group.
+
+**Example.** A nightly import enqueues its rows as one task group. At 09:00, the report of the import
+has not arrived.
+
+1. The engineer runs `admin task-groups --state sealed`. One group from the night has one pending
+   member task.
+2. The engineer runs `admin task-group` with the group ID. The member table shows one `blocked`
+   member task, and the events show no `finished` event.
+3. The prerequisite of that task cannot run today. The engineer runs `admin cancel-task-group` with
+   a reason, `--env`, and `--yes`.
+4. Workhorse cancels the blocked member task and finishes the group with the result `failed`. It
+   enqueues the `onFinish` and `onFailure` callbacks.
+
+```sh
+workhorse admin cancel-task-group 3f2a… --env workhorse_production --reason "schema task paused" --yes
+```
+
+A cancel does not stop an active member task immediately. Workhorse sends a cancel request to that
+task, and the group stays `sealed` until the task stops. If the group is already finished, the
+command changes nothing and exits 1.
+
+<details>
+<summary>Reference: task groups</summary>
+
+| Command                              | Calls                                                                                  |
+| ------------------------------------ | -------------------------------------------------------------------------------------- |
+| `admin task-groups`                  | `dashboard_task_groups_v1`                                                             |
+| `admin task-group <group-id>`        | `Admin.getTaskGroup`, `Admin.listTaskGroupMembers`, `list_newest_task_group_events_v1` |
+| `admin cancel-task-group <group-id>` | `Admin.cancelTaskGroup`, and `list_newest_task_group_events_v1` before and after it    |
+
+- `admin task-groups` accepts one `--state` (`open`, `sealed`, or `finished`), `--limit` from 1
+  through 100 (default 50), and `--page` from 1 through 1,000. `--json` emits
+  `{state, page, pageSize, hasMore, groups}`.
+- `admin task-group` accepts `--limit` from 1 through 1,000 (default 100) and `--after`, the
+  `nextAfter` of the previous page. `--json` emits
+  `{group, members, nextAfter, events, eventsTruncated}`. `events` holds the newest 100 events,
+  newest first.
+- `admin cancel-task-group` requires `--reason`. `--request-id` defaults to a random UUID.
+- `--json` of a cancel emits `{status, group}`. `canceled` exits 0. `already_finished` and
+  `not_found` exit 1.
+- A group id that is not a UUID exits 64.
+
+More detail: [Operations and CLI: Task groups](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#task-groups) and [Operations and CLI: Task group cancel](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#task-group-cancel).
 
 </details>
 

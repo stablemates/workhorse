@@ -255,18 +255,18 @@ before 1.0.0.
 
 <!-- BEGIN GENERATED PARITY PRODUCT -->
 
-| Capability                                 | PostgreSQL | Dashboard | CLI                |
-| ------------------------------------------ | ---------- | --------- | ------------------ |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported          |
-| Queue health snapshot                      | Supported  | Supported | Supported          |
-| Cancellation requests                      | Supported  | Supported | Supported          |
-| Queue pause and resume                     | Supported  | Supported | Supported          |
-| Queue purge                                | Supported  | Supported | Supported          |
-| Dead-letter listing                        | Supported  | Supported | Supported          |
-| Redrive                                    | Supported  | Supported | Supported          |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported          |
-| Durable operator worker pause              | Supported  | Supported | Supported          |
-| Task group listing, detail, and cancel     | Supported  | Supported | [Planned][SM-1257] |
+| Capability                                 | PostgreSQL | Dashboard | CLI       |
+| ------------------------------------------ | ---------- | --------- | --------- |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported |
+| Queue health snapshot                      | Supported  | Supported | Supported |
+| Cancellation requests                      | Supported  | Supported | Supported |
+| Queue pause and resume                     | Supported  | Supported | Supported |
+| Queue purge                                | Supported  | Supported | Supported |
+| Dead-letter listing                        | Supported  | Supported | Supported |
+| Redrive                                    | Supported  | Supported | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported |
+| Task group listing, detail, and cancel     | Supported  | Supported | Supported |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -371,7 +371,4 @@ this document states still governs: a cell says Supported because tests prove it
 stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY LINEAR LINKS -->
-
-[SM-1257]: https://linear.app/stablemates/issue/SM-1257
-
 <!-- END GENERATED PARITY LINEAR LINKS -->

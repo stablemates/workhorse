@@ -993,7 +993,10 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
         '"procedure": "cancelTaskGroup"',
       ],
     },
-    cli: { planned: "SM-1257" },
+    cli: {
+      file: "integration-admin-cli.test.ts",
+      patterns: ['"task-groups"', '"task-group"', '"cancel-task-group"'],
+    },
   },
 ];
 

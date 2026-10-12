@@ -21,6 +21,9 @@ import type {
   AdminExternalWaits,
   AdminMaintenanceState,
   AdminQueueStatus,
+  AdminTaskGroupCancelResult,
+  AdminTaskGroupDetail,
+  AdminTaskGroupPage,
 } from "./admin-client.js";
 import type { SchemaStatusReport } from "./schema-status.js";
 
@@ -93,6 +96,8 @@ export const CLI_OPTIONS = {
     type: { type: "string" },
     state: { type: "string", multiple: true },
     limit: { type: "string" },
+    page: { type: "string" },
+    after: { type: "string" },
     namespace: { type: "string", multiple: true },
     name: { type: "string" },
     cursor: { type: "string" },
@@ -186,6 +191,8 @@ export const ADMIN_COMMANDS = [
   { name: "schedules", mutates: false, positionals: [] },
   { name: "workers", mutates: false, positionals: [] },
   { name: "maintenance", mutates: false, positionals: [] },
+  { name: "task-groups", mutates: false, positionals: [] },
+  { name: "task-group", mutates: false, positionals: ["group-id"] },
   { name: "cancel", mutates: true, positionals: ["task-id"] },
   { name: "redrive", mutates: true, positionals: ["task-id"] },
   { name: "redrive-many", mutates: true, positionals: [] },
@@ -199,6 +206,7 @@ export const ADMIN_COMMANDS = [
   { name: "pause-worker", mutates: true, positionals: ["worker-id"] },
   { name: "resume-worker", mutates: true, positionals: ["worker-id"] },
   { name: "repair-dependencies", mutates: true, positionals: [] },
+  { name: "cancel-task-group", mutates: true, positionals: ["group-id"] },
 ] as const satisfies readonly AdminCommand[];
 
 /** One of the declared names {@link ADMIN_COMMANDS} declares. */
@@ -285,6 +293,8 @@ export interface CliJsonPayloads {
   readonly "admin schedules": readonly StoredSchedule[];
   readonly "admin workers": readonly WorkerRegistryEntry[];
   readonly "admin maintenance": AdminMaintenanceState;
+  readonly "admin task-groups": AdminTaskGroupPage;
+  readonly "admin task-group": AdminTaskGroupDetail;
   readonly "admin cancel": CancelResult;
   readonly "admin redrive": RedriveResult;
   readonly "admin redrive-many": BulkRedrivePage;
@@ -299,4 +309,5 @@ export interface CliJsonPayloads {
   readonly "admin resume-worker": WorkerPauseResult;
   /** `--dry-run` lists the drift and its planned action; execution lists each repaired row. */
   readonly "admin repair-dependencies": readonly DependencyDrift[] | readonly DependencyRepair[];
+  readonly "admin cancel-task-group": AdminTaskGroupCancelResult;
 }

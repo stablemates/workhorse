@@ -32,6 +32,8 @@ queues  read-only
 schedules  read-only
 workers  read-only
 maintenance  read-only
+task-groups  read-only
+task-group <group-id>  read-only
 cancel <task-id>  mutates
 redrive <task-id>  mutates
 redrive-many  mutates
@@ -45,6 +47,7 @@ set-history <queue>  mutates
 pause-worker <worker-id>  mutates
 resume-worker <worker-id>  mutates
 repair-dependencies  mutates
+cancel-task-group <group-id>  mutates
 
 ## Options
 
@@ -55,6 +58,7 @@ repair-dependencies  mutates
 ### admin
 
 --actor <string>
+--after <string>
 --created-after <string>
 --created-before <string>
 --cursor <string>
@@ -70,6 +74,7 @@ repair-dependencies  mutates
 --limit <string>
 --name <string>
 --namespace <string>  (repeatable)
+--page <string>
 --payload-file <string>
 --payload-json <string>
 --queue <string>
@@ -176,6 +181,8 @@ admin queues               readonly AdminQueueStatus[]
 admin schedules            readonly StoredSchedule[]
 admin workers              readonly WorkerRegistryEntry[]
 admin maintenance          AdminMaintenanceState
+admin task-groups          AdminTaskGroupPage
+admin task-group           AdminTaskGroupDetail
 admin cancel               CancelResult
 admin redrive              RedriveResult
 admin redrive-many         BulkRedrivePage
@@ -189,6 +196,7 @@ admin set-history          AdminQueueHistoryReport
 admin pause-worker         WorkerPauseResult
 admin resume-worker        WorkerPauseResult
 admin repair-dependencies  readonly DependencyDrift[] | readonly DependencyRepair[]
+admin cancel-task-group    AdminTaskGroupCancelResult
 
 ## Payload types
 
@@ -241,6 +249,29 @@ interface AdminQueueTierReport {
   readonly queue: string;
   readonly tier: QueueTier;
 }
+
+interface AdminTaskGroupCancelResult {
+  status: "canceled" | "already_finished" | "not_found";
+  group: TaskGroup | null;
+}
+
+interface AdminTaskGroupDetail {
+  group: TaskGroup;
+  members: TaskGroupMember[];
+  nextAfter: number | null;
+  events: TaskGroupEvent[];
+  eventsTruncated: boolean;
+}
+
+interface AdminTaskGroupPage {
+  state: AdminTaskGroupStateFilter;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  groups: TaskGroup[];
+}
+
+type AdminTaskGroupStateFilter = "all" | TaskGroupState;
 
 interface Budget {
   namespace: string;
@@ -859,6 +890,65 @@ interface TaskCheckpoint<TValue extends Json = Json> {
   */
   inputFingerprint: string | null;
 }
+
+interface TaskGroup {
+  id: string;
+  state: TaskGroupState;
+  result: TaskGroupResult | null;
+  counts: TaskGroupCounts;
+  createdAt: Date;
+  sealedAt: Date | null;
+  finishedAt: Date | null;
+  canceledAt: Date | null;
+  canceledBy: string | null;
+  cancelReason: string | null;
+  callbacks: TaskGroupCallback[];
+}
+
+interface TaskGroupCallback {
+  kind: TaskGroupCallbackKind;
+  /** Null until the group finishes, and null for the callback that the result does not select. */
+  taskId: string | null;
+}
+
+type TaskGroupCallbackKind = "onFinish" | "onSuccess" | "onFailure";
+
+interface TaskGroupCounts {
+  total: number;
+  succeeded: number;
+  failed: number;
+  canceled: number;
+  pending: number;
+}
+
+interface TaskGroupEvent {
+  id: string;
+  type: TaskGroupEventType;
+  details: Json;
+  occurredAt: Date;
+}
+
+type TaskGroupEventType = "created" | "sealed" | "canceled" | "finished" | "callback_enqueued" | "callback_failed" | "counter_repaired";
+
+interface TaskGroupMember {
+  /** One-based order in which the member joined its group. */
+  position: number;
+  taskId: string;
+  /** Null after the task is deleted, by a purge or by retention. */
+  queue: string | null;
+  type: string | null;
+  state: TaskState | null;
+  /** The outcome the group counted, or null while the member is pending. */
+  outcome: TaskGroupMemberOutcome | null;
+  addedAt: Date;
+  countedAt: Date | null;
+}
+
+type TaskGroupMemberOutcome = "succeeded" | "failed" | "canceled";
+
+type TaskGroupResult = "succeeded" | "failed";
+
+type TaskGroupState = "open" | "sealed" | "finished";
 
 interface TaskListCursor {
   /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */

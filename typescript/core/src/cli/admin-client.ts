@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { SQL_STATEMENTS } from "../queue/sql-catalogue.generated.js";
 import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
@@ -32,6 +32,17 @@ import type {
   WorkerRegistryEntry,
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
+import { rowTimestamp, nullableRowTimestamp } from "../queue/row-mapping.js";
+import type {
+  TaskGroup,
+  TaskGroupCallbackKind,
+  TaskGroupCounts,
+  TaskGroupEvent,
+  TaskGroupEventType,
+  TaskGroupMember,
+  TaskGroupResult,
+  TaskGroupState,
+} from "../queue/task-groups.js";
 import type { ExternalWaitDeliveryRequest, ExternalWaitCursor } from "../queue/external-waits.js";
 import type { HumanWaitCompletionResult, HumanWaitPage } from "../queue/human-waits.js";
 import type { SignalDeliveryResult, SignalWaitPage } from "../queue/signals.js";
@@ -141,6 +152,103 @@ export interface AdminHistoryChange extends QueueHistorySettings {
   knownBefore: boolean;
 }
 
+/** The states `admin task-groups` selects. `all` selects every group. */
+type AdminTaskGroupStateFilter = "all" | TaskGroupState;
+
+/** One `admin task-groups` read: a page number from 1 and a page size from 1 through 100. */
+export interface AdminTaskGroupQuery {
+  state?: TaskGroupState;
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * One page of task groups, newest first, as `dashboard_task_groups_v1` returns it.
+ *
+ * The function pages by number, not by cursor, so `hasMore` tells the caller to read `page + 1`.
+ */
+export interface AdminTaskGroupPage {
+  state: AdminTaskGroupStateFilter;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  groups: TaskGroup[];
+}
+
+/** One member page after a position. `limit` is from 1 through 1,000. */
+export interface AdminTaskGroupDetailQuery {
+  after?: number;
+  limit?: number;
+}
+
+/**
+ * One task group, one page of its member tasks, and its newest events.
+ *
+ * The parts come from separate statements, so they are not one snapshot. `events` is newest
+ * first, and `eventsTruncated` is true when the group has older events that the detail omits.
+ */
+export interface AdminTaskGroupDetail {
+  group: TaskGroup;
+  members: TaskGroupMember[];
+  nextAfter: number | null;
+  events: TaskGroupEvent[];
+  eventsTruncated: boolean;
+}
+
+/**
+ * What `admin cancel-task-group` did.
+ *
+ * `already_finished` means the group was finished before the cancel, so nothing changed. The group
+ * is null only for `not_found`.
+ */
+export interface AdminTaskGroupCancelResult {
+  status: "canceled" | "already_finished" | "not_found";
+  group: TaskGroup | null;
+}
+
+/** The number of newest events the detail carries, the same number as the dashboard detail. */
+const TASK_GROUP_DETAIL_EVENT_LIMIT = 100;
+
+/**
+ * The number of newest events a cancel reads to find its own `canceled` event: the largest limit of
+ * `list_newest_task_group_events_v1`. Its own event drops out only if more events follow it first.
+ */
+const TASK_GROUP_CANCEL_EVENT_WINDOW = 1_000;
+
+/** One group as `dashboard_task_groups_v1` writes it: the snapshot fields with ISO times. */
+interface TaskGroupDocument {
+  id: string;
+  state: TaskGroupState;
+  result: TaskGroupResult | null;
+  counts: TaskGroupCounts;
+  createdAt: string;
+  sealedAt: string | null;
+  finishedAt: string | null;
+  canceledAt: string | null;
+  canceledBy: string | null;
+  cancelReason: string | null;
+  callbacks: { kind: TaskGroupCallbackKind; taskId: string | null }[];
+}
+
+function taskGroupFromDocument(document: TaskGroupDocument): TaskGroup {
+  return {
+    id: document.id,
+    state: document.state,
+    result: document.result,
+    counts: document.counts,
+    createdAt: rowTimestamp(document.createdAt, "createdAt"),
+    sealedAt: nullableRowTimestamp(document.sealedAt, "sealedAt"),
+    finishedAt: nullableRowTimestamp(document.finishedAt, "finishedAt"),
+    canceledAt: nullableRowTimestamp(document.canceledAt, "canceledAt"),
+    canceledBy: document.canceledBy,
+    cancelReason: document.cancelReason,
+    callbacks: document.callbacks.map((callback) => ({
+      kind: callback.kind,
+      taskId: callback.taskId,
+    })),
+  };
+}
+
 function isDefaultControl(row: QueueControlRow): boolean {
   return !row.paused && row.tier === "full" && !row.record_attempts && !row.record_claims;
 }
@@ -149,7 +257,8 @@ function isDefaultControl(row: QueueControlRow): boolean {
  * The administrative surface shared by `workhorse admin` and `workhorse tui`.
  *
  * The client composes the public {@link Admin} operator API with {@link Queue} application
- * controls plus two reads of existing operator tables. Every mutation
+ * controls, two reads of existing operator tables, and the two task group reads of the dashboard
+ * that no `Admin` call makes. Every mutation
  * requires a {@link ConfirmedEnvironment}, so no front end can reach a destructive operation
  * without the explicit-target check.
  */
@@ -480,6 +589,119 @@ export class WorkhorseAdminClient {
       reason: request.reason,
       requestId: request.requestId,
     });
+  }
+
+  /**
+   * One page of task groups, newest first, through `dashboard_task_groups_v1`.
+   *
+   * No `Admin` call lists task groups. The dashboard group list calls this function, so the CLI and
+   * the dashboard select and order the same groups.
+   */
+  async listTaskGroups(query: AdminTaskGroupQuery = {}): Promise<AdminTaskGroupPage> {
+    const result = await this.pool.query<{
+      result: Omit<AdminTaskGroupPage, "groups"> & { groups: TaskGroupDocument[] };
+    }>(SQL_STATEMENTS["dashboard_task_groups_v1"], [
+      JSON.stringify({ state: query.state ?? "all", page: query.page, pageSize: query.pageSize }),
+    ]);
+    const page = expectOneRow(result, "workhorse.dashboard_task_groups_v1").result;
+    return {
+      state: page.state,
+      page: page.page,
+      pageSize: page.pageSize,
+      hasMore: page.hasMore,
+      groups: page.groups.map(taskGroupFromDocument),
+    };
+  }
+
+  /** The newest events of a group, newest first, through `list_newest_task_group_events_v1`. */
+  private async newestTaskGroupEvents(groupId: string, limit: number): Promise<TaskGroupEvent[]> {
+    const result = await this.pool.query<{
+      event_id: string;
+      event_type: TaskGroupEventType;
+      details: Json;
+      occurred_at: Date | string;
+    }>(SQL_STATEMENTS["list_newest_task_group_events_v1"], [groupId, limit]);
+    return result.rows.map((row) => ({
+      id: row.event_id,
+      type: row.event_type,
+      details: row.details,
+      occurredAt: rowTimestamp(row.occurred_at, "occurred_at"),
+    }));
+  }
+
+  /**
+   * One task group with one page of its member tasks and its newest events, or null for an unknown
+   * group. The reads are the ones the dashboard detail makes.
+   */
+  async getTaskGroupDetail(
+    groupId: string,
+    query: AdminTaskGroupDetailQuery = {},
+  ): Promise<AdminTaskGroupDetail | null> {
+    const group = await this.admin.getTaskGroup(groupId);
+    if (group === null) return null;
+    const [members, events] = await Promise.all([
+      this.admin.listTaskGroupMembers(groupId, query),
+      this.newestTaskGroupEvents(groupId, TASK_GROUP_DETAIL_EVENT_LIMIT + 1),
+    ]);
+    // `listTaskGroupMembers` gives a next position for each full page, also for the last one. A
+    // probe of one member tells a last full page from a page that has more members after it.
+    const nextAfter =
+      members.nextAfter === null ||
+      (await this.admin.listTaskGroupMembers(groupId, { after: members.nextAfter, limit: 1 }))
+        .members.length === 0
+        ? null
+        : members.nextAfter;
+    return {
+      group,
+      members: members.members,
+      nextAfter,
+      events: events.slice(0, TASK_GROUP_DETAIL_EVENT_LIMIT),
+      eventsTruncated: events.length > TASK_GROUP_DETAIL_EVENT_LIMIT,
+    };
+  }
+
+  /**
+   * Cancels one task group through {@link Admin.cancelTaskGroup}.
+   *
+   * `cancel_task_group_v1` returns the unchanged snapshot of a finished group, and the snapshot
+   * alone cannot tell this call from an earlier cancel. The function writes a `canceled` event only
+   * when it does work, and the event records a digest of the request id. Thus the client lists the
+   * `canceled` events before the call, and the call canceled the group only if a new `canceled`
+   * event with its digest follows. A group that finishes during the call is `already_finished`.
+   * Two calls with the same request id at the same time can both report `canceled`, because the
+   * digest names the request, not the call.
+   */
+  async cancelTaskGroup(
+    environment: ConfirmedEnvironment,
+    groupId: string,
+    request: AdminControlRequest,
+  ): Promise<AdminTaskGroupCancelResult> {
+    void environment;
+    const canceledEvents = async () =>
+      (await this.newestTaskGroupEvents(groupId, TASK_GROUP_CANCEL_EVENT_WINDOW)).filter(
+        (event) => event.type === "canceled",
+      );
+    const earlier = new Set((await canceledEvents()).map((event) => event.id));
+    const group = await this.admin.cancelTaskGroup(groupId, {
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
+    });
+    if (group === null) return { status: "not_found", group: null };
+    // The digest has the form that `cancel_task_group_v1` writes to `request_id_digest`.
+    const digest = createHash("sha256")
+      .update(request.requestId, "utf8")
+      .digest("hex")
+      .slice(0, 12);
+    const canceled = (await canceledEvents()).some(
+      (event) =>
+        !earlier.has(event.id) &&
+        typeof event.details === "object" &&
+        event.details !== null &&
+        !Array.isArray(event.details) &&
+        event.details.request_id_digest === digest,
+    );
+    return { status: canceled ? "canceled" : "already_finished", group };
   }
 
   /** Lists drifted blocked dependents and the action a repair would take, without writing. */
