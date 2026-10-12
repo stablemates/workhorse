@@ -352,6 +352,7 @@ func TestProductionSQLLiteralsLiveInStatementRegistry(t *testing.T) {
 		"wake_at":                               {},
 		"worker_id":                             {},
 		"{}":                                    {},
+		"input_fingerprint":                     {},
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {

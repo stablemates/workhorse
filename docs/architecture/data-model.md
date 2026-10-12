@@ -1686,8 +1686,7 @@ inputs as TypeScript does, with these Ruby details:
 
 The Ruby `CheckpointInputConflictError` is a subclass of `ConflictError`. It carries `name`,
 `stored_fingerprint`, and `requested_fingerprint`. `TaskCheckpoint#input_fingerprint` returns the
-stored fingerprint, or nil. An SDK that does not give an input yet returns the column from its
-checkpoint reads and ignores it.
+stored fingerprint, or nil.
 
 In Python, `HandlerContext.checkpoint(name, operation, input=…)` compares inputs as TypeScript does.
 `AsyncHandlerContext`, `BatchHandlerContext`, and `AsyncBatchHandlerContext` take the same keyword
@@ -1706,6 +1705,25 @@ argument. These are the Python details:
 The Python `CheckpointInputConflictError` is a subclass of `CheckpointConflictError`. It carries
 `task_id`, `checkpoint_name`, `stored_fingerprint`, and `requested_fingerprint`.
 `TaskCheckpoint.input_fingerprint` returns the stored fingerprint, or `None`.
+
+In Go, `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})` and
+`BatchHandlerContext.Checkpoint` compare inputs as TypeScript does, with these Go details:
+
+1. `CheckpointInputFingerprint(input)` computes the same digest. `encoding/json` encodes the input
+   first, so `MarshalJSON` methods and struct tags apply. Object keys sort by UTF-16 code units, and
+   each number uses the ECMAScript form of its IEEE 754 double. An integer above 2^53 loses its
+   exact value.
+2. A non-finite number returns an error that starts with
+   `checkpoint input must contain only finite numbers`, and the operation does not run.
+   `encoding/json` replaces invalid UTF-8 with U+FFFD. More than one `CheckpointOptions` value
+   returns an error.
+3. A nil `Input` gives no fingerprint. `json.RawMessage("null")` gives the fingerprint of the JSON
+   null.
+4. A different stored fingerprint, an overlapping call with a different fingerprint, or the
+   `input_conflict` status returns `*CheckpointInputConflictError`, and the operation does not run.
+
+The Go `CheckpointInputConflictError` carries `TaskID`, `CheckpointName`, `StoredFingerprint`, and
+`RequestedFingerprint`. `TaskCheckpoint.InputFingerprint` returns the stored fingerprint, or nil.
 
 In Go:
 

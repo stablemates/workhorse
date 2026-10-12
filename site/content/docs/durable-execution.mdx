@@ -390,15 +390,16 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 <details>
 <summary>Reference: checkpoint input</summary>
 
-Each SDK in this table gives the input of a checkpoint. The fingerprint function returns the
-fingerprint that the call stores.
+Each SDK gives the input of a checkpoint. The fingerprint function returns the fingerprint
+that the call stores.
 
-| SDK        | Call with an input                                        | Fingerprint function                            | Stored fingerprint                  |
-| ---------- | --------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
-| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`   | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
-| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)` | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
-| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`           | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
-| Python     | `HandlerContext.checkpoint(name, operation, input=…)`     | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
+| SDK        | Call with an input                                                            | Fingerprint function                            | Stored fingerprint                  |
+| ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                       | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
+| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                     | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                               | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
+| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                         | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
+| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})` | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
@@ -412,7 +413,7 @@ input.
 | Present            | Different               | `CheckpointInputConflictError`. The operation does not run. |
 
 Overlapping calls with one name compare their inputs in the same way. The stored fingerprint is
-null for a checkpoint without an input. An SDK that is not in the table does not give an input now.
+null for a checkpoint without an input.
 
 More detail: [Data model: `task_checkpoint`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#task_checkpoint).
 
@@ -453,8 +454,8 @@ Workhorse fails the task on the first conflict with saved evidence in one of the
 
 The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictError`,
 `WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
-includes a changed child set. Only an SDK that gives a checkpoint input raises
-`CheckpointInputConflictError`.
+includes a changed child set. A checkpoint call raises
+`CheckpointInputConflictError` only when the call gives an input.
 
 The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
 the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.

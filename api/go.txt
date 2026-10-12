@@ -7,8 +7,7 @@
 # generator re-pins the baseline and empties the list. An addition is compatible and is never
 # listed, so adding never asks for a regeneration.
 
-baseline github.com/stablemates/workhorse/go@v0.6.1 (tag go/v0.6.1)
+baseline github.com/stablemates/workhorse/go@v0.7.1 (tag go/v0.7.1)
 
-- ./dashboard.DashboardTaskRow.HumanWait: changed from *DashboardHumanWaitSummary to *DashboardTaskRowHumanWait
-- ./dashboard.HandlerOptions.AuditActor: removed
-- Version: value changed from "0.6.1" to "0.7.1"
+- (*BatchHandlerContext).Checkpoint: changed from func(string, func() (any, error)) (any, error) to func(string, func() (any, error), ...CheckpointOptions) (any, error)
+- (*HandlerContext).Checkpoint: changed from func(string, func() (any, error)) (any, error) to func(string, func() (any, error), ...CheckpointOptions) (any, error)

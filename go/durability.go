@@ -38,6 +38,28 @@ func (err *CheckpointConflictError) Error() string {
 	return fmt.Sprintf(checkpointConflictErrorFormat, err.CheckpointName, err.TaskID)
 }
 
+// CheckpointInputConflictError identifies a checkpoint name stored with the fingerprint of a
+// different input (ADR 0098). The stored value is the result of another input, so the worker fails
+// the task at once and keeps the current attempt.
+type CheckpointInputConflictError struct {
+	TaskID               string
+	CheckpointName       string
+	StoredFingerprint    string
+	RequestedFingerprint string
+}
+
+func (err *CheckpointInputConflictError) Error() string {
+	return fmt.Sprintf(checkpointInputConflictErrorFormat, err.CheckpointName, err.TaskID)
+}
+
+// CheckpointOptions configures one Checkpoint call.
+type CheckpointOptions struct {
+	// Input is the input of the checkpoint operation. If Input is not nil, the checkpoint stores the
+	// fingerprint of the input with its value, as CheckpointInputFingerprint computes it. A nil
+	// Input gives no input. Use json.RawMessage("null") for the JSON input null.
+	Input any
+}
+
 // WaitLeaseLostError identifies a durable wait rejected under a stale fence.
 type WaitLeaseLostError struct {
 	TaskID   string
@@ -99,9 +121,10 @@ func (err *ProgressRateLimitError) Error() string {
 }
 
 type checkpointCall struct {
-	done  chan struct{}
-	value any
-	err   error
+	done        chan struct{}
+	fingerprint *string
+	value       any
+	err         error
 }
 
 type waitCall struct {
@@ -269,9 +292,15 @@ func progressInt64(value any) (int64, bool) {
 }
 
 // Checkpoint returns the stored value for name, or runs and immutably saves operation once.
+//
+// With CheckpointOptions.Input, the checkpoint also stores the fingerprint of the input (ADR 0098).
+// If the stored checkpoint, or an overlapping call with the same name, has the fingerprint of a
+// different input, the call returns CheckpointInputConflictError and operation does not run. If
+// either side has no input, the call compares nothing.
 func (handler *HandlerContext) Checkpoint(
 	name string,
 	operation func() (any, error),
+	options ...CheckpointOptions,
 ) (any, error) {
 	if err := handler.rejectOnFastTier(fastTierCheckpointsFeature); err != nil {
 		return nil, err
@@ -282,12 +311,19 @@ func (handler *HandlerContext) Checkpoint(
 	if operation == nil {
 		return nil, errors.New(nilCheckpointOperationMessage)
 	}
+	fingerprint, err := checkpointFingerprint(options)
+	if err != nil {
+		return nil, err
+	}
 	handler.checkpoint.Lock()
 	if handler.checkpoints == nil {
 		handler.checkpoints = make(map[string]*checkpointCall)
 	}
 	if pending := handler.checkpoints[name]; pending != nil {
 		handler.checkpoint.Unlock()
+		if err := handler.checkInput(name, pending.fingerprint, fingerprint); err != nil {
+			return nil, err
+		}
 		// The initiator runs application code that may ignore cancellation, so a duplicate stops
 		// waiting for it once the handler context ends.
 		select {
@@ -297,7 +333,7 @@ func (handler *HandlerContext) Checkpoint(
 			return nil, context.Cause(handler.context)
 		}
 	}
-	pending := &checkpointCall{done: make(chan struct{})}
+	pending := &checkpointCall{done: make(chan struct{}), fingerprint: fingerprint}
 	handler.checkpoints[name] = pending
 	handler.checkpoint.Unlock()
 
@@ -314,13 +350,42 @@ func (handler *HandlerContext) Checkpoint(
 		close(pending.done)
 		handler.checkpoint.Unlock()
 	}()
-	pending.value, pending.err = handler.runCheckpoint(name, operation)
+	pending.value, pending.err = handler.runCheckpoint(name, fingerprint, operation)
 	completed = true
 	return pending.value, pending.err
 }
 
+// checkpointFingerprint returns the input fingerprint of one Checkpoint call, or nil without an
+// input.
+func checkpointFingerprint(options []CheckpointOptions) (*string, error) {
+	if len(options) > 1 {
+		return nil, errors.New(checkpointOptionsCountMessage)
+	}
+	if len(options) == 0 || options[0].Input == nil {
+		return nil, nil
+	}
+	fingerprint, err := CheckpointInputFingerprint(options[0].Input)
+	if err != nil {
+		return nil, err
+	}
+	return &fingerprint, nil
+}
+
+// checkInput compares two input fingerprints. Inputs are compared only when both sides carry a
+// fingerprint, so a handler that adds or removes an input keeps the stored result.
+func (handler *HandlerContext) checkInput(name string, stored, requested *string) error {
+	if stored == nil || requested == nil || *stored == *requested {
+		return nil
+	}
+	return &CheckpointInputConflictError{
+		TaskID: handler.Task.ID, CheckpointName: name,
+		StoredFingerprint: *stored, RequestedFingerprint: *requested,
+	}
+}
+
 func (handler *HandlerContext) runCheckpoint(
 	name string,
+	fingerprint *string,
 	operation func() (any, error),
 ) (any, error) {
 	if err := context.Cause(handler.context); err != nil {
@@ -328,7 +393,7 @@ func (handler *HandlerContext) runCheckpoint(
 	}
 	rows, err := handler.executor.Query(
 		handler.context,
-		internalStatementRegistry[listCheckpointStatementName],
+		adminStatementRegistry[getCheckpointStatementName],
 		handler.Task.ID,
 		name,
 	)
@@ -339,6 +404,13 @@ func (handler *HandlerContext) runCheckpoint(
 		return nil, errors.New(invalidCheckpointResultMessage)
 	}
 	if len(rows) == 1 {
+		stored, err := storedInputFingerprint(rows[0])
+		if err != nil {
+			return nil, err
+		}
+		if err := handler.checkInput(name, stored, fingerprint); err != nil {
+			return nil, err
+		}
 		return decodedJSON(rows[0][rowCheckpointValueField])
 	}
 	value, err := operation()
@@ -358,6 +430,7 @@ func (handler *HandlerContext) runCheckpoint(
 		handler.Task.FenceToken,
 		name,
 		encoded,
+		optionalStringArgument(fingerprint),
 	)
 	if err != nil {
 		return nil, err
@@ -372,9 +445,29 @@ func (handler *HandlerContext) runCheckpoint(
 		return nil, &CheckpointLeaseLostError{TaskID: handler.Task.ID, CheckpointName: name}
 	case durableConflictValue:
 		return nil, &CheckpointConflictError{TaskID: handler.Task.ID, CheckpointName: name}
+	case durableInputConflictValue:
+		stored, err := storedInputFingerprint(rows[0])
+		if err != nil {
+			return nil, err
+		}
+		if err := handler.checkInput(name, stored, fingerprint); err != nil {
+			return nil, err
+		}
+		// PostgreSQL returns input_conflict only when both fingerprints are present and differ.
+		return nil, errors.New(invalidCheckpointResultMessage)
 	default:
 		return nil, fmt.Errorf(unknownCheckpointStatusFormat, status)
 	}
+}
+
+// storedInputFingerprint reads the input fingerprint of a checkpoint row. NULL is a checkpoint
+// saved without an input.
+func storedInputFingerprint(row Row) (*string, error) {
+	stored, ok := optionalString(row[rowInputFingerprintField])
+	if !ok {
+		return nil, errors.New(invalidCheckpointResultMessage)
+	}
+	return stored, nil
 }
 
 // Sleep suspends the task without consuming its logical attempt until duration elapses.
