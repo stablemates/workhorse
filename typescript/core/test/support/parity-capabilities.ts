@@ -946,6 +946,24 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
       patterns: ["pause-worker", "resume-worker"],
     },
   },
+  {
+    capability: "Task group listing, detail, and cancel",
+    postgresql: {
+      file: "integration-task-group-shards.test.ts",
+      patterns: ["dashboard_task_groups_v1", "listTaskGroupMembers", "cancelTaskGroup"],
+    },
+    // `test/conformance.test.ts` runs these shared fixtures but never names a task group, so the
+    // cell cites the fixtures that exercise the three procedures.
+    dashboard: {
+      file: "../../dashboard/v1/conformance.json",
+      patterns: [
+        '"procedure": "taskGroups"',
+        '"procedure": "taskGroupDetail"',
+        '"procedure": "cancelTaskGroup"',
+      ],
+    },
+    cli: { planned: "SM-1257" },
+  },
 ];
 
 /**
