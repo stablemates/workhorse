@@ -1500,7 +1500,7 @@ export interface DashboardTaskGroupDetail {
   nextAfter: number | null;
   /** The newest group events first, at most `dashboardTaskGroupEventLimit`. */
   events: DashboardTaskGroupEvent[];
-  /** True when the group has more events than this detail carries. */
+  /** True when the group has older events that this detail does not carry. */
   eventsTruncated: boolean;
   /** True when this dashboard can cancel the group: it is writable and has a cancel controller. */
   canCancel: boolean;

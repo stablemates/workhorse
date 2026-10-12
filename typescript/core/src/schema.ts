@@ -474,6 +474,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "count task group outcomes in counter shards",
     kind: "additive",
   },
+  {
+    fromVersion: 66,
+    toVersion: 67,
+    file: "0068-read-the-newest-task-group-events.sql",
+    description: "read the newest task group events",
+    kind: "additive",
+  },
 ];
 
 /**

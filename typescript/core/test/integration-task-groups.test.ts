@@ -554,6 +554,50 @@ describe("task groups", () => {
     await expect(admin.listTaskGroupDrift()).resolves.toEqual([]);
   });
 
+  it("reads the newest events first, and keeps the oldest-first read unchanged", async () => {
+    const group = await queue.createTaskGroup();
+    // 1,200 repairs after the created event. The newest event has the ordinal 1200.
+    await pool.query(
+      `INSERT INTO workhorse.task_group_event(group_id, event_type, details, occurred_at)
+       SELECT $1, 'counter_repaired', jsonb_build_object('ordinal', ordinal),
+              clock_timestamp() + ordinal * interval '1 millisecond'
+         FROM generate_series(1, 1200) AS ordinal`,
+      [group.id],
+    );
+
+    const newest = await pool.query<{ event_type: string; ordinal: number | null }>(
+      `SELECT event_type, (details ->> 'ordinal')::integer AS ordinal
+         FROM workhorse.list_newest_task_group_events_v1($1, 101)`,
+      [group.id],
+    );
+    expect(newest.rows.map((row) => row.ordinal)).toEqual(
+      Array.from({ length: 101 }, (_, index) => 1200 - index),
+    );
+    const all = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM workhorse.list_newest_task_group_events_v1($1, 1000)",
+      [group.id],
+    );
+    expect(all.rows).toHaveLength(1000);
+    expect(all.rows.every((row) => row.event_type === "counter_repaired")).toBe(true);
+
+    const oldest = await admin.listTaskGroupEvents(group.id);
+    expect(oldest).toHaveLength(1000);
+    expect(oldest[0]?.type).toBe("created");
+    expect(oldest.at(-1)?.details).toEqual({ ordinal: 999 });
+
+    for (const limit of [0, 1001, null]) {
+      await expect(
+        pool.query("SELECT * FROM workhorse.list_newest_task_group_events_v1($1, $2)", [
+          group.id,
+          limit,
+        ]),
+      ).rejects.toThrow("task group event limit must be between 1 and 1000");
+    }
+    await expect(
+      pool.query("SELECT * FROM workhorse.list_newest_task_group_events_v1(NULL, 10)"),
+    ).rejects.toThrow("task group identity is required");
+  });
+
   it("finishes a stalled sealed group in the terminal storage routine", async () => {
     const { group } = await queue.taskGroup(callbacks("stall-cb"), (builder) =>
       builder.add([member("stall-members", 1)]),

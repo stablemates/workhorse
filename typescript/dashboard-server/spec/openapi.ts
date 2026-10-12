@@ -251,7 +251,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   taskGroupDetail: {
     summary: "Read one task group",
     description:
-      "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. eventsTruncated is true when the group has more events than the response carries.",
+      "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. events carries the newest group events first, at most 100; eventsTruncated is true when the group has older events that the response does not carry.",
     notFound: "Task group not found",
   },
   cancelTaskGroup: {

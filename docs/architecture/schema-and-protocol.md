@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 66 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 67 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 66 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 67 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0067`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0068`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 66.
+- An installed version below the baseline 6 or above the current 67.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,9 +139,10 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 66 and newer inside the major line, and client protocol 5 only. Schema version 66
-is the floor because it adds `dashboard_task_groups_v1`, which the dashboard of each SDK calls.
-Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor
+schema versions 67 and newer inside the major line, and client protocol 5 only. Schema version 67
+is the floor because it adds `list_newest_task_group_events_v1`, which the task group detail of
+each SDK dashboard calls. Schema version 66 adds `dashboard_task_groups_v1`, which the dashboard of
+each SDK also calls. Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor
 was 54, because earlier schemas treat the terminal failure override as an immediate retry.
 
 `MINIMUM_SCHEMA_VERSION` holds the `schema.minimumVersion` value of `protocol/v1/manifest.json`.
@@ -218,7 +219,7 @@ executor that only counts empty polls fails on every run instead of once under l
 All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 66, includes it.
+Thus workers require schema version 54 or newer. The current floor, 67, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -501,7 +502,7 @@ Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
 
-`python/src/workhorse/_protocol.py` accepts schema version 66 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 67 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and
