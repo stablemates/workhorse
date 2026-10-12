@@ -1456,16 +1456,65 @@ released task. Also, `terminalize_deadline_v1` rolled back the whole recovery pa
 released task.
 
 Each SDK releases a task of an unregistered type through `release_owned_v1` and records the
-`released` handler outcome. If all claims of a pass were unrunnable, the pass counts as empty for
-the poll backoff. Thus, if no deployed worker handles a task, workers claim that task again on the
-poll cadence and not in a loop.
+`released` handler outcome. A claim whose tasks were all released counts as empty. But the release
+also sends a notification, so the empty wait does not always control when a worker claims that task
+again.
 
-- `Worker.RunOnce`, Python `run_once()`, and Rust `Worker::run_once` report such a pass as
-  unprocessed.
-- `runOnce()` waits for the poll interval on the pass after such a pass.
+##### Continuous loop
 
-The shared `missing-handler` runtime fixture asserts in every SDK that the pass after a
-released-only pass makes no progress.
+The continuous loop is TypeScript `Worker.run()`, Python `Worker.run()` and `AsyncWorker.run()`, Go
+`Worker.Run`, Rust `Worker::run`, and Ruby `Worker#run`. All five do the same steps while the
+worker's listener is active:
+
+1. The worker claims a task that it has no handler for. The claim counts as empty, and the loop
+   starts its empty wait with the base poll interval.
+2. The worker releases the task. `release_owned_v1` sets the task to `ready` and calls
+   `pg_notify('workhorse_tasks', queue_name)`.
+3. The worker's own listener gets the notification and wakes dispatch. The wake is newer than the
+   claim, so the empty wait ends at once. In TypeScript, `wakeDispatch()` increments
+   `dispatchWakeVersion`, and the `emptyWait` check in `Worker.run()` sees the change.
+4. The count of consecutive empty claims is above zero, so the next claim waits the notification
+   claim delay first. That delay is a random time from 0 through 50 ms.
+5. The worker claims again. If the task is first in its queue, the worker gets it and releases it
+   again.
+
+Thus, while a listener is active, a worker that has no handler for a ready task claims and releases
+it again after the notification claim delay plus the database round trips. It does not wait for the
+poll interval. Each release also wakes every other listening worker on that queue. A worker without
+an active listener gets no notification, so it waits for its poll backoff between these claims. The
+[Polling cadence](operations.md#polling-cadence) table gives both delays. SM-1247 tracks this
+behavior.
+
+The SDKs name the notification claim delay `NOTIFICATION_CLAIM_DELAY_MS` (TypeScript),
+`_NOTIFICATION_CLAIM_DELAY_SECONDS` (Python), `notificationClaimDelay` (Go),
+`MAX_NOTIFICATION_DELAY_MS` (Rust), and `NOTIFICATION_CLAIM_DELAY` (Ruby). Rust picks the delay in
+whole milliseconds.
+
+A fused completion claim does not start while an empty wait is active. In every SDK, a fused claim
+that returns only tasks of unregistered types releases them and does not change the backoff.
+
+##### Single-pass call
+
+The single-pass call opens no listener, so a notification does not affect it. The SDKs report a
+pass whose claims were all released in two different ways:
+
+| SDK        | Call               | Result for the released-only pass | Next call                                                            |
+| ---------- | ------------------ | --------------------------------- | -------------------------------------------------------------------- |
+| TypeScript | `runOnce()`        | `true`                            | Returns `false` without a claim until `pollMs` ends after that claim |
+| Python     | `run_once()`       | `False`                           | Claims again at once                                                 |
+| Go         | `Worker.RunOnce`   | `false`                           | Claims again at once                                                 |
+| Rust       | `Worker::run_once` | `false`                           | Claims again at once                                                 |
+| Ruby       | `run_once`         | `false`                           | Claims again at once                                                 |
+
+In Python, Go, Rust, and Ruby, only the `false` result tells the caller to wait. SM-1247 tracks
+the difference.
+
+The shared `missing-handler` runtime fixture checks the single-pass call in two ways:
+
+- The TypeScript, Python, Go, and Ruby tests check that the second call after the release reports
+  no progress. These tests pass for both behaviors in the table.
+- The Rust test checks that the first call, which releases the task, returns `false`. It makes no
+  second call before it registers the handler.
 
 ### Terminal transitions
 
