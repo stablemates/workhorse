@@ -301,6 +301,69 @@ module Stablemates
         Values.parse_integer(rows.first.fetch("deleted_count"))
       end
 
+      # The TaskGroup, or nil when no such group exists.
+      def get_task_group(group_id)
+        group_id = TaskGroups.group_id(group_id)
+        assert_compatible
+        row = @executor.rows(SqlCatalogue::GET_TASK_GROUP_V1, [group_id]).first
+        row && TaskGroups.group(row)
+      end
+
+      # One TaskGroupMemberPage of at most +limit+ member tasks after the position +after+, in the
+      # order they joined.
+      def list_task_group_members(group_id, after: 0, limit: 100)
+        group_id = TaskGroups.group_id(group_id)
+        limit(limit, TaskGroups::MAX_PAGE_SIZE, "list_task_group_members limit")
+        raise ArgumentError, "after must be a non-negative Integer" unless after.is_a?(Integer) && after >= 0
+
+        assert_compatible
+        rows = @executor.rows(SqlCatalogue::LIST_TASK_GROUP_MEMBERS_V1, [group_id, after.to_s, limit.to_s])
+        TaskGroups.member_page(rows, limit)
+      end
+
+      # The group's TaskGroupEvent history in time order: create, seal, cancel, finish, callbacks,
+      # and repairs.
+      def list_task_group_events(group_id, limit: 1000)
+        group_id = TaskGroups.group_id(group_id)
+        limit(limit, TaskGroups::MAX_PAGE_SIZE, "list_task_group_events limit")
+        assert_compatible
+        @executor.rows(SqlCatalogue::LIST_TASK_GROUP_EVENTS_V1, [group_id, limit.to_s])
+          .map { |row| TaskGroups.event(row) }
+      end
+
+      # Seals an open group, so no task can join it after this call, not even from a running member
+      # task. Then cancels every member task that is not terminal. The canceled member tasks count as
+      # not succeeded, so the group finishes as usual and +on_finish+ and +on_failure+ run. A
+      # finished group stays unchanged. Returns the TaskGroup, or nil for an unknown group.
+      def cancel_task_group(group_id, audit:)
+        group_id = TaskGroups.group_id(group_id)
+        audit(audit)
+        assert_compatible
+        row = @executor.rows(SqlCatalogue::CANCEL_TASK_GROUP_V1,
+          [group_id, audit.actor, audit.reason, audit.request_id]).first
+        row && TaskGroups.group(row)
+      end
+
+      # The groups that are not finished and whose counters disagree with their member outcomes,
+      # and the sealed groups with no pending member, as TaskGroupDrift. It writes nothing, so it is
+      # the dry run of +repair_task_group_drift+.
+      def list_task_group_drift(limit: 1000)
+        limit(limit, TaskGroups::MAX_DRIFT_LIMIT, "list_task_group_drift limit")
+        assert_compatible
+        @executor.rows(SqlCatalogue::LIST_TASK_GROUP_DRIFT_V1, [limit.to_s]).map { |row| TaskGroups.drift(row) }
+      end
+
+      # Recounts each group +list_task_group_drift+ reports from its member outcomes, and finishes
+      # a sealed group with no pending member. Returns one TaskGroupRepair for each group. The
+      # +counter_repaired+ event of each group records the audit.
+      def repair_task_group_drift(audit:, limit: 1000)
+        audit(audit)
+        limit(limit, TaskGroups::MAX_DRIFT_LIMIT, "repair_task_group_drift limit")
+        assert_compatible
+        @executor.rows(SqlCatalogue::REPAIR_TASK_GROUP_DRIFT_V1,
+          [limit.to_s, audit.actor, audit.reason, audit.request_id]).map { |row| TaskGroups.repair(row) }
+      end
+
       private
 
       def set_queue_paused(queue, paused, audit)

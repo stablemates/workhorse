@@ -78,17 +78,88 @@ module Stablemates
         raise ArgumentError, "enqueue batch exceeds the shared limit" if
           requests.length > SqlCatalogue::MAX_ENQUEUE_BATCH_SIZE
 
-        2.times do
-          rows = enqueue_attempt(requests)
-          task_types = contract_mismatch(rows)
-          return enqueue_results(rows, requests.length) if task_types.nil?
+        rows = submit_requests(requests) { |document| @executor.rows(SqlCatalogue::ENQUEUE_MANY_V1, [document]) }
+        enqueue_results(rows, requests.length)
+      end
 
-          task_types.each do |task_type|
-            contract = Contracts.load(@executor, task_type)
-            @lock.synchronize { @contracts[task_type] = contract }
-          end
-        end
-        raise ContractPolicyChangedError
+      # Creates an open task group (ADR 0095) and returns its TaskGroup. Each callback is an
+      # EnqueueRequest without idempotency, debounce, or throttle, or nil. Add tasks with
+      # +add_to_task_group+, then seal the group with +seal_task_group+. When the group is sealed and
+      # every member task is finished, Workhorse enqueues +on_finish+, and +on_success+ or
+      # +on_failure+ as the result selects.
+      def create_task_group(on_finish: nil, on_success: nil, on_failure: nil)
+        create_group({on_finish: on_finish, on_success: on_success, on_failure: on_failure}, [], false).group
+      end
+
+      # Creates a task group, yields a TaskGroupBuilder, adds the tasks the block collects, and
+      # seals the group, in one statement and so in one transaction. Returns a
+      # TaskGroupBlockResult. The callbacks are those of +create_task_group+. An Active Job enqueued
+      # through the Workhorse adapter inside the block joins the group. If the block raises, nothing
+      # is enqueued. A group with no tasks finishes at the seal.
+      def task_group(on_finish: nil, on_success: nil, on_failure: nil)
+        raise ArgumentError, "task_group needs a block" unless block_given?
+
+        builder = TaskGroupBuilder.new
+        builder.collect { yield builder }
+        result = create_group({on_finish: on_finish, on_success: on_success, on_failure: on_failure},
+          builder.requests, true)
+        builder.created(result.tasks)
+        result
+      end
+
+      # Enqueues +requests+, an Array of at most 1,000 EnqueueRequest, as member tasks of an open
+      # group, and returns their EnqueueResult in request order. A request cannot use debounce or
+      # throttle. A sealed group accepts tasks only from a running member task, through
+      # HandlerContext#task_group.
+      def add_to_task_group(group_id, requests)
+        add_task_group_members(TaskGroups.group_id(group_id), requests, [nil, nil, nil])
+      end
+
+      # Adds +requests+ to the group of +task+, a running member task, under its fenced lease.
+      # Internal to the SDK.
+      def add_to_task_group_as_member(task, worker_id, requests) # :nodoc:
+        TaskGroups.validate_add(requests)
+        link = find_task_group(task.id)
+        raise ArgumentError, "Task #{task.id} is not a member of a task group" unless link&.role == :member
+
+        add_task_group_members(link.group.id, requests, [task.id, worker_id, task.fence_token.to_s])
+      end
+
+      # Seals an open group and returns its TaskGroup. A group with no pending member finishes at
+      # once. Sealing a sealed or finished group changes nothing.
+      def seal_task_group(group_id)
+        group_id = TaskGroups.group_id(group_id)
+        assert_compatible
+        TaskGroups.group(exactly_one(@executor.rows(SqlCatalogue::SEAL_TASK_GROUP_V1, [group_id]),
+          "seal_task_group_v1"))
+      end
+
+      # The TaskGroup, or nil when no such group exists.
+      def get_task_group(group_id)
+        group_id = TaskGroups.group_id(group_id)
+        assert_compatible
+        row = @executor.rows(SqlCatalogue::GET_TASK_GROUP_V1, [group_id]).first
+        row && TaskGroups.group(row)
+      end
+
+      # One TaskGroupMemberPage of at most +limit+ member tasks after the position +after+, in the
+      # order they joined.
+      def list_task_group_members(group_id, after: 0, limit: 100)
+        group_id = TaskGroups.group_id(group_id)
+        TaskGroups.limit(limit, TaskGroups::MAX_PAGE_SIZE, "list_task_group_members limit")
+        raise ArgumentError, "after must be a non-negative Integer" unless after.is_a?(Integer) && after >= 0
+
+        assert_compatible
+        rows = @executor.rows(SqlCatalogue::LIST_TASK_GROUP_MEMBERS_V1, [group_id, after.to_s, limit.to_s])
+        TaskGroups.member_page(rows, limit)
+      end
+
+      # The TaskGroupLink of the group +task_id+ is a member of, or whose callback it is, or nil.
+      def find_task_group(task_id)
+        task_id = Values.task_id(task_id)
+        assert_compatible
+        row = @executor.rows(SqlCatalogue::TASK_GROUP_FOR_TASK_V1, [task_id]).first
+        row && TaskGroups.link(row)
       end
 
       # Requests cancellation. An active task stops at its next PostgreSQL-owned checkpoint.
@@ -293,7 +364,24 @@ module Stablemates
 
       private
 
-      def enqueue_attempt(requests)
+      # Serializes +requests+, passes their JSON document to the block, and returns the rows the block
+      # returns. On a contract mismatch, PostgreSQL enqueued nothing: the client reloads the named
+      # contracts and calls the block one more time.
+      def submit_requests(requests)
+        2.times do
+          rows = yield serialize_requests(requests)
+          task_types = contract_mismatch(rows)
+          return rows if task_types.nil?
+
+          task_types.each do |task_type|
+            contract = Contracts.load(@executor, task_type)
+            @lock.synchronize { @contracts[task_type] = contract }
+          end
+        end
+        raise ContractPolicyChangedError
+      end
+
+      def serialize_requests(requests)
         now = Time.now
         trace_context = Telemetry.inject_trace_context
         inputs = requests.each_with_index.map do |request, index|
@@ -305,7 +393,64 @@ module Stablemates
         end
         assert_compatible
         inputs.zip(requests) { |input, request| apply_contract(input, request) }
-        @executor.rows(SqlCatalogue::ENQUEUE_MANY_V1, [JSON.generate(inputs)])
+        JSON.generate(inputs)
+      end
+
+      # Creates a group with +requests+ as its member tasks, and seals it when +seal+ is true. A
+      # contract mismatch of a member or a callback creates nothing, and the retry serializes the
+      # callbacks again under the contracts the mismatch reloaded.
+      def create_group(callbacks, requests, seal)
+        callbacks.each do |kind, request|
+          next if request.nil?
+          raise ArgumentError, "#{kind} must be an EnqueueRequest or nil" unless request.is_a?(EnqueueRequest)
+          if request.idempotency || request.debounce || request.throttle
+            raise ArgumentError, "task group callbacks cannot use enqueue idempotency, debounce, or throttle"
+          end
+        end
+        group_id = nil
+        rows = submit_requests(requests) do |document|
+          created = @executor.rows(SqlCatalogue::CREATE_TASK_GROUP_V1,
+            [serialize_callbacks(callbacks), document, seal.to_s])
+          group_id = created.first&.fetch("group_id")
+          created
+        end
+        raise Error, "PostgreSQL created no task group" if group_id.nil?
+
+        group = get_task_group(group_id) or raise Error, "Task group #{group_id} disappeared after its creation"
+        TaskGroupBlockResult.new(group: group, tasks: enqueue_results(rows.reject { |row| row["ordinal"].nil? },
+          requests.length))
+      end
+
+      # The callback document of create_task_group_v1. A callback is enqueued later, so it carries
+      # no run time unless the caller set one.
+      def serialize_callbacks(callbacks)
+        now = Time.now
+        trace_context = Telemetry.inject_trace_context
+        document = callbacks.each_with_object({}) do |(kind, request), entries|
+          next if request.nil?
+
+          input = begin
+            serialize_request(request, now)
+          rescue ArgumentError => e
+            raise ArgumentError, "#{kind} callback: #{e.message}"
+          end
+          input.delete("runAt") if request.run_at.nil?
+          input["traceContext"] = trace_context if trace_context
+          apply_contract(input, request)
+          entries[TaskGroups::CALLBACK_KEYS.fetch(kind)] = input
+        end
+        JSON.generate(document)
+      end
+
+      # +member+ is the task ID, worker ID, and fence token of a running member task, or three nils.
+      def add_task_group_members(group_id, requests, member)
+        TaskGroups.validate_add(requests)
+        return [] if requests.empty?
+
+        rows = submit_requests(requests) do |document|
+          @executor.rows(SqlCatalogue::ADD_TASK_GROUP_MEMBERS_V1, [group_id, document, *member])
+        end
+        enqueue_results(rows, requests.length)
       end
 
       def serialize_request(request, now)

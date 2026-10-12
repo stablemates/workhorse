@@ -73,6 +73,25 @@ module Stablemates
       def suspended? = released? || %i[suspended_for_wait suspended_for_child].include?(@outcome.get)
     end
 
+    # The task group operations of one handler activation (ADR 0095). HandlerContext#task_group
+    # returns it.
+    class TaskGroupContext
+      def initialize(get:, add:) # :nodoc:
+        @get = get
+        @add = add
+      end
+
+      # The TaskGroupLink of the group this task is a member of, or whose callback this task is, with
+      # its counts. Returns nil for a task with no group. The activation reads it one time and keeps
+      # it.
+      def get = @get.call
+
+      # Adds +requests+, an Array of at most 1,000 EnqueueRequest, to the group of this member task,
+      # under the current fenced lease, and returns their EnqueueResult. A running member task can
+      # add tasks after the seal, until its group is canceled.
+      def add(requests) = @add.call(requests)
+    end
+
     # What a handler receives beside its payload: the task, its cancellation token, and the durable
     # primitives. Every durable write carries the attempt's fence token, so a write from an attempt
     # that lost its lease raises LeaseLostError. Concurrent calls that share one name share one
@@ -94,6 +113,8 @@ module Stablemates
 
       # The ClaimedTask this attempt runs.
       attr_reader :task
+      # The TaskGroupContext of this task.
+      attr_reader :task_group
       # The attempt's CancellationToken.
       attr_reader :cancellation
 
@@ -109,6 +130,13 @@ module Stablemates
         @lock = Monitor.new
         @loaded = {}
         @calls = Hash.new { |calls, kind| calls[kind] = {} }
+        @task_group = TaskGroupContext.new(
+          get: -> { load(:task_group) { @queue.find_task_group(@task.id) } },
+          add: lambda do |requests|
+            live!(:task_group_add)
+            @queue.add_to_task_group_as_member(@task, @worker_id, requests)
+          end
+        )
       end
 
       # The TaskCheckpoint named +name+ this task saved, or nil when it saved none.

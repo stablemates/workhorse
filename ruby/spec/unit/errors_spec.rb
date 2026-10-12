@@ -27,6 +27,21 @@ RSpec.describe "Workhorse errors" do
     expect([fast.queue, fast.feature, fast.ordinal]).to eq(["q", "dependencies", 2])
   end
 
+  it "translates the task group SQLSTATEs into their errors" do
+    closed = W::Executor.translate(pg_error("P1008", '{"groupId":"g","state":"sealed","reason":"not_running_member"}'))
+    expect([closed.class, closed.group_id, closed.state, closed.reason])
+      .to eq([W::TaskGroupClosedError, "g", :sealed, :not_running_member])
+    expect(closed.message).to eq("Task group g does not accept tasks (not_running_member)")
+
+    limit = W::Executor.translate(pg_error("P1009", '{"groupId":"g","limit":100000,"total":99999,"requested":2}'))
+    expect([limit.class, limit.limit, limit.total, limit.requested])
+      .to eq([W::TaskGroupLimitExceededError, 100_000, 99_999, 2])
+
+    conflict = W::Executor.translate(pg_error("P1010", "not json"))
+    expect([conflict.class, conflict.group_id, conflict.member_of]).to eq([W::TaskGroupMembershipConflictError, nil, nil])
+    expect(conflict).to be_a(W::DiagnosedError)
+  end
+
   it "turns other errors into database errors with their SQLSTATE" do
     error = W::Executor.translate(pg_error("23505"))
     expect(error).to be_an_instance_of(W::DatabaseError)

@@ -30,6 +30,7 @@ module ApiSnapshot
   KEYWORD_SOURCES = {
     "Stablemates::Workhorse::HandlerContext#run_child" => "Stablemates::Workhorse::EnqueueRequest#initialize",
     "Stablemates::Workhorse::Queue#enqueue" => "Stablemates::Workhorse::EnqueueRequest#initialize",
+    "Stablemates::Workhorse::TaskGroupBuilder#enqueue" => "Stablemates::Workhorse::EnqueueRequest#initialize",
     "Stablemates::Workhorse::ActiveJob::Options::ClassMethods#workhorse_options" =>
       "Stablemates::Workhorse::ActiveJob::OPTION_KEYS"
   }.freeze

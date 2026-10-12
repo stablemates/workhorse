@@ -122,6 +122,9 @@ module Stablemates
           fields = details(detail)
           FastTierUnsupportedError.new(fields.fetch("queue", "unknown"), fields.fetch("feature", "unknown"),
             fields["ordinal"])
+        when "P1008" then TaskGroupClosedError.new(details(detail))
+        when "P1009" then TaskGroupLimitExceededError.new(details(detail))
+        when "P1010" then TaskGroupMembershipConflictError.new(details(detail))
         else DatabaseError.new(error.message, sqlstate)
         end
       end
