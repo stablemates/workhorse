@@ -21,6 +21,7 @@ import {
   RUBY_SEED_NAME,
   RUST_SEED_NAME,
   seedDemoData,
+  TASK_GROUP_SEED_NAME,
 } from "../src/app.js";
 import { DEMO_FEATURE_SHOWCASE_SEED_NAME } from "../src/feature-showcase.js";
 import { createDemoIntegrationSuite } from "./support/demo-integration.js";
@@ -62,8 +63,8 @@ describe("Workhorse demo late language seeds", () => {
     {
       language: "Rust",
       seedName: RUST_SEED_NAME,
-      // The Ruby step is marked too, so this case observes the Rust step alone.
-      otherMarkers: [RUBY_SEED_NAME],
+      // The Ruby and task group steps are marked too, so this case observes the Rust step alone.
+      otherMarkers: [RUBY_SEED_NAME, TASK_GROUP_SEED_NAME],
       queue: DEMO_RUST_QUEUE,
       fastTier: DEMO_RUST_FAST_TIER_QUEUE,
       // The Rust step must not name Ruby's schedule: it would fire into `demo-ruby-fast` before the
@@ -73,7 +74,7 @@ describe("Workhorse demo late language seeds", () => {
     {
       language: "Ruby",
       seedName: RUBY_SEED_NAME,
-      otherMarkers: [RUST_SEED_NAME],
+      otherMarkers: [RUST_SEED_NAME, TASK_GROUP_SEED_NAME],
       queue: DEMO_RUBY_QUEUE,
       fastTier: DEMO_RUBY_FAST_TIER_QUEUE,
       schedules: [...DEMO_FAST_TIER_QUEUES, DEMO_RUST_FAST_TIER_QUEUE, DEMO_RUBY_FAST_TIER_QUEUE],

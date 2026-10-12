@@ -115,9 +115,16 @@ import {
   SHARED_WORKER_TASK_TYPE,
   TRAFFIC_BURST_TASK_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
+  TASK_GROUP_DRIVER_TASK_TYPE,
+  TASK_GROUP_SCHEDULE,
+  TASK_GROUP_SCHEDULE_NAME,
+  TASK_GROUP_SEED_NAME,
+  DEMO_TASK_GROUP_LANGUAGES,
+  type DemoTaskGroupResult,
   TIMING_TASK_TYPE,
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "./constants.js";
+import { demoTaskGroupCallbacks, demoTaskGroupMembers } from "./handlers.js";
 import { orders } from "./schema.js";
 
 export * from "./constants.js";
@@ -771,6 +778,22 @@ function trafficSchedules() {
   );
 }
 
+function taskGroupSchedule() {
+  return {
+    name: TASK_GROUP_SCHEDULE_NAME,
+    schedule: TASK_GROUP_SCHEDULE,
+    catchupPolicy: "latest",
+    enabled: true,
+    task: {
+      type: TASK_GROUP_DRIVER_TASK_TYPE,
+      queue: DEMO_QUEUE,
+      payload: {},
+      maxAttempts: 1,
+      tags: ["task-group"],
+    },
+  } as const;
+}
+
 function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
   return DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
     name: family.scheduleName,
@@ -978,6 +1001,7 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
     longRunningSchedule(true),
     ...featureShowcaseSchedules(new Map()),
     ...trafficSchedules(),
+    taskGroupSchedule(),
   ]);
 }
 
@@ -2026,6 +2050,79 @@ async function seedLateLanguageDemoData(database: DemoDatabase, index: number): 
   });
 }
 
+/** A run time that never arrives, so a member task stays pending and its group stays sealed. */
+const DEMO_TASK_GROUP_HELD_RUN_AT = new Date("9999-12-31T23:59:59.999Z");
+
+/**
+ * Create one task group in each state that the dashboard shows. The member tasks run on the
+ * Python, Go, Rust, and Ruby queues, and the callbacks run on `demo-shared`.
+ *
+ * 1. A sealed group whose members all succeed. It finishes with the result `succeeded`.
+ * 2. A sealed group with a misrouted member. It finishes with the result `failed`.
+ * 3. A sealed group whose Ruby member waits for a run time that never arrives, so it stays sealed.
+ * 4. An open group with members that succeed. Nothing seals it, so it stays open.
+ * 5. A group that the seed cancels at once. Its held members become `canceled`, and the group
+ *    finishes with the result `failed`.
+ *
+ * The workers finish the first two groups after the seed commits. Only the third and the fourth
+ * group stay unfinished.
+ */
+async function seedTaskGroupDemoData(database: DemoDatabase): Promise<string[]> {
+  return database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${TASK_GROUP_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
+
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const source = "task-group-seed";
+    const callbacks = demoTaskGroupCallbacks(source);
+    const sealed = async (result: DemoTaskGroupResult, runAt?: ReadonlyMap<number, Date>) => {
+      const { group, tasks } = await workhorse.queue.taskGroup(callbacks, (builder) =>
+        builder.add(demoTaskGroupMembers(source, result, runAt)),
+      );
+      return { groupId: group.id, taskIds: tasks.map((task) => task.taskId) };
+    };
+
+    const succeeded = await sealed("succeeded");
+    const failed = await sealed("failed");
+    const pending = await sealed(
+      "succeeded",
+      new Map([[DEMO_TASK_GROUP_LANGUAGES.length - 1, DEMO_TASK_GROUP_HELD_RUN_AT]]),
+    );
+
+    const open = await workhorse.queue.createTaskGroup(callbacks);
+    const openTasks = await workhorse.queue.addToTaskGroup(
+      open.id,
+      demoTaskGroupMembers(source, "succeeded").slice(0, 2),
+    );
+
+    const canceled = await sealed(
+      "succeeded",
+      new Map(DEMO_TASK_GROUP_LANGUAGES.map((_, index) => [index, DEMO_TASK_GROUP_HELD_RUN_AT])),
+    );
+    await workhorse.admin.cancelTaskGroup(canceled.groupId, {
+      actor: "workhorse-demo-seed",
+      reason: "Show a canceled task group on the demo dashboard",
+      requestId: `${TASK_GROUP_SEED_NAME}:cancel`,
+    });
+
+    return [
+      ...succeeded.taskIds,
+      ...failed.taskIds,
+      ...pending.taskIds,
+      ...openTasks.map((task) => task.taskId),
+      ...canceled.taskIds,
+    ];
+  });
+}
+
 function showcaseSeedPayload(
   family: DemoFeatureShowcaseFamily,
   example: DemoFeatureExample,
@@ -2510,6 +2607,7 @@ export async function seedDemoData(database: DemoDatabase) {
   for (const index of LATE_LANGUAGE_SEEDS.keys()) {
     lateLanguageTaskIds.push(...(await seedLateLanguageDemoData(database, index)));
   }
+  const taskGroupTaskIds = await seedTaskGroupDemoData(database);
   const taskIds = [
     ...rateLimitTaskIds,
     ...longRunningTaskIds,
@@ -2517,6 +2615,7 @@ export async function seedDemoData(database: DemoDatabase) {
     ...representativeSeed.taskIds,
     ...fastTierTaskIds,
     ...lateLanguageTaskIds,
+    ...taskGroupTaskIds,
   ];
   return {
     seeded: taskIds.length > 0 || historicalTaskCount > 0,

@@ -219,7 +219,15 @@ not claims, and enqueues a small batch there and on `demo-rust`. It then syncs a
 schedules. A primary database that already carries every earlier marker runs this step once. A step
 marked `fast-tier-ruby-dashboard-v1` follows it for the Ruby worker. It moves `demo-ruby-fast` to the
 fast tier, records both attempts and claims, and enqueues a small batch there and on `demo-ruby`. It
-then syncs all five fast-tier schedules. Existing
+then syncs all five fast-tier schedules. A step marked `task-groups-dashboard-v1` creates five task
+groups for the task groups page: one that finishes with the result `succeeded`, one that finishes
+with the result `failed`, one that stays sealed with a pending member, one that stays open, and one
+that the step cancels. Their member tasks run on `demo-python`, `demo-go`, `demo-rust`, and
+`demo-ruby`, and their callbacks run on `demo-shared`. A primary database that already carries every
+earlier marker runs this step once, with no migration and no reset. The sealed group keeps one member
+task whose run time never arrives. The open group has two member tasks that finish normally. Thus
+neither group keeps a worker busy. The `task-group` schedule in the `workhorse-demo` namespace then creates one group twice an
+hour. Each group adds about seven tasks, so the schedule adds about 340 tasks a day. Existing
 staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine

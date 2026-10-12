@@ -10,6 +10,7 @@ import {
   type Handler,
   type Json,
   type Queue,
+  type TaskGroupCallbacks,
   type Worker,
 } from "@stablemates/workhorse";
 import { and, eq } from "drizzle-orm";
@@ -60,6 +61,9 @@ import {
   DEMO_SHARED_QUEUE,
   TIMING_TASK_TYPE,
   TRAFFIC_BURST_TASK_TYPE,
+  DEMO_TASK_GROUP_LANGUAGES,
+  TASK_GROUP_DRIVER_TASK_TYPE,
+  type DemoTaskGroupResult,
   type DemoTrafficTier,
 } from "./constants.js";
 import type { DemoDatabase } from "./database.js";
@@ -138,6 +142,57 @@ export function trafficBurstRequests(
     options: { queue: DEMO_SHARED_QUEUE, maxAttempts: 1 },
     tags: ["traffic", payload.tier],
   }));
+}
+
+/** Where a task group comes from: the seed, or the driver of the daily load. */
+export type DemoTaskGroupSource = "task-group-seed" | "task-group-driver";
+
+/**
+ * Build the member requests of one demo task group: one `demo.language-worker` task on each
+ * full-tier queue of the Python, Go, Rust, and Ruby workers. Each request names its queue, so no
+ * SDK default decides where a member runs.
+ *
+ * For the result `failed`, the Ruby member carries the language `python`. The Ruby worker refuses a
+ * task for another language, and `maxAttempts: 1` makes that one failure final. `runAt` holds the
+ * members whose position it names until that time.
+ */
+export function demoTaskGroupMembers(
+  source: DemoTaskGroupSource,
+  result: DemoTaskGroupResult,
+  runAt: ReadonlyMap<number, Date> = new Map(),
+): EnqueueRequest[] {
+  return DEMO_TASK_GROUP_LANGUAGES.map(({ language, queue }, index) => {
+    const misrouted = result === "failed" && language === "ruby";
+    const held = runAt.get(index);
+    return {
+      type: LANGUAGE_WORKER_TASK_TYPE,
+      payload: { language: misrouted ? "python" : language, source, member: index + 1 },
+      options: { queue, maxAttempts: 1, ...(held === undefined ? {} : { runAt: held }) },
+      tags: ["task-group", language, ...(misrouted ? ["misrouted"] : [])],
+    };
+  });
+}
+
+/** Build the three callbacks of one demo task group, each on `demo-shared` for every worker. */
+export function demoTaskGroupCallbacks(source: DemoTaskGroupSource): TaskGroupCallbacks {
+  const callback = (kind: string): EnqueueRequest => ({
+    type: SHARED_WORKER_TASK_TYPE,
+    payload: { source, callback: kind },
+    options: { queue: DEMO_SHARED_QUEUE, maxAttempts: 1 },
+    tags: ["task-group", "callback", kind],
+  });
+  return {
+    onFinish: callback("on-finish"),
+    onSuccess: callback("on-success"),
+    onFailure: callback("on-failure"),
+  };
+}
+
+/** Pick a stable result per driver task: one group in three fails. */
+export function demoTaskGroupDriverResult(driverTaskId: string): DemoTaskGroupResult {
+  let hash = 0;
+  for (const character of driverTaskId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return hash % 3 === 0 ? "failed" : "succeeded";
 }
 
 /** Build one handler-originated showcase payload with every optional field explicitly null. */
@@ -322,6 +377,14 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   worker.handle<TrafficBurstPayload>(TRAFFIC_BURST_TASK_TYPE, async (payload, { task }) => {
     const taskIds = await queue.enqueueMany(trafficBurstRequests(task.id, payload));
     return { tier: payload.tier, enqueued: taskIds.length };
+  });
+  worker.handle(TASK_GROUP_DRIVER_TASK_TYPE, async (_payload, { task }) => {
+    const result = demoTaskGroupDriverResult(task.id);
+    const { group, tasks } = await queue.taskGroup(
+      demoTaskGroupCallbacks("task-group-driver"),
+      (builder) => builder.add(demoTaskGroupMembers("task-group-driver", result)),
+    );
+    return { groupId: group.id, expectedResult: result, members: tasks.length };
   });
   const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =
