@@ -20,7 +20,8 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
-import type { Notification, PoolClient, QueryResult, QueryResultRow } from "pg";
+import { Pool } from "pg";
+import type { Notification, PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
 import {
   Admin,
   CancellationRequestedError,
@@ -29,12 +30,20 @@ import {
   ExecutionTimeoutError,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_TASK_DEPENDENTS,
+  MAX_TASK_GROUP_MEMBERS,
   ProgressLeaseLostError,
   ProgressRateLimitError,
   Queue,
   Worker,
 } from "../src/index.js";
-import type { ClaimedTask, Json, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+import type {
+  ClaimedTask,
+  EnqueueRequest,
+  Json,
+  Queryable,
+  QueueHealth,
+  QueueOptions,
+} from "../src/index.js";
 // The crash harness and the refill batch are worker internals, not published API, so they come from
 // the source module.
 // The statement catalogue is internal too. The replay probe matches its exact text.
@@ -75,6 +84,7 @@ export const operationalScenarioNames = [
   "query-listing-lifecycle",
   "progress-lifecycle",
   "checkpoint-replay",
+  "hot-task-group",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -141,6 +151,14 @@ export interface OperationalScenarioOptions {
   checkpointCounts?: readonly number[];
   /** Replay passes after the save pass for each checkpoint count. */
   checkpointReplayPasses?: number;
+  /** Tasks in one hot-task-group run, with and without a group. */
+  hotGroupTasks?: number;
+  /** Ascending worker counts the hot-task-group scenario measures. Each worker has its own pool. */
+  hotGroupWorkers?: readonly number[];
+  /** Concurrency of each hot-task-group worker. */
+  hotGroupConcurrency?: number;
+  /** Measured rounds. Each round runs every worker count with and without a group. */
+  hotGroupRounds?: number;
   /** Queue prefix. Every scenario appends its stable scenario name. */
   queuePrefix?: string;
   /** Select a stable subset while retaining contract order. */
@@ -164,6 +182,10 @@ export interface ResolvedOperationalScenarioOptions {
   pruneLimit: number;
   checkpointCounts: readonly number[];
   checkpointReplayPasses: number;
+  hotGroupTasks: number;
+  hotGroupWorkers: readonly number[];
+  hotGroupConcurrency: number;
+  hotGroupRounds: number;
   queuePrefix: string;
   scenarios: readonly OperationalScenarioName[];
 }
@@ -394,6 +416,30 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "replay share of the pass by checkpoint count",
       "list-query execution time and shared buffers by checkpoint count",
       "stored checkpoint bytes and checkpoint_saved events by checkpoint count",
+    ],
+  },
+  {
+    name: "hot-task-group",
+    purpose:
+      "Record what one task group costs when many workers finish its member tasks at the same time, against the same tasks without a group.",
+    invariants: [
+      "every run completes every task and leaves no active or expired lease",
+      "the group run finishes the group with the result succeeded and counts every member task once",
+      "the group run enqueues its onFinish callback task exactly once",
+      "a group run with more than one slot and at least 100 tasks samples a waiter on the group row, which proves that the sampler sees it",
+      "the run without a group creates no group and never waits on a group row",
+    ],
+    metrics: [
+      "hotGroupTasks",
+      "hotGroupWorkers",
+      "hotGroupConcurrency",
+      "hotGroupRounds",
+      "enqueue time, drain time, and tasks per second by worker count, with and without a group",
+      "completion transactions and tasks per completion transaction by worker count",
+      "mean and maximum waiters on the group row, sampled lock wait on it, and the share of samples with a waiter",
+      "lock samples and the real interval between two samples",
+      "sampled lock wait on every lock in the bench database",
+      "throughput with a group as a share of throughput without a group, by worker count",
     ],
   },
   {
@@ -695,7 +741,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.task_event, workhorse.attempt_history,
   workhorse.task_redrive, workhorse.queue_purge_request, workhorse.task_query,
   workhorse.rate_limit_bucket, workhorse.admission_shard, workhorse.rate_limit_policy,
-  workhorse.concurrency_policy,
+  workhorse.concurrency_policy, workhorse.task_group,
   workhorse.enqueue_idempotency, workhorse.task_outcome, workhorse.task_runtime, workhorse.task RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
@@ -726,6 +772,10 @@ const defaults: ResolvedOperationalScenarioOptions = {
   pruneLimit: 1_000,
   checkpointCounts: [0, 10, 100],
   checkpointReplayPasses: 3,
+  hotGroupTasks: 200,
+  hotGroupWorkers: [2],
+  hotGroupConcurrency: 4,
+  hotGroupRounds: 1,
   queuePrefix: "operational",
   scenarios: operationalScenarioNames,
 };
@@ -767,6 +817,32 @@ function checkpointCountList(values: readonly number[]): readonly number[] {
   return [...values];
 }
 
+/** Bounds the workers of one hot-task-group run. Each worker opens its own pool of connections. */
+export const MAX_BENCHMARK_HOT_GROUP_WORKERS = 64;
+/** Bounds the hot-task-group rounds. Each round runs every worker count with and without a group. */
+export const MAX_BENCHMARK_HOT_GROUP_ROUNDS = 10;
+
+function boundedInteger(name: string, value: number, maximum: number): number {
+  positiveInteger(name, value);
+  if (value > maximum) throw new RangeError(`${name} must not exceed ${maximum}`);
+  return value;
+}
+
+function hotGroupWorkerList(values: readonly number[]): readonly number[] {
+  if (values.length === 0) throw new RangeError("hotGroupWorkers must not be empty");
+  values.forEach((value, index) => {
+    if (!Number.isSafeInteger(value) || value < 1 || value > MAX_BENCHMARK_HOT_GROUP_WORKERS) {
+      throw new RangeError(
+        `hotGroupWorkers must contain integers from 1 to ${MAX_BENCHMARK_HOT_GROUP_WORKERS}`,
+      );
+    }
+    if (index > 0 && value <= values[index - 1]!) {
+      throw new RangeError("hotGroupWorkers must be strictly ascending");
+    }
+  });
+  return [...values];
+}
+
 export function resolveOperationalScenarioOptions(
   options: OperationalScenarioOptions = {},
 ): ResolvedOperationalScenarioOptions {
@@ -802,6 +878,23 @@ export function resolveOperationalScenarioOptions(
     checkpointCounts: checkpointCountList(options.checkpointCounts ?? defaults.checkpointCounts),
     checkpointReplayPasses: checkpointReplayPassCount(
       options.checkpointReplayPasses ?? defaults.checkpointReplayPasses,
+    ),
+    hotGroupTasks: boundedInteger(
+      "hotGroupTasks",
+      options.hotGroupTasks ?? defaults.hotGroupTasks,
+      MAX_TASK_GROUP_MEMBERS,
+    ),
+    hotGroupWorkers: hotGroupWorkerList(options.hotGroupWorkers ?? defaults.hotGroupWorkers),
+    // A worker accepts a concurrency of at most 100.
+    hotGroupConcurrency: boundedInteger(
+      "hotGroupConcurrency",
+      options.hotGroupConcurrency ?? defaults.hotGroupConcurrency,
+      100,
+    ),
+    hotGroupRounds: boundedInteger(
+      "hotGroupRounds",
+      options.hotGroupRounds ?? defaults.hotGroupRounds,
+      MAX_BENCHMARK_HOT_GROUP_ROUNDS,
     ),
     queuePrefix,
     scenarios: operationalScenarioNames.filter((name) => requested.includes(name)),
@@ -5586,6 +5679,468 @@ async function checkpointReplay(
   return { name: "checkpoint-replay", durationMs: 0, metrics, assertions };
 }
 
+type HotGroupVariant = "withoutGroup" | "withGroup";
+
+const hotGroupVariantLabels: Readonly<Record<HotGroupVariant, string>> = {
+  withoutGroup: "WithoutGroup",
+  withGroup: "WithGroup",
+};
+
+/**
+ * The pause between two lock samples. Each sample reads pg_locks, so the real interval is this
+ * pause plus the time of the query, and the scenario records it.
+ */
+const HOT_GROUP_LOCK_SAMPLE_MS = 5;
+/**
+ * Stops a run that does not drain, so a stalled group fails its invariants instead of hanging. It
+ * is also the statement timeout of every worker connection, so a blocked completion cannot hold the
+ * run open after the workers stop.
+ */
+const HOT_GROUP_DRAIN_TIMEOUT_MS = 600_000;
+/**
+ * A group run with at least this many tasks and more than one slot must sample a waiter on the
+ * group row. A smaller run can drain between two samples, so it proves nothing about the sampler.
+ */
+const HOT_GROUP_WAITER_PROOF_TASKS = 100;
+
+// PostgreSQL makes the waiters for one row lock form a queue. The first waiter holds the tuple lock
+// of the row and waits for the transaction that holds the row. Every later waiter waits for that
+// tuple lock. A backend counts as a group row waiter only in one of these two states. Each run has
+// at most one task_group row, so the relation identifies the row.
+const hotGroupLockSampleSql = `WITH waiting AS (
+  SELECT locks.pid, locks.locktype, locks.relation
+    FROM pg_locks locks
+    JOIN pg_stat_activity activity ON activity.pid = locks.pid
+   WHERE NOT locks.granted AND activity.datname = current_database()
+)
+SELECT count(DISTINCT waiting.pid) FILTER (
+         WHERE (waiting.locktype = 'tuple' AND waiting.relation = 'workhorse.task_group'::regclass)
+            OR (waiting.locktype = 'transactionid' AND EXISTS (
+                  SELECT 1 FROM pg_locks held
+                   WHERE held.pid = waiting.pid AND held.granted AND held.locktype = 'tuple'
+                     AND held.relation = 'workhorse.task_group'::regclass))
+       )::integer AS group_row_waiters,
+       count(DISTINCT waiting.pid)::integer AS lock_waiters
+  FROM waiting`;
+
+interface HotGroupLockSamples {
+  samples: number;
+  /** The mean time between two adjacent samples, or null with fewer than two samples. */
+  sampleIntervalMs: number | null;
+  groupRowWaitersMean: number | null;
+  groupRowWaitersMax: number;
+  /** Waiters multiplied by the time since the previous sample, summed over the run. */
+  groupRowWaitMs: number;
+  groupRowContendedShare: number | null;
+  lockWaitersMean: number | null;
+  lockWaitMs: number;
+}
+
+async function sampleHotGroupLocks(
+  client: PoolClient,
+  now: () => number,
+  sleep: (milliseconds: number) => Promise<void>,
+  running: () => boolean,
+): Promise<HotGroupLockSamples> {
+  const groupRowWaiters: number[] = [];
+  const lockWaiters: number[] = [];
+  let groupRowWaitMs = 0;
+  let lockWaitMs = 0;
+  let previous = now();
+  let firstSampledAt: number | null = null;
+  while (running()) {
+    const sample = await client.query<{ group_row_waiters: number; lock_waiters: number }>(
+      hotGroupLockSampleSql,
+    );
+    const sampledAt = now();
+    const row = sample.rows[0];
+    const groupRow = row?.group_row_waiters ?? 0;
+    const all = row?.lock_waiters ?? 0;
+    groupRowWaiters.push(groupRow);
+    lockWaiters.push(all);
+    firstSampledAt ??= sampledAt;
+    groupRowWaitMs += groupRow * (sampledAt - previous);
+    lockWaitMs += all * (sampledAt - previous);
+    previous = sampledAt;
+    await sleep(HOT_GROUP_LOCK_SAMPLE_MS);
+  }
+  return {
+    samples: groupRowWaiters.length,
+    sampleIntervalMs:
+      firstSampledAt === null || groupRowWaiters.length < 2
+        ? null
+        : (previous - firstSampledAt) / (groupRowWaiters.length - 1),
+    groupRowWaitersMean: mean(groupRowWaiters),
+    groupRowWaitersMax: Math.max(0, ...groupRowWaiters),
+    groupRowWaitMs,
+    groupRowContendedShare:
+      groupRowWaiters.length === 0
+        ? null
+        : groupRowWaiters.filter((waiters) => waiters > 0).length / groupRowWaiters.length,
+    lockWaitersMean: mean(lockWaiters),
+    lockWaitMs,
+  };
+}
+
+interface HotGroupRunResult {
+  enqueueMs: number;
+  drainMs: number;
+  timedOut: boolean;
+  succeeded: number;
+  activeLeases: number;
+  expiredLeases: number;
+  completionTransactions: number;
+  groups: number;
+  group: Awaited<ReturnType<Queue["getTaskGroup"]>>;
+  callbackTasks: number;
+  locks: HotGroupLockSamples;
+}
+
+// Each worker stands for one process, so it gets its own pool and its own connections.
+function hotGroupPoolConfig(database: Queryable): PoolConfig {
+  const config = (database as Partial<Pool>).options;
+  if (config === undefined) {
+    throw new Error("hot-task-group needs a pg Pool, because each worker opens its own pool");
+  }
+  return config;
+}
+
+// The run opens every worker connection at the same time. A clear error before it starts is better
+// than a connection failure in the middle of a measurement.
+async function assertHotGroupConnectionBudget(
+  database: Queryable,
+  connections: number,
+): Promise<void> {
+  const budget = await database.query<{ available: number }>(
+    `SELECT current_setting('max_connections')::integer
+            - current_setting('superuser_reserved_connections')::integer
+            - (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::integer
+            AS available`,
+  );
+  const available = budget.rows[0]?.available ?? 0;
+  if (connections > available) {
+    throw new RangeError(
+      `hot-task-group needs ${connections} more connections, but PostgreSQL has ${available} free`,
+    );
+  }
+}
+
+async function warmPool(pool: Pool, connections: number): Promise<void> {
+  const clients = await Promise.all(Array.from({ length: connections }, () => pool.connect()));
+  for (const client of clients) client.release();
+}
+
+async function hotGroupRun(
+  context: OperationalScenarioContext,
+  variant: HotGroupVariant,
+  workers: number,
+): Promise<HotGroupRunResult> {
+  const { hotGroupTasks: taskCount, hotGroupConcurrency: concurrency } = context.options;
+  const callbackQueue = `${context.queueName}-callbacks`;
+  await reset(context.pool);
+  const seedQueue = operationalQueue(context.pool, context.queueName);
+  const chunks: EnqueueRequest[][] = [];
+  for (let start = 0; start < taskCount; start += MAX_ENQUEUE_BATCH_SIZE) {
+    chunks.push(
+      Array.from({ length: Math.min(MAX_ENQUEUE_BATCH_SIZE, taskCount - start) }, (_, offset) => ({
+        type: "hot-group-member",
+        payload: { index: start + offset },
+      })),
+    );
+  }
+  let groupId: string | null = null;
+  const [, enqueueMs] = await measured(context.now, async () => {
+    if (variant === "withoutGroup") {
+      for (const chunk of chunks) await seedQueue.enqueueMany(chunk);
+      return;
+    }
+    const group = await seedQueue.createTaskGroup({
+      onFinish: { type: "hot-group-finished", payload: {}, options: { queue: callbackQueue } },
+    });
+    groupId = group.id;
+    for (const chunk of chunks) await seedQueue.addToTaskGroup(group.id, chunk);
+    await seedQueue.sealTaskGroup(group.id);
+  });
+  // Both runs claim from fresh statistics, so neither plan depends on when autovacuum ran.
+  await context.pool.query(
+    "ANALYZE workhorse.task, workhorse.task_runtime, workhorse.task_group_member",
+  );
+
+  const config = hotGroupPoolConfig(context.pool);
+  // One connection for each slot, one for the listener, one for heartbeats, and one for claims.
+  const connectionsPerWorker = concurrency + 3;
+  // The sampler uses one more connection.
+  await assertHotGroupConnectionBudget(context.pool, workers * connectionsPerWorker + 1);
+  const pools = Array.from(
+    { length: workers },
+    () =>
+      new Pool({
+        ...config,
+        max: connectionsPerWorker,
+        statement_timeout: HOT_GROUP_DRAIN_TIMEOUT_MS,
+      }),
+  );
+  const samplerPool = new Pool({ ...config, max: 1 });
+  try {
+    await Promise.all(pools.map((pool) => warmPool(pool, connectionsPerWorker)));
+    let handled = 0;
+    const workerList: Worker[] = [];
+    const stopAll = () => {
+      for (const worker of workerList) worker.stop();
+    };
+    for (const [index, pool] of pools.entries()) {
+      workerList.push(
+        new Worker(operationalQueue(pool, context.queueName), {
+          concurrency,
+          workerId: `benchmark-hot-task-group-${index}`,
+          leaseMs: 60_000,
+          heartbeatMs: 15_000,
+          pollMs: 10,
+          // Maintenance and registration would add statements that only one run pays for.
+          maintenanceIntervalMs: 3_600_000,
+          maintenanceRoutinePollMs: 3_600_000,
+          registryIntervalMs: 0,
+        }).handle("hot-group-member", async () => {
+          handled += 1;
+          // stop() lets every handler that runs finish and complete its task.
+          if (handled === taskCount) stopAll();
+          return { ok: true };
+        }),
+      );
+    }
+
+    const samplerClient = await samplerPool.connect();
+    let draining = true;
+    let timedOut = false;
+    const started = context.now();
+    const sampler = sampleHotGroupLocks(samplerClient, context.now, context.sleep, () => draining);
+    const guard = setTimeout(() => {
+      timedOut = true;
+      stopAll();
+    }, HOT_GROUP_DRAIN_TIMEOUT_MS);
+    let drainMs: number;
+    let locks: HotGroupLockSamples;
+    try {
+      // A failed worker stops the others, and every worker ends before its pool ends.
+      const settled = await Promise.allSettled(
+        workerList.map((worker) =>
+          worker.run().catch((error: unknown) => {
+            stopAll();
+            throw error;
+          }),
+        ),
+      );
+      const failure = settled.find((result) => result.status === "rejected");
+      if (failure !== undefined) throw failure.reason;
+    } finally {
+      drainMs = Math.max(0, context.now() - started);
+      clearTimeout(guard);
+      draining = false;
+      // The sampler must stop before its client returns to the pool, or pool.end() waits forever.
+      try {
+        locks = await sampler;
+      } finally {
+        samplerClient.release();
+      }
+    }
+
+    const outcomes = await context.pool.query<{ succeeded: number; transactions: number }>(
+      `SELECT count(*) FILTER (WHERE state = 'succeeded')::integer AS succeeded,
+              count(DISTINCT xmin::text)::integer AS transactions
+         FROM workhorse.task_outcome`,
+    );
+    const groups = await context.pool.query<{ groups: number }>(
+      "SELECT count(*)::integer AS groups FROM workhorse.task_group",
+    );
+    const callbacks = await context.pool.query<{ tasks: number }>(
+      "SELECT count(*)::integer AS tasks FROM workhorse.task WHERE queue_name = $1",
+      [callbackQueue],
+    );
+    const health = await seedQueue.health();
+    return {
+      enqueueMs,
+      drainMs,
+      timedOut,
+      succeeded: outcomes.rows[0]?.succeeded ?? 0,
+      activeLeases: health.activeLeases,
+      expiredLeases: health.expiredLeases,
+      completionTransactions: outcomes.rows[0]?.transactions ?? 0,
+      groups: groups.rows[0]?.groups ?? 0,
+      group: groupId === null ? null : await seedQueue.getTaskGroup(groupId),
+      callbackTasks: callbacks.rows[0]?.tasks ?? 0,
+      locks,
+    };
+  } finally {
+    await Promise.all([...pools, samplerPool].map((pool) => pool.end()));
+  }
+}
+
+function joined(values: readonly number[]): string {
+  return values.map((value) => Number(value.toFixed(3))).join(",");
+}
+
+async function hotTaskGroup(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const {
+    hotGroupTasks: taskCount,
+    hotGroupWorkers,
+    hotGroupConcurrency,
+    hotGroupRounds: rounds,
+  } = context.options;
+
+  metrics.hotGroupTasks = taskCount;
+  metrics.hotGroupWorkers = hotGroupWorkers.join(",");
+  metrics.hotGroupConcurrency = hotGroupConcurrency;
+  metrics.hotGroupRounds = rounds;
+  metrics.lockSampleMs = HOT_GROUP_LOCK_SAMPLE_MS;
+
+  for (const workers of hotGroupWorkers) {
+    const runs: Record<HotGroupVariant, HotGroupRunResult[]> = { withoutGroup: [], withGroup: [] };
+    for (let round = 0; round < rounds; round += 1) {
+      // Alternate the order, so a drift on the host does not favor one variant.
+      const order: HotGroupVariant[] =
+        round % 2 === 0 ? ["withoutGroup", "withGroup"] : ["withGroup", "withoutGroup"];
+      for (const variant of order) runs[variant].push(await hotGroupRun(context, variant, workers));
+    }
+
+    const throughput: Record<HotGroupVariant, number | null> = {
+      withoutGroup: null,
+      withGroup: null,
+    };
+    for (const variant of ["withoutGroup", "withGroup"] as const) {
+      const prefix = `workers${workers}${hotGroupVariantLabels[variant]}`;
+      const results = runs[variant];
+      const tasksPerSecond = results.map((run) =>
+        run.drainMs === 0 ? 0 : (taskCount * 1_000) / run.drainMs,
+      );
+      const groupRowWaitMs = results.map((run) => run.locks.groupRowWaitMs);
+      throughput[variant] = percentile(tasksPerSecond, 0.5);
+      metrics[`${prefix}EnqueueP50Ms`] = percentile(
+        results.map((run) => run.enqueueMs),
+        0.5,
+      );
+      metrics[`${prefix}DrainP50Ms`] = percentile(
+        results.map((run) => run.drainMs),
+        0.5,
+      );
+      metrics[`${prefix}TasksPerSecondP50`] = throughput[variant];
+      metrics[`${prefix}TasksPerSecondRounds`] = joined(tasksPerSecond);
+      metrics[`${prefix}CompletionTransactionsP50`] = percentile(
+        results.map((run) => run.completionTransactions),
+        0.5,
+      );
+      metrics[`${prefix}TasksPerCompletionTransactionP50`] = percentile(
+        results.map((run) =>
+          run.completionTransactions === 0 ? 0 : run.succeeded / run.completionTransactions,
+        ),
+        0.5,
+      );
+      metrics[`${prefix}LockSamplesP50`] = percentile(
+        results.map((run) => run.locks.samples),
+        0.5,
+      );
+      metrics[`${prefix}LockSampleIntervalP50Ms`] = percentile(
+        // percentile() ignores NaN, so a run with fewer than two samples adds no interval.
+        results.map((run) => run.locks.sampleIntervalMs ?? Number.NaN),
+        0.5,
+      );
+      metrics[`${prefix}GroupRowWaitersMeanP50`] = percentile(
+        results.map((run) => run.locks.groupRowWaitersMean ?? 0),
+        0.5,
+      );
+      metrics[`${prefix}GroupRowWaitersMax`] = Math.max(
+        ...results.map((run) => run.locks.groupRowWaitersMax),
+      );
+      metrics[`${prefix}GroupRowWaitP50Ms`] = percentile(groupRowWaitMs, 0.5);
+      metrics[`${prefix}GroupRowWaitPerTaskP50Ms`] = percentile(
+        groupRowWaitMs.map((waitMs) => waitMs / taskCount),
+        0.5,
+      );
+      metrics[`${prefix}GroupRowContendedShareP50`] = percentile(
+        results.map((run) => run.locks.groupRowContendedShare ?? 0),
+        0.5,
+      );
+      metrics[`${prefix}LockWaitersMeanP50`] = percentile(
+        results.map((run) => run.locks.lockWaitersMean ?? 0),
+        0.5,
+      );
+      metrics[`${prefix}LockWaitP50Ms`] = percentile(
+        results.map((run) => run.locks.lockWaitMs),
+        0.5,
+      );
+
+      results.forEach((run, index) => {
+        const name = `${prefix} round ${index + 1}`;
+        recordInvariant(assertions, `${name} drains before the timeout`, run.timedOut, false);
+        recordInvariant(assertions, `${name} completes every task`, run.succeeded, taskCount);
+        recordInvariant(assertions, `${name} leaves no active lease`, run.activeLeases, 0);
+        recordInvariant(assertions, `${name} leaves no expired lease`, run.expiredLeases, 0);
+        recordInvariant(
+          assertions,
+          `${name} samples the locks`,
+          run.locks.samples,
+          1,
+          (actual) => Number(actual) >= 1,
+        );
+        if (variant === "withoutGroup") {
+          recordInvariant(assertions, `${name} creates no group`, run.groups, 0);
+          recordInvariant(
+            assertions,
+            `${name} never waits on a group row`,
+            run.locks.groupRowWaitersMax,
+            0,
+          );
+          return;
+        }
+        // Many slots that finish at once must queue on the group row. A sampler that sees no waiter
+        // here is broken, and its zero for the run without a group proves nothing.
+        if (workers * hotGroupConcurrency > 1 && taskCount >= HOT_GROUP_WAITER_PROOF_TASKS) {
+          recordInvariant(
+            assertions,
+            `${name} samples a waiter on the group row`,
+            run.locks.groupRowWaitersMax,
+            1,
+            (actual) => Number(actual) >= 1,
+          );
+        }
+        recordInvariant(
+          assertions,
+          `${name} finishes the group`,
+          [run.group?.state, run.group?.result],
+          ["finished", "succeeded"],
+          jsonEquivalent,
+        );
+        recordInvariant(
+          assertions,
+          `${name} counts every member task once`,
+          run.group?.counts,
+          { total: taskCount, succeeded: taskCount, failed: 0, canceled: 0, pending: 0 },
+          jsonEquivalent,
+        );
+        recordInvariant(
+          assertions,
+          `${name} enqueues the onFinish callback once`,
+          [
+            run.callbackTasks,
+            run.group?.callbacks.find((callback) => callback.kind === "onFinish")?.taskId != null,
+          ],
+          [1, true],
+          jsonEquivalent,
+        );
+      });
+    }
+    metrics[`workers${workers}GroupThroughputShareP50`] =
+      throughput.withGroup === null || !throughput.withoutGroup
+        ? null
+        : throughput.withGroup / throughput.withoutGroup;
+  }
+
+  return { name: "hot-task-group", durationMs: 0, metrics, assertions };
+}
+
 const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
@@ -5599,6 +6154,7 @@ const operationalScenarioImplementations: Readonly<
   "query-listing-lifecycle": queryListingLifecycle,
   "progress-lifecycle": progressLifecycle,
   "checkpoint-replay": checkpointReplay,
+  "hot-task-group": hotTaskGroup,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,
