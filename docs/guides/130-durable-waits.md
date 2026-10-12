@@ -254,10 +254,11 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 Each SDK in this table gives the input of a checkpoint. The fingerprint function returns the
 fingerprint that the call stores.
 
-| SDK        | Call with an input                                      | Fingerprint function                            | Stored fingerprint                 |
-| ---------- | ------------------------------------------------------- | ----------------------------------------------- | ---------------------------------- |
-| TypeScript | `HandlerContext.checkpoint(name, operation, { input })` | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`  |
-| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`         | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint` |
+| SDK        | Call with an input                                        | Fingerprint function                            | Stored fingerprint                  |
+| ---------- | --------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`   | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
+| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)` | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`           | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same

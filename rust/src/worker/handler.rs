@@ -69,8 +69,9 @@ impl CancellationToken {
 /// A handler failure, submitted through the task's persisted retry policy.
 ///
 /// Any owned (`'static`) `std::error::Error` converts into it, so a handler can use `?`. A
-/// durable replay conflict ([`crate::Error::Conflict`]) converts into an error that fails the
-/// task without a retry. Only that conversion marks it: an error built with [`HandlerError::named`]
+/// durable replay conflict ([`crate::Error::Conflict`] or
+/// [`crate::Error::CheckpointInputConflict`]) converts into an error that fails the task without a
+/// retry. Only that conversion marks it: an error built with [`HandlerError::named`]
 /// retries under the policy, whatever its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerError {
@@ -131,9 +132,12 @@ impl<E: std::error::Error + 'static> From<E> for HandlerError {
         // Error implementations can expose cyclic source chains, so conversion stays bounded.
         for _ in 0..16 {
             let Some(current) = source else { break };
-            if let Some(crate::Error::Conflict { operation, .. }) =
-                current.downcast_ref::<crate::Error>()
-            {
+            let error_kind = current.downcast_ref::<crate::Error>();
+            if let Some(crate::Error::CheckpointInputConflict { .. }) = error_kind {
+                let name = "CheckpointInputConflictError";
+                return Self { conflict: true, ..Self::named(name, error.to_string()) };
+            }
+            if let Some(crate::Error::Conflict { operation, .. }) = error_kind {
                 let name = match operation {
                     crate::Operation::Checkpoint => Some("CheckpointConflictError"),
                     crate::Operation::Sleep => Some("WaitConflictError"),

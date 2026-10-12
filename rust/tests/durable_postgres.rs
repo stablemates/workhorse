@@ -17,9 +17,9 @@ use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
 use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
-    Admin, BatchItem, BatchOptions, BatchResult, ChildOutcome, ChildTaskRequest, DeliveryOptions,
-    EnqueueOptions, Error, HandlerContext, HandlerError, HumanOutcome, Operation, Queue,
-    SignalOutcome, TaskState, Worker, WorkerOptions,
+    checkpoint_input_fingerprint, Admin, BatchItem, BatchOptions, BatchResult, ChildOutcome,
+    ChildTaskRequest, DeliveryOptions, EnqueueOptions, Error, HandlerContext, HandlerError,
+    HumanOutcome, Operation, Queue, SignalOutcome, TaskState, Worker, WorkerOptions,
 };
 
 const QUEUE: &str = "rust-durable";
@@ -845,6 +845,138 @@ async fn only_a_converted_conflict_fails_without_a_retry() {
         replayed.error.expect("the conflict recorded its error")["name"],
         "WaitConflictError"
     );
+}
+
+// SM-1263: a deploy changes the input of a stored checkpoint. The replay fails the task at once,
+// keeps the current attempt, and does not run the operation again.
+#[tokio::test]
+async fn a_changed_checkpoint_input_fails_the_task_on_replay() {
+    let Some(harness) = harness("durable_checkpoint_input").await else { return };
+    let options = EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let task = harness.queue.enqueue("charge", &Value::Null, options).await.unwrap().task_id;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let operations = Arc::new(AtomicUsize::new(0));
+    let (counted_runs, counted) = (Arc::clone(&runs), Arc::clone(&operations));
+    harness.worker.handle("charge", move |_: Value, context: HandlerContext| {
+        let run = counted_runs.fetch_add(1, Ordering::SeqCst);
+        let counted = Arc::clone(&counted);
+        async move {
+            // The deploy between the two runs adds a discount before the charge.
+            let amount = if run == 0 { 1000 } else { 900 };
+            let input = json!({ "amountCents": amount, "currency": "EUR" });
+            let charged: Value = context
+                .checkpoint_with_input("charge-card", &input, || async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!({ "charged": amount }))
+                })
+                .await?;
+            context.sleep("receipt", HOUR).await?;
+            Ok(charged)
+        }
+    });
+    harness.run_once().await;
+    let saved = harness.admin.get_checkpoint(task, "charge-card").await.unwrap().unwrap();
+    let stored = checkpoint_input_fingerprint(&json!({ "currency": "EUR", "amountCents": 1000 }));
+    assert_eq!(saved.input_fingerprint, Some(stored.unwrap()));
+    harness.wake(task).await;
+    harness.run_once().await;
+
+    let failed = harness.admin.get_task(task).await.unwrap().expect("task exists");
+    assert_eq!(failed.state, TaskState::Failed);
+    assert_eq!(failed.current_attempt, 1);
+    let error = failed.error.expect("the conflict recorded its error");
+    assert_eq!(error["name"], "CheckpointInputConflictError");
+    assert_eq!(operations.load(Ordering::SeqCst), 1);
+}
+
+// A NULL fingerprint on either side never conflicts, and key order does not change a fingerprint.
+#[tokio::test]
+async fn a_checkpoint_input_is_compared_only_when_both_sides_have_one() {
+    let Some(harness) = harness("durable_checkpoint_input_optional").await else { return };
+    let task = harness.enqueue("lookup", Value::Null).await;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let operations = Arc::new(AtomicUsize::new(0));
+    let (counted_runs, counted) = (Arc::clone(&runs), Arc::clone(&operations));
+    harness.worker.handle("lookup", move |_: Value, context: HandlerContext| {
+        let run = counted_runs.fetch_add(1, Ordering::SeqCst);
+        let counted = Arc::clone(&counted);
+        async move {
+            let op = |value: i64| {
+                let counted = Arc::clone(&counted);
+                move || async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(value)
+                }
+            };
+            let charge = json!({ "amountCents": 1000, "currency": "EUR" });
+            let reordered = json!({ "currency": "EUR", "amountCents": 1000 });
+            let other = json!({ "amountCents": 900 });
+            let values: [i64; 3] = if run == 0 {
+                let plain: i64 = context.checkpoint("plain", op(1)).await?;
+                let charged = context.checkpoint_with_input("charged", &charge, op(2)).await?;
+                let same = context.checkpoint_with_input("same", &charge, op(3)).await?;
+                context.sleep("pause", HOUR).await?;
+                [plain, charged, same]
+            } else {
+                // The stored checkpoint has no input, the call has no input, and the inputs match.
+                let plain = context.checkpoint_with_input("plain", &other, op(10)).await?;
+                let charged = context.checkpoint("charged", op(20)).await?;
+                let same = context.checkpoint_with_input("same", &reordered, op(30)).await?;
+                [plain, charged, same]
+            };
+            Ok(json!(values))
+        }
+    });
+    harness.run_once().await;
+    let plain = harness.admin.get_checkpoint(task, "plain").await.unwrap().unwrap();
+    assert_eq!(plain.input_fingerprint, None);
+    harness.wake(task).await;
+    harness.run_once().await;
+    assert_eq!(harness.state(task).await, TaskState::Succeeded);
+    assert_eq!(harness.result(task).await, Some(json!([1, 2, 3])));
+    assert_eq!(operations.load(Ordering::SeqCst), 3);
+}
+
+// A checkpoint that another writer stores while the operation runs makes save_checkpoint_v2
+// return input_conflict, which settles as the same terminal conflict.
+#[tokio::test]
+async fn a_save_that_meets_a_different_stored_input_conflicts() {
+    let Some(harness) = harness("durable_checkpoint_input_save").await else { return };
+    let options = EnqueueOptions { max_attempts: 3, ..EnqueueOptions::default() };
+    let task = harness.queue.enqueue("raced", &Value::Null, options).await.unwrap().task_id;
+    let other = checkpoint_input_fingerprint(&json!({ "amountCents": 900 })).unwrap();
+    let database = harness.database.url().to_owned();
+    harness.worker.handle("raced", move |_: Value, context: HandlerContext| {
+        let (database, other) = (database.clone(), other.clone());
+        async move {
+            let task_id = context.task().id;
+            let input = json!({ "amountCents": 1000 });
+            let value: Value = context
+                .checkpoint_with_input("charge-card", &input, || async move {
+                    let (client, connection) =
+                        tokio_postgres::connect(&database, NoTls).await.unwrap();
+                    tokio::spawn(connection);
+                    client
+                        .execute(
+                            "INSERT INTO workhorse.task_checkpoint(task_id, checkpoint_name,
+                               checkpoint_value, attempt, fence_token, worker_id, input_fingerprint)
+                             VALUES ($1, 'charge-card', '1'::jsonb, 1, 1, 'other', $2)",
+                            &[&task_id, &other],
+                        )
+                        .await
+                        .unwrap();
+                    Ok(json!(1))
+                })
+                .await?;
+            Ok(value)
+        }
+    });
+    harness.run_once().await;
+    let failed = harness.admin.get_task(task).await.unwrap().expect("task exists");
+    assert_eq!(failed.state, TaskState::Failed);
+    assert_eq!(failed.current_attempt, 1);
+    let error = failed.error.expect("the conflict recorded its error");
+    assert_eq!(error["name"], "CheckpointInputConflictError");
 }
 
 // A handler panic fails its attempt, even when it follows the shutdown cancellation. Only an

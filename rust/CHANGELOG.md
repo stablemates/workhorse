@@ -85,6 +85,20 @@ the column without a table scan.
 - `Error` gains `TaskGroupClosed` (`P1008`), `TaskGroupLimitExceeded` (`P1009`), and
   `TaskGroupMembershipConflict` (`P1010`), with their `DETAIL` documents. `Operation` gains
   `AddToTaskGroup`.
+- Checkpoint input check (SM-1263,
+  [ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)).
+  `HandlerContext::checkpoint_with_input(name, &input, op)` stores the fingerprint of the input with
+  the result, through `save_checkpoint_v2`. If a later call gives an input with a different
+  fingerprint, the call fails with `Error::CheckpointInputConflict`, and `op` does not run.
+  Overlapping calls with one name compare their inputs too. If the call or the stored checkpoint has
+  no input, nothing is compared. The worker settles the conflict as the terminal replay conflict
+  `CheckpointInputConflictError`, so the task fails at once and keeps the current attempt.
+  `BatchHandlerContext` gains the same method. `checkpoint` without an input does not change.
+- `checkpoint_input_fingerprint(&input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
+  canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
+  the TypeScript SDK. Each number is a double, so an integer above 2^53 loses its exact value.
+- `TaskCheckpoint` gains `input_fingerprint`, the stored fingerprint or `None`. Code that builds a
+  `TaskCheckpoint` with a struct literal must set the new field.
 
 ### Behaviour changes
 

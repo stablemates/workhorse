@@ -213,6 +213,15 @@ pub enum Error {
     LeaseLost { task_id: Uuid, operation: Operation },
     #[error("{operation} {name} conflicts with a different retained request")]
     Conflict { operation: Operation, name: String },
+    /// A checkpoint name is stored with the fingerprint of a different input (ADR 0098). The
+    /// stored value is the result of another input, so a retry of the same handler cannot succeed.
+    #[error("Checkpoint {name} for task {task_id} stores the result of a different input")]
+    CheckpointInputConflict {
+        task_id: Uuid,
+        name: String,
+        stored_fingerprint: String,
+        requested_fingerprint: String,
+    },
     #[error("{operation} {name} exceeded its limit")]
     LimitExceeded { operation: Operation, name: String },
     #[error("{operation} {name} is already waiting")]
@@ -307,6 +316,17 @@ impl Error {
             Self::Conflict { operation, name } => {
                 Self::Conflict { operation: *operation, name: name.clone() }
             }
+            Self::CheckpointInputConflict {
+                task_id,
+                name,
+                stored_fingerprint,
+                requested_fingerprint,
+            } => Self::CheckpointInputConflict {
+                task_id: *task_id,
+                name: name.clone(),
+                stored_fingerprint: stored_fingerprint.clone(),
+                requested_fingerprint: requested_fingerprint.clone(),
+            },
             Self::LimitExceeded { operation, name } => {
                 Self::LimitExceeded { operation: *operation, name: name.clone() }
             }

@@ -405,6 +405,8 @@ pub struct TaskCheckpoint {
     pub fence_token: i64,
     pub worker_id: String,
     pub created_at: DateTime<Utc>,
+    /// The fingerprint of the input the checkpoint was saved with, or `None` (ADR 0098).
+    pub input_fingerprint: Option<String>,
 }
 
 /// A durable timer a task scheduled under a name.
@@ -1236,6 +1238,7 @@ fn checkpoint(row: &Row) -> Result<TaskCheckpoint, Error> {
         fence_token: integer_text(row, "fence_token")?,
         worker_id: row.try_get("worker_id")?,
         created_at: row.try_get("created_at")?,
+        input_fingerprint: row.try_get("input_fingerprint")?,
     })
 }
 
