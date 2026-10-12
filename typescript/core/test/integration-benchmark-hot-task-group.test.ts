@@ -42,19 +42,24 @@ describe("hot task group benchmark scenario", () => {
     expect(scenario!.metrics).toMatchObject({
       hotGroupTasks: 1_250,
       hotGroupWorkers: "1,3",
-      workers1WithoutGroupGroupRowWaitersMax: 0,
-      workers3WithoutGroupGroupRowWaitersMax: 0,
-      workers1WithoutGroupShardRowWaitersMax: 0,
-      workers3WithoutGroupShardRowWaitersMax: 0,
+      workers1WithoutGroupGroupRowWaitersPeakMax: 0,
+      workers3WithoutGroupGroupRowWaitersPeakMax: 0,
+      workers1WithoutGroupShardRowWaitersPeakMax: 0,
+      workers3WithoutGroupShardRowWaitersPeakMax: 0,
     });
-    expect(scenario!.metrics.workers3WithGroupTasksPerSecondP50).toEqual(expect.any(Number));
+    expect(scenario!.metrics).toMatchObject({
+      workers3WithGroupTasksPerSecondMedian: expect.any(Number),
+      workers3WithGroupTasksPerSecondMin: expect.any(Number),
+      workers3WithGroupTasksPerSecondMax: expect.any(Number),
+      workers3WithoutGroupDrainMedianMs: expect.any(Number),
+    });
     // Three workers of four slots are fewer slots than the 32 counter shards, so a waiter is not
     // required. The test below proves that the sampler sees each kind of waiter.
     const metrics = scenario!.metrics as Record<string, number>;
     expect(metrics.hotGroupShards).toBe(32);
-    expect(metrics.workers3WithGroupGroupRowWaitersMax).toEqual(expect.any(Number));
-    expect(metrics.workers3WithGroupShardRowContendedShareP50).toEqual(expect.any(Number));
-    expect(scenario!.metrics.workers3GroupThroughputShareP50).toEqual(expect.any(Number));
+    expect(metrics.workers3WithGroupGroupRowWaitersPeakMax).toEqual(expect.any(Number));
+    expect(metrics.workers3WithGroupShardRowContendedShareMedian).toEqual(expect.any(Number));
+    expect(scenario!.metrics.workers3GroupThroughputShareMedian).toEqual(expect.any(Number));
   });
 
   it("counts a waiter on a shard row apart from a waiter on the group row", async () => {

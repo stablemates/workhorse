@@ -440,7 +440,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "the same four measures for the counter shard rows of the group, apart from the group row",
       "lock samples and the real interval between two samples",
       "sampled lock wait on every lock in the bench database",
-      "throughput with a group as a share of throughput without a group, by worker count",
+      "throughput with a group as a share of throughput without a group in the same round, by worker count",
+      "the median, minimum, and maximum of each measure over the rounds",
     ],
   },
   {
@@ -911,6 +912,27 @@ export function percentile(samples: readonly number[], percentileValue: number):
   if (sorted.length === 0) return null;
   const index = Math.max(0, Math.ceil(percentileValue * sorted.length) - 1);
   return sorted[index]!;
+}
+
+/** The median, minimum, and maximum of the finite values that the rounds of a scenario give. */
+export interface RoundSummary {
+  median: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+/**
+ * Summarizes the rounds of a scenario. For an even count the median is the mean of the two middle
+ * values, so one slow round of two cannot become the reported value.
+ */
+export function summarizeRounds(samples: readonly number[]): RoundSummary {
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  const sorted = [...samples].filter(Number.isFinite).sort((left, right) => left - right);
+  if (sorted.length === 0) return { median: null, min: null, max: null };
+  const middle = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  return { median, min: sorted[0]!, max: sorted[sorted.length - 1]! };
 }
 
 export function mean(samples: readonly number[]): number | null {
@@ -6040,6 +6062,20 @@ function joined(values: readonly number[]): string {
   return values.map((value) => Number(value.toFixed(3))).join(",");
 }
 
+/** Records the median, minimum, and maximum of the rounds as `<name>Median<unit>`, `Min`, and `Max`. */
+function recordRounds(
+  metrics: Record<string, ScenarioMetric>,
+  name: string,
+  samples: readonly number[],
+  unit = "",
+): number | null {
+  const summary = summarizeRounds(samples);
+  metrics[`${name}Median${unit}`] = summary.median;
+  metrics[`${name}Min${unit}`] = summary.min;
+  metrics[`${name}Max${unit}`] = summary.max;
+  return summary.median;
+}
+
 async function hotTaskGroup(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -6075,9 +6111,9 @@ async function hotTaskGroup(
       for (const variant of order) runs[variant].push(await hotGroupRun(context, variant, workers));
     }
 
-    const throughput: Record<HotGroupVariant, number | null> = {
-      withoutGroup: null,
-      withGroup: null,
+    const tasksPerSecondByVariant: Record<HotGroupVariant, number[]> = {
+      withoutGroup: [],
+      withGroup: [],
     };
     for (const variant of ["withoutGroup", "withGroup"] as const) {
       const prefix = `workers${workers}${hotGroupVariantLabels[variant]}`;
@@ -6085,65 +6121,84 @@ async function hotTaskGroup(
       const tasksPerSecond = results.map((run) =>
         run.drainMs === 0 ? 0 : (taskCount * 1_000) / run.drainMs,
       );
-      throughput[variant] = percentile(tasksPerSecond, 0.5);
-      metrics[`${prefix}EnqueueP50Ms`] = percentile(
-        results.map((run) => run.enqueueMs),
-        0.5,
-      );
-      metrics[`${prefix}DrainP50Ms`] = percentile(
-        results.map((run) => run.drainMs),
-        0.5,
-      );
-      metrics[`${prefix}TasksPerSecondP50`] = throughput[variant];
+      tasksPerSecondByVariant[variant] = tasksPerSecond;
+      recordRounds(metrics, `${prefix}TasksPerSecond`, tasksPerSecond);
       metrics[`${prefix}TasksPerSecondRounds`] = joined(tasksPerSecond);
-      metrics[`${prefix}CompletionTransactionsP50`] = percentile(
-        results.map((run) => run.completionTransactions),
-        0.5,
+      recordRounds(
+        metrics,
+        `${prefix}Enqueue`,
+        results.map((run) => run.enqueueMs),
+        "Ms",
       );
-      metrics[`${prefix}TasksPerCompletionTransactionP50`] = percentile(
+      recordRounds(
+        metrics,
+        `${prefix}Drain`,
+        results.map((run) => run.drainMs),
+        "Ms",
+      );
+      recordRounds(
+        metrics,
+        `${prefix}CompletionTransactions`,
+        results.map((run) => run.completionTransactions),
+      );
+      recordRounds(
+        metrics,
+        `${prefix}TasksPerCompletionTransaction`,
         results.map((run) =>
           run.completionTransactions === 0 ? 0 : run.succeeded / run.completionTransactions,
         ),
-        0.5,
       );
-      metrics[`${prefix}LockSamplesP50`] = percentile(
+      recordRounds(
+        metrics,
+        `${prefix}LockSamples`,
         results.map((run) => run.locks.samples),
-        0.5,
       );
-      metrics[`${prefix}LockSampleIntervalP50Ms`] = percentile(
-        // percentile() ignores NaN, so a run with fewer than two samples adds no interval.
+      recordRounds(
+        metrics,
+        `${prefix}LockSampleInterval`,
+        // summarizeRounds() ignores NaN, so a run with fewer than two samples adds no interval.
         results.map((run) => run.locks.sampleIntervalMs ?? Number.NaN),
-        0.5,
+        "Ms",
       );
       for (const [label, rowWaits] of [
         ["GroupRow", (run: HotGroupRunResult) => run.locks.groupRow],
         ["ShardRow", (run: HotGroupRunResult) => run.locks.shardRows],
       ] as const) {
         const waitMs = results.map((run) => rowWaits(run).waitMs);
-        metrics[`${prefix}${label}WaitersMeanP50`] = percentile(
+        recordRounds(
+          metrics,
+          `${prefix}${label}WaitersMean`,
           results.map((run) => rowWaits(run).waitersMean ?? 0),
-          0.5,
         );
-        metrics[`${prefix}${label}WaitersMax`] = Math.max(
-          ...results.map((run) => rowWaits(run).waitersMax),
+        // The peak is the most waiters that one sample of a round saw.
+        recordRounds(
+          metrics,
+          `${prefix}${label}WaitersPeak`,
+          results.map((run) => rowWaits(run).waitersMax),
         );
-        metrics[`${prefix}${label}WaitP50Ms`] = percentile(waitMs, 0.5);
-        metrics[`${prefix}${label}WaitPerTaskP50Ms`] = percentile(
+        recordRounds(metrics, `${prefix}${label}Wait`, waitMs, "Ms");
+        recordRounds(
+          metrics,
+          `${prefix}${label}WaitPerTask`,
           waitMs.map((value) => value / taskCount),
-          0.5,
+          "Ms",
         );
-        metrics[`${prefix}${label}ContendedShareP50`] = percentile(
+        recordRounds(
+          metrics,
+          `${prefix}${label}ContendedShare`,
           results.map((run) => rowWaits(run).contendedShare ?? 0),
-          0.5,
         );
       }
-      metrics[`${prefix}LockWaitersMeanP50`] = percentile(
+      recordRounds(
+        metrics,
+        `${prefix}LockWaitersMean`,
         results.map((run) => run.locks.lockWaitersMean ?? 0),
-        0.5,
       );
-      metrics[`${prefix}LockWaitP50Ms`] = percentile(
+      recordRounds(
+        metrics,
+        `${prefix}LockWait`,
         results.map((run) => run.locks.lockWaitMs),
-        0.5,
+        "Ms",
       );
 
       results.forEach((run, index) => {
@@ -6216,10 +6271,16 @@ async function hotTaskGroup(
         );
       });
     }
-    metrics[`workers${workers}GroupThroughputShareP50`] =
-      throughput.withGroup === null || !throughput.withoutGroup
-        ? null
-        : throughput.withGroup / throughput.withoutGroup;
+    // Both variants of one round run one after the other, so the share pairs them by round. A slow
+    // round then moves one share, and the median of the shares ignores it.
+    recordRounds(
+      metrics,
+      `workers${workers}GroupThroughputShare`,
+      tasksPerSecondByVariant.withGroup.map((withGroup, round) => {
+        const withoutGroup = tasksPerSecondByVariant.withoutGroup[round]!;
+        return withoutGroup === 0 ? Number.NaN : withGroup / withoutGroup;
+      }),
+    );
   }
 
   return { name: "hot-task-group", durationMs: 0, metrics, assertions };

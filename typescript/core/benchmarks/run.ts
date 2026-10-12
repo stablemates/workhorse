@@ -252,7 +252,7 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       hotGroupTasks: 100_000,
       hotGroupWorkers: [4, 16, 32],
       hotGroupConcurrency: 8,
-      hotGroupRounds: 2,
+      hotGroupRounds: 5,
     },
   },
 };

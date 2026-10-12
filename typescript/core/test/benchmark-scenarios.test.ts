@@ -18,6 +18,7 @@ import {
   runOperationalScenarios,
   sampledHotGroupWaiter,
   summarizeHotGroupLockSamples,
+  summarizeRounds,
 } from "../benchmarks/scenarios.js";
 import type {
   HotGroupLockSample,
@@ -600,6 +601,26 @@ describe("scenario metric helpers", () => {
     expect(percentile([Number.NaN], 0.5)).toBeNull();
     expect(() => percentile([1], -0.1)).toThrow(RangeError);
     expect(() => percentile([1], 1.1)).toThrow(RangeError);
+  });
+
+  it("summarizes one round as its own value", () => {
+    expect(summarizeRounds([9_000])).toEqual({ median: 9_000, min: 9_000, max: 9_000 });
+  });
+
+  it("summarizes two rounds with the mean of both, not the lower value", () => {
+    expect(summarizeRounds([3_050, 11_000])).toEqual({ median: 7_025, min: 3_050, max: 11_000 });
+  });
+
+  it("summarizes five rounds with the middle value, so one slow round cannot move it", () => {
+    const rounds = [11_500, 3_639, 9_200, 12_000, 10_100];
+    expect(summarizeRounds(rounds)).toEqual({ median: 10_100, min: 3_639, max: 12_000 });
+    expect(rounds).toEqual([11_500, 3_639, 9_200, 12_000, 10_100]);
+  });
+
+  it("ignores values that are not finite in the round summary", () => {
+    expect(summarizeRounds([4, Number.NaN, 2, 8, Infinity])).toEqual({ median: 4, min: 2, max: 8 });
+    expect(summarizeRounds([])).toEqual({ median: null, min: null, max: null });
+    expect(summarizeRounds([Number.NaN])).toEqual({ median: null, min: null, max: null });
   });
 
   it("calculates a finite-only arithmetic mean", () => {
