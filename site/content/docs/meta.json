@@ -28,6 +28,7 @@
     "signals",
     "human-waits",
     "child-tasks",
+    "task-groups",
     "progress",
     "cancellation",
     "deadlines",

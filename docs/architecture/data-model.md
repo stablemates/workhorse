@@ -266,7 +266,7 @@ The SDKs measure the same text:
 | Ruby       | Encodes the result once and passes the text to `Worker#check_result_size` in `ruby/lib/stablemates/workhorse/worker.rb` before any completion statement; otherwise measures with `Values.jsonb_text_bytes` in `ruby/lib/stablemates/workhorse/types.rb` | Twice the compact UTF-8 length fits and the JSON has no exponent | Raises `ValueSizeLimitError` with `task_type`, `part` set to `"result"`, `actual_bytes`, and `max_bytes`. The worker settles it through the ordinary fenced failure and retry path and keeps running.                  |
 | Rust       | `jsonb_text_bytes` in `rust/src/worker/value_size.rs`, for every handler result                                                                                                                                                                         | None                                                             | `Worker` fails the attempt with `TaskValueSizeLimitError` through `fail_with_state` before any completion statement. The retry policy and `retry_delay` apply, on both tiers.                                          |
 
-The Ruby behavior holds on both tiers and for each member of a completion batch.
+The Ruby behavior holds on both tiers and for each task in a completion batch.
 
 PostgreSQL enforces the limits itself:
 

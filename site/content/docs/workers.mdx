@@ -477,16 +477,16 @@ keywords to `Worker.new`.
 A batch handler sends several claimed tasks of one type to one handler call. Use it when one
 provider call can process several payloads.
 
-`Worker.handleBatch` groups the claimed tasks. Each member still uses one slot. It keeps its own
-lease, fence, cancellation signal, progress, retry budget, and final result.
+`Worker.handleBatch` collects the claimed tasks into batches. Each task in a batch still uses one
+slot. It keeps its own lease, fence, cancellation signal, progress, retry budget, and final result.
 
 [Batch handlers](/docs/batch-handlers) shows the TypeScript `handleBatch`, Python `handle_batch`, Go
 `HandleBatch`, Rust `handle_batch`, and Ruby `handle_batch` forms. It also shows their positional
 success and failure results.
 
-The callback must return one outcome for each member, in order. A batch context has no durable
-waits, signals, human decisions, or child joins. One member cannot suspend alone inside a shared
-call. [Batch handlers](/docs/batch-handlers) gives the grouping and failure rules.
+The callback must return one outcome for each task in the batch, in order. A batch context has no
+durable waits, signals, human decisions, or child joins. One task cannot suspend alone inside a
+shared call. [Batch handlers](/docs/batch-handlers) gives the batch selection and failure rules.
 
 ## Wait for work without constant polling
 

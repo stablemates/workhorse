@@ -12,7 +12,8 @@ group counter with counter shards. Migration 0067 adds them, and schema version 
 A group has one of three states in `task_group.state`:
 
 1. `open`: the group accepts new member tasks.
-2. `sealed`: the group accepts new member tasks only from a running member task.
+2. `sealed`: the group accepts new member tasks only from a running member task. A canceled group
+   is `sealed` until it finishes, and it accepts no task.
 3. `finished`: every member task is finished. Workhorse enqueued the callbacks in the transaction
    that set this state.
 
@@ -20,16 +21,25 @@ A group has one of three states in `task_group.state`:
 If no member task is pending at the seal, the same call changes the group to `finished`. A seal of
 a `sealed` or `finished` group changes nothing. An `open` group never expires.
 
+`seal_task_group_v1` calls `seal_task_group_internal_v1` and returns the snapshot of
+`get_task_group_v1`. The internal function locks the group row. If the group is `open`, it sets
+`sealed` and `sealed_at`, and it writes the `sealed` event with the member count. Then it calls
+`finish_task_group_internal_v1`, which finishes the group only when no shard is pending.
+
 A member task is finished when Workhorse writes its `task_outcome` row: `succeeded`, `failed`, or
-`canceled`. A retry writes no outcome, so a retry never counts a member task.
+`canceled`. A retry writes no outcome, so a retry never counts a member task. A purge is the one
+exception: it deletes a member task that is not terminal, and it records `canceled` on the
+membership row without a `task_outcome` row.
 
 The result in `task_group.result` is `succeeded` when every member task succeeded, and `failed`
 otherwise. An empty group finishes with the result `succeeded`.
 
 ## Order of group changes
 
-Five changes affect a group: an add, a seal, a cancel, a member outcome, and a purge of a member
-task. The `task_group` row orders the add, the seal, the cancel, and the finish. Only
+Five changes can change the members or the state of a group: an add, a seal, a cancel, a member
+outcome, and a purge of a member task. The `task_group` row orders the add, the seal, the cancel,
+and the finish. The table below also lists the delete of a finished group, the drift repair, and the
+finish itself. Only
 `finish_task_group_internal_v1` changes a group from `sealed` to `finished`, and it enqueues the
 callbacks in the same transaction. Thus each callback is enqueued one time.
 
@@ -373,6 +383,88 @@ task group tables are not a governed dashboard read.
 `Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
 `listTaskGroupEvents`. A handler reads the group of its task through `ctx.taskGroup.get()`, which
 calls `task_group_for_task_v1` one time for each handler activation.
+
+## SDK calls
+
+Each SDK calls the functions above through its `Queue`, its `Admin`, and its handler context.
+
+| Operation          | TypeScript                    | Python                          | Go                              | Rust                               | Ruby                            |
+| ------------------ | ----------------------------- | ------------------------------- | ------------------------------- | ---------------------------------- | ------------------------------- |
+| Create open        | `Queue.createTaskGroup`       | `Queue.create_task_group`       | `Queue.CreateTaskGroup`         | `Queue::create_task_group`         | `Queue#create_task_group`       |
+| Create and seal    | `Queue.taskGroup`             | `Queue.task_group`              | `Queue.TaskGroup`               | `Queue::task_group`                | `Queue#task_group`              |
+| Add to open group  | `Queue.addToTaskGroup`        | `Queue.add_to_task_group`       | `Queue.AddToTaskGroup`          | `Queue::add_to_task_group`         | `Queue#add_to_task_group`       |
+| Seal               | `Queue.sealTaskGroup`         | `Queue.seal_task_group`         | `Queue.SealTaskGroup`           | `Queue::seal_task_group`           | `Queue#seal_task_group`         |
+| Group of a task    | `Queue.findTaskGroup`         | `Queue.find_task_group`         | `Queue.FindTaskGroup`           | `Queue::find_task_group`           | `Queue#find_task_group`         |
+| Read in a handler  | `ctx.taskGroup.get()`         | `context.task_group.get()`      | `HandlerContext.GetTaskGroup`   | `HandlerContext::task_group().get` | `context.task_group.get`        |
+| Add from a handler | `ctx.taskGroup.add(requests)` | `context.task_group.add(...)`   | `HandlerContext.AddToTaskGroup` | `HandlerContext::task_group().add` | `context.task_group.add(...)`   |
+| Cancel             | `Admin.cancelTaskGroup`       | `Admin.cancel_task_group`       | `Admin.CancelTaskGroup`         | `Admin::cancel_task_group`         | `Admin#cancel_task_group`       |
+| Drift              | `Admin.listTaskGroupDrift`    | `Admin.list_task_group_drift`   | `Admin.ListTaskGroupDrift`      | `Admin::list_task_group_drift`     | `Admin#list_task_group_drift`   |
+| Repair             | `Admin.repairTaskGroupDrift`  | `Admin.repair_task_group_drift` | `Admin.RepairTaskGroupDrift`    | `Admin::repair_task_group_drift`   | `Admin#repair_task_group_drift` |
+
+`Queue` and `Admin` in every SDK also have the get and member-list reads. `Admin` also has the
+event read. Python `AsyncQueue` has the same calls as `Queue`.
+
+The callbacks are `onFinish`, `onSuccess`, and `onFailure` in TypeScript. Go uses `OnFinish`,
+`OnSuccess`, and `OnFailure`. Python, Rust, and Ruby use `on_finish`, `on_success`, and
+`on_failure`.
+
+The block form takes a builder function in TypeScript and Go. Python uses a `with` block, and Ruby
+uses a block. In Rust, `Queue::task_group` takes a list of requests in place of a block.
+
+The SDKs map the refusals of an add to these errors:
+
+| SQLSTATE | TypeScript, Python, Ruby           | Go                                                                                | Rust                                 |
+| -------- | ---------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------ |
+| `P1007`  | `FastTierUnsupportedError`         | `*FastTierUnsupportedError`                                                       | `Error::FastTierUnsupported`         |
+| `P1008`  | `TaskGroupClosedError`             | `*TaskGroupClosedError`, which wraps `ErrTaskGroupClosed`                         | `Error::TaskGroupClosed`             |
+| `P1009`  | `TaskGroupLimitExceededError`      | `*TaskGroupLimitExceededError`, which wraps `ErrTaskGroupLimitExceeded`           | `Error::TaskGroupLimitExceeded`      |
+| `P1010`  | `TaskGroupMembershipConflictError` | `*TaskGroupMembershipConflictError`, which wraps `ErrTaskGroupMembershipConflict` | `Error::TaskGroupMembershipConflict` |
+
+### Queue of a request with no queue
+
+An add through `Queue` sends a request with no queue to the default queue of that `Queue`. An add
+from a handler uses a different default in some SDKs:
+
+| SDK        | Queue of a handler add request with no queue                                                                     |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `Queue.defaultQueue` of the `Queue` that the worker uses; `default` unless the app sets it                       |
+| Python     | `default`: the worker builds its add `Queue` with `Queue._from_executor` and no queue name                       |
+| Go         | `default`, from `defaultWorkerQueueValue` in `go/task_groups.go`                                                 |
+| Rust       | `default`, as for a child task request                                                                           |
+| Ruby       | The first queue in the `queues:` list of the `Worker`, from `Queue.new(@executor, default_queue: @queues.first)` |
+
+### Batch handlers
+
+A task in a batch can be a member task. An add does not suspend a task, so some batch contexts
+offer the task group calls of their task:
+
+| SDK        | Task group calls in the batch context |
+| ---------- | ------------------------------------- |
+| TypeScript | `BatchHandlerContext.taskGroup`       |
+| Python     | None                                  |
+| Go         | None                                  |
+| Rust       | `BatchHandlerContext::task_group`     |
+| Ruby       | `BatchHandlerContext#task_group`      |
+
+### Active Job
+
+`Stablemates::Workhorse::ActiveJob.task_group(on_finish:, on_success:, on_failure:, queue:)` creates,
+adds, and seals a group in one statement through the `Queue#task_group` block form:
+
+1. Each Active Job instance that the block enqueues through the Workhorse adapter, with
+   `perform_later` or `perform_all_later`, becomes a member task. The adapter enqueues them when the
+   block returns.
+2. If the block raises, the adapter enqueues nothing.
+3. Each callback is an Active Job instance, an `EnqueueRequest`, or `nil`.
+4. `queue:` defaults to the queue of the Workhorse adapter that `ActiveJob::Base` uses.
+5. If the block enqueues, through the Workhorse adapter, an Active Job instance that sets `enqueue_after_transaction_commit` to
+   `true`, the call raises `ArgumentError` before Rails defers it. Rails would enqueue it after the
+   transaction commits, so outside the group.
+
+`Stablemates::Workhorse::ActiveJob.current_task_group` returns the `TaskGroupLink` of the Active
+Job instance that runs now. It raises `ArgumentError` outside an Active Job instance that a
+Workhorse worker runs. A running Active Job instance can read its group, but a `perform_later` in it
+does not add to the group.
 
 ## Limits
 

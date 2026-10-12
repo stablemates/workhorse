@@ -34,6 +34,7 @@ today. The integer semantics below compare the other four SDKs.
 | ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- |
 | Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported | Supported |
 | Atomic batch enqueue                       | Supported  | Supported | Supported | Supported | Supported |
+| Task groups with completion callbacks      | Supported  | Supported | Supported | Supported | Supported |
 | Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported | Supported |
 | Priority                                   | Supported  | Supported | Supported | Supported | Supported |
 | Tags and max attempts                      | Supported  | Supported | Supported | Supported | Supported |
@@ -78,6 +79,7 @@ telemetry, and graceful shutdown.
 | Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | Supported |
 | Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | Supported |
 | Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | Supported |
+| Task group reads and adds from a handler                    | Supported  | Supported | Supported | Supported | Supported |
 | Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | Supported |
 | Batch handler delivery                                      | Supported  | Supported | Supported | Supported | Supported |
 | Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | Supported |
@@ -123,6 +125,7 @@ and carries one JSON `Hash`, so any SDK can enqueue or handle it.
 | Enqueue idempotency                          | Native only | Native only             |
 | Keyed debounce                               | Native only | Native only             |
 | Keyed throttle                               | Native only | Native only             |
+| Task groups with completion callbacks        | Supported   | Supported               |
 | Task dependencies with terminal policies     | Native only | Native only             |
 | Recurring schedule definition sync           | Native only | Native only             |
 | Cooperative cancellation delivery            | Native only | Native only             |
@@ -147,26 +150,27 @@ runs. Five runtimes can agree on every row above and still drain, poll, and retr
 of the box.
 
 The table below is the whole list. A default differs only where the host language forces it, which
-[ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) records as the rule. One row
-differs today, and the reason follows the table.
+[ADR 0072](decisions/0072-converge-the-worker-runtime-defaults.md) records as the rule. Two rows
+differ today, and the reasons follow the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                                 | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                                      |
-| --------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
-| Worker concurrency                      | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
-| Lease duration                          | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 |
-| Heartbeat interval                      | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        |
-| Claim poll interval (subscription live) | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Claim poll interval (polling only)      | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
-| Empty-claim backoff ceiling             | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Maintenance tick interval               | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  |
-| Maintenance routine offer interval      | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 |
-| Worker registry interval                | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Schedule catch-up limit                 | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
-| Dispatch cohorts                        | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
-| Shutdown grace, then                    | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
-| Handler retry delay override            | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      |
+| Setting                                           | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                                      |
+| ------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| Worker concurrency                                | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
+| Lease duration                                    | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 |
+| Heartbeat interval                                | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        | Lease duration / 3                                        |
+| Claim poll interval (subscription live)           | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Claim poll interval (polling only)                | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
+| Empty-claim backoff ceiling                       | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Maintenance tick interval                         | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  |
+| Maintenance routine offer interval                | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 |
+| Worker registry interval                          | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Schedule catch-up limit                           | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
+| Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
+| Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
+| Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      |
+| Queue of a handler task group add without a queue | The `defaultQueue` of the worker's `Queue`                | `default`                                                 | `default`                                                 | `default`                                                 | The first queue of the worker                             |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -199,6 +203,13 @@ PostgreSQL sees the same thing either way. An abandoned handler holds a lease no
 `recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
 exited at its own deadline. What differs is what the handler observes: a Go, Rust, or Ruby handler
 observes cancellation, where a TypeScript or Python handler observes termination.
+
+The queue of a handler task group add is the second row that differs. A handler can add a task to
+its own task group. If the request names no queue, each SDK picks the queue in its own way. Python,
+Go, and Rust use `default`. TypeScript uses the `defaultQueue` of the `Queue` that the worker uses.
+Ruby uses the first queue of the worker. No host language forces this difference, so it does not
+follow the ADR 0072 rule. A separate issue decides whether it must change. Until then, set the queue
+on each request that a handler adds.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
 choice. All five SDKs carry it and all five leave it unset, so the persisted retry policy chooses
@@ -269,6 +280,8 @@ through its own public SDK.
 | Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported |
 | Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | Supported |
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | Supported |
+| Task group cancel                          | Supported  | Supported | Supported | Supported | Supported |
+| Task group drift listing and repair        | Supported  | Supported | Supported | Supported | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported | Supported |
 | Durable operator worker pause              | Supported  | Supported | Supported | Supported | Supported |
 | Embedded dashboard backend                 | Supported  | Supported | Supported | Supported | Supported |

@@ -1,0 +1,391 @@
+---
+title: Task groups
+description: Track many tasks as one unit, and run one callback task when all of them finish.
+---
+
+An application often enqueues many tasks and must do one more action when all of them finish. For
+example, it imports 20,000 rows as 20,000 tasks and then sends one report. A
+[dependency](/docs/task-dependencies) and a [child set](/docs/child-tasks) can each join only a
+small number of tasks.
+
+A task group is a set of full-tier tasks that Workhorse tracks as one unit. A member task is a task
+in a task group. A callback is a task that Workhorse enqueues one time, when every member task is
+finished. The group does not decide the order of its member tasks, and the member tasks do not wait
+for each other.
+
+## Create a group and run a callback when it finishes
+
+**Example.** An app imports the file `imp-7` with 20,000 rows. Each row is one `imports.row` task on
+the queue `imports`. After the last row, the app must send one report.
+
+1. The app calls `Queue.taskGroup` with an `onFinish` callback of the type `imports.report`. The
+   builder function adds the row tasks in calls of 1,000.
+2. In one transaction, Workhorse creates the group, enqueues the 20,000 member tasks, and seals the
+   group.
+3. Workers run the row tasks. 19,998 tasks succeed. Two tasks fail after their last retry.
+4. The last row task becomes terminal. In the same transaction, Workhorse finishes the group with
+   the result `failed`, and it enqueues the `imports.report` task.
+5. A worker runs `imports.report`. Its handler reads the counts of the group and sends the report.
+
+```ts
+const rows = file.rows.map((row) => ({
+  type: "imports.row",
+  payload: { importId: "imp-7", row },
+  options: { queue: "imports" },
+}));
+
+const { group } = await queue.taskGroup(
+  {
+    onFinish: {
+      type: "imports.report",
+      payload: { importId: "imp-7" },
+      options: { queue: "imports" },
+    },
+  },
+  (builder) => {
+    for (let start = 0; start < rows.length; start += 1_000) {
+      builder.add(rows.slice(start, start + 1_000));
+    }
+  },
+);
+```
+
+A member task is finished when it becomes terminal: `succeeded`, `failed`, or `canceled`. A retry
+does not finish a member task. A purge of a queue also finishes a member task: it counts the deleted
+task as `canceled`. When the group is sealed and every member task is finished,
+Workhorse finishes the group. The result is `succeeded` when every member task succeeded, and
+`failed` otherwise.
+
+A group has three callbacks, and each one is optional:
+
+- `onFinish` runs when the group finishes.
+- `onSuccess` runs when the group finishes with the result `succeeded`.
+- `onFailure` runs when the group finishes with the result `failed`.
+
+A callback is an ordinary enqueue request. It can be on any queue, the fast tier included. Workhorse
+tries to enqueue it one time, in the transaction that finishes the group. A callback task is not
+a member task. If a group has no member tasks at the seal, it finishes at once with the result
+`succeeded`.
+
+<details>
+<summary>Reference: create a group and its callbacks</summary>
+
+**States.** `open` accepts tasks. `sealed` accepts tasks only from a running member task, until a
+cancel. A canceled group is `sealed` until it finishes, and it accepts no task.
+`finished` means every member task is finished and the callbacks are enqueued.
+
+**Calls**
+
+| SDK        | Create and seal in one transaction | Create an open group       | Callbacks                                  |
+| ---------- | ---------------------------------- | -------------------------- | ------------------------------------------ |
+| TypeScript | `Queue.taskGroup`                  | `Queue.createTaskGroup`    | `onFinish`, `onSuccess`, `onFailure`       |
+| Python     | `Queue.task_group`, a `with` block | `Queue.create_task_group`  | `on_finish`, `on_success`, `on_failure`    |
+| Go         | `Queue.TaskGroup`                  | `Queue.CreateTaskGroup`    | `OnFinish`, `OnSuccess`, `OnFailure`       |
+| Rust       | `Queue::task_group`, with a list   | `Queue::create_task_group` | `on_finish`, `on_success`, `on_failure`    |
+| Ruby       | `Queue#task_group`, a block        | `Queue#create_task_group`  | `on_finish:`, `on_success:`, `on_failure:` |
+
+**Callbacks.** `create_task_group_v1` rejects a callback request with `idempotency`, `debounce`, or
+`throttle`. It enqueues each callback request one time in a subtransaction and rolls it back, so a
+callback that cannot enqueue fails the create. `finish_task_group_internal_v1` enqueues `on_finish`,
+then `on_success` or `on_failure`, each in a subtransaction:
+
+- If the enqueue fails with a SQLSTATE that starts with `40` or `57`, the error rolls back the whole
+  transaction, the last member outcome included.
+- If the enqueue fails with any other SQLSTATE, Workhorse writes a `callback_failed` event, and the
+  last member outcome still commits.
+
+**Limits**
+
+| Limit                     | Value   |
+| ------------------------- | ------- |
+| Member tasks in one group | 100,000 |
+| Tasks in one add call     | 1,000   |
+| Callbacks of each kind    | 1       |
+
+More detail: [Task groups: Lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#lifecycle), [Task groups: Create and callbacks](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#create-and-callbacks), [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls), and [Task groups: Limits](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#limits).
+
+</details>
+
+## Add tasks over several transactions
+
+Use an open group when the member tasks do not exist at one time. The app adds tasks in its own
+transactions, and then it seals the group.
+
+**Example.** The rows of `imp-7` arrive from an upload in pages of 1,000 rows.
+
+1. When the upload starts, the app calls `Queue.createTaskGroup` with the callbacks. The group is
+   `open`.
+2. For each page, the app calls `Queue.addToTaskGroup` with 1,000 row tasks. It uses the
+   transaction that stores the page.
+3. Workers run the first row tasks while later pages arrive. The group stays `open`.
+4. After the last page, the app calls `Queue.sealTaskGroup`. The group is `sealed`.
+5. When the last member task is finished, Workhorse finishes the group and enqueues the callbacks.
+
+Thus, an open group cannot finish, even when all of its current member tasks are finished. An open
+group never expires. If the app does not seal the group, the callbacks never run.
+
+After the seal, `Queue.addToTaskGroup` raises an error. A seal of a group that is already sealed or
+finished changes nothing.
+
+<details>
+<summary>Reference: add and seal</summary>
+
+**`add_task_group_members_v1`**
+
+1. Rejects more than 1,000 requests, and any request with `debounce` or `throttle`.
+2. Refuses the add with `P1008` when the group is sealed, finished, or canceled. The reason is
+   `sealed`, `finished`, `canceled`, or `not_running_member`.
+3. Rejects a request on a fast-tier queue with `P1007`.
+4. Rejects with `P1009` an add that takes the group above 100,000 member tasks.
+
+**`seal_task_group_v1`** changes `open` to `sealed`. If no member task is pending, the same call
+finishes the group.
+
+| SDK        | `P1008`                                            | `P1009`                                                          |
+| ---------- | -------------------------------------------------- | ---------------------------------------------------------------- |
+| TypeScript | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
+| Python     | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
+| Go         | `*TaskGroupClosedError` wraps `ErrTaskGroupClosed` | `*TaskGroupLimitExceededError` wraps `ErrTaskGroupLimitExceeded` |
+| Rust       | `Error::TaskGroupClosed`                           | `Error::TaskGroupLimitExceeded`                                  |
+| Ruby       | `TaskGroupClosedError`                             | `TaskGroupLimitExceededError`                                    |
+
+More detail: [Task groups: Lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#lifecycle), [Task groups: Add](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#add), [Task groups: Errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#errors), and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
+
+</details>
+
+## Read the counts of a group
+
+A handler reads its own group through its handler context. A callback uses this read to find the
+counts of the group that enqueued it.
+
+```ts
+worker.handle<{ importId: string }>("imports.report", async (report, ctx) => {
+  const link = await ctx.taskGroup.get();
+  const counts = link!.group.counts;
+  await sendReport(report.importId, counts.succeeded, counts.failed);
+  return { sent: true };
+});
+```
+
+The read gives the role of the task, `member` or `callback`, and the group. The group has its state,
+its result, its times, and the counts `total`, `succeeded`, `failed`, `canceled`, and `pending`. A
+handler reads the group one time, and later calls in the same run return that first answer.
+
+The group does not collect the results of its member tasks. If a callback needs them, it reads the
+member tasks in pages with `Queue.listTaskGroupMembers`. Each member has its position, its task,
+and the outcome that the group counted. An app outside a handler uses `Queue.getTaskGroup`.
+
+<details>
+<summary>Reference: reads</summary>
+
+| SDK        | In a handler                         | By group                                    |
+| ---------- | ------------------------------------ | ------------------------------------------- |
+| TypeScript | `ctx.taskGroup.get()`                | `getTaskGroup`, `listTaskGroupMembers`      |
+| Python     | `context.task_group.get()`           | `get_task_group`, `list_task_group_members` |
+| Go         | `HandlerContext.GetTaskGroup()`      | `GetTaskGroup`, `ListTaskGroupMembers`      |
+| Rust       | `HandlerContext::task_group().get()` | `get_task_group`, `list_task_group_members` |
+| Ruby       | `context.task_group.get`             | `get_task_group`, `list_task_group_members` |
+
+- `Queue` and `Admin` both have the reads by group. `Admin` also lists the events of a group.
+- `task_group_for_task_v1` gives the handler read. It runs one time for each handler activation.
+- `list_task_group_members_v1` returns at most 1,000 members after a position.
+- For a group that is not finished, the counts are the sums of its counter shards.
+
+More detail: [Task groups: Reads](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#reads) and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
+
+</details>
+
+## Add tasks from a running member task
+
+A member task can add tasks to its own group, also after the seal. Use this when a member task finds
+more work that must finish before the callbacks run.
+
+**Example.** The row 512 of `imp-7` has three attachments. Each attachment needs its own task.
+
+1. The group is sealed. The `imports.row` task for row 512 runs.
+2. Its handler calls `ctx.taskGroup.add` with three `imports.attachment` tasks.
+3. Workhorse checks that the task is an active member of the group with the current fence token.
+   It adds the three tasks as member tasks.
+4. The row task is not terminal while it adds, so the group cannot finish before the add.
+5. The group finishes after the three attachment tasks and every other member task are finished.
+
+Thus, the callbacks see the work that member tasks add. Only a running member task can add after
+the seal. A task that is not a member gets an error. No task can join a canceled group.
+
+Set the queue on each request that a handler adds. The default queue of a handler add is not the
+same in each SDK. The reference block shows each default.
+
+<details>
+<summary>Reference: add from a handler</summary>
+
+| SDK        | Call                               | Queue of a request with no queue               |
+| ---------- | ---------------------------------- | ---------------------------------------------- |
+| TypeScript | `ctx.taskGroup.add(requests)`      | `Queue.defaultQueue` of the worker's `Queue`   |
+| Python     | `context.task_group.add(requests)` | `default`                                      |
+| Go         | `HandlerContext.AddToTaskGroup`    | `default`                                      |
+| Rust       | `HandlerContext::task_group().add` | `default`                                      |
+| Ruby       | `context.task_group.add(requests)` | The first queue in the `queues:` of the worker |
+
+`add_task_group_members_v1` takes the member task, the worker, and the fence token. It refuses the
+add with `P1008` and the reason `not_running_member` when they do not name an `active` member of
+the group. The batch context of TypeScript, Rust, and Ruby also has the add. Python and Go batch
+contexts do not.
+
+More detail: [Task groups: Add](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#add), [Task groups: Queue of a request with no queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#queue-of-a-request-with-no-queue), and [Task groups: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#batch-handlers).
+
+</details>
+
+## Expect a member task that never finishes to stop its group
+
+A group finishes only when every member task is terminal. Thus, one member task that never becomes
+terminal stops its group, and the callbacks never run.
+
+**Example.** The row task for row 900 of `imp-7` has a prerequisite: an `imports.schema` task on the
+queue `schemas`. An operator paused `schemas` and did not resume it.
+
+1. The other 19,999 row tasks finish.
+2. The row task for row 900 stays `blocked`, because its prerequisite never runs. The group stays
+   `sealed` with one pending member task.
+3. No callback runs. Workhorse has no time limit for a group.
+4. An operator sees the group and calls `Admin.cancelTaskGroup` with an actor and a reason.
+5. Workhorse cancels the row task for row 900 and finishes the group with the result `failed`. It
+   enqueues the `onFinish` and `onFailure` callbacks.
+
+Thus, a member task that waits for a prerequisite, a signal, or a human decision can hold its group
+open for a long time. Give such a member task a [deadline](/docs/deadlines) if the
+group must finish. A canceled member task counts as not succeeded.
+
+A purge of a queue has the same effect for each member task that it deletes. The purge counts that
+member task as `canceled`, and the group can finish.
+
+<details>
+<summary>Reference: cancel and purge</summary>
+
+**`cancel_task_group_v1(p_group_id, p_requested_by, p_reason, p_request_id)`**
+
+1. If the group is `finished`, it returns the group and changes nothing.
+2. It seals an `open` group and records the cancel. No task can join a canceled group.
+3. It calls `cancel_v1` for each pending member task. A queued member task becomes `canceled` at
+   once. An active member task gets a cancel request.
+4. It writes the `canceled` event, and it finishes the group if no member task is pending.
+
+| SDK        | Call                                    |
+| ---------- | --------------------------------------- |
+| TypeScript | `Admin.cancelTaskGroup(groupId, audit)` |
+| Python     | `Admin.cancel_task_group`               |
+| Go         | `Admin.CancelTaskGroup`                 |
+| Rust       | `Admin::cancel_task_group`              |
+| Ruby       | `Admin#cancel_task_group`               |
+
+**Purge.** `purge_queue_internal_v1` counts each deleted member task that is not terminal as
+`canceled`, in the same transaction.
+
+More detail: [Task groups: Cancel](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#cancel), [Task groups: Purge](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#purge), and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
+
+</details>
+
+## Know which tasks can join a group
+
+A task joins a group only when an add enqueues it. Thus, a caller cannot add a task that already
+exists.
+
+- A task is a member of one group at most.
+- Member tasks can be on different queues and can have different task types.
+- A task on a fast-tier queue cannot be a member task.
+- An add cannot use debounce or throttle.
+- A member task can have prerequisites, child tasks, a delayed start, and durable waits.
+- A child task, a dependent task, or a [redrive](/docs/dead-letters) target of a member task is not a
+  member task.
+
+An add can use enqueue idempotency. A retry of the same add to the same group returns the existing
+member task. If the key returns a task that is not a member of this group, Workhorse rejects the
+add.
+
+<details>
+<summary>Reference: membership errors</summary>
+
+| Condition                                         | SQLSTATE | TypeScript, Python, Ruby error     |
+| ------------------------------------------------- | -------- | ---------------------------------- |
+| A request on a fast-tier queue                    | `P1007`  | `FastTierUnsupportedError`         |
+| Idempotency returns a task that is not its member | `P1010`  | `TaskGroupMembershipConflictError` |
+
+For `P1007`, Go returns `*FastTierUnsupportedError` and Rust returns `Error::FastTierUnsupported`.
+For `P1010`, Go returns `*TaskGroupMembershipConflictError`, which wraps
+`ErrTaskGroupMembershipConflict`, and Rust returns `Error::TaskGroupMembershipConflict`.
+
+More detail: [Task groups: Add](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#add), [Task groups: Errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#errors), and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
+
+</details>
+
+## Repair a group whose counts are wrong
+
+Workhorse counts each member outcome in the transaction that writes it. If the counts of a group do
+not agree with its member tasks, the group can stay sealed after its last member task finishes.
+
+`Admin.listTaskGroupDrift` lists these groups, and `Admin.repairTaskGroupDrift` counts them again
+from their member tasks. A repair finishes a sealed group with no pending member task. The
+`terminal_storage` routine also repairs such a sealed group, so the callbacks run without an
+operator.
+
+<details>
+<summary>Reference: drift, repair, and retention</summary>
+
+- `list_task_group_drift_v1(p_limit)` reads at most 10,000 groups that are not finished.
+- `repair_task_group_drift_v1(p_limit, p_requested_by, p_reason, p_request_id)` writes a
+  `counter_repaired` event for each group that it changes.
+- The `task_groups` phase of `terminal_storage` repairs sealed groups with no live pending member.
+- If `terminal_outcome_retention_days` is set, the phase deletes a finished group after its
+  callback tasks are terminal. It never deletes an `open` or `sealed` group.
+- Terminal-task pruning keeps a member task while its group is not finished.
+
+More detail: [Task groups: Drift and repair](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#drift-and-repair) and [Task groups: Maintenance](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#maintenance).
+
+</details>
+
+## Make a group of Active Job instances in Ruby
+
+A Rails app creates a group with `Stablemates::Workhorse::ActiveJob.task_group`. Each Active Job
+instance that the block enqueues through the Workhorse adapter becomes a member task. The adapter
+enqueues them when the block returns. If the block raises an error, the adapter enqueues nothing.
+
+An Active Job instance that the block enqueues through the Workhorse adapter cannot join a group if
+it sets `enqueue_after_transaction_commit` to `true`. The call raises an error.
+Rails enqueues it after the transaction commits, so outside the group. Set the value to `false`. A
+running Active Job instance reads its group with
+`Stablemates::Workhorse::ActiveJob.current_task_group`. It cannot add to its group.
+
+<details>
+<summary>Reference: Active Job</summary>
+
+- `task_group(on_finish:, on_success:, on_failure:, queue:)` uses the `Queue#task_group` block form.
+- Each callback is an Active Job instance, an `EnqueueRequest`, or `nil`.
+- `queue:` defaults to the queue of the Workhorse adapter that `ActiveJob::Base` uses.
+- An Active Job instance that the block enqueues through the Workhorse adapter, with
+  `enqueue_after_transaction_commit` set to `true`, raises `ArgumentError`.
+- `current_task_group` raises `ArgumentError` outside an Active Job instance that a Workhorse worker
+  runs.
+
+More detail: [Task groups: Active Job](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#active-job).
+
+</details>
+
+## What task groups do not do
+
+- A group does not collect the results of its member tasks.
+- A group runs no callback at the first failure. Each callback runs after the last member task.
+- A task group cannot contain another task group.
+- A group does not order its member tasks. Use [dependencies](/docs/task-dependencies) for an
+  order.
+- A batch of a [batch handler](/docs/batch-handlers) is not a task group. A task can be in a batch
+  and in a group at the same time.
+
+## Next
+
+- [Task dependencies](/docs/task-dependencies) — make one task wait for a small number of tasks
+- [Child tasks](/docs/child-tasks) — use the results of tasks inside a handler
+- [Cancellation](/docs/cancellation) — how a cancel reaches an active member task
+
+---
+
+Exact task group functions, tables, and limits:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#task-groups).
