@@ -39,8 +39,10 @@
 @import "@mantine/core/styles/NavLink.css";
 @import "@mantine/core/styles/Notification.css";
 @import "@mantine/core/styles/Pagination.css";
+@import "@mantine/core/styles/Progress.css";
 @import "@mantine/core/styles/Tooltip.css";
 @import "@mantine/core/styles/SegmentedControl.css";
+@import "@mantine/core/styles/SimpleGrid.css";
 @import "@mantine/core/styles/Stack.css";
 @import "@mantine/core/styles/Stepper.css";
 @import "@mantine/core/styles/Switch.css";
