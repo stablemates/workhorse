@@ -16,8 +16,11 @@ import {
   retireHistoryDayV1Sql,
   resolveOperationalScenarioOptions,
   runOperationalScenarios,
+  sampledHotGroupWaiter,
+  summarizeHotGroupLockSamples,
 } from "../benchmarks/scenarios.js";
 import type {
+  HotGroupLockSample,
   OperationalScenarioName,
   OperationalScenarioRunner,
   ScenarioAssertion,
@@ -371,11 +374,64 @@ describe("hot task group contract", () => {
     expect(contract!.purpose).toMatch(/without a group/);
     expect(contract!.invariants.join("\n")).toMatch(/counts every member task once/);
     expect(contract!.invariants.join("\n")).toMatch(/onFinish callback task exactly once/);
-    expect(contract!.invariants.join("\n")).toMatch(/never waits on a group row/);
+    expect(contract!.invariants.join("\n")).toMatch(
+      /never waits on a group row or a counter shard row/,
+    );
+    expect(contract!.invariants.join("\n")).toMatch(/group row or on a counter shard row/);
     expect(contract!.metrics).toEqual(
       expect.arrayContaining(["hotGroupTasks", "hotGroupWorkers", "hotGroupConcurrency"]),
     );
     expect(contract!.metrics.join("\n")).toMatch(/lock wait on it/);
+    expect(contract!.metrics.join("\n")).toMatch(/counter shard rows of the group/);
+  });
+});
+
+function lockSample(
+  sampledAt: number,
+  groupRowWaiters: number,
+  shardRowWaiters: number,
+  lockWaiters = groupRowWaiters + shardRowWaiters,
+): HotGroupLockSample {
+  return { sampledAt, groupRowWaiters, shardRowWaiters, lockWaiters };
+}
+
+describe("hot task group lock samples", () => {
+  it("summarizes group row and shard row waiters apart", () => {
+    const summary = summarizeHotGroupLockSamples(
+      [lockSample(10, 0, 2), lockSample(20, 1, 0), lockSample(30, 0, 0, 3), lockSample(40, 0, 4)],
+      0,
+    );
+    expect(summary).toEqual({
+      samples: 4,
+      sampleIntervalMs: 10,
+      groupRow: { waitersMean: 0.25, waitersMax: 1, waitMs: 10, contendedShare: 0.25 },
+      shardRows: { waitersMean: 1.5, waitersMax: 4, waitMs: 60, contendedShare: 0.5 },
+      lockWaitersMean: 2.5,
+      lockWaitMs: 100,
+    });
+  });
+
+  it("reports no interval and no share without samples", () => {
+    expect(summarizeHotGroupLockSamples([], 0)).toEqual({
+      samples: 0,
+      sampleIntervalMs: null,
+      groupRow: { waitersMean: null, waitersMax: 0, waitMs: 0, contendedShare: null },
+      shardRows: { waitersMean: null, waitersMax: 0, waitMs: 0, contendedShare: null },
+      lockWaitersMean: null,
+      lockWaitMs: 0,
+    });
+  });
+
+  it("accepts a group run in which only the shard rows have waiters", () => {
+    const onlyShards = summarizeHotGroupLockSamples([lockSample(5, 0, 3), lockSample(10, 0, 1)], 0);
+    expect(onlyShards.groupRow.waitersMax).toBe(0);
+    expect(sampledHotGroupWaiter(onlyShards)).toBe(true);
+    expect(sampledHotGroupWaiter(summarizeHotGroupLockSamples([lockSample(5, 2, 0)], 0))).toBe(
+      true,
+    );
+    expect(sampledHotGroupWaiter(summarizeHotGroupLockSamples([lockSample(5, 0, 0, 7)], 0))).toBe(
+      false,
+    );
   });
 });
 
