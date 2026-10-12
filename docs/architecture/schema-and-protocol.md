@@ -238,8 +238,8 @@ The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictErro
 `WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
 includes a changed child set. `CheckpointInputConflictError` occurs when a checkpoint name is stored
 with the fingerprint of a different input
-([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). Only the TypeScript SDK raises it
-now, so `protocol/v1/runtime.json` does not pin it.
+([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). Only an SDK that gives a
+checkpoint input raises it, so `protocol/v1/runtime.json` does not pin it.
 
 - Go identifies wrapped conflicts with `errors.As` and keeps their class names.
 - Rust converts `Error::Conflict` for `Operation::Checkpoint`, `Sleep`, `RunChild`, `RunChildren`,
@@ -249,7 +249,8 @@ now, so `protocol/v1/runtime.json` does not pin it.
 - Rust marks the converted `HandlerError` with a private conflict flag. `fail_with_state` reads that
   flag, not the name. Thus a handler error built with `HandlerError::named("WaitConflictError", …)`
   retries under the policy of the task.
-- Ruby uses `ConflictError`. Its message identifies the operation and the retained name.
+- Ruby uses `ConflictError`. Its message identifies the operation and the retained name. Its
+  subclass `CheckpointInputConflictError` also identifies the stored and the requested fingerprint.
 
 #### Settling a conflict
 

@@ -81,6 +81,50 @@ RSpec.describe "Worker against PostgreSQL" do
     expect([row["state"], row["attempt"], JSON.parse(row["result"])]).to eq(["succeeded", "2", {"charge" => 1}])
   end
 
+  it "fails the task at once when a replayed checkpoint input differs and keeps the attempt" do
+    task_id = queue.enqueue("charge", {}, max_attempts: 3).task_id
+    runs = 0
+    subject = worker(retry_delay: 0).handle("charge") do |_payload, context|
+      amount = (context.task.attempt == 1) ? 1000 : 900
+      context.checkpoint("charge", input: {"amountCents" => amount}) { runs += 1 }
+      raise "network" if context.task.attempt == 1
+
+      {"charged" => true}
+    end
+    subject.run_once
+    make_ready(task_id)
+    subject.run_once
+
+    expect(runs).to eq(1)
+    row = status(task_id)
+    expect(row.values_at("state", "attempt")).to eq(%w[failed 2])
+    expect(JSON.parse(row["error"])["name"]).to eq("Stablemates::Workhorse::CheckpointInputConflictError")
+    stored = W::Admin.new(@pool).get_checkpoint(task_id, "charge")
+    expect(stored.input_fingerprint).to eq(W.checkpoint_input_fingerprint({"amountCents" => 1000}))
+  end
+
+  it "replays a checkpoint whose input matches or whose stored row has no fingerprint" do
+    task_id = queue.enqueue("charge", {}, max_attempts: 2).task_id
+    runs = 0
+    subject = worker(retry_delay: 0).handle("charge") do |_payload, context|
+      input = (context.task.attempt == 1) ? nil : {"amountCents" => 1000}
+      plain = context.checkpoint("plain") { runs += 1 }
+      matched = context.checkpoint("charge", input: {"amountCents" => 1000}) { runs += 1 }
+      later = (input.nil? ? context.checkpoint("later") { runs += 1 } : context.checkpoint("later", input: input) { runs += 1 })
+      raise "network" if context.task.attempt == 1
+
+      {"values" => [plain, matched, later]}
+    end
+    subject.run_once
+    make_ready(task_id)
+    subject.run_once
+
+    expect(runs).to eq(3)
+    row = status(task_id)
+    expect([row["state"], JSON.parse(row["result"])]).to eq(["succeeded", {"values" => [1, 2, 3]}])
+    expect(W::Admin.new(@pool).get_checkpoint(task_id, "later").input_fingerprint).to be_nil
+  end
+
   it "releases a task whose type has no handler without charging the attempt" do
     task_id = queue.enqueue("unknown", {}).task_id
     ran = worker.handle("other") { {} }.run_once

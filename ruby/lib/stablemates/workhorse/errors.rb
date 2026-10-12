@@ -42,12 +42,35 @@ module Stablemates
     # A named primitive received a different request under its retained identity.
     class ConflictError < NamedOperationError
       def initialize(operation, name, stored_name: nil)
-        message = if stored_name && stored_name != name
-          "conflicts: stored child #{stored_name.inspect}, requested child #{name.inspect}"
-        else
-          "conflicts with a different retained request"
-        end
-        super(operation, name, message)
+        @stored_name = stored_name
+        super(operation, name, conflict_message(name))
+      end
+
+      private
+
+      def conflict_message(name)
+        return "conflicts with a different retained request" unless @stored_name && @stored_name != name
+
+        "conflicts: stored child #{@stored_name.inspect}, requested child #{name.inspect}"
+      end
+    end
+
+    # A checkpoint call gave an input whose fingerprint differs from the stored fingerprint, or from
+    # the fingerprint of an overlapping call with the same name (ADR 0098). The block does not run.
+    # The worker fails the task at once, as for every ConflictError.
+    class CheckpointInputConflictError < ConflictError
+      attr_reader :stored_fingerprint, :requested_fingerprint
+
+      def initialize(name, stored_fingerprint, requested_fingerprint)
+        @stored_fingerprint = stored_fingerprint
+        @requested_fingerprint = requested_fingerprint
+        super(:checkpoint, name)
+      end
+
+      private
+
+      def conflict_message(_name)
+        "input conflicts: stored fingerprint #{@stored_fingerprint}, requested fingerprint #{@requested_fingerprint}"
       end
     end
 

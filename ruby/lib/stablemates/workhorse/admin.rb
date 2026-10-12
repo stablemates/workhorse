@@ -72,7 +72,11 @@ module Stablemates
 
     BulkRedrivePage = Data.define(:results, :next_cursor)
 
-    TaskCheckpoint = Data.define(:task_id, :name, :value, :attempt, :fence_token, :worker_id, :created_at)
+    # +input_fingerprint+ is the fingerprint of the input that produced +value+, or nil when the write
+    # gave no input (ADR 0098).
+    TaskCheckpoint = Data.define(
+      :task_id, :name, :value, :attempt, :fence_token, :worker_id, :created_at, :input_fingerprint
+    )
 
     TaskWait = Data.define(
       :task_id, :name, :mode, :duration_ms, :requested_wake_at, :wake_at, :attempt, :fence_token,
@@ -624,7 +628,8 @@ module Stablemates
           attempt: Values.parse_integer(row.fetch("attempt")),
           fence_token: Values.parse_integer(row.fetch("fence_token")),
           worker_id: row.fetch("worker_id"),
-          created_at: Values.parse_time(row.fetch("created_at"))
+          created_at: Values.parse_time(row.fetch("created_at")),
+          input_fingerprint: row.fetch("input_fingerprint")
         )
       end
 

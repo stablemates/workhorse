@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "json"
 require "logger"
 require "monitor"
@@ -14,6 +15,7 @@ require_relative "workhorse/version"
 require_relative "workhorse/sql_catalogue_generated"
 require_relative "workhorse/errors"
 require_relative "workhorse/types"
+require_relative "workhorse/checkpoint_fingerprint"
 require_relative "workhorse/task_group"
 require_relative "workhorse/executor"
 require_relative "workhorse/active_record_executor"

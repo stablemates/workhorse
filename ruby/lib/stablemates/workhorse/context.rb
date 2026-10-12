@@ -107,6 +107,8 @@ module Stablemates
       MAX_EXTERNAL_TIMEOUT_MS = 604_800_000
       MAX_EXTERNAL_VALUE_BYTES = 65_536
       MAX_CHILDREN = 100
+      # The default of +checkpoint+'s +input+, so that nil stays the JSON input null.
+      NO_INPUT = Object.new.freeze # :nodoc:
       CHILD_OUTCOMES = {"succeeded" => :succeeded, "failed" => :failed, "canceled" => :canceled}.freeze
       private_constant :MAX_WAIT_MS, :MAX_EXTERNAL_TIMEOUT_MS, :MAX_EXTERNAL_VALUE_BYTES, :MAX_CHILDREN,
         :CHILD_OUTCOMES
@@ -144,18 +146,30 @@ module Stablemates
 
       # Returns the value a checkpoint named +name+ saved, running the block to produce and save it
       # only when no such checkpoint exists.
-      def checkpoint(name, &block)
+      #
+      # With +input+, a JSON value, the checkpoint also stores the fingerprint of the input, as
+      # Workhorse.checkpoint_input_fingerprint computes it. If the stored checkpoint or an overlapping
+      # call with the same name has the fingerprint of a different input, the call raises
+      # CheckpointInputConflictError and the block does not run. If either side has no input, the
+      # call compares nothing.
+      def checkpoint(name, input: NO_INPUT, &block)
         durable_name(name, "checkpoint")
         durable!("checkpoints")
         raise ArgumentError, "checkpoint needs a block" if block.nil?
 
-        once(:checkpoint, name) do
+        fingerprint = input.equal?(NO_INPUT) ? nil : Workhorse.checkpoint_input_fingerprint(input)
+        overlap = ->(running) { check_input(name, running, fingerprint) }
+        once(:checkpoint, name, fingerprint, overlap: overlap) do
           existing = checkpoints[name]
-          next existing.value unless existing.nil?
+          unless existing.nil?
+            check_input(name, existing.input_fingerprint, fingerprint)
+            next existing.value
+          end
 
           live!(:checkpoint)
           value = block.call
-          row = write(SqlCatalogue::SAVE_CHECKPOINT_V1, name, Values.json(value, "checkpoint value"))
+          row = write(SqlCatalogue::SAVE_CHECKPOINT_V2, name, Values.json(value, "checkpoint value"), fingerprint)
+          check_input(name, row["input_fingerprint"], fingerprint) if row.fetch("status") == "input_conflict"
           status = expect(:checkpoint, row, %w[saved existing], name)
           log(:debug, "workhorse.task.checkpoint_saved", "Task checkpoint persisted",
             "workhorse.checkpoint.name" => name, "workhorse.checkpoint.status" => status)
@@ -435,7 +449,9 @@ module Stablemates
 
       # Runs the block once per +kind+ and +name+ at a time. A concurrent caller with the same
       # +request+ receives the running call's result or error; a different request conflicts.
-      def once(kind, name, request = nil, conflict_name = name)
+      # +overlap+, when given, receives the running call's request and raises in place of that
+      # comparison.
+      def once(kind, name, request = nil, conflict_name = name, overlap: nil)
         future = nil
         running = @lock.synchronize do
           current = @calls[kind][name]
@@ -444,7 +460,11 @@ module Stablemates
             @calls[kind][name] = [request, future]
             nil
           else
-            raise ConflictError.new(kind, conflict_name) unless current[0] == request
+            if overlap
+              overlap.call(current[0])
+            elsif current[0] != request
+              raise ConflictError.new(kind, conflict_name)
+            end
 
             current[1]
           end
@@ -538,6 +558,14 @@ module Stablemates
         end
       end
 
+      # Inputs are compared only when both sides carry a fingerprint, so a handler that adds or
+      # removes an input keeps the stored result.
+      def check_input(name, stored, requested)
+        return if stored.nil? || requested.nil? || stored == requested
+
+        raise CheckpointInputConflictError.new(name, stored, requested)
+      end
+
       def checkpoints
         load(:checkpoints) do
           @executor.rows(SqlCatalogue::LIST_CHECKPOINTS, [@task.id]).to_h do |row|
@@ -558,7 +586,8 @@ module Stablemates
         TaskCheckpoint.new(
           task_id: @task.id, name: name, value: Values.parse_json(row["checkpoint_value"]),
           attempt: Values.parse_integer(row["attempt"]), fence_token: Values.parse_integer(row["fence_token"]),
-          worker_id: row["worker_id"], created_at: Values.parse_time(row["created_at"])
+          worker_id: row["worker_id"], created_at: Values.parse_time(row["created_at"]),
+          input_fingerprint: row["input_fingerprint"]
         )
       end
 

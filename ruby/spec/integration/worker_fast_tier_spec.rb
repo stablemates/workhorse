@@ -446,7 +446,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
 
     expect(subject.run_once).to be(true)
     expect(rejected.tally).to eq("checkpoints" => 2, "progress" => 2)
-    expect(statements).not_to include(W::SqlCatalogue::SAVE_CHECKPOINT_V1, W::SqlCatalogue::UPDATE_PROGRESS_V1)
+    expect(statements).not_to include(W::SqlCatalogue::SAVE_CHECKPOINT_V2, W::SqlCatalogue::UPDATE_PROGRESS_V1)
     expect(outcomes(task_ids).map { |_, state, _| state }).to eq(%w[succeeded succeeded])
   end
 

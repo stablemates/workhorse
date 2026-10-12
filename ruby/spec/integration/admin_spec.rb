@@ -90,7 +90,13 @@ RSpec.describe "Admin against PostgreSQL" do
     expect(checkpoint).to have_attributes(task_id: task_id, name: "step-1", value: {"at" => 1}, attempt: 1,
       fence_token: Integer(fence, 10), worker_id: worker)
     expect(checkpoint.created_at).to be_a(Time)
+    expect(checkpoint.input_fingerprint).to be_nil
     expect(admin.list_checkpoints(task_id)).to eq([checkpoint])
+    fingerprint = W.checkpoint_input_fingerprint({"step" => 2})
+    @connection.exec_params(W::SqlCatalogue::SAVE_CHECKPOINT_V2,
+      [task_id, worker, fence, "step-2", '{"at":2}', fingerprint])
+    expect(admin.get_checkpoint(task_id, "step-2").input_fingerprint).to eq(fingerprint)
+    expect(admin.list_checkpoints(task_id).map(&:input_fingerprint)).to eq([nil, fingerprint])
     expect(admin.get_checkpoint(task_id, "missing")).to be_nil
 
     expect(admin.get_progress(task_id)).to have_attributes(value: {"pct" => 50}, revision: 1)

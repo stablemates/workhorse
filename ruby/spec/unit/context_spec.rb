@@ -33,12 +33,106 @@ RSpec.describe W::HandlerContext do
 
   it "saves a new checkpoint under the attempt's fence" do
     executor = FakeExecutor.new do |sql|
-      (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V1) ? [checkpoint_row("saved", {"n" => 1})] : []
+      (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", {"n" => 1})] : []
     end
     ctx = context(executor)
     expect(ctx.checkpoint("a") { {"n" => 1} }).to eq({"n" => 1})
     expect(ctx.checkpoint("a") { raise "ran" }).to eq({"n" => 1})
-    expect(executor.statements.last[1]).to eq([task.id, "w", 7, "a", '{"n":1}'])
+    expect(executor.statements.last[1]).to eq([task.id, "w", 7, "a", '{"n":1}', nil])
+  end
+
+  describe "with a checkpoint input" do
+    let(:charge) { {"amountCents" => 1000, "currency" => "EUR"} }
+    let(:stored) { W.checkpoint_input_fingerprint(charge) }
+    let(:changed) { W.checkpoint_input_fingerprint(charge.merge("amountCents" => 900)) }
+
+    def stored_checkpoint(fingerprint)
+      FakeExecutor.new do |sql|
+        next [] unless sql == W::SqlCatalogue::LIST_CHECKPOINTS
+
+        [checkpoint_row(nil, 5).merge("checkpoint_name" => "charge", "input_fingerprint" => fingerprint)]
+      end
+    end
+
+    it "saves the fingerprint of the input with the value" do
+      executor = FakeExecutor.new do |sql|
+        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
+      end
+      ctx = context(executor)
+      expect(ctx.checkpoint("charge", input: {"currency" => "EUR", "amountCents" => 1000}) { 5 }).to eq(5)
+      expect(executor.statements.last[1]).to eq([task.id, "w", 7, "charge", "5", stored])
+      expect(ctx.get_checkpoint("charge").input_fingerprint).to eq(stored)
+    end
+
+    it "returns the stored value when the input matches" do
+      expect(context(stored_checkpoint(stored)).checkpoint("charge", input: charge) { raise "ran" }).to eq(5)
+    end
+
+    it "raises CheckpointInputConflictError when the input differs, without running the block" do
+      ctx = context(stored_checkpoint(stored))
+      expect { ctx.checkpoint("charge", input: charge.merge("amountCents" => 900)) { raise "ran" } }
+        .to raise_error(W::CheckpointInputConflictError) { |error|
+          expect(error).to be_a(W::ConflictError)
+          expect(error).to have_attributes(operation: :checkpoint, name: "charge", stored_fingerprint: stored,
+            requested_fingerprint: changed)
+          expect(error.message).to eq("checkpoint charge input conflicts: stored fingerprint #{stored}, " \
+            "requested fingerprint #{changed}")
+        }
+    end
+
+    it "compares nothing when the call or the stored checkpoint has no input" do
+      expect(context(stored_checkpoint(stored)).checkpoint("charge") { raise "ran" }).to eq(5)
+      expect(context(stored_checkpoint(nil)).checkpoint("charge", input: charge) { raise "ran" }).to eq(5)
+    end
+
+    it "fingerprints a nil input as the JSON null" do
+      null = W.checkpoint_input_fingerprint(nil)
+      expect { context(stored_checkpoint(null)).checkpoint("charge", input: charge) { raise "ran" } }
+        .to raise_error(W::CheckpointInputConflictError)
+      expect(context(stored_checkpoint(null)).checkpoint("charge", input: nil) { raise "ran" }).to eq(5)
+    end
+
+    it "maps the input_conflict status of the save to CheckpointInputConflictError" do
+      executor = FakeExecutor.new do |sql|
+        next [] unless sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2
+
+        [checkpoint_row("input_conflict", 5).merge("input_fingerprint" => stored)]
+      end
+      expect { context(executor).checkpoint("charge", input: charge.merge("amountCents" => 900)) { 5 } }
+        .to raise_error(W::CheckpointInputConflictError) { |error|
+          expect(error).to have_attributes(stored_fingerprint: stored, requested_fingerprint: changed)
+        }
+    end
+
+    it "compares the input of an overlapping call with the same name" do
+      started = Concurrent::Event.new
+      release = Concurrent::Event.new
+      executor = FakeExecutor.new do |sql|
+        (sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2) ? [checkpoint_row("saved", 5).merge("input_fingerprint" => stored)] : []
+      end
+      ctx = context(executor)
+      first = Thread.new do
+        ctx.checkpoint("charge", input: charge) do
+          started.set
+          release.wait(5)
+          5
+        end
+      end
+      started.wait(5)
+      expect { ctx.checkpoint("charge", input: charge.merge("amountCents" => 900)) { raise "ran" } }
+        .to raise_error(W::CheckpointInputConflictError)
+      shared = Thread.new { ctx.checkpoint("charge") { raise "ran" } }
+      release.set
+      expect([first.value, shared.value]).to eq([5, 5])
+      expect(executor.statements.count { |sql, _| sql == W::SqlCatalogue::SAVE_CHECKPOINT_V2 }).to eq(1)
+    end
+
+    it "rejects an input that is not JSON before it runs the block or any statement" do
+      executor = FakeExecutor.new
+      expect { context(executor).checkpoint("charge", input: {amount: 1}) { raise "ran" } }
+        .to raise_error(ArgumentError, "checkpoint input object keys must be Strings")
+      expect(executor.statements).to be_empty
+    end
   end
 
   it "refuses a task group add from a cancelled attempt before any statement" do
