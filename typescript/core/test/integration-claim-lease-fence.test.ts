@@ -339,9 +339,9 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       registryIntervalMs: 0,
     }).handle("released.some-other-type", async () => null);
-    expect(await oldRelease.runOnce()).toBe(true);
-    // The pass handed its claim back, so it made no progress and waits the poll interval like an
-    // empty one. Without that, the worker would claim and release the same task in a hot loop.
+    // The pass handed its claim back, so it made no progress. The false result tells a caller in a
+    // loop to wait. The worker keeps no state between calls, so the next call claims again.
+    expect(await oldRelease.runOnce()).toBe(false);
     expect(await oldRelease.runOnce()).toBe(false);
 
     expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 1 });
@@ -352,7 +352,7 @@ describe("claim lease fence", () => {
           WHERE task_id = $1 AND event_type = 'released') AS releases`,
       [id],
     );
-    expect(afterRelease.rows[0]).toEqual({ attempts: 0, releases: 1 });
+    expect(afterRelease.rows[0]).toEqual({ attempts: 0, releases: 2 });
 
     const handled: Array<{ index: number }> = [];
     const newRelease = new Worker(queue, {

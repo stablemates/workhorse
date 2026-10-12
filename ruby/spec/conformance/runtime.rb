@@ -627,18 +627,27 @@ module Conformance
         older = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}-older", polling_only: true,
           disable_registry: true, lease: fixture["leaseMs"] / 1000.0, poll_interval: fixture["pollMs"] / 1000.0)
           .handle(fixture["registeredTaskType"]) { nil }
-        older.run_once
+        evidence = lambda do
+          [Integer(value("SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1", task_id), 10),
+            Integer(value("SELECT count(*) FROM workhorse.task_event WHERE task_id = $1 AND " \
+              "event_type = 'released'", task_id), 10)]
+        end
+        # A pass that released each task that it claimed made no progress, so it returns false.
+        processed = fixture["expectedReleasedPassOutcome"] != "unprocessed"
+        check(older.run_once == processed, "the released-only pass reported progress")
         expect_state(task_id, fixture["expectedAfterRelease"])
-        attempts = Integer(value("SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1", task_id), 10)
-        releases = Integer(value("SELECT count(*) FROM workhorse.task_event WHERE task_id = $1 AND " \
-          "event_type = 'released'", task_id), 10)
+        attempts, releases = evidence.call
         # The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
         check(attempts == fixture["expectedAttempts"], "the release recorded #{attempts} attempts")
         check(releases == fixture["expectedReleaseEvents"], "the release recorded #{releases} events")
-        # The released task is ready again, so a worker that reported the release as progress would
-        # claim and release it without waiting.
-        processed = fixture["expectedRunOutcomeAfterRelease"] != "unprocessed"
+        # The worker keeps no state between calls. The next call claims the ready task again at once,
+        # inside the poll interval, releases it, and returns false again.
         check(older.run_once == processed, "the pass after the release reported progress")
+        attempts, releases = evidence.call
+        check(attempts == fixture["expectedAttempts"], "the next pass recorded #{attempts} attempts")
+        check(releases == fixture["expectedReleaseEventsAfterNextPass"],
+          "after the next pass the task had #{releases} release events")
+        expect_state(task_id, fixture["expectedAfterRelease"])
 
         newer = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}-newer", polling_only: true,
           disable_registry: true, lease: fixture["leaseMs"] / 1000.0).handle(fixture["taskType"]) do |payload|

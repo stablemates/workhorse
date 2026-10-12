@@ -5392,6 +5392,13 @@ class Worker {
   /** Stable durable identity used for leases, attempt history, and fleet registration. */
   get id(): string;
   maintenanceTelemetry(): WorkerMaintenanceTelemetry[];
+  /**
+  * Runs maintenance, claims tasks for the free slots once, and waits for those tasks to settle.
+  *
+  * Returns `true` only if a handler ran. A pass that claimed no task, or that released each task
+  * because no handler is registered for its type, returns `false`. The worker keeps no state
+  * between calls, so a caller that calls `runOnce()` in a loop must wait after `false`.
+  */
   runOnce(): Promise<boolean>;
   /**
   * Publish this worker's runtime state and read back the operator-requested pause flag.
@@ -5470,7 +5477,7 @@ interface WorkerOptions {
   sharedHeartbeats?: boolean;
   /**
   * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
-  * 250 milliseconds without it; `runOnce()` retains the 250-millisecond compatibility default.
+  * 250 milliseconds without it. `runOnce()` does not wait: it claims on each call.
   */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */

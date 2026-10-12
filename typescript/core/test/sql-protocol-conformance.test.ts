@@ -837,7 +837,9 @@ async function executeMissingHandlerRuntimeFixture(
     registryIntervalMs: 0,
   }).handle(fixture.registeredTaskType, async () => null);
 
-  await older.runOnce();
+  // A pass that released each task that it claimed made no progress, so it returns false.
+  const releasedPassProgress = fixture.expectedReleasedPassOutcome !== "unprocessed";
+  await expect(older.runOnce()).resolves.toBe(releasedPassProgress);
   await expect(admin.getTask(id)).resolves.toMatchObject({
     state: fixture.expectedAfterRelease.state,
     currentAttempt: fixture.expectedAfterRelease.attempt,
@@ -846,11 +848,16 @@ async function executeMissingHandlerRuntimeFixture(
   // The refusal belongs to no attempt, so the task keeps the attempt it was enqueued with.
   expect(evidence.attempts).toBe(fixture.expectedAttempts);
   expect(evidence.releases).toBe(fixture.expectedReleaseEvents);
-  // The released task is ready again, so a worker that reported the release as progress would
-  // claim and release it without waiting. The next pass makes none.
-  await expect(older.runOnce()).resolves.toBe(
-    fixture.expectedRunOutcomeAfterRelease !== "unprocessed",
-  );
+  // The worker keeps no state between calls. The next call claims the ready task again at once,
+  // inside the poll interval, releases it, and returns false again.
+  await expect(older.runOnce()).resolves.toBe(releasedPassProgress);
+  const again = await releaseEvidence(database, id);
+  expect(again.attempts).toBe(fixture.expectedAttempts);
+  expect(again.releases).toBe(fixture.expectedReleaseEventsAfterNextPass);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedAfterRelease.state,
+    currentAttempt: fixture.expectedAfterRelease.attempt,
+  });
 
   const handled: unknown[] = [];
   const newer = new Worker(queue, {

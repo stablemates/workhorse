@@ -222,8 +222,9 @@
     "pollMs": 5000,
     "expectedAfterRelease": { "state": "ready", "attempt": 1 },
     "expectedAttempts": 0,
+    "expectedReleasedPassOutcome": "unprocessed",
     "expectedReleaseEvents": 1,
-    "expectedRunOutcomeAfterRelease": "unprocessed",
+    "expectedReleaseEventsAfterNextPass": 2,
     "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
   },
   {
