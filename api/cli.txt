@@ -853,6 +853,11 @@ interface TaskCheckpoint<TValue extends Json = Json> {
   fenceToken: bigint;
   workerId: string;
   createdAt: Date;
+  /**
+  * SHA-256 digest of the canonical JSON of the input that produced the value, or null when the
+  * write gave no input. `checkpointInputFingerprint` computes it.
+  */
+  inputFingerprint: string | null;
 }
 
 interface TaskListCursor {

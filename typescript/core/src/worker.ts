@@ -9,7 +9,11 @@ import {
   WorkhorseError,
 } from "./errors.js";
 import { Queue } from "./queue.js";
-import { CheckpointConflictError, WaitConflictError } from "./queue/checkpoints-progress-waits.js";
+import {
+  CheckpointConflictError,
+  CheckpointInputConflictError,
+  WaitConflictError,
+} from "./queue/checkpoints-progress-waits.js";
 import { ChildConflictError } from "./queue/child-tasks.js";
 import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
@@ -39,6 +43,7 @@ import {
 } from "./telemetry.js";
 import type { TaskGroupLink } from "./queue/task-groups.js";
 import type {
+  CheckpointOptions,
   ChildTaskOptions,
   ChildOutcomes,
   EnqueueRequest,
@@ -52,6 +57,7 @@ import type {
   CreateChildrenResult,
   ExpireOwnedStatus,
   ReleaseOwnedStatus,
+  SaveCheckpointOptions,
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
@@ -146,10 +152,14 @@ export interface HandlerContext<TPayload extends Json = Json> {
   /**
    * Return the persisted value when this name already exists. Otherwise run the operation and
    * immutably persist its JSON result under the current fenced lease.
+   *
+   * With `options.input`, the checkpoint also stores the fingerprint of the input. A later call
+   * whose input has a different fingerprint fails with `CheckpointInputConflictError`.
    */
   checkpoint<TValue extends Json>(
     name: string,
     operation: () => Promise<TValue> | TValue,
+    options?: CheckpointOptions,
   ): Promise<TValue>;
   /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
@@ -308,6 +318,7 @@ export interface WorkerQueueApi {
     workerId: string,
     name: string,
     value: TValue,
+    options?: SaveCheckpointOptions,
   ): Promise<TaskCheckpoint<TValue>>;
   getProgress(taskId: string): Promise<TaskProgress | null>;
   updateProgress<TValue extends Json>(
@@ -1537,6 +1548,7 @@ export class Worker {
     span.setStatus("error");
     const terminalConflict =
       error instanceof CheckpointConflictError ||
+      error instanceof CheckpointInputConflictError ||
       error instanceof WaitConflictError ||
       error instanceof ChildConflictError ||
       error instanceof HumanWaitConflictError;

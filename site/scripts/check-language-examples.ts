@@ -218,6 +218,8 @@ const allowedTypeScriptOnlyExamples: Partial<Record<(typeof crossSdkGuidePaths)[
   {
     // The typed rate-limit status projection is currently a TypeScript-only client API.
     "rate-limits.mdx": 1,
+    // The checkpoint input is currently a TypeScript-only handler option (SM-1211).
+    "durable-execution.mdx": 1,
   };
 
 for (const guidePath of crossSdkGuidePaths) {

@@ -1,6 +1,6 @@
 # How does a task wait without holding a worker?
 
-<!-- scenario-names: welcome, follow-up-window, welcome-email -->
+<!-- scenario-names: welcome, follow-up-window, welcome-email, welcome-v1, welcome-v2 -->
 
 Some tasks must pause before they continue. For example, a task waits until a reminder time, or it
 waits before it asks an external system again. A worker runs a limited number of tasks at the same
@@ -205,6 +205,8 @@ operator code, call `Admin.listCheckpoints` or `Admin.listWaits`.
 | A task exceeds its bound on open waits              | `WaitLimitExceededError`   |
 | A checkpoint name repeats with a different value    | `CheckpointConflictError`  |
 
+For a checkpoint name that repeats with a different input, read "Check the input of a checkpoint".
+
 One task can hold at most 1,000 timer names.
 
 | Reader                         | Scope                                   |
@@ -215,6 +217,55 @@ One task can hold at most 1,000 timer names.
 | `Admin.listWaits`              | Retained waits, for operator code       |
 
 More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint) and [Data model: `task_wait`](../architecture/data-model.md#task_wait).
+
+</details>
+
+## Check the input of a checkpoint
+
+A checkpoint finds its stored result by name only. If a deployment changes the input of the
+operation, a replay returns the result of the old input and gives no error. A handler can give the
+input of a checkpoint, so that Workhorse can find this change.
+
+**Example.** The order handler gives the address and the template of the `welcome` email as the
+input of the `welcome` checkpoint.
+
+1. At 14:00, worker A runs `welcome` with the template `welcome-v1`. Workhorse stores the result and
+   the fingerprint of the input.
+2. While the task waits, a deployment changes the template to `welcome-v2`.
+3. At 16:00, worker B reaches `welcome` with the template `welcome-v2`. The fingerprint of this
+   input does not agree with the stored fingerprint.
+4. Workhorse fails the task with `CheckpointInputConflictError`. The operation does not run again.
+
+Thus, a changed input stops the task before it uses a result that does not agree with the new code.
+An input fingerprint is a digest of the JSON input. Workhorse stores the fingerprint, not the input.
+The check is optional. If the call or the stored checkpoint has no input, Workhorse returns the
+stored result and compares nothing. Thus you can add an input to the code of a task that waits now.
+
+```ts
+const template = "welcome-v1";
+await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
+  input: { to: payload.to, template },
+});
+```
+
+<details>
+<summary>Reference: checkpoint input</summary>
+
+`HandlerContext.checkpoint(name, operation, { input })` computes the fingerprint with
+`checkpointInputFingerprint(input)`. The fingerprint is the SHA-256 digest of the RFC 8785 canonical
+JSON of the input, as 64 lowercase hexadecimal characters. Key order does not change it.
+
+| Stored fingerprint | Fingerprint of the call | Result                                                      |
+| ------------------ | ----------------------- | ----------------------------------------------------------- |
+| None               | Any, or none            | The stored value returns.                                   |
+| Present            | None                    | The stored value returns.                                   |
+| Present            | Equal                   | The stored value returns.                                   |
+| Present            | Different               | `CheckpointInputConflictError`. The operation does not run. |
+
+Overlapping calls with one name compare their inputs in the same way. `TaskCheckpoint.inputFingerprint`
+returns the stored fingerprint, or null. Only the TypeScript SDK gives an input now.
+
+More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint).
 
 </details>
 
@@ -245,13 +296,15 @@ signal wait that is already pending keeps its usual rules.
 Workhorse fails the task on the first conflict with saved evidence in one of these:
 
 - a checkpoint value;
+- a checkpoint input fingerprint;
 - a timer target;
 - a child request;
 - a child set;
 - a human-decision context.
 
-The terminal classes are `CheckpointConflictError`, `WaitConflictError`, `ChildConflictError`, and
-`HumanWaitConflictError`. `ChildConflictError` includes a changed child set.
+The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictError`,
+`WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
+includes a changed child set. Only the TypeScript SDK raises `CheckpointInputConflictError` now.
 
 The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
 the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.

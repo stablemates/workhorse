@@ -848,6 +848,27 @@ export interface TaskCheckpoint<TValue extends Json = Json> {
   fenceToken: bigint;
   workerId: string;
   createdAt: Date;
+  /**
+   * SHA-256 digest of the canonical JSON of the input that produced the value, or null when the
+   * write gave no input. `checkpointInputFingerprint` computes it.
+   */
+  inputFingerprint: string | null;
+}
+
+/** Options of one handler checkpoint. */
+export interface CheckpointOptions {
+  /**
+   * The JSON input of the operation. If the name is stored with the fingerprint of a different
+   * input, the call fails with `CheckpointInputConflictError` and the operation does not run. If
+   * either side has no input, the call does not compare inputs.
+   */
+  input?: Json;
+}
+
+/** Options of one fenced checkpoint write. */
+export interface SaveCheckpointOptions {
+  /** The fingerprint of the input, from `checkpointInputFingerprint`. Omit it for no input. */
+  inputFingerprint?: string;
 }
 
 /** Latest mutable progress projection for a stable task identity. */

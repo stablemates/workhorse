@@ -26,6 +26,7 @@ import type {
   EnqueueResult,
   ExpireOwnedStatus,
   ReleaseOwnedStatus,
+  SaveCheckpointOptions,
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
@@ -67,6 +68,7 @@ import {
 } from "./queue/operator-reads.js";
 import {
   CheckpointConflictError,
+  CheckpointInputConflictError,
   CheckpointLeaseLostError,
   ProgressLeaseLostError,
   ProgressRateLimitError,
@@ -162,6 +164,7 @@ export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention
 
 export {
   CheckpointConflictError,
+  CheckpointInputConflictError,
   CheckpointLeaseLostError,
   ChildConflictError,
   ChildLeaseLostError,
@@ -712,8 +715,15 @@ export class Queue {
     workerId: string,
     name: string,
     value: TValue,
+    options: SaveCheckpointOptions = {},
   ): Promise<TaskCheckpoint<TValue>> {
-    return this.modules.checkpointsProgressWaits.saveCheckpoint(task, workerId, name, value);
+    return this.modules.checkpointsProgressWaits.saveCheckpoint(
+      task,
+      workerId,
+      name,
+      value,
+      options,
+    );
   }
 
   async [workerProgressRead]<TValue extends Json = Json>(

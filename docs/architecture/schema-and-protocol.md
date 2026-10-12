@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 67 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 68 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 67 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 68 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0068`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0069`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 67.
+- An installed version below the baseline 6 or above the current 68.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,9 +139,10 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 67 and newer inside the major line, and client protocol 5 only. Schema version 67
-is the floor because it adds `list_newest_task_group_events_v1`, which the task group detail of
-each SDK dashboard calls. Schema version 66 adds `dashboard_task_groups_v1`, which the dashboard of
+schema versions 68 and newer inside the major line, and client protocol 5 only. Schema version 68
+is the floor because it adds `save_checkpoint_v2`, which every SDK catalogue names. Schema version
+67 adds `list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
+Schema version 66 adds `dashboard_task_groups_v1`, which the dashboard of
 each SDK also calls. Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor
 was 54, because earlier schemas treat the terminal failure override as an immediate retry.
 
@@ -219,7 +220,7 @@ executor that only counts empty polls fails on every run instead of once under l
 All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 67, includes it.
+Thus workers require schema version 54 or newer. The current floor, 68, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -233,8 +234,12 @@ The retry-delay argument has these other meanings:
 
 #### Conflict classes
 
-The terminal classes are `CheckpointConflictError`, `WaitConflictError`, `ChildConflictError`, and
-`HumanWaitConflictError`. `ChildConflictError` includes a changed child set.
+The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictError`,
+`WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
+includes a changed child set. `CheckpointInputConflictError` occurs when a checkpoint name is stored
+with the fingerprint of a different input
+([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). Only the TypeScript SDK raises it
+now, so `protocol/v1/runtime.json` does not pin it.
 
 - Go identifies wrapped conflicts with `errors.As` and keeps their class names.
 - Rust converts `Error::Conflict` for `Operation::Checkpoint`, `Sleep`, `RunChild`, `RunChildren`,
@@ -271,14 +276,15 @@ Each record is keyed by name. Dates are ISO 8601 strings, so a fixture file can 
 
 | Field         | Entry type               | Entry fields                                                                           |
 | ------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `checkpoints` | `DurableStateCheckpoint` | `value`                                                                                |
+| `checkpoints` | `DurableStateCheckpoint` | `value`, optional `inputFingerprint`                                                   |
 | `waits`       | `DurableStateWait`       | `mode`, `wakeAt`, `durationMs` for `relative`, optional `pending`                      |
 | `signals`     | `DurableStateSignal`     | `payload`, or `pending: true`                                                          |
 | `humanWaits`  | `DurableStateHumanWait`  | `context` and `result`, or `context` and `pending: true`                               |
 | `children`    | `DurableStateChild`      | `type`, `payload`, optional `options` in JSON form, optional `set`, optional `outcome` |
 
 A checkpoint entry is an object, so a later field can join `value` without a change to the other
-fields. `set` is `settled` for a child that `runChildren` created and `all_success` for a child that
+fields. `inputFingerprint` holds the stored fingerprint that `TaskCheckpoint.inputFingerprint`
+returns. Omit it for a checkpoint saved without an input. `set` is `settled` for a child that `runChildren` created and `all_success` for a child that
 `runChildrenAll` created. It is absent for a child of `runChild`, as `task_child.created_as_set` is
 false for that child. A child without `outcome` is not terminal. A pending entry, or a child without
 `outcome`, marks the boundary where the task is suspended.
@@ -296,6 +302,8 @@ The replay gives the handler a `HandlerContext` that reads only `state`:
    `taskGroup.get` returns null, and `taskGroup.add` rejects with a `TypeError`.
 
 Overlapping `checkpoint` calls with one name share one operation, as in a live handler. A
+`checkpoint` call compares its `input` as a live handler does: only when both sides carry a
+fingerprint. A
 `waitForHuman` call with the name of an earlier call in the replay must give the same context, in
 `JSON.stringify` form. Otherwise it is a conflict, also after the first call stopped the replay. The
 claimed task has ID `replay`, type `replay`, and attempt 1, unless `options.task` gives other
@@ -304,10 +312,10 @@ fields.
 The replay raises `HandlerReplayError` at the first problem. It records the problem, so a handler
 that catches the error cannot hide it. `HandlerReplayError.problem.reason` is one of these values:
 
-| Reason              | Cause                                                                                                                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new_before_stored` | The handler asks for a new name while `state` holds a name that the handler has not asked for. The replay raises the error before a new checkpoint operation runs.                                                                              |
-| `conflict`          | A wait changes its mode or its absolute target, a human decision changes its context, or a child changes its type, payload, options, or join call. A child set names other children than the stored children. Values are compared in JSON form. |
+| Reason              | Cause                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new_before_stored` | The handler asks for a new name while `state` holds a name that the handler has not asked for. The replay raises the error before a new checkpoint operation runs.                                                                                                                                                                                                              |
+| `conflict`          | A checkpoint gives an input whose fingerprint differs from the stored `inputFingerprint` or from an earlier call with the name. A wait changes its mode or its absolute target, a human decision changes its context, or a child changes its type, payload, options, or join call. A child set names other children than the stored children. Values are compared in JSON form. |
 
 `options.allowNew` lists names that the new code adds on purpose, for example a version checkpoint.
 A listed name is new, but it does not cause `new_before_stored`. A changed relative wait duration is
@@ -591,7 +599,7 @@ Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
 
-`python/src/workhorse/_protocol.py` accepts schema version 67 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 68 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and

@@ -245,6 +245,78 @@
         }
       },
       {
+        "id": "checkpoint-input",
+        "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id, 'inputFingerprint', input_fingerprint) AS value FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+        "parameters": [
+          {
+            "$ref": "successfulTask"
+          },
+          "protocol-success",
+          {
+            "$ref": "successfulFence"
+          },
+          "charge-card",
+          {
+            "chargedCents": 1000
+          },
+          "9d2b4e1adb2bfbf2ee8be37fd8df1e553dac2776ee865a46d86a38cd6e2737c4"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": {
+                  "$ref": "successfulFence"
+                },
+                "inputFingerprint": "9d2b4e1adb2bfbf2ee8be37fd8df1e553dac2776ee865a46d86a38cd6e2737c4",
+                "status": "saved",
+                "value": {
+                  "chargedCents": 1000
+                },
+                "workerId": "protocol-success"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "checkpoint-input-conflict",
+        "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id, 'inputFingerprint', input_fingerprint) AS value FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
+        "parameters": [
+          {
+            "$ref": "successfulTask"
+          },
+          "protocol-success",
+          {
+            "$ref": "successfulFence"
+          },
+          "charge-card",
+          {
+            "chargedCents": 1000
+          },
+          "2f3d79878d3e6c858a9fbb038b327843f2f752501b99581f7ffc54303eb82f7f"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": {
+                  "$ref": "successfulFence"
+                },
+                "inputFingerprint": "9d2b4e1adb2bfbf2ee8be37fd8df1e553dac2776ee865a46d86a38cd6e2737c4",
+                "status": "input_conflict",
+                "value": {
+                  "chargedCents": 1000
+                },
+                "workerId": "protocol-success"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "update-progress",
         "sql": "SELECT jsonb_build_object('status', status, 'value', progress_value, 'revision', revision, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
         "parameters": [
@@ -2157,7 +2229,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 67,
+                "schemaVersion": 68,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

@@ -1159,6 +1159,10 @@ CREATE TABLE IF NOT EXISTS workhorse.task_checkpoint (
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- The SHA-256 digest of the canonical JSON of the input the handler gave, or NULL when it gave
+  -- none. A replay that gives a different input digest conflicts (ADR 0098). save_checkpoint_v2,
+  -- the only writer, checks its format.
+  input_fingerprint text,
   PRIMARY KEY (task_id, checkpoint_name)
 );
 
@@ -11323,20 +11327,24 @@ END;
 $$;
 
 -- Persist one immutable named checkpoint only while the caller owns the active, unexpired lease.
--- Locking the runtime row serializes this write with completion, failure, and expiry recovery.
-CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v1(
+-- Locking the runtime row serializes this write with completion, failure, and expiry recovery. When
+-- the name exists, a different non-NULL input fingerprint on both sides is an input conflict, and a
+-- different value is a conflict.
+CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v2(
   p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_checkpoint_name text,
-  p_checkpoint_value jsonb
+  p_checkpoint_value jsonb,
+  p_input_fingerprint text
 ) RETURNS TABLE (
   status text,
   checkpoint_value jsonb,
   attempt integer,
   fence_token bigint,
   worker_id text,
-  created_at timestamptz
+  created_at timestamptz,
+  input_fingerprint text
 )
 LANGUAGE plpgsql
 AS $$
@@ -11352,6 +11360,9 @@ BEGIN
   END IF;
   IF octet_length(p_checkpoint_value::text) > 1048576 THEN
     RAISE EXCEPTION 'checkpoint_value must be at most 1048576 bytes';
+  END IF;
+  IF p_input_fingerprint IS NOT NULL AND p_input_fingerprint !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'input_fingerprint must be 64 lowercase hexadecimal characters';
   END IF;
 
   SELECT * INTO v_runtime
@@ -11369,7 +11380,8 @@ BEGIN
        AND v_runtime.attempt_timeout_at <= clock_timestamp())
      OR v_runtime.cancel_requested_at IS NOT NULL THEN
     RETURN QUERY VALUES (
-      'stale'::text, NULL::jsonb, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
+      'stale'::text, NULL::jsonb, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz,
+      NULL::text
     );
     RETURN;
   END IF;
@@ -11380,6 +11392,9 @@ BEGIN
   IF FOUND THEN
     RETURN QUERY VALUES (
       CASE
+        WHEN p_input_fingerprint IS NOT NULL AND v_checkpoint.input_fingerprint IS NOT NULL
+             AND v_checkpoint.input_fingerprint <> p_input_fingerprint
+          THEN 'input_conflict'::text
         WHEN v_checkpoint.checkpoint_value IS NOT DISTINCT FROM p_checkpoint_value
           THEN 'existing'::text
         ELSE 'conflict'::text
@@ -11388,16 +11403,17 @@ BEGIN
       v_checkpoint.attempt,
       v_checkpoint.fence_token,
       v_checkpoint.worker_id,
-      v_checkpoint.created_at
+      v_checkpoint.created_at,
+      v_checkpoint.input_fingerprint
     );
     RETURN;
   END IF;
 
   INSERT INTO workhorse.task_checkpoint(
-    task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+    task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, input_fingerprint
   ) VALUES (
     p_task_id, p_checkpoint_name, p_checkpoint_value, v_runtime.current_attempt,
-    p_fence_token, p_worker_id
+    p_fence_token, p_worker_id, p_input_fingerprint
   )
   RETURNING * INTO v_checkpoint;
   INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
@@ -11414,9 +11430,34 @@ BEGIN
     v_checkpoint.attempt,
     v_checkpoint.fence_token,
     v_checkpoint.worker_id,
-    v_checkpoint.created_at
+    v_checkpoint.created_at,
+    v_checkpoint.input_fingerprint
   );
 END;
+$$;
+
+-- The version 1 contract: the same write with no input fingerprint, so no input conflict.
+CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v1(
+  p_task_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_checkpoint_name text,
+  p_checkpoint_value jsonb
+) RETURNS TABLE (
+  status text,
+  checkpoint_value jsonb,
+  attempt integer,
+  fence_token bigint,
+  worker_id text,
+  created_at timestamptz
+)
+LANGUAGE sql
+AS $$
+  SELECT saved.status, saved.checkpoint_value, saved.attempt, saved.fence_token, saved.worker_id,
+         saved.created_at
+    FROM workhorse.save_checkpoint_v2(
+      p_task_id, p_worker_id, p_fence_token, p_checkpoint_name, p_checkpoint_value, NULL
+    ) saved;
 $$;
 
 -- Replace the latest progress only while the caller owns the exact active, unexpired generation.
@@ -21730,10 +21771,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (64, 'give the terminal cleanup backlog reason its own health budget'),
   (65, 'add task groups with completion callbacks'),
   (66, 'count task group outcomes in counter shards'),
-  (67, 'read the newest task group events')
+  (67, 'read the newest task group events'),
+  (68, 'check the input of a checkpoint on replay')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (67) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (68) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

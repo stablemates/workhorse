@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 67
-	maximumSchemaVersion   = 67
+	minimumSchemaVersion   = 68
+	maximumSchemaVersion   = 68
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -732,6 +732,7 @@ var protocolStatementRegistry = map[string]string{
 	"recover_expired_telemetry_v1": `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
 	"run_maintenance_v1":           `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
 	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	"save_checkpoint_v2":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)`,
 	"schedule_wait_v1":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
 	"send_signal_v1":               `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"sync_contract_definitions_v1": `SELECT workhorse.sync_contract_definitions_v1($1::jsonb)`,
@@ -741,7 +742,7 @@ var protocolStatementRegistry = map[string]string{
 }
 
 var adminStatementRegistry = map[string]string{
-	"get_checkpoint": `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text`,
+	"get_checkpoint": `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text`,
 	"get_task": `SELECT j.id::text AS id, j.queue_name, j.task_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy, j.deadline_at,
@@ -791,7 +792,7 @@ var adminStatementRegistry = map[string]string{
         WHERE j.id = $1::uuid`,
 	"get_progress":          `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
 	"get_wait":              `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
-	"list_checkpoints":      `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
+	"list_checkpoints":      `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at,input_fingerprint FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
 	"list_dead_letters":     `SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
 	"list_dependency_drift": `SELECT task_id,queue_name,pending_prerequisites,pending_edges,dependency_rejected,rejected_edges,action FROM workhorse.list_dependency_drift_v1($1::integer)`,
 	"list_human_waits": `WITH parameters AS (

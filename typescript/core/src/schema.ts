@@ -481,6 +481,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "read the newest task group events",
     kind: "additive",
   },
+  {
+    fromVersion: 67,
+    toVersion: 68,
+    file: "0069-check-the-input-of-a-checkpoint-on-replay.sql",
+    description: "check the input of a checkpoint on replay",
+    kind: "additive",
+  },
 ];
 
 /**

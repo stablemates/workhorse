@@ -39,7 +39,9 @@ type CancelStatus
 interface CancellationRequest
 class CancellationRequestedError
 class CheckpointConflictError
+class CheckpointInputConflictError
 class CheckpointLeaseLostError
+interface CheckpointOptions
 class ChildConflictError
 class ChildLeaseLostError
 class ChildLimitExceededError
@@ -236,6 +238,7 @@ interface RunWorkerProcessOptions
 const SCHEMA_MIGRATION_LOCK_TIMEOUT_MS
 const SUPPORTED_NODE_MAJORS
 const SUPPORTED_POSTGRES_MAJORS
+interface SaveCheckpointOptions
 type ScheduleCatchupPolicy
 interface ScheduleDefinition
 type ScheduleTaskDefinition
@@ -358,6 +361,7 @@ interface WorkhorseTelemetrySpan
 function assertSchemaCompatible
 function assertSupportedPostgres
 function attachConnectionPool
+function checkpointInputFingerprint
 function connectionPoolOf
 function contractSchema
 function createProviderAdapter
@@ -1084,8 +1088,25 @@ class CheckpointConflictError extends WorkhorseError {
   constructor(taskId: string, checkpointName: string);
 }
 
+class CheckpointInputConflictError extends WorkhorseError {
+  readonly taskId: string;
+  readonly checkpointName: string;
+  readonly storedFingerprint: string;
+  readonly requestedFingerprint: string;
+  constructor(taskId: string, checkpointName: string, storedFingerprint: string, requestedFingerprint: string);
+}
+
 class CheckpointLeaseLostError extends WorkhorseError {
   constructor(taskId: string, checkpointName: string);
+}
+
+interface CheckpointOptions {
+  /**
+  * The JSON input of the operation. If the name is stored with the fingerprint of a different
+  * input, the call fails with `CheckpointInputConflictError` and the operation does not run. If
+  * either side has no input, the call does not compare inputs.
+  */
+  input?: Json;
 }
 
 class ChildConflictError extends WorkhorseError {
@@ -3204,6 +3225,7 @@ interface DurableState {
 
 interface DurableStateCheckpoint {
   value: Json;
+  inputFingerprint?: string;
 }
 
 interface DurableStateChild {
@@ -3424,8 +3446,11 @@ interface HandlerContext<TPayload extends Json = Json> {
   /**
   * Return the persisted value when this name already exists. Otherwise run the operation and
   * immutably persist its JSON result under the current fenced lease.
+  *
+  * With `options.input`, the checkpoint also stores the fingerprint of the input. A later call
+  * whose input has a different fingerprint fails with `CheckpointInputConflictError`.
   */
-  checkpoint<TValue extends Json>(name: string, operation: () => Promise<TValue> | TValue): Promise<TValue>;
+  checkpoint<TValue extends Json>(name: string, operation: () => Promise<TValue> | TValue, options?: CheckpointOptions): Promise<TValue>;
   /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
   /** Suspend this task without consuming its logical attempt until the absolute target is due. */
@@ -3587,7 +3612,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 67;
+const MAXIMUM_SCHEMA_VERSION = 68;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3665,7 +3690,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 67;
+const MINIMUM_SCHEMA_VERSION = 68;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -3995,7 +4020,7 @@ class Queue {
   releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   [workerCheckpointsRead]<TValue extends Json = Json>(taskId: string): Promise<TaskCheckpoint<TValue>[]>;
-  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
+  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue, options?: SaveCheckpointOptions): Promise<TaskCheckpoint<TValue>>;
   [workerProgressRead]<TValue extends Json = Json>(taskId: string): Promise<TaskProgress<TValue> | null>;
   updateProgress<TValue extends Json>(task: ClaimedTask, workerId: string, value: TValue): Promise<TaskProgress<TValue>>;
   [workerWaitsRead](taskId: string): Promise<TaskWait[]>;
@@ -4567,6 +4592,11 @@ const SUPPORTED_NODE_MAJORS: readonly number[];
 
 const SUPPORTED_POSTGRES_MAJORS: readonly number[];
 
+interface SaveCheckpointOptions {
+  /** The fingerprint of the input, from `checkpointInputFingerprint`. Omit it for no input. */
+  inputFingerprint?: string;
+}
+
 type ScheduleCatchupPolicy = "skip" | "latest" | "all";
 
 interface ScheduleDefinition {
@@ -4757,6 +4787,11 @@ interface TaskCheckpoint<TValue extends Json = Json> {
   fenceToken: bigint;
   workerId: string;
   createdAt: Date;
+  /**
+  * SHA-256 digest of the canonical JSON of the input that produced the value, or null when the
+  * write gave no input. `checkpointInputFingerprint` computes it.
+  */
+  inputFingerprint: string | null;
 }
 
 class TaskContractUnavailableError extends WorkhorseError {
@@ -5290,7 +5325,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 67;
+const WORKHORSE_SCHEMA_VERSION = 68;
 
 const WORKHORSE_VERSION = "0.7.1";
 
@@ -5559,7 +5594,7 @@ interface WorkerQueueApi {
   releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
   listCheckpoints(taskId: string): Promise<TaskCheckpoint[]>;
-  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
+  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue, options?: SaveCheckpointOptions): Promise<TaskCheckpoint<TValue>>;
   getProgress(taskId: string): Promise<TaskProgress | null>;
   updateProgress<TValue extends Json>(task: ClaimedTask, workerId: string, value: TValue): Promise<TaskProgress<TValue>>;
   listWaits(taskId: string): Promise<TaskWait[]>;
@@ -5719,6 +5754,8 @@ function assertSupportedPostgres(database: Queryable): Promise<void>;
 function attachConnectionPool(queryable: Queryable, pool: AdapterConnectionPoolSource): void;
 
 function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone;
+
+function checkpointInputFingerprint(input: Json): string;
 
 function clearDashboardNotifications(): void;
 

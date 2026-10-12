@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { HandlerReplayError, replayHandler, type DurableState } from "../src/index.js";
+import {
+  checkpointInputFingerprint,
+  HandlerReplayError,
+  replayHandler,
+  type DurableState,
+} from "../src/index.js";
 import type { Json } from "../src/types.js";
 import type { Handler } from "../src/worker.js";
 
@@ -115,6 +120,9 @@ const overlapsTwoLabelSets: Handler<Order> = async (payload, ctx) =>
     ctx.runChildren([{ name: "label", type: "label.print", payload: null }]),
     ctx.runChildren([{ name: "label", type: "label.print", payload: null, options: {} }]),
   ]);
+
+const readsTheLookupFingerprint: Handler<Order> = async (payload, ctx) =>
+  (await ctx.getCheckpoint("lookup"))?.inputFingerprint ?? null;
 
 function storedLabel(set: "settled" | "all_success" | undefined): DurableState {
   return {
@@ -387,6 +395,78 @@ describe("replayHandler", () => {
     expect(operation).toHaveBeenCalledOnce();
     expect(report.new).toEqual([{ kind: "checkpoint", name: "lookup" }]);
     expect(report.outcome).toEqual({ status: "completed", result: ["value", "value"] });
+  });
+
+  it("compares a checkpoint input with the stored input fingerprint", async () => {
+    const charge = { amountCents: 1000 };
+    const state: DurableState = {
+      checkpoints: {
+        "charge-card": {
+          value: { chargeId: "c-1" },
+          inputFingerprint: checkpointInputFingerprint(charge),
+        },
+      },
+    };
+    const chargeCard = vi.fn<() => Json>(() => ({ chargeId: "c-2" }));
+    const charges =
+      (input: Json | undefined): Handler<Order> =>
+      async (payload, ctx) =>
+        ctx.checkpoint("charge-card", chargeCard, input === undefined ? {} : { input });
+
+    const same = await replayHandler(charges({ amountCents: 1000 }), { orderId: "o-1" }, state);
+    expect(same.outcome).toEqual({ status: "completed", result: { chargeId: "c-1" } });
+    const noInput = await replayHandler(charges(undefined), { orderId: "o-1" }, state);
+    expect(noInput.outcome).toEqual({ status: "completed", result: { chargeId: "c-1" } });
+    const unrecorded = await replayHandler(
+      charges({ amountCents: 900 }),
+      { orderId: "o-1" },
+      { checkpoints: { "charge-card": { value: { chargeId: "c-1" } } } },
+    );
+    expect(unrecorded.outcome).toEqual({ status: "completed", result: { chargeId: "c-1" } });
+
+    const error = await replayError(
+      replayHandler(charges({ amountCents: 900 }), { orderId: "o-1" }, state),
+    );
+    expect(error.problem).toEqual({
+      reason: "conflict",
+      at: { kind: "checkpoint", name: "charge-card" },
+    });
+    expect(error.message).toContain("the input of the stored result");
+    expect(chargeCard).not.toHaveBeenCalled();
+  });
+
+  it("compares the inputs of repeated and overlapping calls with one new name", async () => {
+    const operation = vi.fn<() => Promise<string>>(async () => "value");
+    const repeats: Handler<Order> = async (payload, ctx) => {
+      await ctx.checkpoint("lookup", operation, { input: 1 });
+      return ctx.checkpoint("lookup", operation, { input: 2 });
+    };
+    const overlaps: Handler<Order> = async (payload, ctx) =>
+      Promise.all([
+        ctx.checkpoint("lookup", operation, { input: 1 }),
+        ctx.checkpoint("lookup", operation, { input: 2 }),
+      ]);
+
+    for (const handler of [repeats, overlaps]) {
+      const error = await replayError(replayHandler(handler, { orderId: "o-1" }, {}));
+      expect(error.problem).toEqual({
+        reason: "conflict",
+        at: { kind: "checkpoint", name: "lookup" },
+      });
+      expect(error.message).toContain("an earlier call in this replay");
+    }
+  });
+
+  it("reads the stored input fingerprint through getCheckpoint", async () => {
+    const fingerprint = checkpointInputFingerprint("v1");
+
+    const report = await replayHandler(
+      readsTheLookupFingerprint,
+      { orderId: "o-1" },
+      { checkpoints: { lookup: { value: 1, inputFingerprint: fingerprint } } },
+    );
+
+    expect(report.outcome).toEqual({ status: "completed", result: fingerprint });
   });
 
   it("fails when a child set changes its join mode or its call", async () => {

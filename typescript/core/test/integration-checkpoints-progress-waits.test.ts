@@ -3,6 +3,8 @@ import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-lo
 import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  CheckpointInputConflictError,
+  checkpointInputFingerprint,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
   Queue,
@@ -77,6 +79,102 @@ describe("checkpoints progress waits", () => {
       "checkpoint_saved",
       "succeeded",
     ]);
+  });
+
+  it("stores an input fingerprint and refuses a different one for a stored name", async () => {
+    const id = await queue.enqueue("checkpoint-input", {});
+    const task = await queue.claim("worker-a");
+    const charge = checkpointInputFingerprint({ amountCents: 1000 });
+    const discounted = checkpointInputFingerprint({ amountCents: 900 });
+
+    const saved = await queue.saveCheckpoint(
+      task!,
+      "worker-a",
+      "charge-card",
+      { chargeId: "c-1" },
+      { inputFingerprint: charge },
+    );
+    expect(saved).toMatchObject({ name: "charge-card", inputFingerprint: charge });
+    await expect(admin.getCheckpoint(id, "charge-card")).resolves.toEqual(saved);
+    await expect(admin.listCheckpoints(id)).resolves.toEqual([saved]);
+
+    // The same input, and a write with no input, return the stored checkpoint.
+    await expect(
+      queue.saveCheckpoint(
+        task!,
+        "worker-a",
+        "charge-card",
+        { chargeId: "c-1" },
+        { inputFingerprint: charge },
+      ),
+    ).resolves.toEqual(saved);
+    await expect(
+      queue.saveCheckpoint(task!, "worker-a", "charge-card", { chargeId: "c-1" }),
+    ).resolves.toEqual(saved);
+    // A different input is an input conflict, even with the same value.
+    const conflict = await queue
+      .saveCheckpoint(
+        task!,
+        "worker-a",
+        "charge-card",
+        { chargeId: "c-1" },
+        { inputFingerprint: discounted },
+      )
+      .catch((error: unknown) => error);
+    expect(conflict).toBeInstanceOf(CheckpointInputConflictError);
+    expect(conflict).toMatchObject({
+      taskId: id,
+      checkpointName: "charge-card",
+      storedFingerprint: charge,
+      requestedFingerprint: discounted,
+    });
+    // The same input with a different value stays a value conflict.
+    await expect(
+      queue.saveCheckpoint(
+        task!,
+        "worker-a",
+        "charge-card",
+        { chargeId: "c-2" },
+        { inputFingerprint: charge },
+      ),
+    ).rejects.toThrow(/different value/);
+
+    // A name stored with no input compares only the value.
+    const unrecorded = await queue.saveCheckpoint(task!, "worker-a", "lookup", 1);
+    expect(unrecorded.inputFingerprint).toBeNull();
+    await expect(
+      queue.saveCheckpoint(task!, "worker-a", "lookup", 1, { inputFingerprint: discounted }),
+    ).resolves.toEqual(unrecorded);
+
+    await expect(
+      queue.saveCheckpoint(task!, "worker-a", "bad", 1, { inputFingerprint: "ABC" }),
+    ).rejects.toThrow(/64 lowercase hexadecimal/);
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.save_checkpoint_v2($1, $2, $3, 'bad-sql', '1'::jsonb, 'ABC')`,
+        [id, "worker-a", task!.fenceToken.toString()],
+      ),
+    ).rejects.toThrow(/64 lowercase hexadecimal/);
+  });
+
+  it("keeps the version 1 save without an input conflict", async () => {
+    const id = await queue.enqueue("checkpoint-input-v1", {});
+    const task = await queue.claim("worker-a");
+    const fingerprint = checkpointInputFingerprint("input");
+    await queue.saveCheckpoint(task!, "worker-a", "step", 1, { inputFingerprint: fingerprint });
+
+    const statuses = await pool.query<{ status: string }>(
+      `SELECT (workhorse.save_checkpoint_v1($1, $2, $3, 'step', $4::jsonb)).status
+       UNION ALL
+       SELECT (workhorse.save_checkpoint_v1($1, $2, $3, 'step', $5::jsonb)).status
+       UNION ALL
+       SELECT (workhorse.save_checkpoint_v1($1, $2, $3, 'other', $4::jsonb)).status`,
+      [id, "worker-a", task!.fenceToken.toString(), "1", "2"],
+    );
+    expect(statuses.rows.map((row) => row.status)).toEqual(["existing", "conflict", "saved"]);
+    await expect(admin.getCheckpoint(id, "other")).resolves.toMatchObject({
+      inputFingerprint: null,
+    });
   });
 
   it("bounds checkpoint values before durable writes", async () => {
@@ -1210,6 +1308,84 @@ describe("checkpoints progress waits", () => {
       value: { authorizationId: "auth-1" },
       attempt: 1,
       workerId: "checkpoint-worker",
+    });
+  });
+
+  it("fails the task at once when a replay gives a checkpoint a different input", async () => {
+    const id = await queue.enqueue(
+      "checkpoint-input-replay",
+      { amountCents: 1000 },
+      { maxAttempts: 5 },
+    );
+    let charges = 0;
+    let discount = 0;
+    const worker = new Worker(queue, {
+      workerId: "checkpoint-input-worker",
+      maintenanceIntervalMs: 100,
+      retryDelayMs: 0,
+    }).handle("checkpoint-input-replay", async (payload: { amountCents: number }, context) => {
+      const amountCents = payload.amountCents - discount;
+      const charge = await context.checkpoint(
+        "charge-card",
+        () => {
+          charges += 1;
+          return { chargedCents: amountCents };
+        },
+        { input: { amountCents } },
+      );
+      await context.sleep("settle", 30);
+      return charge;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "scheduled" });
+    await sleep(110);
+
+    // A deploy adds a discount before the charge, while the task waits.
+    discount = 100;
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(charges).toBe(1);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+      error: { name: "CheckpointInputConflictError" },
+    });
+    await expect(admin.getCheckpoint(id, "charge-card")).resolves.toMatchObject({
+      value: { chargedCents: 1000 },
+      inputFingerprint: checkpointInputFingerprint({ amountCents: 1000 }),
+    });
+  });
+
+  it("returns the stored result for the same input and for a call with no input", async () => {
+    const id = await queue.enqueue("checkpoint-input-match", {}, { maxAttempts: 3 });
+    let operations = 0;
+    const operation = () => {
+      operations += 1;
+      return operations;
+    };
+    const worker = new Worker(queue, {
+      workerId: "checkpoint-input-worker",
+      retryDelayMs: 0,
+    }).handle("checkpoint-input-match", async (_payload, context) => {
+      const first = await context.checkpoint("lookup", operation, { input: { key: 1 } });
+      if (context.task.attempt === 1) throw new Error("crash after durable checkpoint");
+      const same = await context.checkpoint("lookup", operation, { input: { key: 1 } });
+      const none = await context.checkpoint("lookup", operation);
+      const overlapping = await Promise.all([
+        context.checkpoint("overlap", operation, { input: "a" }),
+        context.checkpoint("overlap", operation, { input: "b" }),
+      ]).catch((error: unknown) => (error as Error).name);
+      return { first, same, none, overlapping };
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(operations).toBe(2);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { first: 1, same: 1, none: 1, overlapping: "CheckpointInputConflictError" },
     });
   });
 

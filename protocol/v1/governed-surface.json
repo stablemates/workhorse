@@ -764,6 +764,19 @@
         "worker_id": "text"
       }
     },
+    "save_checkpoint_v2": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "input_fingerprint": "text",
+        "status": "text",
+        "worker_id": "text"
+      }
+    },
     "schedule_wait_v1": {
       "arguments": ["uuid", "text", "bigint", "text", "bigint", "timestamptz"],
       "returns": "table",
@@ -1565,6 +1578,7 @@
         "checkpoint_value": "jsonb",
         "created_at": "timestamptz",
         "fence_token": "bigint",
+        "input_fingerprint": "text",
         "task_id": "uuid",
         "worker_id": "text"
       }
