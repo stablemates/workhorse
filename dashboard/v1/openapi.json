@@ -4815,7 +4815,7 @@
       "post": {
         "operationId": "dashboard_taskGroupDetail",
         "summary": "Read one task group",
-        "description": "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. eventsTruncated is true when the group has more events than the response carries. Answers NOT_FOUND with the message \"Task group not found\" when the id matches nothing.",
+        "description": "Returns one task group, the member tasks after the position after, and the newest group events. Send nextAfter as after to read the next member page; nextAfter is null on the last page. events carries the newest group events first, at most 100; eventsTruncated is true when the group has older events that the response does not carry. Answers NOT_FOUND with the message \"Task group not found\" when the id matches nothing.",
         "tags": [
           "reads"
         ],

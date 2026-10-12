@@ -363,6 +363,7 @@ Terminal-task pruning keeps a member task while its group is not finished.
 | `task_group_for_task_v1(p_task_id)`                        | `role` (`member` or `callback`), `callback_kind`, and the snapshot of the group of a task  |
 | `list_task_group_members_v1(p_group_id, p_after, p_limit)` | Members after a position, at most 1,000, with the live task state and the counted outcome  |
 | `list_task_group_events_v1(p_group_id, p_limit)`           | At most 1,000 events in time order                                                         |
+| `list_newest_task_group_events_v1(p_group_id, p_limit)`    | At most 1,000 events, newest first                                                         |
 
 For a group that is not finished, the counts are the sums of its shard rows, read in one statement
 without a lock. For a finished group, they are the counts on its row. `task_group_for_task_v1` and
@@ -378,7 +379,9 @@ without a lock. For a finished group, they are the counts on its row. `task_grou
 `canceledAt`, `canceledBy`, `cancelReason`, and `callbacks`, a list of `{ kind, taskId }` in the
 order `onFinish`, `onSuccess`, `onFailure`. It reads one group more than it returns, so `hasMore`
 costs no count of the whole table. The dashboard reads task groups only through functions, so the
-task group tables are not a governed dashboard read.
+task group tables are not a governed dashboard read. The dashboard detail of a group reads its
+newest 101 events through `list_newest_task_group_events_v1`, shows 100, and sets `eventsTruncated`
+when the group has older events.
 
 `Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
 `listTaskGroupEvents`. A handler reads the group of its task through `ctx.taskGroup.get()`, which

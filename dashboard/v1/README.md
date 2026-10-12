@@ -54,9 +54,11 @@ concurrent contract versions, so `Deprecation` and `Sunset` response headers do 
 `pnpm dashboard-bindings:generate` reads `procedures.json` and writes the Go and Python request
 validators and wire types. It also copies the task group statements of
 `typescript/dashboard-server/src/server/task-group-statements.ts` into the Go, Python, Rust, and
-Ruby bindings. The schema has no dashboard function for task groups, so each backend runs these
-statements unchanged and returns the same JSON for `taskGroups`, `taskGroupDetail`, and
-`cancelTaskGroup`. `pnpm dashboard-bindings:check` fails when either committed binding is
+Ruby bindings. The statements call only task group functions, so each backend runs them unchanged
+and returns the same JSON for `taskGroups`, `taskGroupDetail`, and `cancelTaskGroup`.
+`taskGroupDetail` reads the events of a group through `list_newest_task_group_events_v1`. Its
+`events` holds the newest 100 events, newest first. `eventsTruncated` is true when the group has
+older events that `events` does not hold. `pnpm dashboard-bindings:check` fails when either committed binding is
 stale. The dashboard spec commands run the matching bindings command, so one generation command
 updates the router artifact and both language bindings in order.
 

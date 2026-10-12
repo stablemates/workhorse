@@ -1575,8 +1575,8 @@ const taskGroupDetailStatement = `WITH input AS (
   SELECT event.*,
          row_number() OVER (ORDER BY event.occurred_at DESC, event.event_id DESC) AS ordinal
     FROM request
-    CROSS JOIN LATERAL workhorse.list_task_group_events_v1(
-      request.group_id, 1000
+    CROSS JOIN LATERAL workhorse.list_newest_task_group_events_v1(
+      request.group_id, 101
     ) event
 )
 SELECT (

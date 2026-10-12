@@ -1,4 +1,3 @@
-import { MAX_TASK_GROUP_PAGE_SIZE } from "@stablemates/workhorse";
 import { dashboardTaskGroupEventLimit } from "../wire.js";
 
 /**
@@ -75,10 +74,9 @@ export const dashboardTaskGroupsStatement = `SELECT workhorse.dashboard_task_gro
  * `result` is null when the group does not exist. The member page reads one member more than it
  * returns, so `nextAfter` is null exactly on the last page.
  *
- * `list_task_group_events_v1` returns the oldest events first, at most `MAX_TASK_GROUP_PAGE_SIZE`.
- * The detail carries the newest `dashboardTaskGroupEventLimit` of them. A group with more events
- * than the function returns, which only many counter repairs make, shows the newest of its oldest
- * events, and `eventsTruncated` is true.
+ * `list_newest_task_group_events_v1` returns the newest events first. The detail reads one event
+ * more than `dashboardTaskGroupEventLimit` and carries the newest `dashboardTaskGroupEventLimit`, so
+ * `eventsTruncated` is true exactly when the group has older events that the detail does not carry.
  */
 export const dashboardTaskGroupDetailStatement = `WITH input AS (
   SELECT $1::jsonb AS document
@@ -98,8 +96,8 @@ export const dashboardTaskGroupDetailStatement = `WITH input AS (
   SELECT event.*,
          row_number() OVER (ORDER BY event.occurred_at DESC, event.event_id DESC) AS ordinal
     FROM request
-    CROSS JOIN LATERAL workhorse.list_task_group_events_v1(
-      request.group_id, ${MAX_TASK_GROUP_PAGE_SIZE}
+    CROSS JOIN LATERAL workhorse.list_newest_task_group_events_v1(
+      request.group_id, ${dashboardTaskGroupEventLimit + 1}
     ) event
 )
 SELECT (

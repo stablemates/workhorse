@@ -1080,6 +1080,46 @@
           "capture": {
             "cancelTaskGroup": "0.value.groupId"
           }
+        },
+        {
+          "id": "create-crowded-task-group",
+          "sql": "SELECT jsonb_build_object('groupId', min(group_id::text), 'members', count(task_id)) AS value FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)",
+          "parameters": [
+            {},
+            [],
+            false
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "groupId": {
+                    "$type": "uuid"
+                  },
+                  "members": 0
+                }
+              }
+            ]
+          },
+          "capture": {
+            "crowdedTaskGroup": "0.value.groupId"
+          }
+        },
+        {
+          "id": "record-crowded-task-group-events",
+          "sql": "WITH recorded AS (INSERT INTO workhorse.task_group_event(group_id, event_type, details, occurred_at) SELECT $1::uuid, 'counter_repaired', jsonb_build_object('ordinal', ordinal), clock_timestamp() + ordinal * interval '1 millisecond' FROM generate_series(1, 1200) AS ordinal RETURNING 1) SELECT count(*)::integer AS recorded FROM recorded",
+          "parameters": [
+            {
+              "$ref": "crowdedTaskGroup"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "recorded": 1200
+              }
+            ]
+          }
         }
       ]
     },
@@ -6447,6 +6487,29 @@
                 "groups": [
                   {
                     "id": {
+                      "$ref": "crowdedTaskGroup"
+                    },
+                    "state": "open",
+                    "counts": {
+                      "total": 0,
+                      "failed": 0,
+                      "pending": 0,
+                      "canceled": 0,
+                      "succeeded": 0
+                    },
+                    "result": null,
+                    "sealedAt": null,
+                    "callbacks": [],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  },
+                  {
+                    "id": {
                       "$ref": "cancelTaskGroup"
                     },
                     "state": "open",
@@ -6817,6 +6880,1253 @@
                 "canCancel": true,
                 "nextAfter": null,
                 "eventsTruncated": false
+              }
+            }
+          }
+        },
+        {
+          "id": "task-group-detail-newest-events",
+          "procedure": "taskGroupDetail",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "crowdedTaskGroup"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "group": {
+                  "id": {
+                    "$ref": "crowdedTaskGroup"
+                  },
+                  "state": "open",
+                  "counts": {
+                    "total": 0,
+                    "failed": 0,
+                    "pending": 0,
+                    "canceled": 0,
+                    "succeeded": 0
+                  },
+                  "result": null,
+                  "sealedAt": null,
+                  "callbacks": [],
+                  "createdAt": {
+                    "$type": "timestamp"
+                  },
+                  "canceledAt": null,
+                  "canceledBy": null,
+                  "finishedAt": null,
+                  "cancelReason": null
+                },
+                "events": [
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1200
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1199
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1198
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1197
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1196
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1195
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1194
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1193
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1192
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1191
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1190
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1189
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1188
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1187
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1186
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1185
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1184
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1183
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1182
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1181
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1180
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1179
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1178
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1177
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1176
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1175
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1174
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1173
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1172
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1171
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1170
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1169
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1168
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1167
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1166
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1165
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1164
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1163
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1162
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1161
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1160
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1159
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1158
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1157
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1156
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1155
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1154
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1153
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1152
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1151
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1150
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1149
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1148
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1147
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1146
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1145
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1144
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1143
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1142
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1141
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1140
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1139
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1138
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1137
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1136
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1135
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1134
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1133
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1132
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1131
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1130
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1129
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1128
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1127
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1126
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1125
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1124
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1123
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1122
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1121
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1120
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1119
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1118
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1117
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1116
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1115
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1114
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1113
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1112
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1111
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1110
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1109
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1108
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1107
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1106
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1105
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1104
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1103
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1102
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  {
+                    "id": {
+                      "$type": "uuid"
+                    },
+                    "type": "counter_repaired",
+                    "details": {
+                      "ordinal": 1101
+                    },
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "members": [],
+                "canCancel": true,
+                "nextAfter": null,
+                "eventsTruncated": true
               }
             }
           }
@@ -9684,6 +10994,29 @@
                 "page": 1,
                 "state": "all",
                 "groups": [
+                  {
+                    "id": {
+                      "$ref": "crowdedTaskGroup"
+                    },
+                    "state": "open",
+                    "counts": {
+                      "total": 0,
+                      "failed": 0,
+                      "pending": 0,
+                      "canceled": 0,
+                      "succeeded": 0
+                    },
+                    "result": null,
+                    "sealedAt": null,
+                    "callbacks": [],
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "canceledAt": null,
+                    "canceledBy": null,
+                    "finishedAt": null,
+                    "cancelReason": null
+                  },
                   {
                     "id": {
                       "$ref": "cancelTaskGroup"

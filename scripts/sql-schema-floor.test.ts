@@ -84,8 +84,8 @@ describe("schema floor", () => {
     const floor = await floorFor(dashboards);
 
     expect({ required: floor.version, introducedBy: floor.introducedBy }).toEqual({
-      required: 66,
-      introducedBy: ["dashboard_task_groups_v1"],
+      required: 67,
+      introducedBy: ["list_newest_task_group_events_v1"],
     });
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });

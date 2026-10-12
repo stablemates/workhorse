@@ -17105,6 +17105,28 @@ BEGIN
 END;
 $$;
 
+-- The newest events of a group first. It reads task_group_event_group_time_idx backward, so it
+-- reads only the rows it returns. The dashboard detail reads the events of a group through it.
+CREATE OR REPLACE FUNCTION workhorse.list_newest_task_group_events_v1(
+  p_group_id uuid, p_limit integer
+) RETURNS TABLE (event_id uuid, event_type text, details jsonb, occurred_at timestamptz)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+  IF p_group_id IS NULL THEN RAISE EXCEPTION 'task group identity is required'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'task group event limit must be between 1 and 1000';
+  END IF;
+  RETURN QUERY
+    SELECT event.event_id, event.event_type, event.details, event.occurred_at
+      FROM workhorse.task_group_event event
+     WHERE event.group_id = p_group_id
+     ORDER BY event.occurred_at DESC, event.event_id DESC
+     LIMIT p_limit;
+END;
+$$;
+
 -- Finish a sealed group whose every shard has a pending count of 0, and enqueue its callbacks in the
 -- same transaction. The caller holds the group row lock. The shard rows are read without a lock: no
 -- member outcome can change a shard with no pending member, only an add can make a shard pending
@@ -21707,10 +21729,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (63, 'keep JIT out of the statistics aggregate'),
   (64, 'give the terminal cleanup backlog reason its own health budget'),
   (65, 'add task groups with completion callbacks'),
-  (66, 'count task group outcomes in counter shards')
+  (66, 'count task group outcomes in counter shards'),
+  (67, 'read the newest task group events')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (66) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (67) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

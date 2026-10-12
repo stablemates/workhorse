@@ -425,6 +425,16 @@
         "task_id": "uuid"
       }
     },
+    "list_newest_task_group_events_v1": {
+      "arguments": ["uuid", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "details": "jsonb",
+        "event_id": "uuid",
+        "event_type": "text",
+        "occurred_at": "timestamptz"
+      }
+    },
     "list_task_group_drift_v1": {
       "arguments": ["integer"],
       "returns": "table",

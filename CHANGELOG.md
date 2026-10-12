@@ -19,19 +19,20 @@ upgrade steps.
 
 ## Unreleased
 
-Requires **schema v66**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+Requires **schema v67**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **66**.
+1. Run `workhorse schema migrate`. The final schema version is **67**.
 2. Roll out the updated processes.
 
-The SDK compatibility floor is schema version **66**, which migration 0067 reaches. The floor rises
-from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds,
-and the dashboard of each SDK calls `dashboard_task_groups_v1`, which migration 0067 adds. An updated
-process refuses a schema below version 66 at startup. A 0.7 process keeps working on version 66,
+The SDK compatibility floor is schema version **67**, which migration 0068 reaches. The floor rises
+from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds.
+The dashboard of each SDK calls `dashboard_task_groups_v1`, which migration 0067 adds, and
+`list_newest_task_group_events_v1`, which migration 0068 adds. An updated process refuses a schema
+below version 67 at startup. A 0.7 process keeps working on version 67,
 because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
@@ -56,8 +57,14 @@ becomes 0. The migration moves the counts of existing groups into the shards. It
 in `EXCLUSIVE` mode while it runs, so task group changes wait for it. The counts on a `task_group`
 row stay 0 until the group finishes, so read the counts through `get_task_group_v1`. The migration
 also adds `dashboard_task_groups_v1`, which lists task groups one page at a time. The dashboard of
-each SDK reads the task group list through it (SM-1237), so the compatibility floor is schema
-version 66.
+each SDK reads the task group list through it (SM-1237).
+
+Migration 0068 (`0068-read-the-newest-task-group-events.sql`) adds
+`list_newest_task_group_events_v1`, which returns the newest events of a task group first
+(SM-1254). The task group detail of the dashboard reads its events through it. A group with more
+than 1,000 events now shows its newest 100 events. `eventsTruncated` is true when the group has
+older events that the detail does not show. `list_task_group_events_v1` does not change. The
+migration changes no stored data.
 
 TypeScript `Queue` gains `createTaskGroup`, `addToTaskGroup`, `sealTaskGroup`, the block form
 `taskGroup`, `getTaskGroup`, `listTaskGroupMembers`, and `findTaskGroup`. The block form creates,

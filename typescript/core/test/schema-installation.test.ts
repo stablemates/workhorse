@@ -577,6 +577,10 @@ describe("schema installation", () => {
         version: 66,
         description: "count task group outcomes in counter shards",
       },
+      {
+        version: 67,
+        description: "read the newest task group events",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

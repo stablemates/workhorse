@@ -468,8 +468,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 66.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 66, installs the demo's own
+   additive steps after 0025 and leaves the database at version 67.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 67, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -558,13 +558,14 @@ stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 66; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 67; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-66 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
-this build refuses mutations against a schema below 66, because its dashboard calls
-`dashboard_task_groups_v1`, which version 66 introduces. Run `workhorse schema migrate` before any process
-from this build starts. Migration 0067, which produces version 66, locks `workhorse.task_group` in
+67 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+this build refuses mutations against a schema below 67, because its dashboard calls
+`list_newest_task_group_events_v1`, which version 67 introduces. Run `workhorse schema migrate` before
+any process from this build starts. Migration 0068, which produces version 67, only adds that
+function and changes no stored data. Migration 0067, which produces version 66, locks `workhorse.task_group` in
 `EXCLUSIVE` mode while it moves the group counts into counter shards. A task group change waits for
 that lock, and a member outcome that started before the migration and continues after it rolls
 back. The migration

@@ -72,8 +72,15 @@ RSpec.describe "Dashboard against the dashboard/v1 conformance fixtures" do
       else value.to_s
       end
     end
-    rows = connection.exec_params("WITH step AS (#{step.fetch("sql")}) SELECT to_jsonb(step)::text AS row FROM step",
-      parameters).map { |row| JSON.parse(row.fetch("row")) }
+    sql = step.fetch("sql")
+    rows = if sql.match?(/\A\s*WITH\b/i)
+      # PostgreSQL accepts a data-modifying WITH only at the top level, so a WITH step runs as
+      # written, and the type map decodes its columns.
+      connection.exec_params(sql, parameters).map_types!(PG::BasicTypeMapForResults.new(connection)).to_a
+    else
+      connection.exec_params("WITH step AS (#{sql}) SELECT to_jsonb(step)::text AS row FROM step",
+        parameters).map { |row| JSON.parse(row.fetch("row")) }
+    end
     assert_value(step.dig("expect", "rows") || [], rows, references, "seed/#{step.fetch("id")}")
     step.fetch("capture", {}).each { |name, pointer| references[name] = read_pointer(rows, pointer) }
   end
