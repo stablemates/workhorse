@@ -332,6 +332,30 @@ RSpec.describe "Documentation examples against PostgreSQL" do
       expect([single, fulfill].map { |task_id| status(task_id)["state"] }).to eq(%w[blocked blocked])
     end
 
+    it "finishes a task group and reads its counts in the callback" do
+      file = DocsExamples::ImportFile.new(rows: [{"line" => 1}, {"line" => 2}])
+      group = DocsExamples.task_groups(queue, file)
+      expect([group.state, group.counts.total]).to eq([:sealed, 2])
+
+      subject = W::Worker.new(@pool, queues: ["imports"], polling_only: true, poll_interval: 0.01,
+        disable_registry: true)
+      subject.handle("imports.row") { |row| row }
+      allow(DocsExamples).to receive(:send_report)
+      DocsExamples.task_groups_report(subject)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+      until queue.get_task_group(group.id).state == :finished ||
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        subject.run_once
+      end
+      finished = queue.get_task_group(group.id)
+      report = finished.callbacks.find { |callback| callback.kind == :on_finish }.task_id
+      drain(subject, report)
+
+      expect([finished.result, status(report)["state"], result(report)]).to eq([:succeeded, "succeeded",
+        {"sent" => true}])
+      expect(DocsExamples).to have_received(:send_report).with("imp-7", 2, 0)
+    end
+
     it "fans out the agent's tools and waits for approval" do
       model = Object.new
       def model.plan(prompt, key) = {"tools" => [{"id" => "search", "prompt" => prompt, "key" => key}]}

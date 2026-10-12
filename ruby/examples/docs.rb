@@ -43,6 +43,7 @@ module DocsExamples
 
   Actor = Data.define(:email)
   Recipient = Data.define(:email)
+  ImportFile = Data.define(:rows)
 
   module_function
 
@@ -57,6 +58,8 @@ module DocsExamples
   def call_model(prompt) = {"prompt" => prompt}
 
   def upload_part(_part) = nil
+
+  def send_report(_import_id, _succeeded, _failed) = nil
 
   def application_admin_session(env) = env["HTTP_X_ADMIN"]
 
@@ -371,6 +374,32 @@ module DocsExamples
   def batch_handlers_enqueue(queue)
     # docs:start batch-handlers-enqueue
     queue.enqueue("email.send", {"to" => "person@example.com"})
+    # docs:end
+  end
+
+  def task_groups(queue, file)
+    # docs:start task-groups
+    rows = file.rows.map do |row|
+      Stablemates::Workhorse::EnqueueRequest.new(task_type: "imports.row",
+        payload: {"importId" => "imp-7", "row" => row}, queue: "imports")
+    end
+    report = Stablemates::Workhorse::EnqueueRequest.new(task_type: "imports.report",
+      payload: {"importId" => "imp-7"}, queue: "imports")
+
+    group = queue.task_group(on_finish: report) do |builder|
+      rows.each_slice(1_000) { |slice| builder.add(slice) }
+    end.group
+    # docs:end
+    group
+  end
+
+  def task_groups_report(worker)
+    # docs:start task-groups-report
+    worker.handle("imports.report") do |report, context|
+      counts = context.task_group.get.group.counts
+      send_report(report.fetch("importId"), counts.succeeded, counts.failed)
+      {"sent" => true}
+    end
     # docs:end
   end
 

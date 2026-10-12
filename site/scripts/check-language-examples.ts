@@ -58,6 +58,7 @@ const goPublicSource = [
   "external_waits.go",
   "policies.go",
   "queue.go",
+  "task_groups.go",
   "worker.go",
 ]
   .map((path) => readFileSync(resolve(repositoryRoot, "go", path), "utf8"))
@@ -201,6 +202,7 @@ const crossSdkGuidePaths = [
   "human-waits.mdx",
   "idempotency.mdx",
   "task-dependencies.mdx",
+  "task-groups.mdx",
   "operations.mdx",
   "priority.mdx",
   "progress.mdx",

@@ -27,7 +27,7 @@ use workhorse::{
     BulkRedriveOptions, ChildOutcome, ChildTaskRequest, DeadLetterFilter, DeadLetterQuery,
     Debounce, DebounceSchedule, Dependencies, DependencyTerminalPolicy, EnqueueOptions,
     EnqueueRequest, HandlerContext, HandlerError, Idempotency, Queue, ScheduleDefinition,
-    ScheduledTask, Throttle, Worker, WorkerOptions,
+    ScheduledTask, TaskGroupCallbacks, Throttle, Worker, WorkerOptions,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -90,6 +90,16 @@ struct Import {
     source: String,
 }
 
+struct ImportFile {
+    rows: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportReport {
+    import_id: String,
+}
+
 #[derive(Deserialize)]
 struct ProviderEvent {
     id: String,
@@ -120,6 +130,14 @@ async fn send_email(
     _context: workhorse::HandlerContext,
 ) -> std::result::Result<Value, HandlerError> {
     mailer::send(payload).await
+}
+
+async fn send_report(
+    import_id: &str,
+    succeeded: u32,
+    failed: u32,
+) -> std::result::Result<(), HandlerError> {
+    Ok(())
 }
 
 async fn upload_part(part: &str) -> std::result::Result<(), HandlerError> {
@@ -737,6 +755,39 @@ async fn batch_handlers_enqueue(queue: &Queue<Client>) -> Result {
         .await?;
     // docs:end
     Ok(())
+}
+
+async fn task_groups(queue: &Queue<Client>, file: &ImportFile) -> Result {
+    // docs:start task-groups
+    let imports = EnqueueOptions { queue: Some("imports".into()), ..Default::default() };
+    let rows = file
+        .rows
+        .iter()
+        .map(|row| {
+            EnqueueRequest::new("imports.row", json!({ "importId": "imp-7", "row": row }))
+                .with_options(imports.clone())
+        })
+        .collect();
+    let report =
+        EnqueueRequest::new("imports.report", json!({ "importId": "imp-7" })).with_options(imports);
+
+    let group = queue
+        .task_group(TaskGroupCallbacks { on_finish: Some(report), ..Default::default() }, rows)
+        .await?
+        .group;
+    // docs:end
+    Ok(())
+}
+
+fn task_groups_report(worker: &Worker) {
+    // docs:start task-groups-report
+    worker.handle("imports.report", |report: ImportReport, context| async move {
+        let link = context.task_group().get().await?;
+        let counts = link.ok_or_else(|| HandlerError::new("no task group"))?.group.counts;
+        send_report(&report.import_id, counts.succeeded, counts.failed).await?;
+        Ok(json!({ "sent": true }))
+    });
+    // docs:end
 }
 
 async fn durable_checkpoints(
