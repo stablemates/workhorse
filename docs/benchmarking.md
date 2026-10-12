@@ -130,6 +130,16 @@ worker slots than the group has counter shards. The run without a group must sam
 needs 353 free connections. If PostgreSQL has fewer, the scenario stops before the run starts. Its
 timings describe the host that ran it, not a limit.
 
+`hot-task-group` repeats each run `hotGroupRounds` times and alternates the order of the two
+variants in each round. It summarizes each measure over the rounds with three metrics: `Median`,
+`Min`, and `Max`. For an even count of rounds, the median is the mean of the two middle values. Thus
+one slow round of two does not become the reported value. `TasksPerSecondRounds` lists the value of
+each round. `WaitersPeak` is the most waiters that one sample of a round saw.
+`GroupThroughputShare` divides the tasks per second with a group by the tasks per second without a
+group in the same round, and the scenario summarizes these shares. The `full` profile runs 5
+rounds, so one slow round on a loaded host cannot move the median. The `smoke` and `default`
+profiles run 1 round. They prove the invariants, not the throughput.
+
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
 client-observed duration of each failure transition and their total. It also records enqueue, claim,
 and completion timings for a versioned contract while proving that operator reads redact its configured

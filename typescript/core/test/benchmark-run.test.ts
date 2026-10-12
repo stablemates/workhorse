@@ -35,6 +35,8 @@ describe("benchmark v3 profiles", () => {
       churn: { targetTasks: 6_000, targetRatePerSecond: 100 },
     });
     expect(smoke.operational.leaseMs).toBe(100);
+    // One slow round of five cannot become the median of the hot task group rounds.
+    expect(full.operational.hotGroupRounds).toBeGreaterThanOrEqual(5);
   });
 
   it("merges v3 comparative overrides without mutating profiles", () => {
