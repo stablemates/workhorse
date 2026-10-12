@@ -83,7 +83,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `query-listing-lifecycle`       | dedicated routing projection, immutable cursor continuation, default payload omission, redaction before byte bounds, lifecycle-write independence, merged timeline, and operator-index storage         |
 | `progress-lifecycle`            | fenced latest-value updates, identical-value no-op, frequency limit, stale-fence rejection, lookup provenance, terminal retention, and bounded event evidence                                          |
 | `checkpoint-replay`             | save, list-query, and pass timings for each checkpoints-per-task count, replay share of the pass, list execution time, stored bytes, and one-list-per-replay invariants                                |
-| `hot-task-group`                | drain time and tasks per second for one sealed task group and for the same tasks without a group, by worker count, with sampled waiters and lock wait on the group row                                 |
+| `hot-task-group`                | drain time and tasks per second for one sealed task group and for the same tasks without a group, by worker count, with sampled waiters and lock wait on the group row and its shard rows              |
 | `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                      |
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                                    |
 | `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion; versioned contract validation and redaction timings                                      |
@@ -93,7 +93,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained task identity                                                                                                        |
 | `health-snapshot`               | single-statement snapshot latency, capped-scan flags, and machine-readable critical status reasons                                                                                                     |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants       |
-| `batch-dispatch`                | equal serial and batched cohorts, full/partial groups, mixed outcomes, per-task policy admission, claim cost, active slots, and isolated recovery                                                      |
+| `batch-dispatch`                | equal serial and batched cohorts, full and partial batches, mixed outcomes, per-task policy admission, claim cost, active slots, and isolated recovery                                                 |
 | `notification-dispatch`         | polling-only versus notification-assisted idle claim pressure, enqueue-to-claim latency, completion, and bounded-fallback invariants                                                                   |
 | `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                                  |
 
@@ -117,17 +117,18 @@ that many checkpoints, suspends on a durable wait, and replays them on each of
 `checkpointReplayPasses` later passes. The `smoke` profile measures 0, 10, and 100 checkpoints, and
 the `full` profile measures up to 10,000. Its timings describe the host that ran it, not a limit.
 
-`hot-task-group` measures the counter row of one task group under load. Each run enqueues
+`hot-task-group` measures the counter shards of one task group under load. Each run enqueues
 `hotGroupTasks` full-tier tasks, either as members of one sealed group or without a group. Then
 each of `hotGroupWorkers` workers drains them with `hotGroupConcurrency` slots, its own pool, and a
-handler that returns at once. Each member outcome locks the group row, so this is the most
-contended case. A separate connection reads `pg_locks`, waits 5 ms, and reads it again. It counts
-the backends that wait for the `task_group` row. The scenario records the real interval between two
-samples. A group run must sample a waiter when it has more than one slot and at least 100 tasks.
-The run without a group must sample none. The `full` profile drains 100,000 tasks, the member
-limit of ADR 0095, with 4, 16, and 32 workers. It needs 353 free connections. If PostgreSQL has
-fewer, the scenario stops before the run starts. Its timings describe the host that ran it, not a
-limit.
+handler that returns at once. Each member outcome locks its counter shard row, and it locks the
+group row only when its shard reaches 0. A separate connection reads `pg_locks`, waits 5 ms, and
+reads it again. It counts the backends that wait for the `task_group` row and, apart, the backends
+that wait for a `task_group_shard` row. The scenario records the real interval between two samples.
+A group run must sample a waiter on either kind of row when it has at least 100 tasks and more
+worker slots than the group has counter shards. The run without a group must sample none. The
+`full` profile drains 100,000 tasks, the member limit of ADR 0095, with 4, 16, and 32 workers. It
+needs 353 free connections. If PostgreSQL has fewer, the scenario stops before the run starts. Its
+timings describe the host that ran it, not a limit.
 
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
 client-observed duration of each failure transition and their total. It also records enqueue, claim,
@@ -197,7 +198,7 @@ heartbeat pressure, maximum concurrent claims, and maximum handler overlap. Ever
 `Worker` runtime. These measurements cover process-local topology overhead, not operating-system process
 isolation or global queue concurrency.
 
-`batch-dispatch` runs equal serial and batched cohorts through the same `claim_v1` path. It records claim cost, throughput, group sizes, dispatch wait, active slots, and terminal health.
+`batch-dispatch` runs equal serial and batched cohorts through the same `claim_v1` path. It records claim cost, throughput, batch sizes, dispatch wait, active slots, and terminal health.
 
 Separate phases exercise mixed results, policy admission, and recovery of one expired member. Timings describe one local run and do not establish a production throughput advantage.
 

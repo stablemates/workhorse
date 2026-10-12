@@ -426,8 +426,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "every run completes every task and leaves no active or expired lease",
       "the group run finishes the group with the result succeeded and counts every member task once",
       "the group run enqueues its onFinish callback task exactly once",
-      "a group run with more than one slot and at least 100 tasks samples a waiter on the group row, which proves that the sampler sees it",
-      "the run without a group creates no group and never waits on a group row",
+      "a group run with more worker slots than counter shards and at least 100 tasks samples a waiter on the group row or on a counter shard row, which proves that the sampler sees them",
+      "the run without a group creates no group and never waits on a group row or a counter shard row",
     ],
     metrics: [
       "hotGroupTasks",
@@ -437,6 +437,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "enqueue time, drain time, and tasks per second by worker count, with and without a group",
       "completion transactions and tasks per completion transaction by worker count",
       "mean and maximum waiters on the group row, sampled lock wait on it, and the share of samples with a waiter",
+      "the same four measures for the counter shard rows of the group, apart from the group row",
       "lock samples and the real interval between two samples",
       "sampled lock wait on every lock in the bench database",
       "throughput with a group as a share of throughput without a group, by worker count",
@@ -5698,42 +5699,122 @@ const HOT_GROUP_LOCK_SAMPLE_MS = 5;
  */
 const HOT_GROUP_DRAIN_TIMEOUT_MS = 600_000;
 /**
- * A group run with at least this many tasks and more than one slot must sample a waiter on the
- * group row. A smaller run can drain between two samples, so it proves nothing about the sampler.
+ * A group run with at least this many tasks, and more worker slots than the group has counter
+ * shards, must sample a waiter on a row of the group. A smaller run can drain between two samples,
+ * so it proves nothing about the sampler.
  */
 const HOT_GROUP_WAITER_PROOF_TASKS = 100;
 
 // PostgreSQL makes the waiters for one row lock form a queue. The first waiter holds the tuple lock
 // of the row and waits for the transaction that holds the row. Every later waiter waits for that
-// tuple lock. A backend counts as a group row waiter only in one of these two states. Each run has
-// at most one task_group row, so the relation identifies the row.
-const hotGroupLockSampleSql = `WITH waiting AS (
+// tuple lock. A backend counts as a waiter on a relation only in one of these two states. Each run
+// has at most one task_group row and its counter shard rows (ADR 0096), so the relation identifies
+// the kind of row. A member outcome waits on a shard row, and on the group row only when its shard
+// reaches 0, so the sampler counts the two kinds apart. PostgreSQL holds a tuple lock only while it
+// waits for that row, so a waiter holds at most one. If it held both kinds, the group row counts.
+export const hotGroupLockSampleSql = `WITH waiting AS (
   SELECT locks.pid, locks.locktype, locks.relation
     FROM pg_locks locks
     JOIN pg_stat_activity activity ON activity.pid = locks.pid
    WHERE NOT locks.granted AND activity.datname = current_database()
+), row_waiting AS (
+  SELECT waiting.pid,
+         COALESCE(
+           CASE WHEN waiting.locktype = 'tuple' THEN waiting.relation END,
+           CASE WHEN waiting.locktype = 'transactionid' THEN (
+             SELECT held.relation FROM pg_locks held
+              WHERE held.pid = waiting.pid AND held.granted AND held.locktype = 'tuple'
+                AND held.relation IN (
+                  'workhorse.task_group'::regclass, 'workhorse.task_group_shard'::regclass
+                )
+              ORDER BY held.relation = 'workhorse.task_group'::regclass DESC
+              LIMIT 1
+           ) END
+         ) AS relation
+    FROM waiting
 )
-SELECT count(DISTINCT waiting.pid) FILTER (
-         WHERE (waiting.locktype = 'tuple' AND waiting.relation = 'workhorse.task_group'::regclass)
-            OR (waiting.locktype = 'transactionid' AND EXISTS (
-                  SELECT 1 FROM pg_locks held
-                   WHERE held.pid = waiting.pid AND held.granted AND held.locktype = 'tuple'
-                     AND held.relation = 'workhorse.task_group'::regclass))
+SELECT count(DISTINCT row_waiting.pid) FILTER (
+         WHERE row_waiting.relation = 'workhorse.task_group'::regclass
        )::integer AS group_row_waiters,
-       count(DISTINCT waiting.pid)::integer AS lock_waiters
-  FROM waiting`;
+       count(DISTINCT row_waiting.pid) FILTER (
+         WHERE row_waiting.relation = 'workhorse.task_group_shard'::regclass
+       )::integer AS shard_row_waiters,
+       count(DISTINCT row_waiting.pid)::integer AS lock_waiters
+  FROM row_waiting`;
 
-interface HotGroupLockSamples {
+/** One read of `hotGroupLockSampleSql`, with the time it returned. */
+export interface HotGroupLockSample {
+  sampledAt: number;
+  groupRowWaiters: number;
+  shardRowWaiters: number;
+  lockWaiters: number;
+}
+
+/** The waiters on one kind of row over a run. */
+interface HotGroupRowWaits {
+  waitersMean: number | null;
+  waitersMax: number;
+  /** Waiters multiplied by the time since the previous sample, summed over the run. */
+  waitMs: number;
+  /** The share of samples with a waiter, or null without a sample. */
+  contendedShare: number | null;
+}
+
+export interface HotGroupLockSamples {
   samples: number;
   /** The mean time between two adjacent samples, or null with fewer than two samples. */
   sampleIntervalMs: number | null;
-  groupRowWaitersMean: number | null;
-  groupRowWaitersMax: number;
-  /** Waiters multiplied by the time since the previous sample, summed over the run. */
-  groupRowWaitMs: number;
-  groupRowContendedShare: number | null;
+  groupRow: HotGroupRowWaits;
+  /** The counter shard rows of the group, counted apart from the group row (ADR 0096). */
+  shardRows: HotGroupRowWaits;
   lockWaitersMean: number | null;
   lockWaitMs: number;
+}
+
+/** Summarizes the lock samples of one run. `startedAt` is the time before the first sample. */
+export function summarizeHotGroupLockSamples(
+  samples: readonly HotGroupLockSample[],
+  startedAt: number,
+): HotGroupLockSamples {
+  const waits = (count: (sample: HotGroupLockSample) => number): HotGroupRowWaits => {
+    const waiters = samples.map(count);
+    let waitMs = 0;
+    let previous = startedAt;
+    for (const sample of samples) {
+      waitMs += count(sample) * (sample.sampledAt - previous);
+      previous = sample.sampledAt;
+    }
+    return {
+      waitersMean: mean(waiters),
+      waitersMax: Math.max(0, ...waiters),
+      waitMs,
+      contendedShare:
+        waiters.length === 0 ? null : waiters.filter((value) => value > 0).length / waiters.length,
+    };
+  };
+  const all = waits((sample) => sample.lockWaiters);
+  const first = samples[0];
+  const last = samples.at(-1);
+  return {
+    samples: samples.length,
+    sampleIntervalMs:
+      first === undefined || last === undefined || samples.length < 2
+        ? null
+        : (last.sampledAt - first.sampledAt) / (samples.length - 1),
+    groupRow: waits((sample) => sample.groupRowWaiters),
+    shardRows: waits((sample) => sample.shardRowWaiters),
+    lockWaitersMean: all.waitersMean,
+    lockWaitMs: all.waitMs,
+  };
+}
+
+/**
+ * Whether a group run sampled a waiter on a row of its group. A member outcome waits on its shard
+ * row, and on the group row only when its shard reaches 0, so a waiter on either row proves that
+ * the sampler sees them.
+ */
+export function sampledHotGroupWaiter(locks: HotGroupLockSamples): boolean {
+  return locks.groupRow.waitersMax >= 1 || locks.shardRows.waitersMax >= 1;
 }
 
 async function sampleHotGroupLocks(
@@ -5742,44 +5823,24 @@ async function sampleHotGroupLocks(
   sleep: (milliseconds: number) => Promise<void>,
   running: () => boolean,
 ): Promise<HotGroupLockSamples> {
-  const groupRowWaiters: number[] = [];
-  const lockWaiters: number[] = [];
-  let groupRowWaitMs = 0;
-  let lockWaitMs = 0;
-  let previous = now();
-  let firstSampledAt: number | null = null;
+  const samples: HotGroupLockSample[] = [];
+  const startedAt = now();
   while (running()) {
-    const sample = await client.query<{ group_row_waiters: number; lock_waiters: number }>(
-      hotGroupLockSampleSql,
-    );
-    const sampledAt = now();
+    const sample = await client.query<{
+      group_row_waiters: number;
+      shard_row_waiters: number;
+      lock_waiters: number;
+    }>(hotGroupLockSampleSql);
     const row = sample.rows[0];
-    const groupRow = row?.group_row_waiters ?? 0;
-    const all = row?.lock_waiters ?? 0;
-    groupRowWaiters.push(groupRow);
-    lockWaiters.push(all);
-    firstSampledAt ??= sampledAt;
-    groupRowWaitMs += groupRow * (sampledAt - previous);
-    lockWaitMs += all * (sampledAt - previous);
-    previous = sampledAt;
+    samples.push({
+      sampledAt: now(),
+      groupRowWaiters: row?.group_row_waiters ?? 0,
+      shardRowWaiters: row?.shard_row_waiters ?? 0,
+      lockWaiters: row?.lock_waiters ?? 0,
+    });
     await sleep(HOT_GROUP_LOCK_SAMPLE_MS);
   }
-  return {
-    samples: groupRowWaiters.length,
-    sampleIntervalMs:
-      firstSampledAt === null || groupRowWaiters.length < 2
-        ? null
-        : (previous - firstSampledAt) / (groupRowWaiters.length - 1),
-    groupRowWaitersMean: mean(groupRowWaiters),
-    groupRowWaitersMax: Math.max(0, ...groupRowWaiters),
-    groupRowWaitMs,
-    groupRowContendedShare:
-      groupRowWaiters.length === 0
-        ? null
-        : groupRowWaiters.filter((waiters) => waiters > 0).length / groupRowWaiters.length,
-    lockWaitersMean: mean(lockWaiters),
-    lockWaitMs,
-  };
+  return summarizeHotGroupLockSamples(samples, startedAt);
 }
 
 interface HotGroupRunResult {
@@ -5996,6 +6057,14 @@ async function hotTaskGroup(
   metrics.hotGroupConcurrency = hotGroupConcurrency;
   metrics.hotGroupRounds = rounds;
   metrics.lockSampleMs = HOT_GROUP_LOCK_SAMPLE_MS;
+  // Concurrent member tasks have consecutive positions, so they select different counter shards
+  // (ADR 0096). Only a run with more slots than shards must make two of them share a row.
+  const shardCount = (
+    await context.pool.query<{ shards: number }>(
+      "SELECT workhorse.task_group_shard_count_v1() AS shards",
+    )
+  ).rows[0]!.shards;
+  metrics.hotGroupShards = shardCount;
 
   for (const workers of hotGroupWorkers) {
     const runs: Record<HotGroupVariant, HotGroupRunResult[]> = { withoutGroup: [], withGroup: [] };
@@ -6016,7 +6085,6 @@ async function hotTaskGroup(
       const tasksPerSecond = results.map((run) =>
         run.drainMs === 0 ? 0 : (taskCount * 1_000) / run.drainMs,
       );
-      const groupRowWaitMs = results.map((run) => run.locks.groupRowWaitMs);
       throughput[variant] = percentile(tasksPerSecond, 0.5);
       metrics[`${prefix}EnqueueP50Ms`] = percentile(
         results.map((run) => run.enqueueMs),
@@ -6047,22 +6115,28 @@ async function hotTaskGroup(
         results.map((run) => run.locks.sampleIntervalMs ?? Number.NaN),
         0.5,
       );
-      metrics[`${prefix}GroupRowWaitersMeanP50`] = percentile(
-        results.map((run) => run.locks.groupRowWaitersMean ?? 0),
-        0.5,
-      );
-      metrics[`${prefix}GroupRowWaitersMax`] = Math.max(
-        ...results.map((run) => run.locks.groupRowWaitersMax),
-      );
-      metrics[`${prefix}GroupRowWaitP50Ms`] = percentile(groupRowWaitMs, 0.5);
-      metrics[`${prefix}GroupRowWaitPerTaskP50Ms`] = percentile(
-        groupRowWaitMs.map((waitMs) => waitMs / taskCount),
-        0.5,
-      );
-      metrics[`${prefix}GroupRowContendedShareP50`] = percentile(
-        results.map((run) => run.locks.groupRowContendedShare ?? 0),
-        0.5,
-      );
+      for (const [label, rowWaits] of [
+        ["GroupRow", (run: HotGroupRunResult) => run.locks.groupRow],
+        ["ShardRow", (run: HotGroupRunResult) => run.locks.shardRows],
+      ] as const) {
+        const waitMs = results.map((run) => rowWaits(run).waitMs);
+        metrics[`${prefix}${label}WaitersMeanP50`] = percentile(
+          results.map((run) => rowWaits(run).waitersMean ?? 0),
+          0.5,
+        );
+        metrics[`${prefix}${label}WaitersMax`] = Math.max(
+          ...results.map((run) => rowWaits(run).waitersMax),
+        );
+        metrics[`${prefix}${label}WaitP50Ms`] = percentile(waitMs, 0.5);
+        metrics[`${prefix}${label}WaitPerTaskP50Ms`] = percentile(
+          waitMs.map((value) => value / taskCount),
+          0.5,
+        );
+        metrics[`${prefix}${label}ContendedShareP50`] = percentile(
+          results.map((run) => rowWaits(run).contendedShare ?? 0),
+          0.5,
+        );
+      }
       metrics[`${prefix}LockWaitersMeanP50`] = percentile(
         results.map((run) => run.locks.lockWaitersMean ?? 0),
         0.5,
@@ -6090,20 +6164,30 @@ async function hotTaskGroup(
           recordInvariant(
             assertions,
             `${name} never waits on a group row`,
-            run.locks.groupRowWaitersMax,
+            run.locks.groupRow.waitersMax,
+            0,
+          );
+          recordInvariant(
+            assertions,
+            `${name} never waits on a shard row`,
+            run.locks.shardRows.waitersMax,
             0,
           );
           return;
         }
-        // Many slots that finish at once must queue on the group row. A sampler that sees no waiter
-        // here is broken, and its zero for the run without a group proves nothing.
-        if (workers * hotGroupConcurrency > 1 && taskCount >= HOT_GROUP_WAITER_PROOF_TASKS) {
+        // More slots than shards that finish at once must queue on the rows of the group: on the
+        // shard rows, and on the group row when a shard reaches 0. A sampler that sees no waiter on
+        // either is broken, and its zeros for the run without a group prove nothing.
+        if (
+          workers * hotGroupConcurrency > shardCount &&
+          taskCount >= HOT_GROUP_WAITER_PROOF_TASKS
+        ) {
           recordInvariant(
             assertions,
-            `${name} samples a waiter on the group row`,
-            run.locks.groupRowWaitersMax,
-            1,
-            (actual) => Number(actual) >= 1,
+            `${name} samples a waiter on the group row or a shard row`,
+            `group row ${run.locks.groupRow.waitersMax}, shard rows ${run.locks.shardRows.waitersMax}`,
+            "at least 1 on either",
+            () => sampledHotGroupWaiter(run.locks),
           );
         }
         recordInvariant(
