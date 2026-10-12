@@ -27,28 +27,128 @@ the queue `imports`. After the last row, the app must send one report.
    the result `failed`, and it enqueues the `imports.report` task.
 5. A worker runs `imports.report`. Its handler reads the counts of the group and sends the report.
 
-```ts
-const rows = file.rows.map((row) => ({
-  type: "imports.row",
-  payload: { importId: "imp-7", row },
-  options: { queue: "imports" },
-}));
-
-const { group } = await queue.taskGroup(
-  {
-    onFinish: {
-      type: "imports.report",
-      payload: { importId: "imp-7" },
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const rows = file.rows.map((row) => ({
+      type: "imports.row",
+      payload: { importId: "imp-7", row },
       options: { queue: "imports" },
-    },
-  },
-  (builder) => {
-    for (let start = 0; start < rows.length; start += 1_000) {
-      builder.add(rows.slice(start, start + 1_000));
+    }));
+
+    const { group } = await queue.taskGroup(
+      {
+        onFinish: {
+          type: "imports.report",
+          payload: { importId: "imp-7" },
+          options: { queue: "imports" },
+        },
+      },
+      (builder) => {
+        for (let start = 0; start < rows.length; start += 1_000) {
+          builder.add(rows.slice(start, start + 1_000));
+        }
+      },
+    );
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python
+    rows = [
+        EnqueueRequest(
+            "imports.row",
+            {"importId": "imp-7", "row": row},
+            EnqueueOptions(queue="imports"),
+        )
+        for row in file.rows
+    ]
+    report = EnqueueRequest(
+        "imports.report",
+        {"importId": "imp-7"},
+        EnqueueOptions(queue="imports"),
+    )
+
+    with queue.task_group(on_finish=report) as builder:
+        for start in range(0, len(rows), 1_000):
+            builder.add(rows[start : start + 1_000])
+    group = builder.result.group
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    imports := workhorse.EnqueueOptions{Queue: "imports"}
+    rows := make([]workhorse.EnqueueRequest, 0, len(file.Rows))
+    for _, row := range file.Rows {
+    	rows = append(rows, workhorse.EnqueueRequest{
+    		Type:    "imports.row",
+    		Payload: map[string]any{"importId": "imp-7", "row": row},
+    		Options: imports,
+    	})
     }
-  },
-);
-```
+    report := workhorse.EnqueueRequest{
+    	Type:    "imports.report",
+    	Payload: map[string]any{"importId": "imp-7"},
+    	Options: imports,
+    }
+
+    result, err := queue.TaskGroup(ctx, workhorse.TaskGroupCallbacks{OnFinish: &report},
+    	func(builder *workhorse.TaskGroupBuilder) error {
+    		for start := 0; start < len(rows); start += 1_000 {
+    			end := min(start+1_000, len(rows))
+    			if err := builder.Add(rows[start:end]...); err != nil {
+    				return err
+    			}
+    		}
+    		return nil
+    	})
+    if err != nil {
+    	return err
+    }
+    group := result.Group
+    ```
+
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    let imports = EnqueueOptions { queue: Some("imports".into()), ..Default::default() };
+    let rows = file
+        .rows
+        .iter()
+        .map(|row| {
+            EnqueueRequest::new("imports.row", json!({ "importId": "imp-7", "row": row }))
+                .with_options(imports.clone())
+        })
+        .collect();
+    let report =
+        EnqueueRequest::new("imports.report", json!({ "importId": "imp-7" })).with_options(imports);
+
+    let group = queue
+        .task_group(TaskGroupCallbacks { on_finish: Some(report), ..Default::default() }, rows)
+        .await?
+        .group;
+    ```
+
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    rows = file.rows.map do |row|
+      Stablemates::Workhorse::EnqueueRequest.new(task_type: "imports.row",
+        payload: {"importId" => "imp-7", "row" => row}, queue: "imports")
+    end
+    report = Stablemates::Workhorse::EnqueueRequest.new(task_type: "imports.report",
+      payload: {"importId" => "imp-7"}, queue: "imports")
+
+    group = queue.task_group(on_finish: report) do |builder|
+      rows.each_slice(1_000) { |slice| builder.add(slice) }
+    end.group
+    ```
+
+  </Tab>
+</Tabs>
+
+The Rust call has no builder function. It takes the member tasks as one list.
 
 A member task is finished when it becomes terminal: `succeeded`, `failed`, or `canceled`. A retry
 does not finish a member task. A purge of a queue also finishes a member task: it counts the deleted
@@ -158,14 +258,74 @@ More detail: [Task groups: Lifecycle](https://github.com/stablemates/workhorse/b
 A handler reads its own group through its handler context. A callback uses this read to find the
 counts of the group that enqueued it.
 
-```ts
-worker.handle<{ importId: string }>("imports.report", async (report, ctx) => {
-  const link = await ctx.taskGroup.get();
-  const counts = link!.group.counts;
-  await sendReport(report.importId, counts.succeeded, counts.failed);
-  return { sent: true };
-});
-```
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+  <Tab value="TypeScript">
+    ```ts
+    worker.handle<{ importId: string }>("imports.report", async (report, ctx) => {
+      const link = await ctx.taskGroup.get();
+      const counts = link!.group.counts;
+      await sendReport(report.importId, counts.succeeded, counts.failed);
+      return { sent: true };
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    def send_import_report(report: dict[str, str], context: HandlerContext) -> Json:
+        link = context.task_group.get()
+        assert link is not None
+        counts = link.group.counts
+        send_report(report["importId"], counts.succeeded, counts.failed)
+        return {"sent": True}
+
+    worker.handle("imports.report", send_import_report)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    worker.Handle("imports.report", func(
+    	ctx context.Context,
+    	payload any,
+    	handler *workhorse.HandlerContext,
+    ) (any, error) {
+    	report, _ := payload.(map[string]any)
+    	importID, _ := report["importId"].(string)
+    	link, err := handler.GetTaskGroup()
+    	if err != nil {
+    		return nil, err
+    	}
+    	if link == nil {
+    		return nil, errors.New("the task has no task group")
+    	}
+    	counts := link.Group.Counts
+    	if err := sendReport(ctx, importID, counts.Succeeded, counts.Failed); err != nil {
+    		return nil, err
+    	}
+    	return map[string]any{"sent": true}, nil
+    })
+    ```
+  </Tab>
+  <Tab value="Rust">
+    ```rust
+    worker.handle("imports.report", |report: ImportReport, context| async move {
+        let link = context.task_group().get().await?;
+        let counts = link.ok_or_else(|| HandlerError::new("no task group"))?.group.counts;
+        send_report(&report.import_id, counts.succeeded, counts.failed).await?;
+        Ok(json!({ "sent": true }))
+    });
+    ```
+  </Tab>
+  <Tab value="Ruby">
+    ```ruby
+    worker.handle("imports.report") do |report, context|
+      counts = context.task_group.get.group.counts
+      send_report(report.fetch("importId"), counts.succeeded, counts.failed)
+      {"sent" => true}
+    end
+    ```
+  </Tab>
+</Tabs>
 
 The read gives the role of the task, `member` or `callback`, and the group. The group has its state,
 its result, its times, and the counts `total`, `succeeded`, `failed`, `canceled`, and `pending`. A
