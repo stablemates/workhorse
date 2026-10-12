@@ -85,6 +85,39 @@ goes to the queue of that task. After the lease of that task ends, `AddToTaskGro
 `TaskGroupMembershipConflictError`, which match `ErrTaskGroupClosed`, `ErrTaskGroupLimitExceeded`,
 and `ErrTaskGroupMembershipConflict`. A fast-tier member gives `FastTierUnsupportedError`.
 
+### Checkpoint input
+
+A checkpoint finds its stored result by name only. If a deployment changes the input of a checkpoint
+operation, a replay returns the result of the old input and gives no error. A Go handler can now
+give the input of a checkpoint (SM-1262,
+[ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)):
+
+```go
+charged, err := handler.Checkpoint("charge-card", func() (any, error) {
+	return gateway.Charge(amount)
+}, workhorse.CheckpointOptions{Input: map[string]any{"amountCents": amount}})
+```
+
+- `HandlerContext.Checkpoint` and `BatchHandlerContext.Checkpoint` take an optional
+  `CheckpointOptions` value. If its `Input` is not nil, the checkpoint stores the fingerprint of the
+  input with its value, through `save_checkpoint_v2`. A call without an input keeps its current
+  behavior. Use `json.RawMessage("null")` for the JSON input null.
+- If the stored checkpoint, or an overlapping call with the same name, has the fingerprint of a
+  different input, the call returns `*CheckpointInputConflictError`, and the operation does not
+  run. If either side has no input, nothing is compared. The error carries `TaskID`,
+  `CheckpointName`, `StoredFingerprint`, and `RequestedFingerprint`.
+- The worker finds the error with `errors.As`, also through a wrapper, and settles it as the
+  terminal replay conflict `CheckpointInputConflictError`. The task fails at once and keeps the
+  current attempt.
+- `CheckpointInputFingerprint(input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
+  canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
+  the other SDKs. `encoding/json` encodes the input first, so `MarshalJSON` methods and struct tags
+  apply. Each number is a double, so an integer above 2^53 loses its exact value. A non-finite
+  number returns an error.
+- `TaskCheckpoint` gains `InputFingerprint`, the stored fingerprint or nil.
+- The `Checkpoint` methods now take a variadic `options ...CheckpointOptions` parameter. A call
+  does not change, but a function value of the old method type must change its type.
+
 ### Behaviour changes
 
 - If a child task request names no queue, `HandlerContext.RunChild`, `RunChildren`, and

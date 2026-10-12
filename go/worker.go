@@ -2857,11 +2857,14 @@ func (worker *Worker) retryDelayOverride(task ClaimedTask) any {
 
 // durableReplayConflictName recognizes typed conflicts through ordinary Go error wrapping.
 func durableReplayConflictName(err error) string {
+	var checkpointInput *CheckpointInputConflictError
 	var checkpoint *CheckpointConflictError
 	var wait *WaitConflictError
 	var child *ChildConflictError
 	var human *HumanWaitConflictError
 	switch {
+	case errors.As(err, &checkpointInput):
+		return checkpointInputConflictErrorName
 	case errors.As(err, &checkpoint):
 		return checkpointConflictErrorName
 	case errors.As(err, &wait):

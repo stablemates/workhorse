@@ -633,7 +633,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
       file: "test_worker_checkpoint_input.py",
       pattern: "CheckpointInputConflictError",
     },
-    go: { planned: "SM-1262" },
+    go: { file: "checkpoint_input_test.go", pattern: "CheckpointInputConflictError" },
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",

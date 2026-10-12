@@ -191,6 +191,9 @@ type TaskCheckpoint struct {
 	FenceToken int64
 	WorkerID   string
 	CreatedAt  time.Time
+	// InputFingerprint is the fingerprint of the input the checkpoint was saved with, or nil
+	// (ADR 0098).
+	InputFingerprint *string
 }
 
 type TaskWait struct {
@@ -704,7 +707,7 @@ func mapRedrive(row Row) RedriveResult {
 	return RedriveResult{Status: stringValue(row["status"]), SourceTaskID: stringValue(row["source_task_id"]), TargetTaskID: optionalStringValue(row["target_task_id"]), SourceState: source, TargetState: target, RequestedAt: optionalTimeValue(row["requested_at"])}
 }
 func mapCheckpoint(row Row) TaskCheckpoint {
-	return TaskCheckpoint{TaskID: stringValue(row["task_id"]), Name: stringValue(row["checkpoint_name"]), Value: jsonValue(row["checkpoint_value"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}
+	return TaskCheckpoint{TaskID: stringValue(row["task_id"]), Name: stringValue(row["checkpoint_name"]), Value: jsonValue(row["checkpoint_value"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"]), InputFingerprint: optionalStringValue(row["input_fingerprint"])}
 }
 func mapWait(row Row) TaskWait {
 	return TaskWait{TaskID: stringValue(row["task_id"]), Name: stringValue(row["wait_name"]), Mode: stringValue(row["mode"]), DurationMS: optionalInt64Value(row["duration_ms"]), RequestedWakeAt: optionalTimeValue(row["requested_wake_at"]), WakeAt: timeValue(row["wake_at"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}

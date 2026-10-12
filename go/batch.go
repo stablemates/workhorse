@@ -33,12 +33,14 @@ type BatchHandlerContext struct {
 	handler *HandlerContext
 }
 
-// Checkpoint returns a member's stored value, or runs and saves operation once.
+// Checkpoint returns a member's stored value, or runs and saves operation once. See
+// HandlerContext.Checkpoint for CheckpointOptions.
 func (handler *BatchHandlerContext) Checkpoint(
 	name string,
 	operation func() (any, error),
+	options ...CheckpointOptions,
 ) (any, error) {
-	return handler.handler.Checkpoint(name, operation)
+	return handler.handler.Checkpoint(name, operation, options...)
 }
 
 // GetProgress returns the member's latest progress projection.

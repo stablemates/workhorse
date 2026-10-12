@@ -25,6 +25,21 @@ const (
 	jsonMinusSign                         = "-"
 	jsonDecimalPoint                      = "."
 	jsonZeroDigit                         = "0"
+	jsonFractionPrefix                    = "0."
+	jsonHexDigits                         = "0123456789abcdef"
+	jsonEscapedQuote                      = `\"`
+	jsonEscapedBackslash                  = `\\`
+	jsonEscapedBackspace                  = `\b`
+	jsonEscapedFormFeed                   = `\f`
+	jsonEscapedNewline                    = `\n`
+	jsonEscapedCarriageReturn             = `\r`
+	jsonEscapedTab                        = `\t`
+	jsonControlEscapePrefix               = `\u00`
+	jsonNaNText                           = "NaN"
+	jsonPositiveInfinityText              = "+Inf"
+	jsonNegativeInfinityText              = "-Inf"
+	wrappedErrorFormat                    = "%s: %w"
+	unsupportedCheckpointInputFormat      = "checkpoint input decoded to unsupported type %T"
 	contractSchemaTypeErrorFormat         = "%s must be an object or boolean JSON Schema"
 	contractBundledReferenceErrorFormat   = "%s must be a bundled local reference"
 	contractDialectErrorFormat            = "%s must select Draft 2020-12"
@@ -98,8 +113,8 @@ const (
 	completeStatementName                = "complete_v1"
 	failStatementName                    = "fail_v1"
 	acknowledgeCancelStatementName       = "acknowledge_cancel_v1"
-	listCheckpointStatementName          = "list_checkpoint"
-	saveCheckpointStatementName          = "save_checkpoint_v1"
+	saveCheckpointStatementName          = "save_checkpoint_v2"
+	getCheckpointStatementName           = "get_checkpoint"
 	listProgressStatementName            = "list_progress"
 	updateProgressStatementName          = "update_progress_v1"
 	scheduleWaitStatementName            = "schedule_wait_v1"
@@ -158,6 +173,7 @@ const (
 	rowFenceTokenField                   = "fence_token"
 	rowLeaseExpiresAtField               = "lease_expires_at"
 	rowCheckpointValueField              = "checkpoint_value"
+	rowInputFingerprintField             = "input_fingerprint"
 	rowProgressValueField                = "progress_value"
 	rowUpdatedAtField                    = "updated_at"
 	rowCreatedAtField                    = "created_at"
@@ -239,6 +255,7 @@ const (
 	durableExistingValue                           = "existing"
 	durableStaleValue                              = "stale"
 	durableConflictValue                           = "conflict"
+	durableInputConflictValue                      = "input_conflict"
 	durableElapsedValue                            = "elapsed"
 	durableScheduledValue                          = "scheduled"
 	durableLimitExceededValue                      = "limit_exceeded"
@@ -381,6 +398,9 @@ const (
 	durableWaitSuspensionMessage        = "durable wait suspended the handler"
 	checkpointLeaseLostErrorFormat      = "cannot save checkpoint %s for task %s because the lease is stale or expired"
 	checkpointConflictErrorFormat       = "checkpoint %s for task %s already exists with a different value"
+	checkpointInputConflictErrorFormat  = "checkpoint %s for task %s stores the result of a different input"
+	checkpointOptionsCountMessage       = "checkpoint accepts at most one CheckpointOptions value"
+	nonFiniteCheckpointInputMessage     = "checkpoint input must contain only finite numbers"
 	waitLeaseLostErrorFormat            = "cannot schedule wait %s for task %s because the lease is stale or expired"
 	waitConflictErrorFormat             = "wait %s for task %s has a conflicting target"
 	waitLimitExceededErrorFormat        = "task %s already has the maximum number of durable waits"
@@ -568,10 +588,11 @@ const (
 )
 
 const (
-	checkpointConflictErrorName = "CheckpointConflictError"
-	waitConflictErrorName       = "WaitConflictError"
-	childConflictErrorName      = "ChildConflictError"
-	humanWaitConflictErrorName  = "HumanWaitConflictError"
+	checkpointConflictErrorName      = "CheckpointConflictError"
+	checkpointInputConflictErrorName = "CheckpointInputConflictError"
+	waitConflictErrorName            = "WaitConflictError"
+	childConflictErrorName           = "ChildConflictError"
+	humanWaitConflictErrorName       = "HumanWaitConflictError"
 )
 
 const (

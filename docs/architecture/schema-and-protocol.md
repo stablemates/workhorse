@@ -238,8 +238,8 @@ The terminal classes are `CheckpointConflictError`, `CheckpointInputConflictErro
 `WaitConflictError`, `ChildConflictError`, and `HumanWaitConflictError`. `ChildConflictError`
 includes a changed child set. `CheckpointInputConflictError` occurs when a checkpoint name is stored
 with the fingerprint of a different input
-([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). Only an SDK that gives a
-checkpoint input raises it, so `protocol/v1/runtime.json` does not pin it.
+([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). A checkpoint call raises it
+only when the call gives an input. `protocol/v1/runtime.json` does not pin it.
 
 - Go identifies wrapped conflicts with `errors.As` and keeps their class names.
 - Rust converts `Error::Conflict` for `Operation::Checkpoint`, `Sleep`, `RunChild`, `RunChildren`,
@@ -255,6 +255,9 @@ checkpoint input raises it, so `protocol/v1/runtime.json` does not pin it.
   subclass `CheckpointInputConflictError` also identifies the stored and the requested fingerprint.
 - Python makes `CheckpointInputConflictError` a subclass of `CheckpointConflictError`, so the worker
   settles it with the other terminal classes.
+- Go finds a wrapped `*CheckpointInputConflictError` with `errors.As` and records the name
+  `CheckpointInputConflictError`. It is a separate type, so `errors.As` does not match it as a
+  `*CheckpointConflictError`.
 
 #### Settling a conflict
 
