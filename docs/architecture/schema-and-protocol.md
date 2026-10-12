@@ -852,7 +852,9 @@ PostgreSQL caps each task at 1,000 signal names and 1,000 human-decision names.
 
 `HandlerContext.run_child(name, type, payload, options=None)` accepts child names from 1 through 200
 characters. It encodes `EnqueueOptions` without keyed modes or dependencies. Then it calls
-`create_child_v2`. If the child queue is omitted, it is `default`.
+`create_child_v2`. If the child queue is omitted, it is the queue of the parent task. A replay keeps
+the queue of the stored child, as [Data model: Queue of a child request with no
+queue](data-model.md#queue-of-a-child-request-with-no-queue) describes.
 
 - Status `created` sends `suspended_for_child` to the attempt arbiter.
 - Status `completed` returns the retained result.
@@ -1563,7 +1565,9 @@ optional `EnqueueOptions` value. A child name contains 1 through 200 Unicode cod
 
 - The method rejects idempotency, debounce, throttle, and dependencies before it calls
   `create_child_v2`.
-- The default child queue is `default`.
+- The default child queue is the queue of the parent task, `HandlerContext.Task.Queue`. A replay
+  keeps the queue of the stored child, as [Data model: Queue of a child request with no
+  queue](data-model.md#queue-of-a-child-request-with-no-queue) describes.
 - Status `created` records the private child suspension and cancels the handler context.
 - Status `completed` returns the retained result.
 - Concurrent calls with one name share one result only when their canonical requests match.
@@ -1728,7 +1732,9 @@ Ruby `HandlerContext` in `ruby/lib/stablemates/workhorse/context.rb` also holds 
 | `run_children(children)` and `run_children_all(children)`                       | Take at most 100 `ChildTaskRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`. |
 
 `run_children` maps each name to a `ChildOutcome`. `run_children_all` maps each name to its result.
-If the child queue is omitted, it is the first queue of the worker.
+If the child queue is omitted, it is the queue of the parent task. A replay keeps the queue of the
+stored child, as [Data model: Queue of a child request with no
+queue](data-model.md#queue-of-a-child-request-with-no-queue) describes.
 
 #### Progress ordering
 

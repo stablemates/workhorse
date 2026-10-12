@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 import psycopg
+import pytest
 
 from workhorse import (
     ChildConflictError,
@@ -231,6 +232,88 @@ def test_child_fan_out_returns_mixed_settled_outcomes(database_url: str) -> None
         assert result["accepted"] == {"status": "succeeded", "result": {"value": 1}}
         assert result["rejected"]["status"] == "failed"
         assert result["skipped"]["status"] == "canceled"
+
+
+def test_a_child_request_without_a_queue_goes_to_the_queue_of_the_parent(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        parent_id = Queue(connection).enqueue(
+            "default-child-parent", None, EnqueueOptions(queue="python-default-child-parents")
+        )
+
+        def handle_parent(_payload: object, context: HandlerContext) -> object:
+            return context.run_children(
+                (
+                    # The request names no queue, so the child goes to the queue of the parent.
+                    ChildTaskRequest(
+                        "unnamed", "default-child", None, EnqueueOptions(max_attempts=1)
+                    ),
+                    ChildTaskRequest(
+                        "named",
+                        "default-child",
+                        None,
+                        EnqueueOptions(queue="python-default-child-named", max_attempts=1),
+                    ),
+                )
+            )
+
+        worker = Worker(
+            worker_pool,
+            queue="python-default-child-parents",
+            worker_id="python-default-child-worker",
+        ).handle("default-child-parent", handle_parent)
+        assert worker.run_once() is True
+        rows = connection.execute(
+            "SELECT edge.child_name, task.queue_name FROM workhorse.task_child edge "
+            "JOIN workhorse.task task ON task.id = edge.child_task_id "
+            "WHERE edge.parent_task_id = %s ORDER BY edge.child_name",
+            (parent_id,),
+        ).fetchall()
+        assert rows == [
+            ("named", "python-default-child-named"),
+            ("unnamed", "python-default-child-parents"),
+        ]
+
+
+@pytest.mark.parametrize("child_set", [False, True])
+def test_a_replay_without_a_queue_keeps_the_queue_of_the_stored_child(
+    database_url: str, child_set: bool
+) -> None:
+    parent_queue = f"python-legacy-child-parents-{child_set}"
+    activations = 0
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        parent_id = Queue(connection).enqueue(
+            "legacy-child-parent", None, EnqueueOptions(queue=parent_queue)
+        )
+
+        def handle_parent(_payload: object, context: HandlerContext) -> object:
+            nonlocal activations
+            activations += 1
+            # The first activation acts as an earlier SDK, which put a child with no queue on
+            # `default`. The replay names no queue, so it keeps the queue of the stored child.
+            options = EnqueueOptions(queue="default" if activations == 1 else None, max_attempts=1)
+            if child_set:
+                return context.run_children_all(
+                    (ChildTaskRequest("charge", "legacy-child", None, options),)
+                )
+            return context.run_child("charge", "legacy-child", None, options)
+
+        parent = Worker(
+            worker_pool, queue=parent_queue, worker_id="python-legacy-parent-worker"
+        ).handle("legacy-child-parent", handle_parent)
+        child = Worker(worker_pool, queue="default", worker_id="python-legacy-child-worker").handle(
+            "legacy-child", lambda _payload, _context: {"receipt": 1}
+        )
+
+        assert parent.run_once() is True
+        assert child.run_once() is True
+        assert parent.run_once() is True
+        assert activations == 2
+        row = connection.execute(
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s", (parent_id,)
+        ).fetchone()
+        assert row == ("succeeded", {"charge": {"receipt": 1}} if child_set else {"receipt": 1})
 
 
 def test_child_fan_out_all_success_propagates_failure(database_url: str) -> None:

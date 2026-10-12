@@ -36,6 +36,10 @@ worker.handle<{ id: string }>("orders.checkout", async (order, ctx) => {
 });
 ```
 
+The request names the `payments` queue. If a child request names no queue, Workhorse puts the child
+in the queue of the parent task. A worker just ran the parent task, so a worker serves its queue. If
+the child needs a different queue, name that queue on the request.
+
 Thus, `runChild` gives the parent only the result of a successful child. If the child fails,
 Workhorse fails the parent. If the child is canceled, Workhorse cancels the parent. The wait does
 not use an attempt of the parent.
@@ -74,12 +78,14 @@ A rollback removes the child, the link, the dependency, the events, and the susp
   `dependencies`.
 - A handler on a fast-tier queue cannot run children. A child request cannot name a fast-tier
   queue.
+- A child request with no queue goes to the queue of the parent task. A replay of that request keeps
+  the queue of the stored child.
 - The suspension does not consume the parent's logical attempt.
 
 **Events.** `child_created` on the parent, `parent_linked` on the child, and the first
 `child_joined` on the parent.
 
-More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle) and [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints).
+More detail: [Data model: runChild lifecycle](../architecture/data-model.md#runchild-lifecycle), [Data model: Columns and constraints](../architecture/data-model.md#columns-and-constraints), and [Data model: Queue of a child request with no queue](../architecture/data-model.md#queue-of-a-child-request-with-no-queue).
 
 </details>
 

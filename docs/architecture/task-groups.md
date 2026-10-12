@@ -440,8 +440,9 @@ rule.
 | Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                 |
 | Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`  |
 
-A child task request with no queue does not follow this rule yet. ADR 0097 applies the same rule to
-child task requests in SM-1260.
+A child task request with no queue follows the same rule: the child goes to the queue of the parent
+task. [Data model: Queue of a child request with no
+queue](data-model.md#queue-of-a-child-request-with-no-queue) describes it.
 
 ### Batch handlers
 

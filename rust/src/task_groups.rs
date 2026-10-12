@@ -430,7 +430,8 @@ impl TaskGroupContext<'_> {
 
     /// Adds up to 1,000 tasks to the group of this member task, under the current fenced lease. A
     /// running member task can add tasks after the seal, until its group is canceled. A request
-    /// without a queue goes to the `default` queue, as a child task request does.
+    /// without a queue goes to the queue of the member task, as a child task request goes to the
+    /// queue of its parent task.
     pub async fn add(&self, requests: Vec<EnqueueRequest>) -> Result<Vec<EnqueueResult>, Error> {
         let context = self.context;
         context.check(Operation::AddToTaskGroup)?;

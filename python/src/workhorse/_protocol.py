@@ -177,13 +177,13 @@ def serialize_child_request(
     type: str,
     payload: Json,
     options: EnqueueOptions,
-    default_queue: str,
 ) -> dict[str, Json]:
     _validate_options(options)
     if any((options.idempotency, options.debounce, options.throttle, options.dependencies)):
         raise TypeError("Child tasks cannot use coalescing or dependency enqueue options")
     value: dict[str, Json] = {
-        "queue": options.queue or default_queue,
+        # A request with no queue goes to the queue of the parent task.
+        "queue": options.queue or parent.queue,
         "type": type,
         "payload": payload,
         "priority": options.priority,

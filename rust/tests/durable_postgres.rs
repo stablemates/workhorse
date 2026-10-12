@@ -304,6 +304,95 @@ async fn run_child_suspends_the_parent_until_the_child_succeeds() {
     assert_eq!(harness.result(parent).await, Some(json!(42)));
 }
 
+/// The queue of each child of `parent`, by child name.
+async fn child_queues(harness: &Harness, parent: Uuid) -> BTreeMap<String, String> {
+    let rows = harness
+        .database
+        .connect()
+        .await
+        .query(
+            "SELECT edge.child_name, task.queue_name FROM workhorse.task_child edge
+               JOIN workhorse.task task ON task.id = edge.child_task_id
+              WHERE edge.parent_task_id = $1",
+            &[&parent],
+        )
+        .await
+        .unwrap();
+    rows.iter().map(|row| (row.get(0), row.get(1))).collect()
+}
+
+#[tokio::test]
+async fn a_child_without_a_queue_goes_to_the_queue_of_its_parent() {
+    let Some(harness) = harness("durable_child_parent_queue").await else { return };
+    let parent = harness.enqueue("parent", json!(20)).await;
+    harness.worker.handle("parent", |input: i64, context: HandlerContext| async move {
+        // The request names no queue, so the child goes to the queue of the parent task.
+        let options = EnqueueOptions { max_attempts: 1, ..EnqueueOptions::default() };
+        let doubled: i64 = context.run_child("double", "double", &input, options).await?;
+        Ok(doubled + 2)
+    });
+    harness.worker.handle("double", |input: i64, _| async move { Ok(input * 2) });
+    let (stop, running) = harness.run();
+    harness.wait_for(parent, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    assert_eq!(harness.result(parent).await, Some(json!(42)));
+    assert_eq!(
+        child_queues(&harness, parent).await,
+        BTreeMap::from([("double".into(), QUEUE.into())])
+    );
+}
+
+#[tokio::test]
+async fn a_replay_without_a_queue_keeps_the_queue_of_the_stored_child() {
+    for set in [false, true] {
+        let name = format!("durable_child_stored_queue_{set}");
+        let Some(harness) = harness(&name).await else { return };
+        let options = WorkerOptions {
+            queues: vec![QUEUE.into(), "default".into()],
+            worker_id: Some(format!("rust-durable-{}", Uuid::new_v4())),
+            polling_only: true,
+            poll_interval: Some(Duration::from_millis(20)),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(harness.pool.clone(), options).unwrap();
+        let parent = harness.enqueue("parent", json!(20)).await;
+        let activations = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&activations);
+        worker.handle("parent", move |input: i64, context: HandlerContext| {
+            let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
+            async move {
+                // The first activation acts as an earlier SDK, which put a child with no queue on
+                // `default`. The replay names no queue, so it keeps the queue of the stored child.
+                let queue = first.then(|| "default".to_string());
+                let options =
+                    EnqueueOptions { queue, max_attempts: 1, ..EnqueueOptions::default() };
+                if set {
+                    let child = ChildTaskRequest {
+                        options,
+                        ..ChildTaskRequest::new("double", "double", &input).unwrap()
+                    };
+                    let results = context.run_children_all(vec![child]).await?;
+                    return Ok(results["double"].clone());
+                }
+                let doubled: i64 = context.run_child("double", "double", &input, options).await?;
+                Ok(json!(doubled))
+            }
+        });
+        worker.handle("double", |input: i64, _| async move { Ok(input * 2) });
+        for _ in 0..3 {
+            assert!(worker.run_once().await.unwrap(), "run_once() processed nothing");
+        }
+        assert_eq!(activations.load(Ordering::SeqCst), 2);
+        assert_eq!(harness.state(parent).await, TaskState::Succeeded);
+        assert_eq!(harness.result(parent).await, Some(json!(40)));
+        assert_eq!(
+            child_queues(&harness, parent).await,
+            BTreeMap::from([("double".into(), "default".into())])
+        );
+    }
+}
+
 #[tokio::test]
 async fn run_children_reports_how_each_child_ended() {
     let Some(harness) = harness("durable_run_children").await else { return };

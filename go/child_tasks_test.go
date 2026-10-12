@@ -204,6 +204,110 @@ func TestGoRunChildrenAllPropagatesFailure(t *testing.T) {
 	}
 }
 
+func TestGoChildRequestWithoutAQueueGoesToTheQueueOfTheParent(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-default-queue")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-default-child-parents")
+	parentID, err := queue.Enqueue(ctx, "go.default-child-parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-default-child-parents", WorkerID: "go-default-child-parent-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.Handle("go.default-child-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		return handler.RunChildren([]workhorse.ChildTaskRequest{
+			// The request names no queue, so the child goes to the queue of the parent task.
+			{Name: "unnamed", Type: "go.default-child", Options: workhorse.EnqueueOptions{MaxAttempts: 1}},
+			{Name: "named", Type: "go.default-child", Options: workhorse.EnqueueOptions{Queue: "go-default-child-named", MaxAttempts: 1}},
+		})
+	})
+	if processed, err := parent.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("create children: processed=%t err=%v", processed, err)
+	}
+	rows, err := pool.Query(ctx, `SELECT edge.child_name, task.queue_name FROM workhorse.task_child edge
+		JOIN workhorse.task task ON task.id = edge.child_task_id WHERE edge.parent_task_id = $1`, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queues := map[string]string{}
+	for rows.Next() {
+		var name, queueName string
+		if err := rows.Scan(&name, &queueName); err != nil {
+			t.Fatal(err)
+		}
+		queues[name] = queueName
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(queues) != 2 || queues["unnamed"] != "go-default-child-parents" || queues["named"] != "go-default-child-named" {
+		t.Fatalf("unexpected child queues: %v", queues)
+	}
+}
+
+func TestGoChildReplayWithoutAQueueKeepsTheQueueOfTheStoredChild(t *testing.T) {
+	for _, set := range []bool{false, true} {
+		t.Run(fmt.Sprintf("set=%t", set), func(t *testing.T) {
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), fmt.Sprintf("go-child-legacy-queue-%t", set))
+			ctx := context.Background()
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-legacy-child-parents")
+			parentID, err := queue.Enqueue(ctx, "go.legacy-child-parent", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-legacy-child-parents", WorkerID: "go-legacy-parent-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			activations := 0
+			parent.Handle("go.legacy-child-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+				activations++
+				// The first activation acts as an earlier SDK, which put a child with no queue on
+				// `default`. The replay names no queue, so it keeps the queue of the stored child.
+				options := workhorse.EnqueueOptions{MaxAttempts: 1}
+				if activations == 1 {
+					options.Queue = "default"
+				}
+				if set {
+					return handler.RunChildrenAll([]workhorse.ChildTaskRequest{{Name: "charge", Type: "go.legacy-child", Options: options}})
+				}
+				return handler.RunChild("charge", "go.legacy-child", nil, options)
+			})
+			child, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "default", WorkerID: "go-legacy-child-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child.Handle("go.legacy-child", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+				return map[string]int{"receipt": 1}, nil
+			})
+			for index, worker := range []*workhorse.Worker{parent, child, parent} {
+				if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+					t.Fatalf("run %d: processed=%t err=%v", index, processed, err)
+				}
+			}
+			var state string
+			if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1", parentID).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if activations != 2 || state != "succeeded" {
+				t.Fatalf("unexpected replay: activations=%d state=%s", activations, state)
+			}
+		})
+	}
+}
+
 func TestGoParentCreatesAndJoinsOneChild(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-single-child")
 	ctx := context.Background()

@@ -328,12 +328,14 @@ module Stablemates
       end
 
       # The +create_child_v1+ request for one child of +parent+, a ClaimedTask. A child inherits
-      # the parent's trace context, runs on the default queue unless +options+ names one, and
+      # the parent's trace context, runs on the queue of +parent+ unless +options+ names one, and
       # takes no coalescing or dependency option. A contracted child carries the contract PostgreSQL
       # holds now, because a child write has no stale-contract retry. A +version+ other than
       # +:current+ stamps that contract version instead, or none when it is nil. +contracts+ caches
-      # those loads across one child set. Internal to the SDK.
-      def serialize_child_request(parent, task_type, payload, options, contracts = {}, version: :current) # :nodoc:
+      # those loads across one child set. A request with no queue takes +stored_queue+ before the
+      # queue of +parent+. Internal to the SDK.
+      def serialize_child_request(parent, task_type, payload, options, contracts = {}, version: :current, # :nodoc:
+        stored_queue: nil)
         request = EnqueueRequest.new(task_type: task_type, payload: payload, **options)
         if request.idempotency || request.debounce || request.throttle || request.dependencies
           raise ArgumentError, "Child tasks cannot use coalescing or dependency enqueue options"
@@ -341,7 +343,7 @@ module Stablemates
 
         Values.check_json(payload, "payload")
         input = task_input(request)
-        input["queue"] = @default_queue if request.queue.nil? || request.queue.empty?
+        input["queue"] = stored_queue || parent.queue if request.queue.nil? || request.queue.empty?
         input["deadline"] = request.deadline && Values.timestamp(request.deadline, "deadline")
         input["budget"] = optional_bytes(request.budget, MAX_NAME_BYTES, "budget")
         timeout = request.execution_timeout &&

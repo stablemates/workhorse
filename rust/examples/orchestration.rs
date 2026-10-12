@@ -11,7 +11,8 @@ use workhorse::{
 
 const QUEUE: &str = "orders";
 
-/// A child omitted from any queue goes to `default`, which this worker does not serve.
+/// Names the queue of each child. A child with no queue also goes to `orders`, the queue of its
+/// parent task.
 fn child(name: &str, task_type: &str, payload: &Value) -> Result<ChildTaskRequest, HandlerError> {
     let mut request = ChildTaskRequest::new(name, task_type, payload)?;
     request.options = EnqueueOptions { queue: Some(QUEUE.into()), ..Default::default() };

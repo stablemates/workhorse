@@ -794,8 +794,8 @@ func (handler *HandlerContext) GetTaskGroup() (*TaskGroupLink, error) {
 
 // AddToTaskGroup adds up to MaxEnqueueBatchSize tasks to the group of this member task, under the
 // current fenced lease. A running member task can add tasks after the seal, until its group is
-// canceled. A request without a queue goes to the default queue. ErrNotTaskGroupMember reports a
-// task that is not a member task.
+// canceled. A request without a queue goes to the queue of the member task. ErrNotTaskGroupMember
+// reports a task that is not a member task.
 func (handler *HandlerContext) AddToTaskGroup(requests []EnqueueRequest) ([]EnqueueResult, error) {
 	if err := validateTaskGroupRequests(requests); err != nil {
 		return nil, err

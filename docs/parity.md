@@ -171,6 +171,7 @@ differ today, and the reasons follow the table.
 | Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
 | Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      |
 | Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
+| Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -206,7 +207,9 @@ observes cancellation, where a TypeScript or Python handler observes termination
 
 The queue of a handler task group add agrees. A handler can add a task to its own task group. If
 the request names no queue, all five SDKs put the task in the queue of the member task that adds it.
-A worker just ran that member task, so a worker serves its queue. [ADR
+A worker just ran that member task, so a worker serves its queue. The queue of a child task request
+agrees for the same reason. If a child task request names no queue, all five SDKs put the child in
+the queue of the parent task. [ADR
 0097](decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the rule.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's

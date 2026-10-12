@@ -49,6 +49,11 @@ queue of a member task always accepts a new member task.
   must now name that queue on the request.
 - New work shares the queue of its task, with its concurrency and its claim order. If the new work
   needs a different queue, the request must name it.
+- A parent task can create a child with no queue before an upgrade and replay that request after
+  the upgrade. PostgreSQL compares the queue of a replayed request. If the old default queue is not
+  the queue of the parent task, the replay gives a conflict. Thus, on a conflict, a replayed child
+  request with no queue keeps the queue of its stored child (SM-1260). A request that names a queue
+  keeps that queue.
 - The task group rule and the child task rule merge separately. Both must merge before the next
   release, so no release has one rule for task group adds and a different rule for child tasks.
 

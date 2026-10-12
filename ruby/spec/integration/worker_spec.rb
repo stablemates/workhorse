@@ -203,6 +203,55 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(queues.column_values(0)).to eq([@queue_name] * 3)
   end
 
+  it "puts a child request with no queue on the queue of the parent task" do
+    parent = queue.enqueue("parent", {}).task_id
+    other = "#{@queue_name}-other"
+    # The first queue of this worker is not the queue of the parent task.
+    subject = W::Worker.new(@pool, queues: ["#{@queue_name}-first", @queue_name], polling_only: true,
+      poll_interval: 0.01, disable_registry: true)
+    subject.handle("parent") do |_payload, context|
+      context.run_children([W::ChildTaskRequest.new(name: "unnamed", task_type: "child", payload: {}),
+        W::ChildTaskRequest.new(name: "named", task_type: "child", payload: {}, options: {queue: other})])
+    end
+    expect(subject.run_once).to be(true)
+
+    rows = @connection.exec_params("SELECT child.child_name, task.queue_name FROM workhorse.task_child child " \
+      "JOIN workhorse.task task ON task.id = child.child_task_id WHERE child.parent_task_id = $1", [parent])
+    expect(rows.to_h { |row| [row["child_name"], row["queue_name"]] }).to eq("unnamed" => @queue_name, "named" => other)
+  end
+
+  [false, true].each do |set|
+    it "keeps the queue of a stored child when a replay names no queue (set=#{set})" do
+      parent = queue.enqueue("parent", {}, max_attempts: 1).task_id
+      legacy = "#{@queue_name}-legacy"
+      subject = W::Worker.new(@pool, queues: [@queue_name, legacy], polling_only: true, poll_interval: 0.01,
+        disable_registry: true)
+      activations = 0
+      subject.handle("child") { {"receipt" => 1} }
+      subject.handle("parent") do |_payload, context|
+        activations += 1
+        # The first activation acts as an earlier SDK, which put a child with no queue on another
+        # queue. The replay names no queue, so it keeps the queue of the stored child.
+        options = (activations == 1) ? {queue: legacy, max_attempts: 1} : {max_attempts: 1}
+        if set
+          context.run_children_all([W::ChildTaskRequest.new(name: "charge", task_type: "child", payload: {},
+            options: options)])
+        else
+          context.run_child("charge", "child", {}, **options)
+        end
+      end
+
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+      until %w[succeeded failed].include?(status(parent)["state"]) ||
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        subject.run_once
+      end
+      expect(activations).to eq(2)
+      expect(status(parent)["state"]).to eq("succeeded")
+      expect(JSON.parse(status(parent)["result"])).to eq(set ? {"charge" => {"receipt" => 1}} : {"receipt" => 1})
+    end
+  end
+
   it "resumes a signal wait and a human wait with what was delivered" do
     task_id = queue.enqueue("review", {}).task_id
     subject = worker.handle("review") do |_payload, context|

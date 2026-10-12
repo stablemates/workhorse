@@ -1510,4 +1510,32 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
       pattern: "request.with(queue: task.queue)",
     },
   },
+  {
+    setting: "Queue of a child task request without a queue",
+    rust: {
+      value: "The queue of the parent task",
+      file: "rust/src/children.rs",
+      pattern: "stored_queue.unwrap_or(&parent.queue),",
+    },
+    typescript: {
+      value: "The queue of the parent task",
+      file: "typescript/core/src/queue/child-tasks.ts",
+      pattern: "queue: options.queue ?? storedQueue ?? parent.queue,",
+    },
+    python: {
+      value: "The queue of the parent task",
+      file: "python/src/workhorse/_protocol.py",
+      pattern: '"queue": options.queue or parent.queue,',
+    },
+    go: {
+      value: "The queue of the parent task",
+      file: "go/child_tasks.go",
+      pattern: "queueName = handler.Task.Queue",
+    },
+    ruby: {
+      value: "The queue of the parent task",
+      file: "ruby/lib/stablemates/workhorse/queue.rb",
+      pattern: 'input["queue"] = stored_queue || parent.queue if',
+    },
+  },
 ];

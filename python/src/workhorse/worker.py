@@ -334,7 +334,8 @@ _LookupResult = TypeVar("_LookupResult")
 
 # The contract version each existing child was created under, by child name. None marks a child
 # created without a contract.
-_ChildVersions = dict[str, str | None]
+# The contract version and the queue of each stored child, by name.
+_ChildVersions = dict[str, tuple[str | None, str | None]]
 # Contract definitions loaded for one child request, by task type, whether the version was pinned,
 # and the pinned version. None marks a type without a contract.
 _ChildContracts = dict[tuple[str, bool, str | None], _Row | None]
@@ -1040,10 +1041,15 @@ class _HandlerDurability:
 
         A child write has no stale-contract retry, so the request carries the current contract. A
         name in versions carries that contract version instead, or none when the version is None.
+        A name in versions with no queue in its options keeps the queue of the stored child, so a
+        child created before the queue of the parent became the default does not conflict.
         """
-        request = _serialize_child_request(self._task, type, payload, options, "default")
-        pinned = versions is not None and name in versions
-        version = versions.get(name) if versions is not None and pinned else None
+        stored = versions.get(name) if versions is not None else None
+        pinned = stored is not None
+        version = stored[0] if stored is not None else None
+        if stored is not None and stored[1] is not None and not options.queue:
+            options = replace(options, queue=stored[1])
+        request = _serialize_child_request(self._task, type, payload, options)
         if pinned and version is None:
             return request
         key = (type, pinned, version)
@@ -1110,7 +1116,7 @@ class _HandlerDurability:
         return write(accepted)
 
     def _accepted_child_versions(self) -> _ChildVersions:
-        """Return the contract version of each child this task created, by name."""
+        """Return the contract version and the queue of each child this task created, by name."""
         task_id = self._task.id
         # The psycopg text names the task twice; the asyncpg text reuses $1. One extra row covers
         # the edge where this task is itself a child.
@@ -1125,7 +1131,11 @@ class _HandlerDurability:
                 continue
             rows = self._executor.rows(_GET_TASK, (str(edge["child_task_id"]),))
             version = rows[0]["contract_version"] if len(rows) == 1 else None
-            versions[str(edge["child_name"])] = version if isinstance(version, str) else None
+            queue = rows[0]["queue_name"] if len(rows) == 1 else None
+            versions[str(edge["child_name"])] = (
+                version if isinstance(version, str) else None,
+                queue if isinstance(queue, str) else None,
+            )
         return versions
 
 
