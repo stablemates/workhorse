@@ -75,9 +75,9 @@ class AsyncAdmin(_AdminOperations)
 type AsyncBatchHandler = Callable[[Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]]
 
 class AsyncBatchHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
-  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
+  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   async def get_progress(self) -> TaskProgress | None
   async def set_progress(self, value: Json) -> TaskProgress
@@ -99,9 +99,9 @@ class AsyncCancellationToken
 type AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 
 class AsyncHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
-  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
+  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   async def get_progress(self) -> TaskProgress | None
   async def get_wait(self, name: str) -> TaskWait | None
@@ -186,9 +186,9 @@ class BatchFailed(dict)
 type BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandlerOutcome]]
 
 class BatchHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
-  def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
+  def checkpoint(self, name: str, operation: Callable[[], _TJson], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   def get_progress(self) -> TaskProgress | None
   def set_progress(self, value: Json) -> TaskProgress
@@ -269,6 +269,9 @@ class CancellationToken
 
 class CheckpointConflictError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
+
+class CheckpointInputConflictError(CheckpointConflictError)
+  def __init__(self, task_id: str, checkpoint_name: str, stored_fingerprint: str, requested_fingerprint: str) -> None
 
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
@@ -528,9 +531,9 @@ class FastTierUnsupportedError(WorkhorseError)
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class HandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
-  def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
+  def checkpoint(self, name: str, operation: Callable[[], _TJson], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   def get_progress(self) -> TaskProgress | None
   def get_wait(self, name: str) -> TaskWait | None
@@ -741,10 +744,11 @@ class StaleLeaseError(LifecycleError)
 TRACE_ATTRIBUTE_COUNT_LIMIT: int = 8
 
 class TaskCheckpoint
-  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime, input_fingerprint: str | None = None) -> None
   attempt: int
   created_at: datetime
   fence_token: int
+  input_fingerprint: str | None = None
   name: str
   task_id: str
   value: Json
@@ -1120,6 +1124,8 @@ def assert_schema_compatible(connection: _SyncConnection) -> None
 async def assert_schema_compatible_asyncpg(connection: _AsyncpgConnection) -> None
 
 async def assert_schema_compatible_psycopg(connection: _AsyncPsycopgConnectionInput) -> None
+
+def checkpoint_input_fingerprint(input: object) -> str
 
 def run_worker_process(worker: Worker, *, shutdown_timeout_ms: int = 25000, force_exit: Callable[[int], NoReturn] = <_exit>) -> None
 
@@ -5979,6 +5985,9 @@ class CancellationRequestedError(WorkhorseError)
 class CheckpointConflictError(WorkhorseError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
 
+class CheckpointInputConflictError(CheckpointConflictError)
+  def __init__(self, task_id: str, checkpoint_name: str, stored_fingerprint: str, requested_fingerprint: str) -> None
+
 class CheckpointLeaseLostError(LifecycleError)
   def __init__(self, task_id: str, checkpoint_name: str) -> None
 
@@ -6095,9 +6104,9 @@ class WorkhorseError(Exception)
 ## workhorse.types
 
 class AsyncBatchHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
-  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
+  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   async def get_progress(self) -> TaskProgress | None
   async def set_progress(self, value: Json) -> TaskProgress
@@ -6117,9 +6126,9 @@ class AsyncCancellationToken
   async def wait(self, timeout: float | None = None) -> bool
 
 class AsyncHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]], _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = <_async_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = <_async_task_groups_unsupported>) -> None
   cancellation: AsyncCancellationToken
-  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
+  async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   async def get_progress(self) -> TaskProgress | None
   async def get_wait(self, name: str) -> TaskWait | None
@@ -6157,9 +6166,9 @@ class BatchFailed(dict)
   def values(...)
 
 class BatchHandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
-  def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
+  def checkpoint(self, name: str, operation: Callable[[], _TJson], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   def get_progress(self) -> TaskProgress | None
   def set_progress(self, value: Json) -> TaskProgress
@@ -6370,9 +6379,9 @@ class EnqueueResult
   task_id: str
 
 class HandlerContext
-  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]], _get_task_group: Callable[[], TaskGroupLink | None] = <_task_groups_unsupported>, _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = <_task_groups_unsupported>) -> None
   cancellation: CancellationToken
-  def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
+  def checkpoint(self, name: str, operation: Callable[[], _TJson], *, input: Json | _NoInput = <_NoInput>) -> _TJson
   def get_checkpoint(self, name: str) -> TaskCheckpoint | None
   def get_progress(self) -> TaskProgress | None
   def get_wait(self, name: str) -> TaskWait | None
@@ -6475,10 +6484,11 @@ type SignalDeliveryStatus = Literal[
 ]
 
 class TaskCheckpoint
-  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime, input_fingerprint: str | None = None) -> None
   attempt: int
   created_at: datetime
   fence_token: int
+  input_fingerprint: str | None = None
   name: str
   task_id: str
   value: Json

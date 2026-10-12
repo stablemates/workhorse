@@ -66,6 +66,33 @@ class CheckpointConflictError(WorkhorseError):
         )
 
 
+class CheckpointInputConflictError(CheckpointConflictError):
+    """A checkpoint stores the result of a different input (ADR 0098).
+
+    The call gave an input whose fingerprint differs from the stored fingerprint, or from the
+    fingerprint of an overlapping call with the same name. The operation does not run. A retry of
+    the same handler cannot succeed, so the worker fails the task at once, as for every
+    ``CheckpointConflictError``.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        checkpoint_name: str,
+        stored_fingerprint: str,
+        requested_fingerprint: str,
+    ) -> None:
+        WorkhorseError.__init__(
+            self,
+            f"Checkpoint {checkpoint_name} for task {task_id} stores the result of a different "
+            "input",
+        )
+        self.task_id = task_id
+        self.checkpoint_name = checkpoint_name
+        self.stored_fingerprint = stored_fingerprint
+        self.requested_fingerprint = requested_fingerprint
+
+
 class ProgressLeaseLostError(LifecycleError):
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
@@ -409,6 +436,7 @@ def _translate_database_error(error: Exception) -> WorkhorseError | None:
 __all__ = [
     "CancellationRequestedError",
     "CheckpointConflictError",
+    "CheckpointInputConflictError",
     "CheckpointLeaseLostError",
     "ChildConflictError",
     "ChildLeaseLostError",

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from threading import Event, Lock
 from typing import Any, Literal, TypedDict, TypeVar, cast
 
@@ -31,6 +32,12 @@ type TaskState = Literal[
     "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
 ]
 _TJson = TypeVar("_TJson", bound=Json)
+
+
+class _NoInput(Enum):
+    """The default of a checkpoint input, so that ``None`` stays the JSON input null."""
+
+    NO_INPUT = "no input"
 
 
 @dataclass(frozen=True)
@@ -302,6 +309,9 @@ class TaskCheckpoint:
     fence_token: int
     worker_id: str
     created_at: datetime
+    input_fingerprint: str | None = None
+    """The fingerprint of the input that produced ``value``, or ``None`` when the save gave no
+    input (ADR 0098)."""
 
 
 @dataclass(frozen=True)
@@ -579,7 +589,7 @@ class HandlerContext:
     _get_wait: Callable[[str], TaskWait | None] = field(repr=False)
     _get_progress: Callable[[], TaskProgress | None] = field(repr=False)
     _set_progress: Callable[[Json], TaskProgress] = field(repr=False)
-    _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json] = field(repr=False)
     _sleep: Callable[[str, int], None] = field(repr=False)
     _sleep_until: Callable[[str, datetime], None] = field(repr=False)
     _wait_for_signal: Callable[[str, int | None], Json] = field(repr=False)
@@ -613,8 +623,22 @@ class HandlerContext:
     def set_progress(self, value: Json) -> TaskProgress:
         return self._set_progress(value)
 
-    def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
-        return cast(_TJson, self._checkpoint(name, operation))
+    def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], _TJson],
+        *,
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> _TJson:
+        """Return the value of the checkpoint ``name``. Run ``operation`` only if none is saved.
+
+        With ``input``, a JSON value, the checkpoint also stores the fingerprint of the input, as
+        ``checkpoint_input_fingerprint`` computes it. If the stored checkpoint or an overlapping
+        call with the same name has the fingerprint of a different input, the call raises
+        ``CheckpointInputConflictError`` and ``operation`` does not run. If either side has no
+        input, the call compares nothing (ADR 0098).
+        """
+        return cast(_TJson, self._checkpoint(name, operation, input))
 
     def sleep(self, name: str, duration_ms: int) -> None:
         self._sleep(name, duration_ms)
@@ -666,7 +690,9 @@ class AsyncHandlerContext:
     _get_wait: Callable[[str], Awaitable[TaskWait | None]] = field(repr=False)
     _get_progress: Callable[[], Awaitable[TaskProgress | None]] = field(repr=False)
     _set_progress: Callable[[Json], Awaitable[TaskProgress]] = field(repr=False)
-    _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
+    _checkpoint: Callable[
+        [str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]
+    ] = field(repr=False)
     _sleep: Callable[[str, int], Awaitable[None]] = field(repr=False)
     _sleep_until: Callable[[str, datetime], Awaitable[None]] = field(repr=False)
     _wait_for_signal: Callable[[str, int | None], Awaitable[Json]] = field(repr=False)
@@ -702,8 +728,22 @@ class AsyncHandlerContext:
     async def set_progress(self, value: Json) -> TaskProgress:
         return await self._set_progress(value)
 
-    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
-        return cast(_TJson, await self._checkpoint(name, operation))
+    async def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[_TJson]],
+        *,
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> _TJson:
+        """Return the value of the checkpoint ``name``. Run ``operation`` only if none is saved.
+
+        With ``input``, a JSON value, the checkpoint also stores the fingerprint of the input, as
+        ``checkpoint_input_fingerprint`` computes it. If the stored checkpoint or an overlapping
+        call with the same name has the fingerprint of a different input, the call raises
+        ``CheckpointInputConflictError`` and ``operation`` does not run. If either side has no
+        input, the call compares nothing (ADR 0098).
+        """
+        return cast(_TJson, await self._checkpoint(name, operation, input))
 
     async def sleep(self, name: str, duration_ms: int) -> None:
         await self._sleep(name, duration_ms)
@@ -744,7 +784,7 @@ class BatchHandlerContext:
     _get_checkpoint: Callable[[str], TaskCheckpoint | None] = field(repr=False)
     _get_progress: Callable[[], TaskProgress | None] = field(repr=False)
     _set_progress: Callable[[Json], TaskProgress] = field(repr=False)
-    _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Json], Json | _NoInput], Json] = field(repr=False)
     _get_task_group: Callable[[], TaskGroupLink | None] = field(
         default=_task_groups_unsupported, repr=False
     )
@@ -766,8 +806,22 @@ class BatchHandlerContext:
     def set_progress(self, value: Json) -> TaskProgress:
         return self._set_progress(value)
 
-    def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
-        return cast(_TJson, self._checkpoint(name, operation))
+    def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], _TJson],
+        *,
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> _TJson:
+        """Return the value of the checkpoint ``name``. Run ``operation`` only if none is saved.
+
+        With ``input``, a JSON value, the checkpoint also stores the fingerprint of the input, as
+        ``checkpoint_input_fingerprint`` computes it. If the stored checkpoint or an overlapping
+        call with the same name has the fingerprint of a different input, the call raises
+        ``CheckpointInputConflictError`` and ``operation`` does not run. If either side has no
+        input, the call compares nothing (ADR 0098).
+        """
+        return cast(_TJson, self._checkpoint(name, operation, input))
 
 
 @dataclass(frozen=True)
@@ -785,7 +839,9 @@ class AsyncBatchHandlerContext:
     _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]] = field(repr=False)
     _get_progress: Callable[[], Awaitable[TaskProgress | None]] = field(repr=False)
     _set_progress: Callable[[Json], Awaitable[TaskProgress]] = field(repr=False)
-    _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
+    _checkpoint: Callable[
+        [str, Callable[[], Awaitable[Json]], Json | _NoInput], Awaitable[Json]
+    ] = field(repr=False)
     _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = field(
         default=_async_task_groups_unsupported, repr=False
     )
@@ -807,8 +863,22 @@ class AsyncBatchHandlerContext:
     async def set_progress(self, value: Json) -> TaskProgress:
         return await self._set_progress(value)
 
-    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
-        return cast(_TJson, await self._checkpoint(name, operation))
+    async def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[_TJson]],
+        *,
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> _TJson:
+        """Return the value of the checkpoint ``name``. Run ``operation`` only if none is saved.
+
+        With ``input``, a JSON value, the checkpoint also stores the fingerprint of the input, as
+        ``checkpoint_input_fingerprint`` computes it. If the stored checkpoint or an overlapping
+        call with the same name has the fingerprint of a different input, the call raises
+        ``CheckpointInputConflictError`` and ``operation`` does not run. If either side has no
+        input, the call compares nothing (ADR 0098).
+        """
+        return cast(_TJson, await self._checkpoint(name, operation, input))
 
 
 @dataclass(frozen=True)

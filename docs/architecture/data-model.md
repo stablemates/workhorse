@@ -1689,6 +1689,24 @@ The Ruby `CheckpointInputConflictError` is a subclass of `ConflictError`. It car
 stored fingerprint, or nil. An SDK that does not give an input yet returns the column from its
 checkpoint reads and ignores it.
 
+In Python, `HandlerContext.checkpoint(name, operation, input=…)` compares inputs as TypeScript does.
+`AsyncHandlerContext`, `BatchHandlerContext`, and `AsyncBatchHandlerContext` take the same keyword
+argument. These are the Python details:
+
+1. `checkpoint_input_fingerprint(input)` computes the same digest. Object keys sort by UTF-16 code
+   units, and each number uses the ECMAScript form of its IEEE 754 double. A value of a type that is
+   not JSON, or a key that is not a `str`, raises a `TypeError`. A non-finite number, an `int`
+   larger than 2**53 - 1 in magnitude, or a string with a lone surrogate raises a `ValueError`.
+2. The context computes the fingerprint before it reads the checkpoint, so the operation does not
+   run for an input that is not JSON. A call without `input` gives no fingerprint, and `input=None`
+   gives the fingerprint of the JSON null.
+3. A different stored fingerprint, an overlapping call with a different fingerprint, or the
+   `input_conflict` status raises `CheckpointInputConflictError`, and the operation does not run.
+
+The Python `CheckpointInputConflictError` is a subclass of `CheckpointConflictError`. It carries
+`task_id`, `checkpoint_name`, `stored_fingerprint`, and `requested_fingerprint`.
+`TaskCheckpoint.input_fingerprint` returns the stored fingerprint, or `None`.
+
 In Go:
 
 - A panic in the operation reaches each duplicate as a `checkpoint <name> operation panicked` error.

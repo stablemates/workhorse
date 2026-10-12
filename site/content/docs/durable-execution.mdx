@@ -398,6 +398,7 @@ fingerprint that the call stores.
 | TypeScript | `HandlerContext.checkpoint(name, operation, { input })`   | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
 | Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)` | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
 | Ruby       | `HandlerContext#checkpoint(name, input:) { … }`           | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
+| Python     | `HandlerContext.checkpoint(name, operation, input=…)`     | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same

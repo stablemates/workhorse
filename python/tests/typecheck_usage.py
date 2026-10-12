@@ -155,6 +155,8 @@ def sync_worker(pool: ConnectionPool[Any]) -> bool:
         progress = context.set_progress({"phase": "working"})
         assert context.get_progress() == progress
         prepared = context.checkpoint("prepare", lambda: {"payload": payload})
+        charged = context.checkpoint("charge", lambda: 1, input={"amountCents": 1000})
+        assert charged == 1
         signal = context.wait_for_signal("approval", timeout_ms=60_000)
         decision = context.wait_for_human("review", {"signal": signal})
         child = context.run_child("audit", "audit.write", {"decision": decision})
@@ -256,6 +258,7 @@ async def async_psycopg_worker(pool: AsyncConnectionPool[Any]) -> bool:
         progress = await context.set_progress({"phase": "working"})
         assert await context.get_progress() == progress
         prepared = await context.checkpoint("prepare", lambda: async_value(payload))
+        await context.checkpoint("charge", lambda: async_value(1), input={"amountCents": 1000})
         await context.sleep("delay", 1)
         return {"prepared": prepared}
 

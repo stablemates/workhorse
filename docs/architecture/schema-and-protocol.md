@@ -253,6 +253,8 @@ checkpoint input raises it, so `protocol/v1/runtime.json` does not pin it.
   `CheckpointInputConflictError`, with the same conflict flag.
 - Ruby uses `ConflictError`. Its message identifies the operation and the retained name. Its
   subclass `CheckpointInputConflictError` also identifies the stored and the requested fingerprint.
+- Python makes `CheckpointInputConflictError` a subclass of `CheckpointConflictError`, so the worker
+  settles it with the other terminal classes.
 
 #### Settling a conflict
 
@@ -795,11 +797,13 @@ The handler context gives a Python handler its checkpoint, progress, wait, and c
 #### Checkpoints
 
 Python `HandlerContext.checkpoint(name, operation)` loads `task_checkpoint` lazily, once for each
-activation. It coalesces concurrent calls by name. It calls `save_checkpoint_v1` under the active
+activation. It coalesces concurrent calls by name. It calls `save_checkpoint_v2` under the active
 worker and fence. `get_checkpoint(name)` reads the same activation cache.
 
 The method raises `CheckpointLeaseLostError` for `stale` and `CheckpointConflictError` for
-`conflict`.
+`conflict`. With `input=`, it sends the input fingerprint and raises
+`CheckpointInputConflictError` for `input_conflict`. Without an input, it sends a NULL fingerprint
+([Data model: `task_checkpoint`](data-model.md#task_checkpoint)).
 
 #### Progress
 
@@ -1031,12 +1035,12 @@ In each case, `checkpoint` stores no row in `workhorse.task_checkpoint`. Thus a 
 the operation again.
 
 If a cancellation arrives after the tracked task returns, it does not stop the save. The synchronous
-core sends `save_checkpoint_v1` when `operation` returns. `_await_bridge_call` waits for that bridge
+core sends `save_checkpoint_v2` when `operation` returns. `_await_bridge_call` waits for that bridge
 call before it re-raises. If the save is already under way, the caller receives
 `asyncio.CancelledError`, and the row can commit at the same time. A later attempt then replays its
 value and does not call `operation`.
 
-`save_checkpoint_v1` checks the worker, fence, lease expiry, deadline, attempt timeout, and
+`save_checkpoint_v2` checks the worker, fence, lease expiry, deadline, attempt timeout, and
 `cancel_requested_at` of the runtime row. The asyncio cancellation of the caller is not one of its
 conditions. Thus a cancelled await never proves that no checkpoint exists. It also does not undo the
 operation's effects on other systems.

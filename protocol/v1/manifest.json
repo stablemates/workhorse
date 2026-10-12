@@ -576,13 +576,13 @@
     },
     {
       "name": "save_checkpoint_v1",
-      "pythonBinding": "save_checkpoint",
       "arity": 5,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
       "catalogues": ["protocol"]
     },
     {
       "name": "save_checkpoint_v2",
+      "pythonBinding": "save_checkpoint",
       "arity": 6,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at, input_fingerprint FROM workhorse.save_checkpoint_v2($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::text)",
       "catalogues": ["protocol"]

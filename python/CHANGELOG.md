@@ -99,6 +99,27 @@ The Python SDK adds task groups (SM-1233). The names follow the TypeScript SDK, 
   `TaskGroupContext`, `AsyncTaskGroupContext`, their literal types, and the constants
   `MAX_TASK_GROUP_MEMBERS`, `MAX_TASK_GROUP_PAGE_SIZE`, and `MAX_TASK_GROUP_DRIFT_LIMIT`.
 
+### Checkpoint input check
+
+A Python handler can give the input of a checkpoint (SM-1261,
+[ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)).
+
+- `HandlerContext.checkpoint(name, operation, input=value)` stores the fingerprint of the input with
+  the value, through `save_checkpoint_v2`. `AsyncHandlerContext`, `BatchHandlerContext`, and
+  `AsyncBatchHandlerContext` take the same keyword argument. A call without `input` does not change.
+- If the stored checkpoint, an overlapping call with the same name, or the `input_conflict` status
+  of the save has a different fingerprint, the call raises `CheckpointInputConflictError`, and the
+  operation does not run. If the call or the stored checkpoint has no input, nothing is compared.
+- `CheckpointInputConflictError` is a subclass of `CheckpointConflictError`, so the worker fails the
+  task at once and keeps the current attempt. It carries `task_id`, `checkpoint_name`,
+  `stored_fingerprint`, and `requested_fingerprint`.
+- `checkpoint_input_fingerprint(input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
+  canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
+  the TypeScript SDK. It refuses a non-finite number and an `int` larger than 2**53 - 1 in
+  magnitude.
+- `TaskCheckpoint` gains `input_fingerprint`, the stored fingerprint or `None`. The handler context
+  and the `Admin` and `AsyncAdmin` reads fill it.
+
 ### Behaviour changes
 
 - If a child task request names no queue, `run_child`, `run_children`, and `run_children_all` put

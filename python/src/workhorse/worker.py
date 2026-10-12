@@ -19,6 +19,7 @@ from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 from uuid import uuid4
 
+from ._checkpoint_input import checkpoint_input_fingerprint as _checkpoint_input_fingerprint
 from ._compatibility import (
     CachedCompatibilityCheck as _CachedCompatibilityCheck,
     SyncRowExecutor as _SyncRowExecutor,
@@ -75,6 +76,7 @@ from .client import Queue
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
+    CheckpointInputConflictError,
     CheckpointLeaseLostError,
     ChildConflictError,
     ChildLeaseLostError,
@@ -117,6 +119,7 @@ from .types import (
     TaskGroupLink,
     TaskProgress,
     TaskWait,
+    _NoInput,
 )
 
 if TYPE_CHECKING:
@@ -387,7 +390,9 @@ class _HandlerDurability:
         self._progress: TaskProgress | None = None
         self._progress_load_error: BaseException | None = None
         self._progress_load_attempted = False
-        self._checkpoint_calls: dict[str, Future[Json]] = {}
+        # Each running checkpoint call keeps its input fingerprint, so an overlapping call with
+        # the same name compares its input before it shares the result.
+        self._checkpoint_calls: dict[str, tuple[str | None, Future[Json]]] = {}
         self._wait_calls: dict[str, Future[None]] = {}
         self._signal_calls: dict[str, Future[Json]] = {}
         self._human_calls: dict[str, tuple[str, Future[Json]]] = {}
@@ -586,20 +591,32 @@ class _HandlerDurability:
         )
         return progress
 
-    def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json:
+    def _check_input(self, name: str, stored: str | None, requested: str | None) -> None:
+        # Inputs are compared only when both sides carry a fingerprint, so a handler that adds or
+        # removes an input keeps the stored result.
+        if stored is not None and requested is not None and stored != requested:
+            raise CheckpointInputConflictError(self._task.id, name, stored, requested)
+
+    def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], Json],
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> Json:
+        # An input that is not JSON fails here, before the call registers or the operation runs.
+        fingerprint = None if input is _NoInput.NO_INPUT else _checkpoint_input_fingerprint(input)
         with self._lock:
-            pending = self._checkpoint_calls.get(name)
-            if pending is None:
-                pending = Future()
-                self._checkpoint_calls[name] = pending
-                owns_call = True
-            else:
-                owns_call = False
-        if not owns_call:
-            return pending.result()
+            running = self._checkpoint_calls.get(name)
+            if running is None:
+                pending: Future[Json] = Future()
+                self._checkpoint_calls[name] = (fingerprint, pending)
+        if running is not None:
+            self._check_input(name, running[0], fingerprint)
+            return running[1].result()
         try:
             existing = self._load_checkpoints().get(name)
             if existing is not None:
+                self._check_input(name, existing.input_fingerprint, fingerprint)
                 result = existing.value
             else:
                 self._cancellation.raise_if_cancelled()
@@ -615,12 +632,15 @@ class _HandlerDurability:
                             self._task.fence_token,
                             name,
                             encoded,
+                            fingerprint,
                         ),
                     )
                 )
                 status = row["status"]
                 if status == "stale":
                     raise CheckpointLeaseLostError(self._task.id, name)
+                if status == "input_conflict":
+                    self._check_input(name, cast(str | None, row["input_fingerprint"]), fingerprint)
                 if status == "conflict":
                     raise CheckpointConflictError(self._task.id, name)
                 if status not in {"saved", "existing"}:
@@ -648,7 +668,8 @@ class _HandlerDurability:
             raise
         finally:
             with self._lock:
-                if self._checkpoint_calls.get(name) is pending:
+                current = self._checkpoint_calls.get(name)
+                if current is not None and current[1] is pending:
                     del self._checkpoint_calls[name]
 
     def sleep(self, name: str, duration_ms: int) -> None:
@@ -3320,6 +3341,7 @@ def _checkpoint_record(task_id: str, row: _Row, *, name: str | None = None) -> T
         fence_token=int(cast(int, row["fence_token"])),
         worker_id=str(row["worker_id"]),
         created_at=cast(datetime, row["created_at"]),
+        input_fingerprint=cast(str | None, row["input_fingerprint"]),
     )
 
 

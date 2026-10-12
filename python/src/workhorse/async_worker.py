@@ -41,6 +41,7 @@ from .types import (
     TaskGroupLink,
     TaskProgress,
     TaskWait,
+    _NoInput,
 )
 from .worker import Worker
 
@@ -193,7 +194,9 @@ class _AsyncExecutorBridge:
 class _CheckpointContext(Protocol):
     def get_checkpoint(self, name: str) -> TaskCheckpoint | None: ...
 
-    def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json: ...
+    def checkpoint(
+        self, name: str, operation: Callable[[], Json], *, input: Json | _NoInput = ...
+    ) -> Json: ...
 
     def get_progress(self) -> TaskProgress | None: ...
 
@@ -220,7 +223,12 @@ class _AsyncCheckpointAdapter:
     async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._call(self._checkpoint_context.get_checkpoint, name)
 
-    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[Json]]) -> Json:
+    async def checkpoint(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[Json]],
+        input: Json | _NoInput = _NoInput.NO_INPUT,
+    ) -> Json:
         # The operation and the cancellation callback both run on the event loop. The
         # tracked task calls the operation in its first step, so a cancellation either
         # stops it before the operation is created or cancels it while it runs.
@@ -260,7 +268,9 @@ class _AsyncCheckpointAdapter:
         return await _await_bridge_call(
             asyncio.wrap_future(
                 self._threads.run(
-                    partial(self._checkpoint_context.checkpoint, name, invoke_operation)
+                    partial(
+                        self._checkpoint_context.checkpoint, name, invoke_operation, input=input
+                    )
                 )
             ),
             cancel_operation,
