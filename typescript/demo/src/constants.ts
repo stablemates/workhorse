@@ -233,7 +233,7 @@ export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";
  * out a burst of shared-worker tasks onto `demo-shared`, so every language worker drains it. A
  * steady trickle runs every minute, spikes land three times an hour, and surges land six times a
  * day. The burst size varies per occurrence between `minSize` and `maxSize`. Together the tiers
- * add about 14,800 tasks a day to the roughly 9,500 the other schedules produce.
+ * add about 14,800 tasks a day to the roughly 9,800 the other schedules produce.
  */
 export const DEMO_TRAFFIC_TIERS = [
   { name: "traffic.trickle", tier: "trickle", schedule: "* * * * *", minSize: 2, maxSize: 6 },
@@ -241,6 +241,28 @@ export const DEMO_TRAFFIC_TIERS = [
   { name: "traffic.surge", tier: "surge", schedule: "38 1-23/4 * * *", minSize: 200, maxSize: 400 },
 ] as const;
 export type DemoTrafficTier = (typeof DEMO_TRAFFIC_TIERS)[number]["tier"];
+/**
+ * Task groups (ADR 0095) in the daily load.
+ *
+ * Each occurrence runs one `demo.task-group-driver` on the TypeScript worker. The driver creates
+ * one sealed group with one member task on each full-tier queue of the Python, Go, Rust, and Ruby
+ * workers. The group requests all three callbacks on `demo-shared`, and a finished group enqueues
+ * two of them. One group in three has a misrouted member that fails, so the group finishes with the
+ * result `failed`. Two occurrences an hour add about 340 tasks a day.
+ */
+export const TASK_GROUP_DRIVER_TASK_TYPE = "demo.task-group-driver";
+export const TASK_GROUP_SCHEDULE_NAME = "task-group";
+export const TASK_GROUP_SCHEDULE = "17,47 * * * *";
+/** The task groups seed marker. It creates one group in each state that the dashboard shows. */
+export const TASK_GROUP_SEED_NAME = "task-groups-dashboard-v1";
+/** The full-tier language queues that hold the member tasks, in member order. */
+export const DEMO_TASK_GROUP_LANGUAGES = [
+  { language: "python", queue: DEMO_PYTHON_QUEUE },
+  { language: "go", queue: DEMO_GO_QUEUE },
+  { language: "rust", queue: DEMO_RUST_QUEUE },
+  { language: "ruby", queue: DEMO_RUBY_QUEUE },
+] as const;
+export type DemoTaskGroupResult = "succeeded" | "failed";
 /**
  * The demo always asks for the documented 24 hour retention window so a repeated submission is
  * still recognised across a demo session and an operator can see one stable retention claim.

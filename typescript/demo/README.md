@@ -145,6 +145,22 @@ of these late steps syncs the schedules of its own language and every earlier on
 A later language's schedule could otherwise fire into its fast-tier queue before that queue's tier
 changes. The ordinary schedule sync gives `demo-ruby` its own recurring task.
 
+A seed step marked `task-groups-dashboard-v1` fills the task groups page. A task group is a set of
+member tasks that Workhorse tracks as one unit, with callbacks that run when every member is finished
+(ADR 0095). The step creates five groups. Each group has member tasks on `demo-python`, `demo-go`,
+`demo-rust`, and `demo-ruby`, so four SDKs run them. Each group requests its `onFinish`, `onSuccess`,
+and `onFailure` callbacks on `demo-shared`.
+
+1. A sealed group whose members all succeed. It finishes with the result `succeeded`.
+2. A sealed group whose Ruby member carries another language. The Ruby worker fails that member, so
+   the group finishes with the result `failed`.
+3. A sealed group whose Ruby member has a run time that never arrives. The group stays sealed.
+4. An open group with two members. Nothing seals it, so it stays open.
+5. A group that the step cancels at once. Its members become canceled, and the group finishes with
+   the result `failed`.
+
+The step does not change the earlier markers, and a second run does nothing.
+
 Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
 application shell keeps the header and responsive sidebar in place while browser URLs switch between
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
@@ -212,7 +228,11 @@ long-running schedule, the staggered feature-family definitions, and three traff
 `Queue.syncSchedules`. Each traffic occurrence runs a `demo.traffic-burst` driver that enqueues a burst
 of `demo.shared-worker` tasks on `demo-shared`, so all five workers drain it. A trickle of 2 to 6 tasks
 runs every minute, spikes of 40 to 120 tasks land three times an hour, and surges of 200 to 400 tasks
-land six times a day.
+land six times a day. Twice an hour, the `task-group` schedule runs a `demo.task-group-driver`. The
+driver creates one sealed task group with one member on each of `demo-python`, `demo-go`,
+`demo-rust`, and `demo-ruby`. One group in three has a misrouted Ruby member, so that group finishes
+with the result `failed`. Each group finishes when its members finish, and it enqueues two of its
+three callbacks on `demo-shared`. The driver adds about 340 tasks a day.
 All five workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
