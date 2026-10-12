@@ -680,15 +680,39 @@ describe("retention maintenance", () => {
   });
 
   it("prunes statistics buckets on their own policy, bounded per pass", async () => {
-    await queue.enqueue("stat-prune", {});
+    const taskId = await queue.enqueue("stat-prune", {});
     await queue.tick();
-    await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
+    // The rollup runs in the first minutes of the enqueue's UTC day, so it cannot close that day.
+    // If the rollup used the wall clock near UTC midnight, it could close the day. It would then
+    // write the day bucket that this test inserts below.
+    const dayStart = (
+      await pool.query<{ at: Date }>(
+        `UPDATE workhorse.task_event
+            SET occurred_at = date_bin('1 day', occurred_at,
+                  timestamp '2000-01-01' AT TIME ZONE 'UTC')
+          WHERE task_id = $1 AND event_type = 'enqueued'
+          RETURNING occurred_at AS at`,
+        [taskId],
+      )
+    ).rows[0]!.at;
+    await pool.query(
+      `UPDATE workhorse.task_stat_state
+          SET rolled_up_through = $1, hourly_rolled_up_through = $1, daily_rolled_up_through = $1`,
+      [dayStart],
+    );
+    await queue.rollupStatistics({ now: new Date(dayStart.getTime() + 120_000) });
     await pool.query(
       `INSERT INTO workhorse.task_stat_bucket_day (bucket_start, queue_name, task_type, enqueued)
        SELECT date_bin('1 day', bucket_start, timestamp '2000-01-01' AT TIME ZONE 'UTC'),
               queue_name, task_type, sum(enqueued)
          FROM workhorse.task_stat_bucket
         GROUP BY 1, 2, 3`,
+    );
+    // The event ages with its buckets. Otherwise the recompute window of a later rollup starts at
+    // the event's minute and writes its buckets again inside the retention window.
+    await pool.query(
+      "UPDATE workhorse.task_event SET occurred_at = occurred_at - interval '30 days' WHERE task_id = $1",
+      [taskId],
     );
     await pool.query(
       "UPDATE workhorse.task_stat_bucket SET bucket_start = bucket_start - interval '30 days'",
