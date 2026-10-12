@@ -1277,6 +1277,7 @@ def _checkpoint(row: _Row) -> TaskCheckpoint:
         int(cast(str | int, row["fence_token"])),
         cast(str, row["worker_id"]),
         cast(datetime, row["created_at"]),
+        cast(str | None, row["input_fingerprint"]),
     )
 
 

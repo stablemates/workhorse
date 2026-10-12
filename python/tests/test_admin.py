@@ -23,6 +23,7 @@ from workhorse import (
     TaskListQuery,
     TaskPayloadProjection,
     Worker,
+    checkpoint_input_fingerprint,
 )
 
 worker_pool: Any
@@ -45,7 +46,7 @@ def _raise_failure(_payload: object, _context: HandlerContext) -> object:
 
 
 def _durable_wait(_payload: object, context: HandlerContext) -> object:
-    context.checkpoint("prepared", lambda: {"ready": True})
+    context.checkpoint("prepared", lambda: {"ready": True}, input={"step": 1})
     context.set_progress({"step": "waiting"})
     context.sleep("backoff", 60_000)
     raise AssertionError("sleep should suspend the handler")
@@ -170,7 +171,9 @@ def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str, w
         assert fixture.failed_task_ids[1] in {result.source_task_id for result in bulk.results}
         assert {result.status for result in bulk.results} == {"eligible"}
 
-        assert admin.get_checkpoint(fixture.durable_task_id, "prepared") is not None
+        checkpoint = admin.get_checkpoint(fixture.durable_task_id, "prepared")
+        assert checkpoint is not None
+        assert checkpoint.input_fingerprint == checkpoint_input_fingerprint({"step": 1})
         assert len(admin.list_checkpoints(fixture.durable_task_id)) == 1
         assert admin.get_progress(fixture.durable_task_id) is not None
         assert admin.get_wait(fixture.durable_task_id, "backoff") is not None
@@ -221,7 +224,9 @@ async def _assert_async_admin_operations(
     )
     assert bulk.results[0].status == "eligible"
 
-    assert await admin.get_checkpoint(fixture.durable_task_id, "prepared") is not None
+    checkpoint = await admin.get_checkpoint(fixture.durable_task_id, "prepared")
+    assert checkpoint is not None
+    assert checkpoint.input_fingerprint == checkpoint_input_fingerprint({"step": 1})
     assert len(await admin.list_checkpoints(fixture.durable_task_id)) == 1
     assert await admin.get_progress(fixture.durable_task_id) is not None
     assert await admin.get_wait(fixture.durable_task_id, "backoff") is not None

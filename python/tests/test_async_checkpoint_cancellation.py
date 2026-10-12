@@ -42,7 +42,7 @@ class SyncCheckpoints:
     def get_checkpoint(self, _name: str) -> None:
         return None
 
-    def checkpoint(self, _name: str, operation: Callable[[], Json]) -> Json:
+    def checkpoint(self, _name: str, operation: Callable[[], Json], **_options: object) -> Json:
         try:
             value = operation()
             self.saved.append(value)
@@ -107,7 +107,7 @@ async def test_a_cancelled_checkpoint_does_not_start_its_operation_later() -> No
     calls = 0
 
     class HeldCheckpoints(SyncCheckpoints):
-        def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json:
+        def checkpoint(self, name: str, operation: Callable[[], Json], **_options: object) -> Json:
             # The core still reads stored checkpoints when the handler gives up.
             release.wait(5)
             return super().checkpoint(name, operation)
@@ -193,7 +193,7 @@ def run_on_a_fresh_loop(scenario: Callable[[], Coroutine[Any, Any, None]]) -> li
 class FailingCheckpoints(SyncCheckpoints):
     """A core whose checkpoint call fails after the operation ends."""
 
-    def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json:
+    def checkpoint(self, name: str, operation: Callable[[], Json], **_options: object) -> Json:
         with suppress(BaseException):
             super().checkpoint(name, operation)
         raise RuntimeError("cleanup failed")
@@ -300,7 +300,7 @@ class HeldSaves:
         if statement is STATEMENTS.list_checkpoints:
             return list(self.rows_by_name.values())
         assert statement is STATEMENTS.save_checkpoint
-        task_id, worker_id, fence_token, name, encoded = parameters
+        task_id, worker_id, fence_token, name, encoded, input_fingerprint = parameters
         self.saving.set()
         assert self.release.wait(5), "the test never released the held save"
         row = {
@@ -311,6 +311,7 @@ class HeldSaves:
             "fence_token": str(fence_token),
             "worker_id": worker_id,
             "created_at": datetime.now(UTC),
+            "input_fingerprint": input_fingerprint,
         }
         self.rows_by_name[str(name)] = row
         return [{"status": "saved", **row}]

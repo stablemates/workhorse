@@ -708,10 +708,10 @@ process runner, which exits without a wait.
 
 **After the operation returns**
 
-- The core sends `save_checkpoint_v1`, and `_await_bridge_call` waits for that call before it
+- The core sends `save_checkpoint_v2`, and `_await_bridge_call` waits for that call before it
   re-raises.
 - The row may commit. A later attempt replays its value.
-- `save_checkpoint_v1` checks the worker, fence, lease expiry, deadline, attempt timeout, and
+- `save_checkpoint_v2` checks the worker, fence, lease expiry, deadline, attempt timeout, and
   `cancel_requested_at`. Asyncio cancellation is not one of its conditions.
 
 **Bridge threads.** Each awaitable context method runs its synchronous call on a bridge thread. The

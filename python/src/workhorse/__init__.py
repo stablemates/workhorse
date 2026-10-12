@@ -1,3 +1,4 @@
+from ._checkpoint_input import checkpoint_input_fingerprint
 from ._telemetry import METRIC_ATTRIBUTE_CARDINALITY_LIMIT, TRACE_ATTRIBUTE_COUNT_LIMIT
 from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from .admin import (
@@ -44,6 +45,7 @@ from .compatibility import (
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
+    CheckpointInputConflictError,
     CheckpointLeaseLostError,
     ChildConflictError,
     ChildLeaseLostError,
@@ -202,6 +204,7 @@ __all__ = [
     "CancellationRequestedError",
     "CancellationToken",
     "CheckpointConflictError",
+    "CheckpointInputConflictError",
     "CheckpointLeaseLostError",
     "ChildCanceled",
     "ChildConflictError",
@@ -333,5 +336,6 @@ __all__ = [
     "assert_schema_compatible",
     "assert_schema_compatible_asyncpg",
     "assert_schema_compatible_psycopg",
+    "checkpoint_input_fingerprint",
     "run_worker_process",
 ]

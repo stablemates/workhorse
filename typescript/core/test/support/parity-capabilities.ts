@@ -629,7 +629,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
       file: "integration-checkpoints-progress-waits.test.ts",
       pattern: "CheckpointInputConflictError",
     },
-    python: { planned: "SM-1261" },
+    python: {
+      file: "test_worker_checkpoint_input.py",
+      pattern: "CheckpointInputConflictError",
+    },
     go: { planned: "SM-1262" },
   },
   {
