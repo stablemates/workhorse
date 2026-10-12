@@ -1,6 +1,6 @@
 # ADR 0096: Count task group outcomes in counter shards
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-11
 - **Amends:** [ADR 0095](0095-add-task-groups-with-completion-callbacks.md). This ADR replaces its
   single group counter and the counter rules in "Order of group changes".
