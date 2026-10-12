@@ -83,6 +83,10 @@ The Python SDK adds task groups (SM-1233). The names follow the TypeScript SDK, 
   [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
   `AsyncHandlerContext.task_group` gives the
   same calls as coroutines. A callback handler reads the group ID and the counts through `get()`.
+- `BatchHandlerContext.task_group` and `AsyncBatchHandlerContext.task_group` give each task in a
+  batch the same `get()` and `add()` (SM-1252). An add uses the fenced lease of that task, and a
+  request with no queue goes to the queue of that task. After the lease of that task ends, `add()`
+  raises `TaskGroupClosedError` with the reason `not_running_member`.
 - `Admin` and `AsyncAdmin` gain `get_task_group`, `list_task_group_members`,
   `list_task_group_events`, `cancel_task_group`, `list_task_group_drift`, and
   `repair_task_group_drift`.

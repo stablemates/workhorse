@@ -389,8 +389,8 @@ needs a different queue, name that queue on the request.
 
 `add_task_group_members_v1` takes the member task, the worker, and the fence token. It refuses the
 add with `P1008` and the reason `not_running_member` when they do not name an `active` member of
-the group. The batch context of TypeScript, Rust, and Ruby also has the add. Python and Go batch
-contexts do not.
+the group. The batch context of every SDK also has the read and the add for each task in the
+batch, with the same lease check and the same queue rule.
 
 More detail: [Task groups: Add](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#add), [Task groups: Queue of a request with no queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#queue-of-a-request-with-no-queue), and [Task groups: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#batch-handlers).
 

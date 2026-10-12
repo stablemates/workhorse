@@ -746,3 +746,89 @@ func TestTaskGroupMemberAddStampsAndValidatesTheCurrentContract(t *testing.T) {
 		t.Fatalf("expected two members, received %+v", counts)
 	}
 }
+
+func TestTaskGroupBatchHandlerReadsAndAddsForEachTaskInTheBatch(t *testing.T) {
+	fixture := newTaskGroupFixture(t, "go-task-group-batch")
+	block, err := fixture.queue.TaskGroup(fixture.ctx, workhorse.TaskGroupCallbacks{}, func(builder *workhorse.TaskGroupBuilder) error {
+		return builder.Add(groupMember("batch-add", 1), groupMember("batch-add", 2))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workerID = "batch-add-worker"
+	worker, err := workhorse.NewWorker(fixture.pool, workhorse.WorkerOptions{
+		Queue: "batch-add", WorkerID: workerID, Concurrency: 2, LeaseDuration: 5 * time.Second,
+		PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var links []*workhorse.TaskGroupLink
+	var addResults []workhorse.EnqueueResult
+	var staleErr error
+	runContext, stop := context.WithCancel(fixture.ctx)
+	defer stop()
+	worker.HandleBatch("member", workhorse.BatchHandlerOptions{MaxSize: 2, Linger: time.Second}, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
+		outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
+		for index, item := range items {
+			outcomes[index] = workhorse.BatchSucceeded{}
+			link, err := item.Context.GetTaskGroup()
+			if err != nil {
+				outcomes[index] = workhorse.BatchFailed{Error: err}
+				continue
+			}
+			links = append(links, link)
+			unnamed := workhorse.EnqueueRequest{Type: "extra", Payload: item.Payload, Options: workhorse.EnqueueOptions{MaxAttempts: 1}}
+			if item.Payload == float64(2) {
+				// A competing settlement ends the lease of this task, so its add must fail.
+				var accepted bool
+				if err := fixture.pool.QueryRow(
+					fixture.ctx,
+					"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, 'null'::jsonb)",
+					item.Context.Task.ID, workerID, item.Context.Task.FenceToken,
+				).Scan(&accepted); err != nil || !accepted {
+					outcomes[index] = workhorse.BatchFailed{Error: fmt.Errorf("competing settlement: accepted=%t err=%v", accepted, err)}
+					continue
+				}
+				_, staleErr = item.Context.AddToTaskGroup([]workhorse.EnqueueRequest{unnamed})
+				continue
+			}
+			addResults, err = item.Context.AddToTaskGroup([]workhorse.EnqueueRequest{unnamed})
+			if err != nil {
+				outcomes[index] = workhorse.BatchFailed{Error: err}
+			}
+		}
+		stop()
+		return outcomes
+	})
+	if err := worker.Run(runContext); err != nil {
+		t.Fatalf("run batch: %v", err)
+	}
+
+	if len(links) != 2 {
+		t.Fatalf("expected a read for each task in the batch, received %d", len(links))
+	}
+	for _, link := range links {
+		if link == nil || link.Role != workhorse.TaskGroupMemberRole || link.Group.ID != block.Group.ID {
+			t.Fatalf("unexpected member link: %+v", link)
+		}
+	}
+	if len(addResults) != 1 || addResults[0].Outcome != workhorse.EnqueueAccepted {
+		t.Fatalf("unexpected batch add: %+v", addResults)
+	}
+	var closed *workhorse.TaskGroupClosedError
+	if !errors.As(staleErr, &closed) || !errors.Is(staleErr, workhorse.ErrTaskGroupClosed) ||
+		closed.Details.GroupID != block.Group.ID || closed.Details.Reason != workhorse.TaskGroupRefusedNotRunningMember {
+		t.Fatalf("expected a refusal after the lease is lost, received %v", staleErr)
+	}
+	var queueName string
+	if err := fixture.pool.QueryRow(fixture.ctx, "SELECT queue_name FROM workhorse.task WHERE id = $1", addResults[0].TaskID).Scan(&queueName); err != nil {
+		t.Fatal(err)
+	}
+	if queueName != "batch-add" {
+		t.Fatalf("expected the added task on the queue of its task in the batch, found %q", queueName)
+	}
+	if group := fixture.group(t, block.Group.ID); group.Counts.Total != 3 {
+		t.Fatalf("expected three member tasks, found %+v", group.Counts)
+	}
+}

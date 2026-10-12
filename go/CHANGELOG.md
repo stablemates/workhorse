@@ -75,6 +75,10 @@ transaction, use a `Queue` over a transaction executor. `TaskGroupCallbacks` hol
 `HandlerContext.AddToTaskGroup`. If a request names no queue, `AddToTaskGroup` puts the task in the
 queue of the member task (SM-1251,
 [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
+`BatchHandlerContext` gains `GetTaskGroup` and `AddToTaskGroup`, which give each task in a batch the
+same read and add (SM-1252). An add uses the fenced lease of that task, and a request with no queue
+goes to the queue of that task. After the lease of that task ends, `AddToTaskGroup` returns a
+`TaskGroupClosedError` with the reason `not_running_member`.
 `Admin` gains `GetTaskGroup`, `ListTaskGroupMembers`,
 `ListTaskGroupEvents`, `CancelTaskGroup`, `ListTaskGroupDrift`, and `RepairTaskGroupDrift`.
 `P1008`, `P1009`, and `P1010` map to `TaskGroupClosedError`, `TaskGroupLimitExceededError`, and
