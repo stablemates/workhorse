@@ -279,6 +279,9 @@ export const SQL_STATEMENTS = {
     "SELECT member_position AS position, task_id, queue_name, task_type, state, outcome, added_at, counted_at FROM workhorse.list_task_group_members_v1($1::uuid, $2::integer, $3::integer)",
   list_task_group_events_v1:
     "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)",
+  list_newest_task_group_events_v1:
+    "SELECT event_id, event_type, details, occurred_at FROM workhorse.list_newest_task_group_events_v1($1::uuid, $2::integer)",
+  dashboard_task_groups_v1: "SELECT workhorse.dashboard_task_groups_v1($1::jsonb) AS result",
   cancel_task_group_v1:
     "SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)",
   list_task_group_drift_v1:

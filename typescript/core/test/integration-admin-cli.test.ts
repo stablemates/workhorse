@@ -1229,3 +1229,221 @@ describe("admin CLI external-wait delivery", () => {
     },
   );
 });
+
+const groupMember = (payload: number) => ({
+  type: "cli.group.member",
+  payload,
+  options: { queue: "cli-group-members", maxAttempts: 1 },
+});
+const groupCallbacks = {
+  onFinish: {
+    type: "cli.group.finished",
+    payload: {},
+    options: { queue: "cli-group-callbacks" },
+  },
+  onFailure: { type: "cli.group.failed", payload: {}, options: { queue: "cli-group-callbacks" } },
+};
+
+describe("admin CLI task groups", () => {
+  it("lists task groups newest first, in one state, one page at a time", async () => {
+    const finished = (await queue.taskGroup({}, () => {})).group;
+    const sealed = (
+      await queue.taskGroup({}, (group) => group.add([groupMember(1), groupMember(2)]))
+    ).group;
+    const open = await queue.createTaskGroup();
+    await queue.addToTaskGroup(open.id, [groupMember(3)]);
+
+    const all = runAdmin(["task-groups", "--json"]);
+    expect(all.code).toBe(0);
+    const page = JSON.parse(all.stdout) as {
+      state: string;
+      hasMore: boolean;
+      groups: Array<{ id: string; state: string; counts: { total: number; pending: number } }>;
+    };
+    expect(page).toMatchObject({ state: "all", page: 1, pageSize: 50, hasMore: false });
+    expect(page.groups.map((group) => group.id)).toEqual([open.id, sealed.id, finished.id]);
+    expect(page.groups[1]).toMatchObject({ state: "sealed", counts: { total: 2, pending: 2 } });
+
+    const openOnly = JSON.parse(runAdmin(["task-groups", "--state", "open", "--json"]).stdout);
+    expect(openOnly.groups.map((group: { id: string }) => group.id)).toEqual([open.id]);
+
+    const first = JSON.parse(runAdmin(["task-groups", "--limit", "2", "--json"]).stdout);
+    expect(first).toMatchObject({ pageSize: 2, hasMore: true });
+    const second = JSON.parse(
+      runAdmin(["task-groups", "--limit", "2", "--page", "2", "--json"]).stdout,
+    );
+    expect(second).toMatchObject({ page: 2, hasMore: false });
+    expect(second.groups.map((group: { id: string }) => group.id)).toEqual([finished.id]);
+
+    const human = runAdmin(["task-groups", "--limit", "2"]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("DONE");
+    expect(human.stdout).toContain(`${sealed.id}  sealed`);
+    expect(human.stdout).toContain("Next page: pass --page 2");
+
+    for (const args of [
+      ["--state", "open,sealed"],
+      ["--state", "ready"],
+      ["--page", "0"],
+      ["--page", "1001"],
+      ["--limit", "101"],
+      ["--after", "1"],
+    ]) {
+      expect(runAdmin(["task-groups", ...args]).code).toBe(64);
+    }
+  });
+
+  it("shows one task group with its counts, member tasks, and newest events", async () => {
+    const { group } = await queue.taskGroup(groupCallbacks, (builder) =>
+      builder.add([groupMember(1), groupMember(2), groupMember(3)]),
+    );
+    const [claimed] = await queue.claimMany("cli-group-worker", 1, { queue: "cli-group-members" });
+    expect(await queue.complete(claimed!, "cli-group-worker", null)).toBe(true);
+
+    const detail = runAdmin(["task-group", group.id, "--limit", "2", "--json"]);
+    expect(detail.code).toBe(0);
+    const parsed = JSON.parse(detail.stdout) as {
+      group: { id: string; state: string; counts: Record<string, number> };
+      members: Array<{ position: number; outcome: string | null }>;
+      nextAfter: number | null;
+      events: Array<{ type: string }>;
+      eventsTruncated: boolean;
+    };
+    expect(parsed.group).toMatchObject({
+      id: group.id,
+      state: "sealed",
+      counts: { total: 3, succeeded: 1, failed: 0, canceled: 0, pending: 2 },
+    });
+    expect(parsed.members.map((entry) => entry.position)).toEqual([1, 2]);
+    expect(parsed.nextAfter).toBe(2);
+    expect(parsed.events.map((event) => event.type)).toEqual(["sealed", "created"]);
+    expect(parsed.eventsTruncated).toBe(false);
+
+    const next = JSON.parse(runAdmin(["task-group", group.id, "--after", "2", "--json"]).stdout);
+    expect(next.members.map((entry: { position: number }) => entry.position)).toEqual([3]);
+    expect(next.nextAfter).toBeNull();
+    const exact = JSON.parse(runAdmin(["task-group", group.id, "--limit", "3", "--json"]).stdout);
+    expect(exact.members).toHaveLength(3);
+    expect(exact.nextAfter).toBeNull();
+
+    const human = runAdmin(["task-group", group.id, "--limit", "2"]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("total 3, succeeded 1, failed 0, canceled 0, pending 2");
+    expect(human.stdout).toContain("POSITION");
+    expect(human.stdout).toContain("Next member page: pass --after 2");
+
+    const missing = runAdmin(["task-group", "00000000-0000-0000-0000-000000000000"]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("not found");
+    expect(runAdmin(["task-group", "not-a-group"]).code).toBe(64);
+    expect(runAdmin(["task-group", group.id, "--after", "-1"]).code).toBe(64);
+    expect(runAdmin(["task-group", group.id, "--after", "2147483648"]).code).toBe(64);
+    expect(runAdmin(["task-group", group.id, "--limit", "1001"]).code).toBe(64);
+    expect(runAdmin(["task-group", group.id, "--page", "2"]).code).toBe(64);
+  });
+
+  it("cancels a task group with an actor and a required reason", async () => {
+    const { group } = await queue.taskGroup(groupCallbacks, (builder) =>
+      builder.add([groupMember(1), groupMember(2)]),
+    );
+    const guarded = ["cancel-task-group", group.id];
+    expect(runAdmin([...guarded, "--env", databaseName, "--yes"]).code).toBe(64);
+    expect(runAdmin([...guarded, "--reason", "stuck import", "--yes"]).code).toBe(64);
+    expect(runAdmin([...guarded, "--reason", "stuck import", "--env", databaseName]).code).toBe(64);
+    expect(
+      runAdmin([...guarded, "--reason", "stuck import", "--env", "workhorse_production", "--yes"])
+        .code,
+    ).toBe(1);
+    await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({ canceledAt: null });
+
+    const canceled = runAdmin([
+      ...guarded,
+      "--actor",
+      "oncall@example.com",
+      "--reason",
+      "stuck import",
+      "--env",
+      databaseName,
+      "--yes",
+      "--json",
+    ]);
+    expect(canceled.code).toBe(0);
+    const result = JSON.parse(canceled.stdout) as {
+      status: string;
+      group: { state: string; result: string; callbacks: Array<{ taskId: string | null }> };
+    };
+    expect(result).toMatchObject({
+      status: "canceled",
+      group: {
+        state: "finished",
+        result: "failed",
+        counts: { total: 2, canceled: 2, pending: 0 },
+        canceledBy: "oncall@example.com",
+        cancelReason: "stuck import",
+      },
+    });
+    expect(result.group.callbacks.every((callback) => callback.taskId !== null)).toBe(true);
+    const events = await admin.listTaskGroupEvents(group.id);
+    expect(events.find((event) => event.type === "canceled")?.details).toMatchObject({
+      requested_by: "oncall@example.com",
+      request_reason: "stuck import",
+      members: 2,
+    });
+
+    const again = runAdmin([
+      ...guarded,
+      "--reason",
+      "stuck import",
+      "--env",
+      databaseName,
+      "--yes",
+      "--json",
+    ]);
+    expect(again.code).toBe(1);
+    expect(JSON.parse(again.stdout)).toMatchObject({ status: "already_finished" });
+
+    const missing = runAdmin([
+      "cancel-task-group",
+      "00000000-0000-0000-0000-000000000000",
+      "--reason",
+      "stuck import",
+      "--env",
+      databaseName,
+      "--yes",
+    ]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("not found");
+  });
+
+  it("leaves a canceled group sealed until its active member task stops", async () => {
+    const { group } = await queue.taskGroup(groupCallbacks, (builder) =>
+      builder.add([groupMember(1), groupMember(2)]),
+    );
+    const [active] = await queue.claimMany("cli-group-worker", 1, { queue: "cli-group-members" });
+    const cancel = ["cancel-task-group", group.id, "--reason", "stuck import"];
+    const guarded = [...cancel, "--env", databaseName, "--yes"];
+    const result = runAdmin(guarded);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("1 active member task(s) must stop before it finishes");
+    await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "sealed",
+      counts: { canceled: 1, pending: 1 },
+    });
+
+    // A cancel of a sealed group that an earlier cancel canceled runs again and writes its event.
+    const again = runAdmin([...guarded, "--json"]);
+    expect(again.code).toBe(0);
+    expect(JSON.parse(again.stdout)).toMatchObject({ status: "canceled" });
+
+    // After the active member stops, the group is finished and has a cancel time. A cancel then
+    // changes nothing, so the snapshot cancel time does not make it a success.
+    expect(await queue.acknowledgeCancel(active!, "cli-group-worker")).toBe(true);
+    await expect(admin.getTaskGroup(group.id)).resolves.toMatchObject({ state: "finished" });
+    const finished = runAdmin([...guarded, "--json"]);
+    expect(finished.code).toBe(1);
+    expect(JSON.parse(finished.stdout)).toMatchObject({
+      status: "already_finished",
+      group: { state: "finished", canceledBy: "workhorse-admin" },
+    });
+  });
+});

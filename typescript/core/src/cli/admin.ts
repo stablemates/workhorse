@@ -11,6 +11,7 @@ import {
 } from "../types.js";
 import type { DeadLetterFilter, TaskListQuery, TaskState } from "../types.js";
 import type { ExternalWaitCursor } from "../queue/external-waits.js";
+import { MAX_TASK_GROUP_PAGE_SIZE, type TaskGroupState } from "../queue/task-groups.js";
 import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import {
   AdminSafetyError,
@@ -22,6 +23,9 @@ import {
   EXTERNAL_WAITS_TABLE_HEADERS,
   FAILURES_TABLE_HEADERS,
   TASKS_TABLE_HEADERS,
+  TASK_GROUPS_TABLE_HEADERS,
+  TASK_GROUP_EVENTS_TABLE_HEADERS,
+  TASK_GROUP_MEMBERS_TABLE_HEADERS,
   QUEUES_TABLE_HEADERS,
   SCHEDULES_TABLE_HEADERS,
   TIMELINE_TABLE_HEADERS,
@@ -33,6 +37,10 @@ import {
   failuresTableRows,
   formatTable,
   taskDetailLines,
+  taskGroupDetailLines,
+  taskGroupEventsTableRows,
+  taskGroupMembersTableRows,
+  taskGroupsTableRows,
   tasksTableRows,
   maintenanceLines,
   queuesTableRows,
@@ -74,6 +82,10 @@ Inspection commands (safe, read-only):
   schedules    List enabled recurring schedules.
   workers      List durable worker registrations.
   maintenance  Show the maintenance and retention policies with provenance.
+  task-groups  List task groups newest-first, optionally in one --state.
+  task-group <group-id>
+               Show one task group with its counts, one page of member tasks, and its
+               newest 100 events.
 
 Guarded commands (mutate; require --env and confirmation):
   cancel <task-id>     Request cooperative cancellation of one task.
@@ -95,6 +107,8 @@ Guarded commands (mutate; require --env and confirmation):
   repair-dependencies
                       Recount blocked dependents whose prerequisite counter drifted from their
                       edges; --dry-run lists the drift and each planned action without writes.
+  cancel-task-group <group-id>
+                      Seal one task group and cancel its member tasks that are not terminal.
 
 Common options:
   --database-url <url>  Database URL. This takes precedence over all other sources.
@@ -107,6 +121,7 @@ Guarded-command options:
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
   --reason <text>    Reason recorded for the mutation. Required for every guarded command except
                      cancel, signal, complete-human, and set-history, which records no reason.
+                     cancel-task-group requires it.
   --request-id <id>  Request identity recorded with the mutation (default: a random UUID).
                      Redrive and purge additionally use it for idempotency. Required explicitly
                      for redrive-many execution, signal, and complete-human; reuse on retries.
@@ -125,9 +140,15 @@ Guarded-command options:
 Listing options:
   --queue <name>     Filter by queue.
   --type <type>      Filter by task type.
-  --state <state>    Filter tasks by lifecycle state; repeatable or comma-separated.
+  --state <state>    Filter tasks by lifecycle state; repeatable or comma-separated. For
+                     task-groups, one of open, sealed, or finished.
   --limit <count>    Page size, at most 1000 for tasks, timeline, failures, and redrive-many.
                      repair-dependencies examines at most 1000 rows by default and 100000 at most.
+                     task-groups shows 50 groups by default and 100 at most. task-group shows
+                     100 member tasks by default and 1000 at most.
+  --page <number>    Show this task-groups page, from 1 through 1000. Read the next page when
+                     the JSON "hasMore" is true.
+  --after <position> Show the task-group member tasks after this position, the JSON "nextAfter".
   --cursor <json>   Continue tasks, timeline, failures, or redrive-many from its own nextCursor.
                      Keep filters unchanged; failure listings descend and bulk recovery ascends.
   --created-after <timestamp>, --created-before <timestamp>
@@ -272,6 +293,58 @@ function tierRefusal(error: FastTierUnsupportedError, tier: QueueTier): string {
   return `Queue ${error.queue} cannot move to the ${tier} tier: the fast tier does not support ${error.feature}.`;
 }
 
+/** The largest page `dashboard_task_groups_v1` returns, and the largest page number it accepts. */
+const MAX_TASK_GROUP_LIST_PAGE_SIZE = 100;
+const MAX_TASK_GROUP_LIST_PAGE = 1_000;
+
+const TASK_GROUP_STATES: readonly TaskGroupState[] = ["open", "sealed", "finished"];
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `dashboard_task_groups_v1` selects one state or every state, so the filter takes one value. */
+function parseTaskGroupState(values: readonly string[] | undefined): TaskGroupState | undefined {
+  const states = [...new Set(splitRepeatable(values))];
+  if (states.length === 0) return undefined;
+  if (states.length > 1) {
+    throw new CliUsageError("admin task-groups accepts one --state: open, sealed, or finished");
+  }
+  const state = states[0] as TaskGroupState;
+  if (!TASK_GROUP_STATES.includes(state)) {
+    throw new CliUsageError(
+      `Unknown task group state: ${state}. Known states: ${TASK_GROUP_STATES.join(", ")}`,
+    );
+  }
+  return state;
+}
+
+function parseTaskGroupPage(value: string): number {
+  const page = parsePositiveInteger(value, "--page");
+  if (page > MAX_TASK_GROUP_LIST_PAGE) {
+    throw new CliUsageError(`--page must be at most ${MAX_TASK_GROUP_LIST_PAGE}`);
+  }
+  return page;
+}
+
+/** A member position is a PostgreSQL `integer`, so a larger value is a usage error. */
+const MAX_TASK_GROUP_POSITION = 2_147_483_647;
+
+function parseAfter(value: string): number {
+  const after = Number(value);
+  if (!/^\d+$/.test(value) || after > MAX_TASK_GROUP_POSITION) {
+    throw new CliUsageError(`--after must be an integer from 0 through ${MAX_TASK_GROUP_POSITION}`);
+  }
+  return after;
+}
+
+/** A malformed group id is a usage error, not a PostgreSQL cast failure. */
+function requireGroupId(positionals: readonly string[], command: string): string {
+  const groupId = requirePositional(positionals, command, "group-id");
+  if (!UUID_PATTERN.test(groupId)) {
+    throw new CliUsageError(`admin ${command} requires a UUID <group-id>, not ${groupId}`);
+  }
+  return groupId;
+}
+
 function requirePositional(positionals: readonly string[], command: string, name: string): string {
   const target = positionals[0];
   if (target === undefined) throw new CliUsageError(`admin ${command} requires a <${name}>`);
@@ -350,7 +423,9 @@ export async function runAdminCommand(
     "dry-run": ["redrive-many", "repair-dependencies"],
     "payload-json": ["signal", "complete-human"],
     "payload-file": ["signal", "complete-human"],
-    state: ["tasks"],
+    state: ["tasks", "task-groups"],
+    page: ["task-groups"],
+    after: ["task-group"],
     namespace: ["schedules"],
     limit: [
       "tasks",
@@ -359,6 +434,8 @@ export async function runAdminCommand(
       "redrive-many",
       "external-waits",
       "repair-dependencies",
+      "task-groups",
+      "task-group",
     ],
     queue: ["tasks", "failures", "redrive-many"],
     type: ["tasks", "failures", "redrive-many"],
@@ -387,7 +464,11 @@ export async function runAdminCommand(
         ? MAX_REDRIVE_BATCH_SIZE
         : command === "repair-dependencies"
           ? MAX_DEPENDENCY_DRIFT_LIMIT
-          : MAX_TASK_QUERY_PAGE_SIZE;
+          : command === "task-groups"
+            ? MAX_TASK_GROUP_LIST_PAGE_SIZE
+            : command === "task-group"
+              ? MAX_TASK_GROUP_PAGE_SIZE
+              : MAX_TASK_QUERY_PAGE_SIZE;
   if (limit !== undefined && limit > maximum) {
     throw new CliUsageError(`admin ${command} --limit must be at most ${maximum}`);
   }
@@ -572,6 +653,46 @@ export async function runAdminCommand(
       );
       return;
     }
+    if (command === "task-groups") {
+      const page = await client.listTaskGroups({
+        state: parseTaskGroupState(values.state),
+        page: values.page === undefined ? undefined : parseTaskGroupPage(values.page),
+        pageSize: limit,
+      });
+      io.out(
+        json
+          ? toAdminJson("admin task-groups", page)
+          : `${formatTable(TASK_GROUPS_TABLE_HEADERS, taskGroupsTableRows(page.groups))}\n` +
+              (page.hasMore ? `Next page: pass --page ${page.page + 1}\n` : ""),
+      );
+      return;
+    }
+    if (command === "task-group") {
+      const groupId = requireGroupId(positionals, command);
+      const detail = await client.getTaskGroupDetail(groupId, {
+        after: values.after === undefined ? undefined : parseAfter(values.after),
+        limit,
+      });
+      if (detail === null) {
+        io.error(`Task group ${groupId} was not found.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      if (json) {
+        io.out(toAdminJson("admin task-group", detail));
+        return;
+      }
+      io.out(
+        `${taskGroupDetailLines(detail.group).join("\n")}\n\n` +
+          `${formatTable(TASK_GROUP_MEMBERS_TABLE_HEADERS, taskGroupMembersTableRows(detail.members))}\n` +
+          (detail.nextAfter === null
+            ? ""
+            : `Next member page: pass --after ${detail.nextAfter}\n`) +
+          `\n${formatTable(TASK_GROUP_EVENTS_TABLE_HEADERS, taskGroupEventsTableRows(detail.events))}\n` +
+          (detail.eventsTruncated ? "Older events are not shown.\n" : ""),
+      );
+      return;
+    }
 
     // Every mutation passes through confirmMutation. Bulk preview is the read-only exception.
     const actor = values.actor ?? "workhorse-admin";
@@ -740,6 +861,31 @@ export async function runAdminCommand(
         );
       } else io.error(`Task ${taskId} was not found.\n`);
       if (result.status === "not_found" || result.status === "not_failed") process.exitCode = 1;
+      return;
+    }
+    if (command === "cancel-task-group") {
+      const groupId = requireGroupId(positionals, command);
+      if (!values.reason?.trim())
+        throw new CliUsageError(`admin ${command} requires --reason <text>`);
+      const environment = await confirmMutation(client, io, values, command, groupId);
+      if (environment === null) return;
+      const result = await client.cancelTaskGroup(environment, groupId, {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? randomUUID(),
+      });
+      if (json) io.out(toAdminJson("admin cancel-task-group", result));
+      else if (result.status === "canceled") {
+        const pending = result.group!.counts.pending;
+        io.out(
+          result.group!.state === "finished"
+            ? `Canceled task group ${groupId}. It finished with the result ${result.group!.result ?? "-"}.\n`
+            : `Canceled task group ${groupId}. ${pending} active member task(s) must stop before it finishes.\n`,
+        );
+      } else if (result.status === "already_finished") {
+        io.out(`Task group ${groupId} is already finished (${result.group!.result ?? "-"}).\n`);
+      } else io.error(`Task group ${groupId} was not found.\n`);
+      if (result.status !== "canceled") process.exitCode = 1;
       return;
     }
     if (command === "pause-worker" || command === "resume-worker") {

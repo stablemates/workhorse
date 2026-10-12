@@ -284,7 +284,9 @@ snapshot, or no row for an unknown group:
 5. It writes the `canceled` event and finishes the group if no member task is pending.
 
 The canceled member tasks count as not succeeded, so `onFinish` and `onFailure` run.
-`Admin.cancelTaskGroup(groupId, { actor, reason, requestId })` calls it.
+`Admin.cancelTaskGroup(groupId, { actor, reason, requestId })` calls it. `workhorse admin
+cancel-task-group` calls `Admin.cancelTaskGroup`, as
+[Operations and CLI: Task group cancel](operations.md#task-group-cancel) describes.
 
 ## Purge
 
@@ -384,7 +386,9 @@ newest 101 events through `list_newest_task_group_events_v1`, shows 100, and set
 when the group has older events.
 
 `Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
-`listTaskGroupEvents`. A handler reads the group of its task through `ctx.taskGroup.get()`, which
+`listTaskGroupEvents`. `workhorse admin task-groups` and `workhorse admin task-group` make the reads of
+the dashboard list and detail, as [Operations and CLI: Task groups](operations.md#task-groups)
+describes. A handler reads the group of its task through `ctx.taskGroup.get()`, which
 calls `task_group_for_task_v1` one time for each handler activation.
 
 ## SDK calls

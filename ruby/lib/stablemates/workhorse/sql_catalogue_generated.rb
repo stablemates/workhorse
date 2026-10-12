@@ -1162,6 +1162,12 @@ module Stablemates
       # `list_task_group_events_v1` (admin)
       LIST_TASK_GROUP_EVENTS_V1 = 'SELECT event_id, event_type, details, occurred_at FROM workhorse.list_task_group_events_v1($1::uuid, $2::integer)'
 
+      # `list_newest_task_group_events_v1` (admin)
+      LIST_NEWEST_TASK_GROUP_EVENTS_V1 = 'SELECT event_id, event_type, details, occurred_at FROM workhorse.list_newest_task_group_events_v1($1::uuid, $2::integer)'
+
+      # `dashboard_task_groups_v1` (admin)
+      DASHBOARD_TASK_GROUPS_V1 = 'SELECT workhorse.dashboard_task_groups_v1($1::jsonb) AS result'
+
       # `cancel_task_group_v1` (admin)
       CANCEL_TASK_GROUP_V1 = 'SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.cancel_task_group_v1($1::uuid, $2::text, $3::text, $4::text)'
 

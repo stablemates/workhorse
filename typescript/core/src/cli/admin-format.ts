@@ -10,6 +10,7 @@ import type {
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
 import type { ExternalWaitRecord } from "../queue/external-waits.js";
+import type { TaskGroup, TaskGroupEvent, TaskGroupMember } from "../queue/task-groups.js";
 import type {
   AdminExternalWaits,
   AdminMaintenanceState,
@@ -432,4 +433,97 @@ export function maintenanceLines(state: AdminMaintenanceState): string[] {
   }
   lines.push(`  updated at: ${formatTimestamp(retention.updatedAt)}`);
   return lines;
+}
+
+export const TASK_GROUPS_TABLE_HEADERS = [
+  "GROUP",
+  "STATE",
+  "RESULT",
+  "DONE",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELED",
+  "PENDING",
+  "CREATED",
+];
+
+/** `DONE` is the finished member tasks over all member tasks, the progress the dashboard draws. */
+export function taskGroupsTableRows(groups: readonly TaskGroup[]): string[][] {
+  return groups.map((group) => [
+    group.id,
+    group.state,
+    group.result ?? "-",
+    `${group.counts.total - group.counts.pending}/${group.counts.total}`,
+    String(group.counts.succeeded),
+    String(group.counts.failed),
+    String(group.counts.canceled),
+    String(group.counts.pending),
+    formatTimestamp(group.createdAt),
+  ]);
+}
+
+export function taskGroupDetailLines(group: TaskGroup): string[] {
+  const { counts } = group;
+  const entries: Array<[string, string]> = [
+    ["id", group.id],
+    ["state", group.state],
+    ["result", group.result ?? "-"],
+    [
+      "counts",
+      `total ${counts.total}, succeeded ${counts.succeeded}, failed ${counts.failed}, ` +
+        `canceled ${counts.canceled}, pending ${counts.pending}`,
+    ],
+    ["created at", formatTimestamp(group.createdAt)],
+    ["sealed at", formatTimestamp(group.sealedAt)],
+    ["finished at", formatTimestamp(group.finishedAt)],
+    [
+      "callbacks",
+      group.callbacks.length === 0
+        ? "-"
+        : group.callbacks
+            .map((callback) => `${callback.kind} ${callback.taskId ?? "(not enqueued)"}`)
+            .join(", "),
+    ],
+  ];
+  if (group.canceledAt !== null) {
+    entries.push([
+      "canceled",
+      `${formatTimestamp(group.canceledAt)} by ${group.canceledBy ?? "-"}` +
+        `${group.cancelReason ? `: ${group.cancelReason}` : ""}`,
+    ]);
+  }
+  return keyValueLines(entries);
+}
+
+export const TASK_GROUP_MEMBERS_TABLE_HEADERS = [
+  "POSITION",
+  "TASK",
+  "STATE",
+  "OUTCOME",
+  "QUEUE",
+  "TYPE",
+  "ADDED",
+];
+
+/** A member whose task row is gone, by a purge or by retention, shows `-` for its task fields. */
+export function taskGroupMembersTableRows(members: readonly TaskGroupMember[]): string[][] {
+  return members.map((member) => [
+    String(member.position),
+    member.taskId,
+    member.state ?? "-",
+    member.outcome ?? "-",
+    member.queue ?? "-",
+    member.type === null ? "-" : truncate(member.type, 32),
+    formatTimestamp(member.addedAt),
+  ]);
+}
+
+export const TASK_GROUP_EVENTS_TABLE_HEADERS = ["AT", "EVENT", "DETAILS"];
+
+export function taskGroupEventsTableRows(events: readonly TaskGroupEvent[]): string[][] {
+  return events.map((event) => [
+    formatTimestamp(event.occurredAt),
+    event.type,
+    truncate(JSON.stringify(event.details), 80),
+  ]);
 }
