@@ -63,7 +63,10 @@ adds, and seals in one statement, so in one transaction. To create a group in yo
 transaction, use a `Queue` over a transaction executor. `TaskGroupCallbacks` holds the `OnFinish`,
 `OnSuccess`, and `OnFailure` requests. A handler reads its group through
 `HandlerContext.GetTaskGroup`, and a running member task adds tasks through
-`HandlerContext.AddToTaskGroup`. `Admin` gains `GetTaskGroup`, `ListTaskGroupMembers`,
+`HandlerContext.AddToTaskGroup`. If a request names no queue, `AddToTaskGroup` puts the task in the
+queue of the member task (SM-1251,
+[ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)).
+`Admin` gains `GetTaskGroup`, `ListTaskGroupMembers`,
 `ListTaskGroupEvents`, `CancelTaskGroup`, `ListTaskGroupDrift`, and `RepairTaskGroupDrift`.
 `P1008`, `P1009`, and `P1010` map to `TaskGroupClosedError`, `TaskGroupLimitExceededError`, and
 `TaskGroupMembershipConflictError`, which match `ErrTaskGroupClosed`, `ErrTaskGroupLimitExceeded`,

@@ -262,6 +262,33 @@ def test_after_the_seal_only_a_running_member_adds_tasks(database_url: str) -> N
         )
 
 
+def test_a_member_add_without_a_queue_goes_to_the_queue_of_the_member(database_url: str) -> None:
+    with clients(database_url) as (connection, queue, _admin):
+        with queue.task_group() as builder:
+            builder.add([member("default-add", 1)])
+        group = builder.result.group
+
+        def handle(_payload: int, context: HandlerContext) -> None:
+            unnamed = EnqueueRequest("unnamed", 2, EnqueueOptions(max_attempts=1))
+            [added] = context.task_group.add([unnamed])
+            assert added.outcome == "accepted"
+            return None
+
+        worker = Worker(worker_pool, queue="default-add", worker_id="default-add-worker").handle(
+            "member", handle
+        )
+        assert worker.run_once() is True
+        members = queue.list_task_group_members(group.id).members
+        assert [(item.position, item.queue) for item in members] == [
+            (1, "default-add"),
+            (2, "default-add"),
+        ]
+        row = connection.execute(
+            "SELECT queue_name FROM workhorse.task WHERE id = %s", (members[1].task_id,)
+        ).fetchone()
+        assert row == ("default-add",)
+
+
 def test_a_task_without_a_group_cannot_add_through_its_context(database_url: str) -> None:
     with clients(database_url) as (_connection, queue, _admin):
         queue.enqueue("lonely", {}, EnqueueOptions(queue="lonely", max_attempts=1))

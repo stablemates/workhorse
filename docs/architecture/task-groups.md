@@ -426,15 +426,22 @@ The SDKs map the refusals of an add to these errors:
 ### Queue of a request with no queue
 
 An add through `Queue` sends a request with no queue to the default queue of that `Queue`. An add
-from a handler uses a different default in some SDKs:
+from a handler sends a request with no queue to the queue of the member task that adds it, in every
+SDK. The queue list of the worker and the `defaultQueue` of a TypeScript `Queue` do not change it.
+A request that names a queue keeps that queue. [ADR
+0097](../decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the
+rule.
 
-| SDK        | Queue of a handler add request with no queue                                                                     |
-| ---------- | ---------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `Queue.defaultQueue` of the `Queue` that the worker uses; `default` unless the app sets it                       |
-| Python     | `default`: the worker builds its add `Queue` with `Queue._from_executor` and no queue name                       |
-| Go         | `default`, from `defaultWorkerQueueValue` in `go/task_groups.go`                                                 |
-| Rust       | `default`, as for a child task request                                                                           |
-| Ruby       | The first queue in the `queues:` list of the `Worker`, from `Queue.new(@executor, default_queue: @queues.first)` |
+| SDK        | Where the SDK sets the queue of a handler add request with no queue               |
+| ---------- | --------------------------------------------------------------------------------- |
+| TypeScript | `TaskGroups.addAsMember` in `typescript/core/src/queue/task-groups.ts`            |
+| Python     | `add_to_task_group` of the handler context in `python/src/workhorse/worker.py`    |
+| Go         | `HandlerContext.AddToTaskGroup` in `go/task_groups.go`, from `handler.Task.Queue` |
+| Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                 |
+| Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`  |
+
+A child task request with no queue does not follow this rule yet. ADR 0097 applies the same rule to
+child task requests in SM-1260.
 
 ### Batch handlers
 

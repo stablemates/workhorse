@@ -456,7 +456,13 @@ export class TaskGroupsModule extends QueueModule {
     if (link?.role !== "member") {
       throw new TypeError(`Task ${task.id} is not a member of a task group`);
     }
-    return this.add(link.group.id, requests, this.context.database, { task, workerId });
+    // A request with no queue goes to the queue of the member task that adds it.
+    const queued = requests.map((request) =>
+      request.options?.queue === undefined
+        ? { ...request, options: { ...request.options, queue: task.queue } }
+        : request,
+    );
+    return this.add(link.group.id, queued, this.context.database, { task, workerId });
   }
 
   async seal(groupId: string, transaction: Queryable = this.context.database): Promise<TaskGroup> {

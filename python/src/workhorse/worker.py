@@ -10,7 +10,7 @@ from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import nullcontext, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import islice
 from queue import SimpleQueue
@@ -520,9 +520,16 @@ class _HandlerDurability:
         link = self.get_task_group()
         if link is None or link.role != "member":
             raise TypeError(f"Task {self._task.id} is not a member of a task group")
+        # A request with no queue goes to the queue of the member task that adds it.
+        queued = [
+            replace(request, options=replace(request.options, queue=self._task.queue))
+            if isinstance(request, EnqueueRequest) and not request.options.queue
+            else request
+            for request in requests
+        ]
         return self._task_groups._add_to_task_group(
             link.group.id,
-            requests,
+            queued,
             (self._task.id, self._worker_id, self._task.fence_token),
         )
 
