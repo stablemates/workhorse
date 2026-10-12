@@ -651,6 +651,8 @@ class HandlerContext:
             self._get_progress,
             self._set_progress,
             self._checkpoint,
+            self._get_task_group,
+            self._add_to_task_group,
         )
 
 
@@ -743,6 +745,17 @@ class BatchHandlerContext:
     _get_progress: Callable[[], TaskProgress | None] = field(repr=False)
     _set_progress: Callable[[Json], TaskProgress] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
+    _get_task_group: Callable[[], TaskGroupLink | None] = field(
+        default=_task_groups_unsupported, repr=False
+    )
+    _add_to_task_group: Callable[[Sequence[EnqueueRequest]], list[EnqueueResult]] = field(
+        default=_task_groups_unsupported, repr=False
+    )
+
+    @property
+    def task_group(self) -> TaskGroupContext:
+        """The task group of this task in the batch, as a member task or as a callback task."""
+        return TaskGroupContext(self._get_task_group, self._add_to_task_group)
 
     def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._get_checkpoint(name)
@@ -773,6 +786,17 @@ class AsyncBatchHandlerContext:
     _get_progress: Callable[[], Awaitable[TaskProgress | None]] = field(repr=False)
     _set_progress: Callable[[Json], Awaitable[TaskProgress]] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
+    _get_task_group: Callable[[], Awaitable[TaskGroupLink | None]] = field(
+        default=_async_task_groups_unsupported, repr=False
+    )
+    _add_to_task_group: Callable[[Sequence[EnqueueRequest]], Awaitable[list[EnqueueResult]]] = (
+        field(default=_async_task_groups_unsupported, repr=False)
+    )
+
+    @property
+    def task_group(self) -> AsyncTaskGroupContext:
+        """The task group of this task in the batch, as a member task or as a callback task."""
+        return AsyncTaskGroupContext(self._get_task_group, self._add_to_task_group)
 
     async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._get_checkpoint(name)

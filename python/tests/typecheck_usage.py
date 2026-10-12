@@ -114,6 +114,29 @@ async def async_task_group_handler(payload: Json, context: AsyncHandlerContext) 
     return None
 
 
+def batch_task_group_handler(items: Sequence[BatchHandlerItem]) -> list[BatchHandlerOutcome]:
+    outcomes: list[BatchHandlerOutcome] = []
+    for item in items:
+        link: TaskGroupLink | None = item.context.task_group.get()
+        if link is not None and link.role == "member":
+            item.context.task_group.add([EnqueueRequest("import.row", item.payload)])
+        outcomes.append({"status": "succeeded", "result": None})
+    return outcomes
+
+
+async def async_batch_task_group_handler(
+    items: Sequence[AsyncBatchHandlerItem],
+) -> list[BatchHandlerOutcome]:
+    outcomes: list[BatchHandlerOutcome] = []
+    for item in items:
+        link = await item.context.task_group.get()
+        added: list[EnqueueResult] = []
+        if link is not None and link.role == "member":
+            added = await item.context.task_group.add([EnqueueRequest("import.row", item.payload)])
+        outcomes.append({"status": "succeeded", "result": len(added)})
+    return outcomes
+
+
 def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
     admin = Admin(connection)
     failures = admin.list_dead_letters(DeadLetterQuery(queue="billing"))

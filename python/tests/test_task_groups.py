@@ -16,10 +16,12 @@ from workhorse import (
     Admin,
     AdminAudit,
     AsyncAdmin,
+    AsyncBatchHandlerItem,
     AsyncHandlerContext,
     AsyncQueue,
     AsyncWorker,
     Debounce,
+    BatchHandlerItem,
     EnqueueOptions,
     EnqueueRequest,
     FastTierUnsupportedError,
@@ -306,6 +308,58 @@ def test_a_task_without_a_group_cannot_add_through_its_context(database_url: str
     assert worker.run_once() is True
     assert len(errors) == 1
     assert "is not a member of a task group" in str(errors[0])
+
+
+def test_a_batch_handler_reads_and_adds_for_each_task_in_the_batch(database_url: str) -> None:
+    with clients(database_url) as (connection, queue, _admin):
+        with queue.task_group() as builder:
+            builder.add([member("batch-add", 1), member("batch-add", 2)])
+        group = builder.result.group
+        links: list[TaskGroupLink | None] = []
+        added: list[str] = []
+        refusals: list[TaskGroupClosedError] = []
+
+        def handle_batch(items: tuple[BatchHandlerItem, ...]) -> list[dict[str, object]]:
+            for item in items:
+                links.append(item.context.task_group.get())
+                unnamed = EnqueueRequest("extra", item.payload, EnqueueOptions(max_attempts=1))
+                if item.payload == 2:
+                    # A competing settlement ends the lease of this task, so its add must fail.
+                    row = connection.execute(
+                        "SELECT workhorse.complete_v1(%s, %s, %s, 'null'::jsonb)",
+                        (item.context.task.id, "batch-add-worker", item.context.task.fence_token),
+                    ).fetchone()
+                    assert row == (True,)
+                    try:
+                        item.context.task_group.add([unnamed])
+                    except TaskGroupClosedError as error:
+                        refusals.append(error)
+                    continue
+                [result] = item.context.task_group.add([unnamed])
+                assert result.outcome == "accepted"
+                added.append(result.task_id)
+            return [{"status": "succeeded", "result": None} for _item in items]
+
+        worker = (
+            Worker(worker_pool, queue="batch-add", worker_id="batch-add-worker", concurrency=2)
+            .handle_batch("member", max_size=2, linger_ms=1000, handler=handle_batch)
+            .handle("extra", lambda _payload, _context: None)
+        )
+        assert worker.run_once() is True
+
+        assert len(links) == 2
+        assert all(link is not None and link.role == "member" for link in links)
+        assert {link.group.id for link in links if link is not None} == {group.id}
+        assert len(added) == 1
+        row = connection.execute(
+            "SELECT queue_name FROM workhorse.task WHERE id = %s", (added[0],)
+        ).fetchone()
+        assert row == ("batch-add",)
+        assert [(error.group_id, error.reason) for error in refusals] == [
+            (group.id, "not_running_member")
+        ]
+        current = queue.get_task_group(group.id)
+        assert current is not None and current.counts.total == 3
 
 
 def test_membership_rules(database_url: str) -> None:
@@ -694,6 +748,74 @@ async def test_async_psycopg_clients_and_worker_use_task_groups(
             "callback_enqueued"
         )
         assert await admin.repair_task_group_drift(audit("nothing to repair")) == ()
+    finally:
+        await connection.close()
+
+
+async def test_an_async_batch_handler_reads_and_adds_for_each_task_in_the_batch(
+    database_url: str, asyncpg_pool
+) -> None:
+    connection = await asyncpg.connect(database_url)
+    try:
+        queue = AsyncQueue.from_asyncpg(connection)
+        async with queue.task_group() as builder:
+            builder.add([member("async-batch-add", 1), member("async-batch-add", 2)])
+        group = builder.result.group
+        links: list[TaskGroupLink | None] = []
+        added: list[str] = []
+        refusals: list[TaskGroupClosedError] = []
+
+        async def handle_batch(
+            items: tuple[AsyncBatchHandlerItem, ...],
+        ) -> list[dict[str, object]]:
+            for item in items:
+                links.append(await item.context.task_group.get())
+                unnamed = EnqueueRequest("extra", item.payload, EnqueueOptions(max_attempts=1))
+                if item.payload == 2:
+                    # A competing settlement ends the lease of this task, so its add must fail.
+                    assert await connection.fetchval(
+                        "SELECT workhorse.complete_v1($1::uuid, $2, $3, 'null'::jsonb)",
+                        item.context.task.id,
+                        "async-batch-add-worker",
+                        item.context.task.fence_token,
+                    )
+                    try:
+                        await item.context.task_group.add([unnamed])
+                    except TaskGroupClosedError as error:
+                        refusals.append(error)
+                    continue
+                [result] = await item.context.task_group.add([unnamed])
+                added.append(result.task_id)
+            return [{"status": "succeeded", "result": None} for _item in items]
+
+        async def handle_extra(_payload: object, _context: AsyncHandlerContext) -> None:
+            return None
+
+        worker = (
+            AsyncWorker.from_asyncpg(
+                asyncpg_pool,
+                queue="async-batch-add",
+                worker_id="async-batch-add-worker",
+                concurrency=2,
+            )
+            .handle_batch("member", handle_batch, max_size=2, linger_ms=1000)
+            .handle("extra", handle_extra)
+        )
+        assert await worker.run_once() is True
+
+        assert [link.group.id if link else None for link in links] == [group.id, group.id]
+        assert len(added) == 1
+        assert (
+            await connection.fetchval(
+                "SELECT queue_name FROM workhorse.task WHERE id = $1::uuid", added[0]
+            )
+            == "async-batch-add"
+        )
+        assert [(error.group_id, error.reason) for error in refusals] == [
+            (group.id, "not_running_member")
+        ]
+        current = await queue.get_task_group(group.id)
+        assert current is not None and current.counts.total == 3
     finally:
         await connection.close()
 

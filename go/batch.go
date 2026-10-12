@@ -24,7 +24,8 @@ type BatchHandlerOptions struct {
 	Linger  time.Duration
 }
 
-// BatchHandlerContext exposes one member's fence and checkpoint operations without suspension APIs.
+// BatchHandlerContext exposes the fence, checkpoint, and task group operations of one task in the
+// batch, without suspension APIs.
 type BatchHandlerContext struct {
 	Task    ClaimedTask
 	Context context.Context
@@ -48,6 +49,18 @@ func (handler *BatchHandlerContext) GetProgress() (*TaskProgress, error) {
 // SetProgress replaces the member's latest progress under its fenced lease.
 func (handler *BatchHandlerContext) SetProgress(value any) (*TaskProgress, error) {
 	return handler.handler.SetProgress(value)
+}
+
+// GetTaskGroup reads the group this task in the batch is a member of, or whose callback it is. It
+// returns nil for a task with no group.
+func (handler *BatchHandlerContext) GetTaskGroup() (*TaskGroupLink, error) {
+	return handler.handler.GetTaskGroup()
+}
+
+// AddToTaskGroup adds up to MaxEnqueueBatchSize tasks to the group of this member task, under its
+// fenced lease. A request without a queue goes to the queue of this task in the batch.
+func (handler *BatchHandlerContext) AddToTaskGroup(requests []EnqueueRequest) ([]EnqueueResult, error) {
+	return handler.handler.AddToTaskGroup(requests)
 }
 
 // BatchHandlerItem is one claimed payload and its independent fenced context.

@@ -354,8 +354,16 @@ class _AsyncBatchContextAdapter(_AsyncCheckpointAdapter):
                 self.get_progress,
                 self.set_progress,
                 self.checkpoint,
+                self.get_task_group,
+                self.add_to_task_group,
             ),
         )
+
+    async def get_task_group(self) -> TaskGroupLink | None:
+        return await self._call(self._context.task_group.get)
+
+    async def add_to_task_group(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
+        return await self._call(self._context.task_group.add, requests)
 
 
 class AsyncWorker:

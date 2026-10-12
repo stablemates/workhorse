@@ -446,16 +446,22 @@ queue](data-model.md#queue-of-a-child-request-with-no-queue) describes it.
 
 ### Batch handlers
 
-A task in a batch can be a member task. An add does not suspend a task, so some batch contexts
-offer the task group calls of their task:
+A task in a batch can be a member task. An add does not suspend a task, so the batch context of
+every SDK gives each task in the batch the task group calls of that task:
 
-| SDK        | Task group calls in the batch context |
-| ---------- | ------------------------------------- |
-| TypeScript | `BatchHandlerContext.taskGroup`       |
-| Python     | None                                  |
-| Go         | None                                  |
-| Rust       | `BatchHandlerContext::task_group`     |
-| Ruby       | `BatchHandlerContext#task_group`      |
+| SDK        | Task group calls in the batch context                                       |
+| ---------- | --------------------------------------------------------------------------- |
+| TypeScript | `BatchHandlerContext.taskGroup`                                             |
+| Python     | `BatchHandlerContext.task_group` and `AsyncBatchHandlerContext.task_group`  |
+| Go         | `BatchHandlerContext.GetTaskGroup` and `BatchHandlerContext.AddToTaskGroup` |
+| Rust       | `BatchHandlerContext::task_group`                                           |
+| Ruby       | `BatchHandlerContext#task_group`                                            |
+
+Each batch context uses the `HandlerContext` of its task. Thus the read and the add of a task in the
+batch behave as they do in an ordinary handler. The read calls `task_group_for_task_v1` one time for
+each activation. The add sends the member task, the worker, and the fence token of that task, so
+PostgreSQL refuses it with `P1008` and the reason `not_running_member` after the lease of that task
+ends. A request with no queue goes to the queue of that task in the batch.
 
 ### Active Job
 

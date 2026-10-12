@@ -263,8 +263,8 @@ alone and continue later. `BatchHandlerContext` does not have the calls that mak
 If a task must wait, register an ordinary `Handler` for its task type.
 
 A task in a batch can also be a member task of a [task group](/docs/task-groups). An add to a task
-group does not make the task wait. Thus, the batch context of some SDKs can read the group and add
-tasks to it. The reference block names those SDKs.
+group does not make the task wait. Thus, the batch context of every SDK can read the group of each
+task in the batch and add tasks to it.
 
 <details>
 <summary>Reference: the batch context</summary>
@@ -273,14 +273,14 @@ TypeScript `BatchHandlerContext` omits `sleep`, `sleepUntil`, `waitForSignal`, `
 `runChild`, `runChildren`, and `runChildrenAll`. It keeps the task, the abort signal, checkpoint
 reads and writes, wait reads, progress reads and writes, and `taskGroup`.
 
-| SDK    | Calls in the context                                                                   |
-| ------ | -------------------------------------------------------------------------------------- |
-| Python | `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, `set_progress` |
-| Go     | `Task`, the cancellation `Context`, `Checkpoint`, `GetProgress`, `SetProgress`         |
+| SDK    | Calls in the context                                                                                             |
+| ------ | ---------------------------------------------------------------------------------------------------------------- |
+| Python | `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, `set_progress`, `task_group`             |
+| Go     | `Task`, the cancellation `Context`, `Checkpoint`, `GetProgress`, `SetProgress`, `GetTaskGroup`, `AddToTaskGroup` |
 
-**Task groups.** The batch context reads the task group and adds to it in TypeScript
-(`taskGroup`), Rust (`BatchHandlerContext::task_group`), and Ruby (`BatchHandlerContext#task_group`).
-The Python and Go batch contexts have no task group calls.
+**Task groups.** The batch context reads the task group and adds to it in every SDK: TypeScript
+(`taskGroup`), Python (`task_group`), Go (`GetTaskGroup` and `AddToTaskGroup`), Rust
+(`BatchHandlerContext::task_group`), and Ruby (`BatchHandlerContext#task_group`).
 
 More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
 

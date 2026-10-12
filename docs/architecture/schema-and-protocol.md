@@ -919,10 +919,14 @@ thread starts. The coordinator ranks by that sequence, not by the order in which
 
 The handler receives a sequence of `BatchHandlerItem` values. Each item contains `payload` and a
 `BatchHandlerContext` with `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`,
-and `set_progress`.
+`set_progress`, and `task_group`.
+
+`BatchHandlerContext.task_group` returns a `TaskGroupContext` with `get()` and `add(requests)`. The
+batch context takes these calls from the `HandlerContext` of that task, so they use the fenced lease
+of that task and the read of its activation.
 
 `BatchHandlerContext` has no `sleep` or `sleep_until` methods. Thus one task in the batch cannot
-suspend the shared invocation. It also has no task group calls.
+suspend the shared invocation.
 
 The handler returns one `BatchHandlerOutcome` mapping per item:
 
@@ -1061,7 +1065,8 @@ The shared coordinator still owns batch selection, priority order, evidence writ
 settlement of each task in the batch.
 
 `AsyncBatchHandlerContext.get_progress()` and `set_progress(value)` are awaitable, as its checkpoint
-methods are. These operations run on the application loop. The shared durability core owns replay
+methods are. `AsyncBatchHandlerContext.task_group` returns an `AsyncTaskGroupContext`, whose `get()`
+and `add(requests)` are awaitable and call the `task_group` of the sync batch context. These operations run on the application loop. The shared durability core owns replay
 and persistence.
 
 #### Async notifications
@@ -1624,9 +1629,9 @@ tasks in the batch by descending `ClaimedTask.Priority` and by arrival order.
 
 The Go callback receives `[]BatchHandlerItem` and returns `[]BatchHandlerOutcome` in the same order.
 Each item contains `Payload` and a `BatchHandlerContext` with `Task`, the standard cancellation
-`Context`, `Checkpoint`, `GetProgress`, and `SetProgress`. The batch context omits `Sleep` and
-`SleepUntil`, and it has no task group calls. Thus one task in the batch cannot suspend the shared
-invocation.
+`Context`, `Checkpoint`, `GetProgress`, `SetProgress`, `GetTaskGroup`, and `AddToTaskGroup`. The
+task group calls use the `HandlerContext` of that task. The batch context omits `Sleep` and
+`SleepUntil`. Thus one task in the batch cannot suspend the shared invocation.
 
 - `BatchSucceeded{Result: value}` completes one task.
 - `BatchFailed{Error: err}` sends the failure of that task through its own retry budget.
