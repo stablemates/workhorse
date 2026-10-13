@@ -900,9 +900,14 @@ describe("continuous integration", () => {
   it("creates Go module tags only after the release check and full repository gate", async () => {
     const script = await read("scripts/release-go.sh");
 
-    expect(script.indexOf('pnpm release:check go "$tag"')).toBeLessThan(
-      script.indexOf("pnpm check"),
-    );
+    const releaseCheck = script.indexOf('pnpm go:release-check "$version"');
+    expect(releaseCheck).toBeGreaterThan(-1);
+    // The candidate guards refuse a wrong HEAD before the long checks start.
+    for (const guard of ["git merge-base --is-ancestor", '"python/v$python_version"']) {
+      expect(script.indexOf(guard)).toBeGreaterThan(-1);
+      expect(script.indexOf(guard)).toBeLessThan(releaseCheck);
+    }
+    expect(releaseCheck).toBeLessThan(script.indexOf("pnpm check"));
     expect(script.indexOf("pnpm check")).toBeLessThan(script.indexOf('git tag --annotate "$tag"'));
     expect(script).toContain("pnpm db:reset:test");
     expect(script).toContain("pnpm db:reset:test-packed");

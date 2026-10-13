@@ -142,6 +142,9 @@ run.
   run that the merge starts on `main`. Use `gh run cancel` with the ID of that run.
 - Cancel only runs of the `CI` workflow on `main`. Never cancel a pull request run or a release
   workflow run, because a canceled publish can leave a release incomplete.
+- Nobody may cancel the `main` CI run of a release candidate commit, because the release workflows
+  require that run to succeed. Other commits can land on `main` during a release. Thus, check the
+  commit SHA of a run before you cancel it.
 
 ## Keep benchmark comparisons private
 
