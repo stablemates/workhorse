@@ -16,7 +16,7 @@ Requires **schema v69** and Go **1.25** or newer.
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **69**.
+1. Run `workhorse schema migrate`. The final schema version is **70**.
 2. Roll out the updated processes.
 
 The SDK compatibility floor is schema version **69**, which migration 0070 reaches. The floor rises
@@ -25,7 +25,7 @@ and `save_checkpoint_v2`, which migration 0069 adds. The dashboard of each SDK c
 `dashboard_task_groups_v1`, which migration 0067 adds, and `list_newest_task_group_events_v1`, which
 migration 0068 adds. Migration 0070 fences a member add, so an updated process does not add tasks to
 a group without that check. An updated process refuses a schema below version 69 at startup. A 0.7
-process keeps working on version 69, because a migration inside a major line only adds.
+process keeps working on version 70, because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
 [ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
@@ -78,6 +78,15 @@ a state without a read of the groups of other states. The migration is a non-tra
 builds the index with `CREATE INDEX CONCURRENTLY`, so writes to `task_group` continue. If it fails
 part-way, drop the invalid index before the rerun, as `docs/schema-lifecycle.md` describes. It
 changes no stored data.
+
+Migration 0071 (`0071-lock-purged-runtime-rows-in-identity-order.sql`) makes a queue purge lock its
+tasks in identity order (SM-1282). Before, `purge_queue_internal_v1` locked the runtime rows and the
+task rows of the queue in scan order. An enqueue that named two of those tasks as prerequisites
+locks them in identity order. Thus the purge and the enqueue could wait for each other, and
+PostgreSQL aborted one of them with `40P01`. The purge now locks every runtime row, then every task
+row, each in identity order. The signature and the deleted count do not change. The migration does
+not raise the SDK compatibility floor, because no SDK statement changes and every process gets the
+new lock order when the migration commits. It changes no stored data.
 
 `Queue` gains `CreateTaskGroup`, `AddToTaskGroup`, `SealTaskGroup`, the block form `TaskGroup`,
 `GetTaskGroup`, `ListTaskGroupMembers`, and `FindTaskGroup` (SM-1234). The block form creates,

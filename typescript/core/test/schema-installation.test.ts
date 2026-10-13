@@ -590,6 +590,10 @@ describe("schema installation", () => {
         version: 69,
         description: "fence a task group member add and index the group list",
       },
+      {
+        version: 70,
+        description: "lock purged runtime rows in identity order",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

@@ -588,7 +588,8 @@ expired" }`.
 
 - `run_task_now_v1` moves a delayed fast-tier row's `run_at` to now.
 - `purge_queue_internal_v1` deletes ready fast-tier rows by deleting their `task` identities, which
-  cascades.
+  cascades. It locks the runtime rows, then the `task` rows, each in identity order, as
+  [Data model: Queue purge](data-model.md#queue-purge) states.
 - `list_dead_letters_v1` lists failed rows from `fast_task_outcome`.
 - `redrive_v1` and `redrive_many_v1` accept those rows as sources. A redrive copies the task into
   its queue's current tier, not the tier it closed in.

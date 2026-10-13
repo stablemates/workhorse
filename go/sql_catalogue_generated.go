@@ -8,7 +8,7 @@ const (
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
 	minimumSchemaVersion   = 69
-	maximumSchemaVersion   = 69
+	maximumSchemaVersion   = 70
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576

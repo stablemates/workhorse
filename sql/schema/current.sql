@@ -8667,11 +8667,19 @@ BEGIN
   -- Lock both runtime and parent identities before taking a fresh statement snapshot for history
   -- deletion. The history insert trigger takes KEY SHARE on task, so it either commits before these
   -- deletes become visible or fails after the parent disappears; it cannot commit an orphan.
+  -- Lock every runtime row in identity order, then every task row in identity order. An enqueue
+  -- locks its prerequisites in the same order, so the two cannot deadlock.
+  PERFORM 1
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
+   ORDER BY runtime.task_id
+   FOR UPDATE;
   PERFORM 1
     FROM workhorse.task_runtime runtime
     JOIN workhorse.task task ON task.id = runtime.task_id
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-   FOR UPDATE OF runtime, task;
+   ORDER BY task.id
+   FOR UPDATE OF task;
   -- A purged member task counts as canceled for its group (ADR 0095). Every member is full-tier.
   v_member_task_ids := ARRAY(
     SELECT member.task_id
@@ -8707,11 +8715,18 @@ BEGIN
   END IF;
 
   -- Fast-tier ready rows carry no events, and deleting the task cascades to the runtime row.
+  -- The same order applies: every runtime row, then every task row, each in identity order.
+  PERFORM 1
+    FROM workhorse.fast_task_runtime fast
+   WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
+   ORDER BY fast.task_id
+   FOR UPDATE;
   PERFORM 1
     FROM workhorse.fast_task_runtime fast
     JOIN workhorse.task task ON task.id = fast.task_id
    WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
-   FOR UPDATE OF fast, task;
+   ORDER BY task.id
+   FOR UPDATE OF task;
   DELETE FROM workhorse.enqueue_idempotency idempotency
    USING workhorse.fast_task_runtime fast
    WHERE fast.queue_name = p_queue_name AND fast.state = 'ready'
@@ -21857,10 +21872,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (66, 'count task group outcomes in counter shards'),
   (67, 'read the newest task group events'),
   (68, 'check the input of a checkpoint on replay'),
-  (69, 'fence a task group member add and index the group list')
+  (69, 'fence a task group member add and index the group list'),
+  (70, 'lock purged runtime rows in identity order')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (69) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (70) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
