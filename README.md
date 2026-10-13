@@ -29,23 +29,12 @@ with fence tokens, so a worker that resumes after losing its lease cannot overwr
 Handlers receive at-least-once delivery. Workhorse records durable progress and outcomes, but external
 effects still need stable provider idempotency keys or compensation.
 
-```mermaid
-flowchart LR
-  subgraph App[Your application]
-    Tx[Business writes + enqueue<br/>in one transaction]
-  end
-  subgraph PG[PostgreSQL]
-    Schema[workhorse schema<br/>versioned SQL functions,<br/>runtime, outcomes, history]
-  end
-  subgraph Fleet[Worker processes]
-    W[TypeScript, Python, Go,<br/>Rust, or Ruby Worker]
-  end
-  Tx -->|commit or roll back together| Schema
-  Schema -->|claim: payload + fence token| W
-  W -->|heartbeat, complete, fail<br/>checked against the fence| Schema
-  W -->|at-least-once handler| Effects[External effects]
-  Dash[Dashboard] -->|read models and<br/>operator actions| Schema
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="site/public/diagrams/readme-overview-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="site/public/diagrams/readme-overview-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/diagrams/readme-overview-dark.png">
+  <img src="site/public/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
+</picture>
 
 ## See it operate
 
@@ -53,91 +42,24 @@ The dashboard exposes task activity, lifecycle events, system health, worker cap
 schedules without making the queue's PostgreSQL tables part of your operator interface.
 
 <p>
-  <a href="site/public/screenshots/demo-tasks.png"><img src="site/public/screenshots/demo-tasks.png" width="14%" hspace="8" alt="Workhorse dashboard task activity chart and task table"></a>
-  <a href="site/public/screenshots/demo-events.png"><img src="site/public/screenshots/demo-events.png" width="14%" hspace="8" alt="Workhorse event stream with task lifecycle events and operational details"></a>
-  <a href="site/public/screenshots/demo-health.png"><img src="site/public/screenshots/demo-health.png" width="14%" hspace="8" alt="Workhorse system health dashboard with queue backlog and retry metrics"></a>
-  <a href="site/public/screenshots/demo-queues.png"><img src="site/public/screenshots/demo-queues.png" width="14%" hspace="8" alt="Workhorse queues dashboard with per-queue status, concurrency limits, and rate budgets"></a>
-  <a href="site/public/screenshots/demo-workers.png"><img src="site/public/screenshots/demo-workers.png" width="14%" hspace="8" alt="Workhorse worker fleet with queue assignments, capacity, and recent results"></a>
-  <a href="site/public/screenshots/demo-schedules.png"><img src="site/public/screenshots/demo-schedules.png" width="14%" hspace="8" alt="Workhorse schedule list with expressions, destinations, and recent runs"></a>
+  <a href="https://demo.workhorse.run">
+    <picture>
+      <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="site/public/screenshots/demo-tasks-mobile-dark.png">
+      <source media="(max-width: 600px)" srcset="site/public/screenshots/demo-tasks-mobile.png">
+      <source media="(prefers-color-scheme: dark)" srcset="site/public/screenshots/demo-tasks-dark.png">
+      <img src="site/public/screenshots/demo-tasks.png" width="960" alt="Workhorse dashboard task activity chart and task table">
+    </picture>
+  </a>
 </p>
 
 Open the [live demo](https://demo.workhorse.run) to explore the dashboard, including recurring
 schedules and task details.
-
-## Run one task
-
-Install the TypeScript package and its schema:
-
-```bash
-npm install @stablemates/workhorse
-npm exec --no -- workhorse schema install
-```
-
-Install the schema during deployment. Runtime processes should verify compatibility instead of
-attempting schema changes. `npm exec --no` runs the binary your project already depends on, so the
-schema tool and the application always agree on a version.
-
-Requires Node.js 22 or 24 and PostgreSQL 15 through 18.
-
-```ts
-import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
-
-export async function runQuickstart(databaseUrl: string) {
-  const pool = new Pool({ connectionString: databaseUrl });
-  try {
-    const queue = new Queue(pool);
-    const admin = new Admin(pool);
-    const worker = new Worker(queue, { workerId: "quickstart-worker" }).handle<{ name: string }>(
-      "welcome.send",
-      async (payload) => ({ message: `Welcome, ${payload.name}!` }),
-    );
-    const taskId = await queue.enqueue("welcome.send", { name: "Ada" });
-    await worker.runOnce();
-    const task = await admin.getTask(taskId);
-    if (task?.state !== "succeeded") throw new Error(`Quickstart task finished in ${task?.state}`);
-    return { taskId, result: task.result };
-  } finally {
-    await pool.end();
-  }
-}
-```
-
-The [quickstart](https://workhorse.run/docs/quickstart) continues through failure and recovery. See
-[worker processes](https://workhorse.run/docs/worker-processes) before deploying a worker.
-
-Every other SDK README runs the same first task in its own language. A Ruby application adds the gem
-and the connection pool it runs on:
-
-```bash
-bundle add stablemates-workhorse
-bundle add connection_pool
-```
-
-The [Ruby README](ruby/README.md) continues with the schema step and a first task. The
-[Python](python/README.md), [Go](go/README.md), and [Rust](rust/README.md) READMEs do the same.
 
 ## When it fits
 
 Choose Workhorse when your application already depends on PostgreSQL and needs durable background
 work that can share application transactions. Choose a dedicated broker when queue scale or
 availability must be independent from the application database.
-
-## Packages
-
-- [`@stablemates/workhorse`](typescript/core) is the TypeScript client, worker runtime, schema CLI,
-  and operator API that most TypeScript applications install.
-- [`@stablemates/workhorse-drizzle`](typescript/drizzle),
-  [`@stablemates/workhorse-prisma`](typescript/prisma),
-  [`@stablemates/workhorse-typeorm`](typescript/typeorm),
-  [`@stablemates/workhorse-kysely`](typescript/kysely), and
-  [`@stablemates/workhorse-knex`](typescript/knex) enqueue through ORM-owned transactions.
-- [`@stablemates/workhorse-dashboard`](typescript/dashboard) is the React operator dashboard and
-  compatibility facade. Its server and type contract are also published for package composition.
-- [`@stablemates/workhorse-otel`](typescript/otel) connects core's vendor-neutral telemetry to the
-  host application's OpenTelemetry API providers.
-- The [Python SDK](python), [Go SDK](go), [Rust crate](rust), and [Ruby gem](ruby) implement the
-  same PostgreSQL protocol and embed the same operator dashboard. The Ruby gem also ships an Active
-  Job adapter.
 
 ## Learn and operate
 

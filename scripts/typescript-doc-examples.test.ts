@@ -33,7 +33,6 @@ declare global {
 `;
 
 const contracts: readonly FenceContract[] = [
-  { file: "README.md", fence: 1 },
   { file: "typescript/core/README.md", fence: 1 },
   { file: "site/content/docs/index.mdx", fence: 1 },
   { file: "site/content/docs/index.mdx", fence: 2 },

@@ -1147,9 +1147,6 @@ describe("documentation", () => {
       expect(positions).toEqual(positions.toSorted((left, right) => left - right));
     }
     const postgresRange = `${manifest.support.postgres.tested[0]} through ${manifest.support.postgres.tested.at(-1)}`;
-    expect(readme).toContain(
-      `Requires Node.js ${SUPPORTED_NODE_MAJORS.join(" or ")} and PostgreSQL ${postgresRange}.`,
-    );
     expect(coreReadme).toContain(
       `Requires Node.js ${SUPPORTED_NODE_MAJORS.join(" or ")} and PostgreSQL ${postgresRange}.`,
     );
