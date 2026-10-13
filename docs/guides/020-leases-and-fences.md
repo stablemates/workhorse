@@ -63,9 +63,17 @@ this write.
 
 1. At about 52 s, worker B claims the task. The claim gets a new, higher fence token: 57. Other
    claims occurred between the two claims, so the token is not 42.
-2. At 90 s, the machine of worker A starts again. Its handler finishes.
-3. Worker A tries to record that the task is complete. The write has the fence token 41.
+2. At 70 s, the machine of worker A starts again. Its old handler continues to run.
+3. At 90 s, the handler finishes. Worker A tries to record that the task is complete. The write has
+   the fence token 41.
 4. The row has the fence token 57, so PostgreSQL refuses the write.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/leases-and-fences-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/leases-and-fences-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/leases-and-fences-dark.png">
+  <img src="../../site/public/diagrams/leases-and-fences-light.png" width="960" alt="A lease gives a task one owner, and a fence token refuses a late write">
+</picture>
 
 Each lifecycle write of a worker has the worker ID and the fence token of the claim. Examples are a
 heartbeat, a checkpoint, and the completion. The SQL function compares the two values with the row

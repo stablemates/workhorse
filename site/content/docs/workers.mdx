@@ -252,10 +252,26 @@ can cause the same result. The fence token stops the late write of that worker.
 
 1. At about 52 s, worker B claims the invoice task. The new claim gets fence token 57, which is
    higher than 41. Other claims took the numbers between them.
-2. At 90 s, the machine of worker A recovers. Its handler finishes and tries to mark the task
-   complete. The write carries fence token 41.
-3. The row now holds fence token 57, so PostgreSQL refuses the write. Worker A cannot change the
+2. At 70 s, the machine of worker A recovers. Its old handler continues to run.
+3. At 90 s, the handler finishes and tries to mark the task complete. The write carries fence
+   token 41.
+4. The row now holds fence token 57, so PostgreSQL refuses the write. Worker A cannot change the
    attempt that replaced its attempt.
+
+<picture className="dark:hidden">
+  <source media="(max-width: 600px)" srcSet="/diagrams/leases-and-fences-narrow-light.png" />
+  <img
+    src="/diagrams/leases-and-fences-light.png"
+    alt="A lease gives a task one owner, and a fence token refuses a late write"
+  />
+</picture>
+<picture className="hidden dark:block">
+  <source media="(max-width: 600px)" srcSet="/diagrams/leases-and-fences-narrow-dark.png" />
+  <img
+    src="/diagrams/leases-and-fences-dark.png"
+    alt="A lease gives a task one owner, and a fence token refuses a late write"
+  />
+</picture>
 
 Thus, each write that changes a task carries the worker ID and the fence token of the claim. Each
 SQL function compares both values with the row before it writes. If they do not match, the function
