@@ -106,6 +106,9 @@ jobs:
           working-directory: ruby
           bundler-cache: true
       - run: pnpm install --frozen-lockfile
+      # `pnpm npm:release-check` runs knip before it builds, so run knip here with no `dist/` too. A
+      # knip config that loads a build output passes after the build and fails the release (SM-1292).
+      - run: pnpm lint:dead-code
       - run: pnpm build:runtime:dev
       - run: pnpm sql-catalogues:check
       - run: pnpm go:sqlc:check
