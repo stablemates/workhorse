@@ -14,7 +14,10 @@
       "ignoreDependencies": ["@vitest/coverage-v8", "geist"]
     },
     "dashboard/app": {
-      "entry": ["browser/react-grab.ts", "src/browser.tsx"]
+      "entry": ["browser/react-grab.ts", "src/browser.tsx", "vite.config.ts"],
+      "vite": {
+        "config": []
+      }
     },
     "typescript/core": {
       "entry": ["src/cli/benchmark.ts", "src/cli/reset-db.ts", "src/cli/workhorse.ts"],
