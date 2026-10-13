@@ -48,13 +48,16 @@ order `(group_id, shard)`, then group rows in identity order.
 
 | Change                     | Shard rows                                                 | Group row                                        |
 | -------------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| Add                        | All shard rows of the group, after the prerequisites       | Always                                           |
+| Add                        | All shard rows of the group, after the prerequisites¹      | Always                                           |
 | Seal                       | Read without a lock                                        | Always                                           |
 | Cancel                     | All shard rows, after the runtime rows of the live members | Always                                           |
 | Member outcome or purge    | The shard rows of the members, at the apply step           | Only when the pending count of a shard becomes 0 |
 | Delete of a finished group | All shard rows, with `SKIP LOCKED`                         | Always, with `SKIP LOCKED`                       |
 | Drift repair               | All shard rows                                             | Always                                           |
 | Finish                     | Read without a lock                                        | The caller holds the lock                        |
+
+¹ A member add locks the runtime row of its member task with the runtime rows of the prerequisites,
+in identity order.
 
 The finish condition is: the group is `sealed`, and `task_group.pending_shard_count` is 0.
 Workhorse changes `pending_shard_count` only while it holds the group row lock. An add increases it
@@ -142,11 +145,12 @@ cancel, and that a `finished` group has counts that add up to `total_count`.
 `finished`. The finish writes the sums of the shard rows to them. `task_group_shards_check`
 requires `shard_count >= 1` and `pending_shard_count BETWEEN 0 AND shard_count`.
 
-| Index                     | Columns             | Predicate            |
-| ------------------------- | ------------------- | -------------------- |
-| `task_group_created_idx`  | `(created_at, id)`  |                      |
-| `task_group_sealed_idx`   | `(sealed_at, id)`   | `state = 'sealed'`   |
-| `task_group_finished_idx` | `(finished_at, id)` | `state = 'finished'` |
+| Index                          | Columns                   | Predicate            |
+| ------------------------------ | ------------------------- | -------------------- |
+| `task_group_created_idx`       | `(created_at, id)`        |                      |
+| `task_group_sealed_idx`        | `(sealed_at, id)`         | `state = 'sealed'`   |
+| `task_group_finished_idx`      | `(finished_at, id)`       | `state = 'finished'` |
+| `task_group_state_created_idx` | `(state, created_at, id)` |                      |
 
 ### `task_group_member`
 
@@ -235,23 +239,49 @@ p_worker_id text DEFAULT NULL, p_fence_token bigint DEFAULT NULL)` returns the r
 `enqueue_many_v1`: `(ordinal, task_id, outcome, reason)`. In order, it:
 
 1. Rejects more than 1,000 requests, and any request with `debounce` or `throttle`.
-2. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
-   all shard rows of the group, then the group row. Completion, cancellation, and purge lock a
-   runtime row before the shard and group rows, so an add that names a member as a prerequisite
-   takes the same order. An unknown group raises an error.
-3. Refuses the add with `P1008` when the group is canceled or finished, when the member arguments
-   do not name an `active` member of this group with that worker and fence token, or when the group
-   is sealed and no member arguments are given.
-4. Rejects a request on a fast-tier queue with `P1007` and feature `task groups`.
-5. Enqueues the requests through `enqueue_many_v1`. On a contract mismatch it returns that row and
+2. For a member add, locks the `task_runtime` row of the member task `FOR NO KEY UPDATE` and the
+   `task_runtime` rows of the prerequisites `FOR KEY SHARE`, one row at a time in identity order.
+   `enqueue_prerequisite_task_ids_internal_v1` gives the prerequisite identities. The member lock
+   conflicts with every update and delete of the row. It does not block the `FOR KEY SHARE` lock of
+   an enqueue that names the member task as a prerequisite. `cancel_task_group_v1` locks the
+   runtime rows of live members in identity order too, so a member add that names a lower member
+   as a prerequisite does not hold its own row while it waits for the cancel.
+3. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
+   all shard rows of the group, then the group row. Completion, cancellation, purge, and lease
+   recovery lock a runtime row before the shard and group rows, so a member add and an add that
+   names a member as a prerequisite take the same order. An unknown group raises an error.
+4. Refuses the add with `P1008` when the group is canceled or finished, when the group is sealed
+   and no member arguments are given, or with the reason `not_running_member` when the member
+   check below fails. The check runs after the group row lock, so a wait for a lock cannot make it
+   stale.
+5. Rejects a request on a fast-tier queue with `P1007` and feature `task groups`.
+6. Enqueues the requests through `enqueue_many_v1`. On a contract mismatch it returns that row and
    adds nothing.
-6. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
+7. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
    this call enqueued. Thus an idempotent retry of the same add returns the existing member.
-7. Rejects with `P1009` an add that takes the member count above 100,000. The member count is the
+8. Rejects with `P1009` an add that takes the member count above 100,000. The member count is the
    sum of the shard `total_count` values, read while the add holds all shard rows and the group row.
-8. Inserts the membership rows at the next positions, increases the `total_count` of their shards,
+9. Inserts the membership rows at the next positions, increases the `total_count` of their shards,
    and increases `pending_shard_count` for each shard whose pending count was 0. Then it counts the
    outcomes that the enqueue already wrote, for example for a deadline in the past.
+
+The member check passes only when all of these conditions are true. Conditions 1 to 5 are the
+conditions of `save_checkpoint_v2`, with `clock_timestamp()` as the time:
+
+1. The member task has a `task_runtime` row with `state = 'active'`.
+2. Its `worker_id` and `fence_token` equal `p_worker_id` and `p_fence_token`.
+3. Its `expires_at` is after the time.
+4. Its `deadline_at` and its `attempt_timeout_at` are null or after the time.
+5. Its `cancel_requested_at` is null.
+6. A `task_group_member` row puts the member task in this group.
+
+Thus a worker whose lease expired, or whose task Workhorse gave to a new worker with a new fence
+token, cannot add tasks. A completion of the member task and a member add do not deadlock: the one
+that locks the runtime row first runs to its commit, and the other one then continues. An add that
+waits for a completion finds no runtime row and refuses with `not_running_member`.
+
+Schema version 69 adds the runtime row lock and the conditions 3 to 5. On an earlier schema, the
+add read the runtime row without a lock and checked only the conditions 1, 2, and 6.
 
 A task becomes a member only when this function enqueues it. A child task, a dependent task, or a
 redrive target of a member task is not a member.
@@ -380,7 +410,11 @@ without a lock. For a finished group, they are the counts on its row. `task_grou
 (`total`, `succeeded`, `failed`, `canceled`, `pending`), `createdAt`, `sealedAt`, `finishedAt`,
 `canceledAt`, `canceledBy`, `cancelReason`, and `callbacks`, a list of `{ kind, taskId }` in the
 order `onFinish`, `onSuccess`, `onFailure`. It reads one group more than it returns, so `hasMore`
-costs no count of the whole table. The dashboard reads task groups only through functions, so the
+costs no count of the whole table. A page with `state` `all` reads `task_group_created_idx`. A page
+with another `state` reads `task_group_state_created_idx`, because its statement orders by
+`(state, created_at, id)` descending. Thus a page of a state that few groups have reads only the
+groups of that state, also in a generic plan. Before schema version 69, one statement served both
+cases, and such a page could read every group. The dashboard reads task groups only through functions, so the
 task group tables are not a governed dashboard read. The dashboard detail of a group reads its
 newest 101 events through `list_newest_task_group_events_v1`, shows 100, and sets `eventsTruncated`
 when the group has older events.

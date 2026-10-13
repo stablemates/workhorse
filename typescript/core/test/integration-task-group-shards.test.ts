@@ -649,6 +649,58 @@ describe("task group counter shards", () => {
       });
     });
 
+    it("reads one page of a rare state without a walk over the other groups", async () => {
+      await pool.query("DELETE FROM workhorse.task_group");
+      const open = await queue.createTaskGroup();
+      const sealed = await queue.createTaskGroup();
+      await queue.addToTaskGroup(sealed.id, members("dash-rare", 1));
+      await queue.sealTaskGroup(sealed.id);
+      // 20,000 newer finished groups. Newest first, the open and the sealed group are last.
+      await pool.query(
+        `INSERT INTO workhorse.task_group(state, result, sealed_at, finished_at, shard_count)
+         SELECT 'finished', 'succeeded', clock_timestamp(), clock_timestamp(), 1
+           FROM generate_series(1, 20000)`,
+      );
+      await pool.query("ANALYZE workhorse.task_group");
+      const client = await pool.connect();
+      try {
+        // PL/pgSQL can choose a generic plan after five calls. Force it, so the test does not
+        // depend on the choice.
+        await client.query("SET plan_cache_mode = force_generic_plan");
+        for (const [state, id] of [
+          ["open", open.id],
+          ["sealed", sealed.id],
+        ] as const) {
+          const input = JSON.stringify({ state, pageSize: 50 });
+          const sql = "SELECT workhorse.dashboard_task_groups_v1($1) AS page";
+          // The first call on a connection compiles the function. Measure the second.
+          await client.query(sql, [input]);
+          const page = await client.query<{ page: { groups: Array<{ id: string }> } }>(sql, [
+            input,
+          ]);
+          expect(page.rows[0]!.page.groups.map((group) => group.id)).toEqual([id]);
+          const explained = await client.query<{
+            "QUERY PLAN": Array<{
+              Plan: { "Shared Hit Blocks": number; "Shared Read Blocks": number };
+            }>;
+          }>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [input]);
+          const buffers = explained.rows[0]!["QUERY PLAN"][0]!.Plan;
+          const pages = await client.query<{ pages: number }>(
+            "SELECT relpages AS pages FROM pg_class WHERE oid = 'workhorse.task_group'::regclass",
+          );
+          // A walk over the finished groups reads at least every page of the table.
+          expect(pages.rows[0]!.pages).toBeGreaterThan(100);
+          expect(buffers["Shared Hit Blocks"] + buffers["Shared Read Blocks"]).toBeLessThan(
+            pages.rows[0]!.pages / 4,
+          );
+        }
+      } finally {
+        await client.query("RESET plan_cache_mode");
+        client.release();
+      }
+      await pool.query("DELETE FROM workhorse.task_group");
+    });
+
     it("rejects an unknown state filter and a page outside its bounds", async () => {
       await expect(groupPage({ state: "canceled" })).rejects.toThrow("task group state filter");
       await expect(groupPage({ page: 0 })).rejects.toThrow("task group page must be");

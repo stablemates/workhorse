@@ -1665,6 +1665,9 @@ CREATE INDEX IF NOT EXISTS task_group_sealed_idx
   ON workhorse.task_group (sealed_at, id) WHERE state = 'sealed';
 CREATE INDEX IF NOT EXISTS task_group_finished_idx
   ON workhorse.task_group (finished_at, id) WHERE state = 'finished';
+-- The dashboard group list with a state filter reads this index newest first.
+CREATE INDEX IF NOT EXISTS task_group_state_created_idx
+  ON workhorse.task_group (state, created_at, id);
 
 -- One row for each member task. The task reference has no foreign key: a purge deletes a member
 -- task that is not terminal, and the row then keeps the canceled outcome the purge counted. A task
@@ -6235,6 +6238,33 @@ BEGIN
          ELSE jsonb_build_object('ordinal', p_ordinal) END
     )::text;
 END;
+$$;
+
+-- The distinct prerequisite identities that the requests of one enqueue batch name: the identities
+-- that lock_enqueue_prerequisites_internal_v1 locks. A value that is not a UUID is left out, so the
+-- per-request validation raises its usual error. A member add of a task group uses it to lock its
+-- member task in identity order with the prerequisites.
+CREATE OR REPLACE FUNCTION workhorse.enqueue_prerequisite_task_ids_internal_v1(p_requests jsonb)
+RETURNS uuid[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT ARRAY(
+    SELECT DISTINCT prerequisite.value::uuid
+      FROM jsonb_array_elements(p_requests) input(request)
+      CROSS JOIN LATERAL (
+        SELECT input.request->>'prerequisiteTaskId' AS value
+         WHERE jsonb_typeof(input.request->'prerequisiteTaskId') = 'string'
+        UNION ALL
+        SELECT item.value
+          FROM jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(input.request->'dependencies') = 'object'
+                  AND jsonb_typeof(input.request->'dependencies'->'prerequisiteTaskIds') = 'array'
+              THEN input.request->'dependencies'->'prerequisiteTaskIds' ELSE '[]'::jsonb END
+          ) item(value)
+      ) prerequisite
+     WHERE prerequisite.value ~* '^(\{[0-9a-f]{4}(-?[0-9a-f]{4}){7}\}|[0-9a-f]{4}(-?[0-9a-f]{4}){7})$'
+  );
 $$;
 
 -- Lock the prerequisites of every request in one enqueue batch before the batch inserts anything.
@@ -17503,6 +17533,14 @@ CREATE OR REPLACE TRIGGER task_outcome_settle_task_groups_insert
 -- After the seal, only a running member task can add tasks: the caller passes that member's task
 -- identity, worker, and fence token. The member is not terminal, so its shard is pending and the
 -- group cannot finish first.
+--
+-- A member add locks the member's runtime row first, with the runtime rows of the prerequisites in
+-- identity order, before the shard rows and the group row. Completion, cancellation, purge, and
+-- lease recovery change or delete that row first too, so they wait for the add, or the add waits
+-- for them and then sees their result. The
+-- add then checks, as save_checkpoint_v2 does, that the caller owns the active lease and that the
+-- lease, the deadline, and the attempt timeout have not passed and no cancel was requested. It
+-- checks the times after its last lock, so a wait for the group row cannot make them stale.
 CREATE OR REPLACE FUNCTION workhorse.add_task_group_members_v1(
   p_group_id uuid,
   p_requests jsonb,
@@ -17515,6 +17553,8 @@ AS $$
 #variable_conflict use_column
 DECLARE
   v_group workhorse.task_group%ROWTYPE;
+  v_member workhorse.task_runtime%ROWTYPE;
+  v_lock_task_id uuid;
   v_refusal text;
   v_fast_queue text;
   v_fast_ordinal integer;
@@ -17548,7 +17588,29 @@ BEGIN
 
   -- Completion, cancellation, and purge lock a runtime row before the shard and group rows. Lock
   -- the prerequisites of the requests first, so an add that names a member as a prerequisite takes
-  -- the same order and cannot deadlock with that member's completion.
+  -- the same order and cannot deadlock with that member's completion. A member add also locks the
+  -- member's runtime row in this pass. FOR NO KEY UPDATE conflicts with every update and delete of
+  -- the row, and it does not block the key-share lock of an enqueue that names the member as a
+  -- prerequisite. The pass locks in identity order, as cancel_task_group_v1 and a resolver do, so
+  -- it does not hold the member while it waits for a lower runtime row that a cancel holds.
+  IF p_member_task_id IS NOT NULL THEN
+    FOR v_lock_task_id IN
+      SELECT locked.task_id
+        FROM unnest(
+          workhorse.enqueue_prerequisite_task_ids_internal_v1(p_requests) || p_member_task_id
+        ) locked(task_id)
+       GROUP BY locked.task_id
+       ORDER BY locked.task_id
+    LOOP
+      IF v_lock_task_id = p_member_task_id THEN
+        SELECT * INTO v_member FROM workhorse.task_runtime runtime
+         WHERE runtime.task_id = p_member_task_id FOR NO KEY UPDATE;
+      ELSE
+        PERFORM 1 FROM workhorse.task_runtime runtime
+         WHERE runtime.task_id = v_lock_task_id FOR KEY SHARE;
+      END IF;
+    END LOOP;
+  END IF;
   PERFORM workhorse.lock_enqueue_prerequisites_internal_v1(p_requests);
   PERFORM 1 FROM workhorse.task_group_shard shard
    WHERE shard.group_id = p_group_id
@@ -17559,15 +17621,20 @@ BEGIN
   v_refusal := CASE
     WHEN v_group.canceled_at IS NOT NULL THEN 'canceled'
     WHEN v_group.state = 'finished' THEN 'finished'
-    WHEN p_member_task_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1
-        FROM workhorse.task_group_member member
-        JOIN workhorse.task_runtime runtime ON runtime.task_id = member.task_id
-       WHERE member.task_id = p_member_task_id
-         AND member.group_id = p_group_id
-         AND runtime.state = 'active'
-         AND runtime.worker_id = p_worker_id
-         AND runtime.fence_token = p_fence_token
+    WHEN p_member_task_id IS NOT NULL AND NOT COALESCE(
+      v_member.state = 'active'
+        AND v_member.worker_id = p_worker_id
+        AND v_member.fence_token = p_fence_token
+        AND v_member.expires_at > clock_timestamp()
+        AND (v_member.deadline_at IS NULL OR v_member.deadline_at > clock_timestamp())
+        AND (v_member.attempt_timeout_at IS NULL
+          OR v_member.attempt_timeout_at > clock_timestamp())
+        AND v_member.cancel_requested_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM workhorse.task_group_member member
+           WHERE member.task_id = p_member_task_id AND member.group_id = p_group_id
+        ),
+      false
     ) THEN 'not_running_member'
     WHEN v_group.state = 'sealed' AND p_member_task_id IS NULL THEN 'sealed'
   END;
@@ -18346,8 +18413,10 @@ BEGIN
 END;
 $$;
 
--- One dashboard/v1 page of task groups, newest first, read through task_group_created_idx (ADR
--- 0096). The input carries state (all, open, sealed, or finished), page, and pageSize. Each group
+-- One dashboard/v1 page of task groups, newest first (ADR 0096). The input carries state (all,
+-- open, sealed, or finished), page, and pageSize. The page without a filter reads
+-- task_group_created_idx. A page with a filter reads task_group_state_created_idx, so a state that
+-- few groups have does not walk the groups of the other states. Each group
 -- has the snapshot of get_task_group_v1, so a group that is not finished shows the sums of its
 -- shard rows. The page reads one group more than it returns, so hasMore costs no count of the whole
 -- table. The dashboard reads task groups only through functions, so the task group tables do not
@@ -18361,6 +18430,7 @@ DECLARE
   v_state text := COALESCE(p_input->>'state', 'all');
   v_page integer := COALESCE((p_input->>'page')::integer, 1);
   v_page_size integer := COALESCE((p_input->>'pageSize')::integer, 50);
+  v_ids uuid[];
 BEGIN
   IF v_state NOT IN ('all', 'open', 'sealed', 'finished') THEN
     RAISE EXCEPTION 'task group state filter must be all, open, sealed, or finished';
@@ -18371,18 +18441,32 @@ BEGIN
   IF v_page_size NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'task group page size must be between 1 and 100';
   END IF;
+  -- Two statements, because one statement with an optional filter has one plan for both cases.
+  -- The filtered page also orders by state, the first column of task_group_state_created_idx. The
+  -- order of the page does not change, because every row has the same state. Without it, a generic
+  -- plan, which PL/pgSQL can choose after five calls, reads task_group_created_idx and filters it.
+  IF v_state = 'all' THEN
+    v_ids := ARRAY(
+      SELECT task_group.id
+        FROM workhorse.task_group task_group
+       ORDER BY task_group.created_at DESC, task_group.id DESC
+      OFFSET (v_page - 1) * v_page_size
+       LIMIT v_page_size + 1
+    );
+  ELSE
+    v_ids := ARRAY(
+      SELECT task_group.id
+        FROM workhorse.task_group task_group
+       WHERE task_group.state = v_state
+       ORDER BY task_group.state DESC, task_group.created_at DESC, task_group.id DESC
+      OFFSET (v_page - 1) * v_page_size
+       LIMIT v_page_size + 1
+    );
+  END IF;
   RETURN (
     WITH listed AS (
-      SELECT candidate.id,
-             row_number() OVER (ORDER BY candidate.created_at DESC, candidate.id DESC) AS ordinal
-        FROM (
-          SELECT task_group.id, task_group.created_at
-            FROM workhorse.task_group task_group
-           WHERE v_state = 'all' OR task_group.state = v_state
-           ORDER BY task_group.created_at DESC, task_group.id DESC
-          OFFSET (v_page - 1) * v_page_size
-           LIMIT v_page_size + 1
-        ) candidate
+      SELECT candidate.id, candidate.ordinal
+        FROM unnest(v_ids) WITH ORDINALITY candidate(id, ordinal)
     )
     SELECT jsonb_build_object(
       'state', v_state,
@@ -21772,10 +21856,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (65, 'add task groups with completion callbacks'),
   (66, 'count task group outcomes in counter shards'),
   (67, 'read the newest task group events'),
-  (68, 'check the input of a checkpoint on replay')
+  (68, 'check the input of a checkpoint on replay'),
+  (69, 'fence a task group member add and index the group list')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (68) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (69) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

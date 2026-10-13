@@ -298,6 +298,196 @@ describe("task groups", () => {
     }
   });
 
+  it("locks the member and the prerequisites of a member add in identity order", async () => {
+    // cancel_task_group_v1 locks the runtime rows of live members in identity order. A member add
+    // that names a lower member as a prerequisite must not hold the higher member while it waits.
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("identity-order", 1), member("identity-order", 2)]),
+    );
+    const [lower, higher] = (await claimAll("identity-order")).toSorted((left, right) =>
+      left.id < right.id ? -1 : 1,
+    );
+    const holder = await pool.connect();
+    const observer = await pool.connect();
+    try {
+      // The first step of cancel_task_group_v1: it holds the lower member's runtime row.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        lower!.id,
+      ]);
+      const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!
+        .pid;
+      const add = queue.addToTaskGroupAsMember(higher!, "group-worker", [
+        member("identity-order", 3, { prerequisiteTaskId: lower!.id }),
+      ]);
+      await waitForDatabaseCondition(async () => {
+        const blocked = await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+          [pid],
+        );
+        return blocked.rows[0]!.count > 0;
+      });
+      // The waiting add does not hold the higher member, so the cancel could lock it next.
+      await observer.query("BEGIN");
+      await expect(
+        observer.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE NOWAIT",
+          [higher!.id],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await observer.query("ROLLBACK");
+      await holder.query("ROLLBACK");
+      await expect(add).resolves.toEqual([expect.objectContaining({ outcome: "accepted" })]);
+    } finally {
+      holder.release();
+      observer.release();
+    }
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ counts: { total: 3 } });
+  });
+
+  it.each([
+    ["an expired lease", "expires_at = clock_timestamp() - interval '1 second'"],
+    ["a passed deadline", "deadline_at = clock_timestamp() - interval '1 second'"],
+    ["a passed attempt timeout", "attempt_timeout_at = clock_timestamp() - interval '1 second'"],
+  ])("refuses a member add after %s", async (_label, change) => {
+    const queueName = `fenced-add-${change.slice(0, change.indexOf(" "))}`;
+    const { group } = await queue.taskGroup({}, (builder) => builder.add([member(queueName, 1)]));
+    const running = (await claimAll(queueName))[0]!;
+    await pool.query(`UPDATE workhorse.task_runtime SET ${change} WHERE task_id = $1`, [
+      running.id,
+    ]);
+
+    await expect(
+      queue.addToTaskGroupAsMember(running, "group-worker", [member(queueName, 2)]),
+    ).rejects.toMatchObject({ details: { groupId: group.id, reason: "not_running_member" } });
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ counts: { total: 1 } });
+  });
+
+  it("refuses a member add after a cancel request for the member", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("fenced-add-cancel", 1)]),
+    );
+    const running = (await claimAll("fenced-add-cancel"))[0]!;
+    await expect(queue.cancel(running.id)).resolves.toMatchObject({ status: "cancel_requested" });
+
+    await expect(
+      queue.addToTaskGroupAsMember(running, "group-worker", [member("fenced-add-cancel", 2)]),
+    ).rejects.toMatchObject({ details: { groupId: group.id, reason: "not_running_member" } });
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ counts: { total: 1 } });
+  });
+
+  it("refuses a member add from the old lease after a reclaim", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("fenced-add-reclaim", 1, { maxAttempts: 2 })]),
+    );
+    const stale = (await claimAll("fenced-add-reclaim", "old-worker"))[0]!;
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+      [stale.id],
+    );
+    expect(await queue.recoverExpired(100, 0)).toBe(1);
+    const current = (await claimAll("fenced-add-reclaim", "new-worker"))[0]!;
+    expect(current).toMatchObject({ id: stale.id });
+    expect(current.fenceToken).toBeGreaterThan(stale.fenceToken);
+
+    await expect(
+      queue.addToTaskGroupAsMember(stale, "old-worker", [member("fenced-add-reclaim", 2)]),
+    ).rejects.toMatchObject({ details: { groupId: group.id, reason: "not_running_member" } });
+    await expect(
+      queue.addToTaskGroupAsMember(current, "new-worker", [member("fenced-add-reclaim", 3)]),
+    ).resolves.toEqual([expect.objectContaining({ outcome: "accepted" })]);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({ counts: { total: 2 } });
+  });
+
+  it("makes a completion wait for a member add that holds the member, without a deadlock", async () => {
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("add-then-complete", 1)]),
+    );
+    const running = (await claimAll("add-then-complete"))[0]!;
+    const adder = await pool.connect();
+    const completer = await pool.connect();
+    try {
+      await adder.query("BEGIN");
+      await queue
+        .forDatabase(adder)
+        .addToTaskGroupAsMember(running, "group-worker", [member("add-then-complete", 2)]);
+      const adderPid = (await adder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const completion = queue.forDatabase(completer).complete(running, "group-worker", null);
+      // The completion waits for the member's runtime row, the first lock that the add took.
+      await waitForDatabaseCondition(async () => {
+        const blocked = await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+          [adderPid],
+        );
+        return blocked.rows[0]!.count > 0;
+      });
+      await adder.query("COMMIT");
+      await expect(completion).resolves.toBe(true);
+    } finally {
+      adder.release();
+      completer.release();
+    }
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      counts: { total: 2, succeeded: 1, pending: 1 },
+    });
+  });
+
+  it("makes a member add wait for the completion of the member before any group lock", async () => {
+    // A second member keeps the group from finishing at the completion.
+    const { group } = await queue.taskGroup({}, (builder) =>
+      builder.add([member("complete-then-add", 1), member("complete-then-add", 2)]),
+    );
+    const running = (await claimAll("complete-then-add"))[0]!;
+    const completer = await pool.connect();
+    const observer = await pool.connect();
+    try {
+      await completer.query("BEGIN");
+      expect(await queue.forDatabase(completer).complete(running, "group-worker", null)).toBe(true);
+      const completerPid = (
+        await completer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+      ).rows[0]!.pid;
+      // Catch the refusal now, because it can arrive before the reply to COMMIT.
+      const add = queue
+        .addToTaskGroupAsMember(running, "group-worker", [member("complete-then-add", 3)])
+        .catch((error: unknown) => error);
+      await waitForDatabaseCondition(async () => {
+        const blocked = await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+          [completerPid],
+        );
+        return blocked.rows[0]!.count > 0;
+      });
+      // The waiting add holds no shard row and no group row, so the completion can count its
+      // outcome at commit.
+      await observer.query("BEGIN");
+      await expect(
+        observer.query(
+          "SELECT 1 FROM workhorse.task_group_shard WHERE group_id = $1 FOR UPDATE NOWAIT",
+          [group.id],
+        ),
+      ).resolves.toMatchObject({ rowCount: expect.any(Number) });
+      await expect(
+        observer.query("SELECT 1 FROM workhorse.task_group WHERE id = $1 FOR UPDATE NOWAIT", [
+          group.id,
+        ]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await observer.query("ROLLBACK");
+      await completer.query("COMMIT");
+      expect(await add).toBeInstanceOf(TaskGroupClosedError);
+      expect(await add).toMatchObject({
+        details: { groupId: group.id, reason: "not_running_member" },
+      });
+    } finally {
+      completer.release();
+      observer.release();
+    }
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "sealed",
+      counts: { total: 2, succeeded: 1, pending: 1 },
+    });
+  });
+
   it("stores a callback under the current contract version after a mismatch", async () => {
     const versions = { one: { payloadSchema: {} }, two: { payloadSchema: {} } };
     const synced = new Queue(pool, "default", {
