@@ -7,12 +7,43 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
+
+// ErrInvalidCheckpointInput reports a checkpoint input that has no fingerprint: a value that
+// encoding/json cannot encode, a non-finite number, a number above 2^53 - 1 in magnitude, or text
+// that is not valid UTF-8. Every SDK refuses the same inputs (ADR 0098). The error message is the
+// message of the cause.
+var ErrInvalidCheckpointInput = errors.New(invalidCheckpointInputMessage)
+
+// maxSafeCheckpointInteger is the largest number magnitude that a checkpoint input can hold. I-JSON
+// (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly.
+const maxSafeCheckpointInteger = 1<<53 - 1
+
+// A JSON escape \uXXXX has six bytes. A low surrogate code unit is the second unit of a pair.
+const (
+	unicodeEscapeLength = 6
+	lowSurrogateStart   = 0xdc00
+	lowSurrogateEnd     = 0xdfff
+)
+
+// invalidCheckpointInputError matches ErrInvalidCheckpointInput and the cause, with the message of
+// the cause.
+type invalidCheckpointInputError struct {
+	cause error
+}
+
+func (err invalidCheckpointInputError) Error() string { return err.cause.Error() }
+
+func (err invalidCheckpointInputError) Unwrap() []error {
+	return []error{ErrInvalidCheckpointInput, err.cause}
+}
 
 // CheckpointInputFingerprint returns the input fingerprint that a checkpoint stores for input: the
 // SHA-256 digest of the canonical JSON form of the input (RFC 8785), as 64 lowercase hexadecimal
@@ -21,14 +52,19 @@ import (
 // The input is encoded with encoding/json first, as a checkpoint value is, so MarshalJSON methods
 // and struct tags apply. The canonical form then sorts the keys of each object by their UTF-16 code
 // units and writes no whitespace. Each number is an IEEE 754 double in the ECMAScript form, so 1,
-// 1.0, and 1e0 give one digest, and an integer above 2^53 loses its exact value. Thus two inputs
-// that differ only in key order have the same fingerprint, and every SDK gives the same digest for
-// the same input. An input with a non-finite number returns an error. encoding/json replaces
-// invalid UTF-8 with U+FFFD before the canonical form is written.
+// 1.0, and 1e0 give one digest. Thus two inputs that differ only in key order have the same
+// fingerprint, and every SDK gives the same digest for the same input.
+//
+// An input that has no fingerprint returns an error that wraps ErrInvalidCheckpointInput: a
+// non-finite number, a number above 2^53 - 1 in magnitude, or a string or key with invalid UTF-8.
+// A larger number can be an integer that a double does not hold exactly, so every SDK refuses it.
+// encoding/json writes an invalid byte as the escape \ufffd, so a json.RawMessage or a MarshalJSON
+// method that writes U+FFFD as an escape, in either case, is refused too. Such a method must write
+// U+FFFD itself.
 func CheckpointInputFingerprint(input any) (string, error) {
 	canonical, err := canonicalCheckpointInput(input)
 	if err != nil {
-		return emptyString, err
+		return emptyString, invalidCheckpointInputError{cause: err}
 	}
 	digest := sha256.Sum256(canonical)
 	return hex.EncodeToString(digest[:]), nil
@@ -43,6 +79,9 @@ func canonicalCheckpointInput(input any) ([]byte, error) {
 		}
 		return nil, err
 	}
+	if hasInvalidUTF8(encoded) {
+		return nil, errors.New(invalidUTF8CheckpointInputMessage)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.UseNumber()
 	var value any
@@ -54,6 +93,49 @@ func canonicalCheckpointInput(input any) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// hasInvalidUTF8 reports whether the input held text that is not valid Unicode. encoding/json
+// writes each invalid byte of a string or a key as the escape \ufffd, and it writes U+FFFD itself
+// without an escape. Thus any escape of U+FFFD marks invalid text. A json.RawMessage or a
+// MarshalJSON method can keep an invalid byte, or write a lone surrogate escape that encoding/json
+// decodes as U+FFFD.
+func hasInvalidUTF8(encoded []byte) bool {
+	if !utf8.Valid(encoded) {
+		return true
+	}
+	for index := 0; index < len(encoded); index++ {
+		if encoded[index] != '\\' {
+			continue
+		}
+		unit, isUnicodeEscape := escapedCodeUnit(encoded, index)
+		switch {
+		case !isUnicodeEscape:
+			// The escaped character cannot start another escape, as in \\ufffd.
+			index++
+		case unit == utf8.RuneError || unit >= lowSurrogateStart && unit <= lowSurrogateEnd:
+			return true
+		case utf16.IsSurrogate(unit):
+			low, isPaired := escapedCodeUnit(encoded, index+unicodeEscapeLength)
+			if !isPaired || low < lowSurrogateStart || low > lowSurrogateEnd {
+				return true
+			}
+			index += 2*unicodeEscapeLength - 1
+		default:
+			index += unicodeEscapeLength - 1
+		}
+	}
+	return false
+}
+
+// escapedCodeUnit returns the UTF-16 code unit of the escape \uXXXX that starts at start, if
+// there is one. encoding/json has checked that each such escape has four hexadecimal digits.
+func escapedCodeUnit(encoded []byte, start int) (rune, bool) {
+	if start+unicodeEscapeLength > len(encoded) || encoded[start] != '\\' || encoded[start+1] != 'u' {
+		return 0, false
+	}
+	unit, err := strconv.ParseUint(string(encoded[start+2:start+unicodeEscapeLength]), 16, 16)
+	return rune(unit), err == nil
 }
 
 // isNonFiniteText reports whether encoding/json refused a float as NaN or an infinity.
@@ -72,6 +154,11 @@ func writeCanonicalJSON(out *bytes.Buffer, value any) error {
 		if err != nil {
 			// A json.Number or a json.RawMessage can hold a number outside the double range.
 			return fmt.Errorf(wrappedErrorFormat, nonFiniteCheckpointInputMessage, err)
+		}
+		// Each double of 2^53 or more in magnitude is an integer, so this refuses no fraction. A
+		// larger integer text rounds to such a double.
+		if math.Abs(number) > maxSafeCheckpointInteger {
+			return errors.New(unsafeCheckpointInputNumberMessage)
 		}
 		out.WriteString(ecmaScriptNumber(number))
 	case string:

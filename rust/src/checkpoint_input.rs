@@ -15,9 +15,10 @@ use crate::Error;
 ///
 /// The canonical form sorts the keys of each object by their UTF-16 code units and writes no
 /// whitespace. Each number is an IEEE 754 double in the ECMAScript form, so `1`, `1.0` and `1e0`
-/// give one digest, and an integer above 2^53 loses its exact value. Thus two inputs that differ
-/// only in key order have the same fingerprint. The input must serialize to JSON with finite
-/// numbers.
+/// give one digest. Thus two inputs that differ only in key order have the same fingerprint. The
+/// input must serialize to JSON with finite numbers of at most 2^53 - 1 in magnitude. A larger
+/// number can be an integer that a double does not hold exactly, so every SDK refuses it with
+/// `Error::InvalidArgument` (ADR 0098).
 pub fn checkpoint_input_fingerprint<T: Serialize + ?Sized>(input: &T) -> Result<String, Error> {
     let value = finite_json(input, "Checkpoint input")?;
     let mut canonical = String::new();
@@ -30,7 +31,7 @@ fn write_canonical(value: &Value, out: &mut String) -> Result<(), Error> {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
-        Value::Number(number) => out.push_str(&ecmascript_number(number)?),
+        Value::Number(number) => out.push_str(&ecmascript_number(safe_number(number)?)?),
         Value::String(text) => write_string(text, out),
         Value::Array(items) => {
             out.push('[');
@@ -64,6 +65,21 @@ fn write_object(members: &Map<String, Value>, out: &mut String) -> Result<(), Er
     Ok(())
 }
 
+/// The largest number magnitude that a checkpoint input can hold. I-JSON (RFC 7493) keeps integers
+/// to the range that an IEEE 754 double holds exactly.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// Refuses a number above 2^53 - 1 in magnitude. A larger `i64` or `u64` rounds to a double of at
+/// least 2^53, and each double of 2^53 or more is an integer, so this refuses no fraction.
+fn safe_number(number: &Number) -> Result<&Number, Error> {
+    match number.as_f64() {
+        Some(value) if value.is_finite() && value.abs() > MAX_SAFE_INTEGER => {
+            Err(Error::invalid("Checkpoint input numbers must be at most 2^53 - 1 in magnitude"))
+        }
+        _ => Ok(number),
+    }
+}
+
 /// Writes a string as `JSON.stringify` does. A Rust string is well-formed UTF-8, so it holds no
 /// lone surrogate, and `serde_json` escapes the same characters with lowercase hexadecimal.
 fn write_string(text: &str, out: &mut String) {
@@ -93,7 +109,8 @@ mod tests {
     use super::*;
 
     // The shared vectors of typescript/core/test/checkpoint-fingerprint.test.ts. The last vector
-    // orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33.
+    // orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33. 2^53 - 1 is
+    // the largest number magnitude that an input can hold.
     #[test]
     fn the_fingerprint_gives_the_shared_vectors() {
         let vectors = [
@@ -101,7 +118,18 @@ mod tests {
             (json!(true), "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"),
             (json!(0), "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"),
             (json!(1.5), "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"),
-            (json!(1e21), "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"),
+            (
+                json!(9_007_199_254_740_991_i64),
+                "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26",
+            ),
+            (
+                json!(-9_007_199_254_740_991_i64),
+                "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815",
+            ),
+            (
+                json!(9_007_199_254_740_991.0),
+                "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26",
+            ),
             (json!(1e-7), "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"),
             (json!("é"), "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"),
             (json!([]), "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"),
@@ -181,5 +209,38 @@ mod tests {
             }
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_number_larger_than_2_pow_53_minus_1_in_magnitude_is_refused() {
+        let inputs = [
+            json!(9_007_199_254_740_992_u64),
+            json!(-9_007_199_254_740_992_i64),
+            json!({ "id": 9_007_199_254_740_993_u64 }),
+            json!(u64::MAX),
+            json!(i64::MIN),
+            json!(9_007_199_254_740_992.0),
+            json!([1e21]),
+            json!(-f64::MAX),
+        ];
+        for input in inputs {
+            match checkpoint_input_fingerprint(&input) {
+                Err(Error::InvalidArgument(message)) => assert_eq!(
+                    message, "Checkpoint input numbers must be at most 2^53 - 1 in magnitude",
+                    "input {input}"
+                ),
+                other => panic!("expected a refusal of {input}, got {other:?}"),
+            }
+        }
+    }
+
+    // A Rust `String` and a `serde_json::Value` hold only valid UTF-8, so invalid text cannot
+    // reach the fingerprint. The conversions into them refuse it.
+    #[test]
+    fn invalid_text_cannot_become_an_input() {
+        assert!(String::from_utf8(vec![b'a', 0xff]).is_err());
+        assert!(serde_json::from_slice::<Value>(b"\"\xff\"").is_err());
+        assert!(serde_json::from_str::<Value>(r#""\ud800""#).is_err());
+        assert!(serde_json::from_str::<Value>(r#"{"\ud83d": 1}"#).is_err());
     }
 }

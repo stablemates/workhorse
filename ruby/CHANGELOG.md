@@ -134,8 +134,8 @@ context.checkpoint("charge-card", input: {"amountCents" => amount}) { gateway.ch
   and keeps the current attempt, as for every replay conflict. The task error names the class.
 - `Stablemates::Workhorse.checkpoint_input_fingerprint(input)` returns the fingerprint: the SHA-256
   digest of the RFC 8785 canonical JSON of the input, as 64 lowercase hexadecimal characters. It
-  refuses an Integer larger than 2**53 - 1 in magnitude, because RFC 8785 writes each number as an
-  IEEE 754 double.
+  refuses an Integer or a Float larger than 2**53 - 1 in magnitude, such as `1e21`, because RFC 8785
+  writes each number as an IEEE 754 double. Every SDK refuses the same inputs (SM-1274).
 - `TaskCheckpoint#input_fingerprint` returns the stored fingerprint, or nil. `Admin#get_checkpoint`,
   `Admin#list_checkpoints`, and `HandlerContext#get_checkpoint` return it.
 

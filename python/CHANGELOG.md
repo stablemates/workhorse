@@ -128,8 +128,9 @@ A Python handler can give the input of a checkpoint (SM-1261,
   `stored_fingerprint`, and `requested_fingerprint`.
 - `checkpoint_input_fingerprint(input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
   canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
-  the TypeScript SDK. It refuses a non-finite number and an `int` larger than 2**53 - 1 in
-  magnitude.
+  the TypeScript SDK, and every SDK refuses the same inputs (SM-1274). It raises `ValueError` for a
+  non-finite number, a string with a lone surrogate, and an `int` or a `float` larger than
+  2**53 - 1 in magnitude, such as `1e21`.
 - `TaskCheckpoint` gains `input_fingerprint`, the stored fingerprint or `None`. The handler context
   and the `Admin` and `AsyncAdmin` reads fill it.
 

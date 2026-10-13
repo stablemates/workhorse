@@ -9,19 +9,21 @@ module Stablemates
     # whitespace, and writes each number in the ECMAScript form of its IEEE 754 double. Thus two
     # inputs that differ only in key order have the same fingerprint, and every SDK gives the same
     # digest for the same input. +input+ must be JSON: a Hash with String keys, an Array, a String, an
-    # Integer of at most 2**53 - 1 in magnitude, a finite Float, true, false, or nil. Each String must
-    # be valid UTF-8. Another value raises ArgumentError.
+    # Integer or a finite Float of at most 2**53 - 1 in magnitude, true, false, or nil. Each String
+    # must be valid UTF-8. Another value raises ArgumentError.
     def self.checkpoint_input_fingerprint(input)
       Digest::SHA256.hexdigest(CheckpointFingerprint.canonical(input))
     end
 
     # The RFC 8785 canonical JSON of a checkpoint input. Internal to the SDK.
     module CheckpointFingerprint # :nodoc:
-      # I-JSON (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly.
+      # I-JSON (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly. A double
+      # of 2**53 or more in magnitude is an integer, so the bound refuses no fraction (ADR 0098).
       MAX_SAFE_INTEGER = (2**53) - 1
+      RANGE_MESSAGE = "checkpoint input numbers must be at most 2**53 - 1 in magnitude"
       ESCAPES = {"\"" => "\\\"", "\\" => "\\\\", "\b" => "\\b", "\t" => "\\t", "\n" => "\\n", "\f" => "\\f",
                  "\r" => "\\r"}.freeze
-      private_constant :MAX_SAFE_INTEGER, :ESCAPES
+      private_constant :MAX_SAFE_INTEGER, :RANGE_MESSAGE, :ESCAPES
 
       module_function
 
@@ -32,7 +34,7 @@ module Stablemates
         when false then "false"
         when String then string(value)
         when Integer then integer(value)
-        when Float then number(value)
+        when Float then float(value)
         when Array then "[#{value.map { |item| canonical(item) }.join(",")}]"
         when Hash then object(value)
         else raise ArgumentError, "checkpoint input contains #{value.class}, which is not a JSON value"
@@ -50,10 +52,16 @@ module Stablemates
       end
 
       def integer(value)
-        raise ArgumentError, "checkpoint input integers must be at most 2**53 - 1 in magnitude" if
-          value.abs > MAX_SAFE_INTEGER
+        raise ArgumentError, RANGE_MESSAGE if value.abs > MAX_SAFE_INTEGER
 
         value.to_s
+      end
+
+      def float(value)
+        # number refuses a non-finite value with its own message.
+        raise ArgumentError, RANGE_MESSAGE if value.finite? && value.abs > MAX_SAFE_INTEGER
+
+        number(value)
       end
 
       # The ECMAScript Number::toString form of a double. Float#to_s gives the shortest digits that

@@ -4,12 +4,14 @@ import type { Json } from "../src/types.js";
 
 // Each SDK must give the same digest for the same input, so these vectors are the shared target.
 // The last vector orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33.
+// 2^53 - 1 is the largest number magnitude that an input can hold.
 const vectors: Array<[Json, string]> = [
   [null, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"],
   [true, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"],
   [0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"],
   [1.5, "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"],
-  [1e21, "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"],
+  [9_007_199_254_740_991, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"],
+  [-9_007_199_254_740_991, "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"],
   [1e-7, "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"],
   ["é", "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"],
   [[], "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"],
@@ -24,6 +26,8 @@ const vectors: Array<[Json, string]> = [
   ],
   [{ "\u{1F600}": 1, דּ: 2 }, "2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3"],
 ];
+
+const boxed = (value: number) => new Number(value) as unknown as Json;
 
 describe("checkpointInputFingerprint", () => {
   it.each(vectors)("hashes the canonical JSON of %j", (input, digest) => {
@@ -49,5 +53,28 @@ describe("checkpointInputFingerprint", () => {
     expect(() => checkpointInputFingerprint("\uD800")).toThrow(/lone surrogate/);
     expect(() => checkpointInputFingerprint(["\uDE00x"])).toThrow(/lone surrogate/);
     expect(() => checkpointInputFingerprint({ "\uD83D": 1 })).toThrow(/lone surrogate/);
+  });
+
+  it("rejects a number larger than 2^53 - 1 in magnitude", () => {
+    // A Number cannot show whether a source integer was rounded, so every SDK refuses the range.
+    for (const input of [2 ** 53, -(2 ** 53), 2 ** 64, 1e21, Number.MAX_VALUE]) {
+      expect(() => checkpointInputFingerprint({ id: input })).toThrow(
+        new TypeError("Checkpoint input numbers must be at most 2^53 - 1 in magnitude"),
+      );
+    }
+  });
+
+  it("checks a boxed Number as it checks the primitive", () => {
+    // JSON.stringify gives a boxed Number to the replacer as an object, then writes its value.
+    expect(() => checkpointInputFingerprint([boxed(2 ** 53)])).toThrow(/at most 2\^53 - 1/);
+    expect(() =>
+      checkpointInputFingerprint({ toJSON: () => boxed(2 ** 53) } as unknown as Json),
+    ).toThrow(/at most 2\^53 - 1/);
+    expect(() => checkpointInputFingerprint({ amount: boxed(Number.NaN) })).toThrow(
+      /finite numbers/,
+    );
+    expect(checkpointInputFingerprint([boxed(9_007_199_254_740_991)])).toBe(
+      checkpointInputFingerprint([9_007_199_254_740_991]),
+    );
   });
 });

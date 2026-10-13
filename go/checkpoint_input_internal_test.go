@@ -172,6 +172,13 @@ func TestCheckpointRefusesAnInvalidInputBeforeARoundTrip(t *testing.T) {
 	}); err == nil || !strings.HasPrefix(err.Error(), nonFiniteCheckpointInputMessage) {
 		t.Fatalf("returned %v, want the non-finite refusal", err)
 	}
+	for _, input := range []any{uint64(maxSafeCheckpointInteger + 1), string([]byte{0xff})} {
+		if _, err := handler.Checkpoint(
+			"charge-card", refusedOperation(t), CheckpointOptions{Input: input},
+		); !errors.Is(err, ErrInvalidCheckpointInput) {
+			t.Fatalf("input %#v returned %v, want ErrInvalidCheckpointInput", input, err)
+		}
+	}
 	if _, err := handler.Checkpoint(
 		"charge-card", refusedOperation(t), CheckpointOptions{Input: 1}, CheckpointOptions{Input: 2},
 	); err == nil || err.Error() != checkpointOptionsCountMessage {

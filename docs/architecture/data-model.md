@@ -1641,13 +1641,28 @@ tasks already stored the name, or remove the input, and still read the stored va
 coalesces overlapping calls for the same name inside one handler. A duplicate call receives the
 first call's result or error.
 
+Each SDK refuses the same inputs, so no SDK gives a digest for an input that another SDK refuses
+(ADR 0098, SM-1274). An input has no fingerprint if it holds one of these:
+
+- a value that is not JSON, or a non-finite number;
+- a string or a key that is not valid Unicode text: invalid UTF-8, or a lone surrogate;
+- a number larger than 2^53 - 1 (9,007,199,254,740,991) in magnitude, of any numeric type.
+
+The number limit applies to the value, not to the type, because a TypeScript `Number` and a Go
+value after `encoding/json` cannot show if a number was an integer. Every double of 2^53 or more in
+magnitude is an integer, so the limit refuses no fraction. 2^53 - 1 gives the digest
+`f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26` in every SDK. 2^53, `1e21`, and
+the largest `u64` are refused. A refused input raises the error that the SDK uses for an invalid
+argument, and the operation does not run.
+
 In TypeScript, `HandlerContext.checkpoint(name, operation, { input })` also compares inputs:
 
 1. The worker computes `checkpointInputFingerprint(input)`: the SHA-256 digest of the RFC 8785
    canonical JSON of the input. Object keys sort by UTF-16 code units, and numbers and strings use
    the `JSON.stringify` form. A `toJSON` method applies first, as for a stored value. A value
-   that is not JSON with finite numbers, or a string or key with a lone surrogate, raises a
-   `TypeError`.
+   that is not JSON with finite numbers, a `Number` larger than `Number.MAX_SAFE_INTEGER` in
+   magnitude, or a string or key with a lone surrogate, raises a `TypeError`. A boxed `Number`
+   gets the same checks as its value. A `BigInt` raises the `TypeError` of `JSON.stringify`.
 2. If the name is stored with a different non-NULL fingerprint, the call raises
    `CheckpointInputConflictError` and the operation does not run.
 3. A duplicate call that overlaps a call in flight with a different fingerprint raises the same
@@ -1667,7 +1682,9 @@ four cases as TypeScript:
 
 1. The worker computes `checkpoint_input_fingerprint(&input)`, which gives the same digest as
    `checkpointInputFingerprint`. Each number is an IEEE 754 double in the ECMAScript form. A value
-   with a non-finite number raises `Error::InvalidArgument`, and the operation does not run.
+   with a non-finite number, or with an `i64`, `u64`, or `f64` larger than 2^53 - 1 in magnitude,
+   raises `Error::InvalidArgument`, and the operation does not run. A Rust `String` holds only
+   valid UTF-8, so invalid text cannot reach the function.
 2. A conflict raises `Error::CheckpointInputConflict` with `task_id`, `name`,
    `stored_fingerprint`, and `requested_fingerprint`. The worker settles it as
    `CheckpointInputConflictError`. `BatchHandlerContext::checkpoint_with_input` behaves the same,
@@ -1678,8 +1695,8 @@ inputs as TypeScript does, with these Ruby details:
 
 1. `Workhorse.checkpoint_input_fingerprint(input)` computes the same digest. Object keys sort by
    UTF-16 code units, and each number uses the ECMAScript form of its IEEE 754 double. A value that
-   is not JSON with finite numbers, an Integer larger than 2**53 - 1 in magnitude, or a string that
-   is not valid UTF-8 raises an `ArgumentError`. A call without `input:` gives no fingerprint, and
+   is not JSON with finite numbers, an Integer or a Float larger than 2**53 - 1 in magnitude, or a
+   string that is not valid UTF-8 raises an `ArgumentError`. A call without `input:` gives no fingerprint, and
    `input: nil` gives the fingerprint of the JSON null.
 2. A different stored fingerprint, an overlapping call with a different fingerprint, or the
    `input_conflict` status raises `CheckpointInputConflictError`, and the block does not run.
@@ -1694,8 +1711,9 @@ argument. These are the Python details:
 
 1. `checkpoint_input_fingerprint(input)` computes the same digest. Object keys sort by UTF-16 code
    units, and each number uses the ECMAScript form of its IEEE 754 double. A value of a type that is
-   not JSON, or a key that is not a `str`, raises a `TypeError`. A non-finite number, an `int`
-   larger than 2**53 - 1 in magnitude, or a string with a lone surrogate raises a `ValueError`.
+   not JSON, or a key that is not a `str`, raises a `TypeError`. A non-finite number, an `int` or a
+   `float` larger than 2**53 - 1 in magnitude, or a string with a lone surrogate raises a
+   `ValueError`.
 2. The context computes the fingerprint before it reads the checkpoint, so the operation does not
    run for an input that is not JSON. A call without `input` gives no fingerprint, and `input=None`
    gives the fingerprint of the JSON null.
@@ -1711,12 +1729,25 @@ In Go, `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: inpu
 
 1. `CheckpointInputFingerprint(input)` computes the same digest. `encoding/json` encodes the input
    first, so `MarshalJSON` methods and struct tags apply. Object keys sort by UTF-16 code units, and
-   each number uses the ECMAScript form of its IEEE 754 double. An integer above 2^53 loses its
-   exact value.
-2. A non-finite number returns an error that starts with
-   `checkpoint input must contain only finite numbers`, and the operation does not run.
-   `encoding/json` replaces invalid UTF-8 with U+FFFD. More than one `CheckpointOptions` value
-   returns an error.
+   each number uses the ECMAScript form of its IEEE 754 double.
+2. An input without a fingerprint returns an error that wraps `ErrInvalidCheckpointInput`, and the
+   operation does not run. `Error()` returns the text of the cause:
+
+   | Input                                            | Error text starts with                                           |
+   | ------------------------------------------------ | ---------------------------------------------------------------- |
+   | A non-finite number                              | `checkpoint input must contain only finite numbers`              |
+   | A number larger than 2^53 - 1 in magnitude       | `checkpoint input numbers must be at most 2^53 - 1 in magnitude` |
+   | A string or a key that is not valid Unicode text | `checkpoint input strings must be valid UTF-8`                   |
+   | A value that `encoding/json` refuses to encode   | The `encoding/json` error                                        |
+
+   `encoding/json` writes each invalid byte of a string or a key as the escape `\ufffd`, and it
+   writes U+FFFD itself without an escape. Thus `hasInvalidUTF8` refuses each escape of U+FFFD in
+   the encoded input, with its hexadecimal digits in either case. It also refuses any invalid byte
+   that a `json.RawMessage` keeps, and an escape of a lone surrogate, which `encoding/json` decodes
+   as U+FFFD. A `MarshalJSON` method or a `json.RawMessage` that writes U+FFFD as an escape is
+   refused too, so it must write U+FFFD itself. More than one `CheckpointOptions`
+   value returns an error.
+
 3. A nil `Input` gives no fingerprint. `json.RawMessage("null")` gives the fingerprint of the JSON
    null.
 4. A different stored fingerprint, an overlapping call with a different fingerprint, or the
