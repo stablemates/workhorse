@@ -39,9 +39,20 @@ the result, and compares it on replay.
    input while tasks wait on the old code.
 6. `CheckpointInputConflictError` is a terminal replay conflict, as the other classes are since
    SM-1107. The worker fails the task at once and keeps the current attempt.
+7. Each SDK refuses the same inputs, with its error for an invalid argument, and the operation does
+   not run. SM-1274 adds this rule. An input has no fingerprint if it holds one of these:
+   - a value that is not JSON, or a non-finite number;
+   - a string or a key that is not valid Unicode text: invalid UTF-8, or a lone surrogate;
+   - a number larger than 2^53 - 1 in magnitude, of any numeric type.
 
 The TypeScript SDK gives the input as `ctx.checkpoint(name, operation, { input })`. The other SDKs
 follow in parity issues.
+
+The number limit applies to the value, not to the type. A TypeScript `Number`, a Go value after
+`encoding/json`, and JSON text cannot show if a number was an integer or a float. They also cannot
+show if a source integer was rounded before the SDK saw it. Every IEEE 754 double of 2^53 or more
+in magnitude is an integer, so the limit refuses no fraction. Thus TypeScript refuses a `Number`
+such as `2 ** 53` or `1e21`, and Python refuses the `float` `1e21` as it refuses the `int` `2**53`.
 
 ## Consequences
 
@@ -51,6 +62,8 @@ follow in parity issues.
 - Workhorse stores 64 characters for each checkpoint with an input, not the input. An operator
   cannot read the input from the fingerprint.
 - Every SDK statement catalogue names `save_checkpoint_v2`, so the schema floor rises to 68.
+- An input cannot hold a number larger than 2^53 - 1 in magnitude, such as a 64-bit identifier.
+  Code that must check such a value gives it as a string.
 - An SDK that adds the option must produce the RFC 8785 form. A JSON encoder that sorts keys by
   code point, or that writes numbers in another form, gives a different digest for some inputs.
 
@@ -66,6 +79,11 @@ and it can hold data that the result does not hold. A digest has a fixed size.
 PostgreSQL could hash the canonical `jsonb` text. But the SDK compares the fingerprint before it
 returns a stored value, without a round trip. It would have to reproduce the `jsonb` text form,
 which is not a published standard.
+
+### Refuse only an integer type above 2^53 - 1
+
+Python, Ruby and Rust can tell an integer from a float, so they could refuse only a large integer.
+TypeScript and Go cannot. One SDK would then give a digest for an input that another SDK refuses.
 
 ### Compare the input on every checkpoint
 

@@ -13,8 +13,10 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 
-# I-JSON (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly.
+# I-JSON (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly. A double
+# of 2**53 or more in magnitude is an integer, so the bound refuses no fraction (ADR 0098).
 _MAX_SAFE_INTEGER = 2**53 - 1
+_RANGE_MESSAGE = "Checkpoint input numbers must be at most 2**53 - 1 in magnitude"
 _REPR = re.compile(r"(\d+)(?:\.(\d+))?(?:e([+-]\d+))?")
 
 
@@ -27,15 +29,17 @@ def checkpoint_input_fingerprint(input: object) -> str:
     IEEE 754 double. Thus two inputs that differ only in key order have the same fingerprint, and
     every SDK gives the same digest for the same input.
 
-    ``input`` must be JSON: a mapping with ``str`` keys, a list or tuple, a ``str``, an ``int`` of
-    at most 2**53 - 1 in magnitude, a finite ``float``, ``True``, ``False``, or ``None``. A value of
-    another type raises ``TypeError``. A non-finite number, a larger integer, or a string with a
+    ``input`` must be JSON: a mapping with ``str`` keys, a list or tuple, a ``str``, an ``int`` or
+    a finite ``float`` of at most 2**53 - 1 in magnitude, ``True``, ``False``, or ``None``. A value
+    of another type raises ``TypeError``. A non-finite number, a larger number, or a string with a
     lone surrogate raises ``ValueError``.
     """
     return hashlib.sha256(_canonical(input).encode()).hexdigest()
 
 
 def _canonical(value: object) -> str:
+    # A subclass of str, int, or float can override the methods that this module calls, such as
+    # __abs__, __repr__, or encode. Each branch first converts the value to its base type.
     if value is None:
         return "null"
     if value is True:
@@ -43,13 +47,18 @@ def _canonical(value: object) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
-        return _string(value)
+        return _string(str.__str__(value))
     if isinstance(value, int):
-        if abs(value) > _MAX_SAFE_INTEGER:
-            raise ValueError("Checkpoint input integers must be at most 2**53 - 1 in magnitude")
-        return str(int(value))
+        integer = int.__int__(value)
+        if abs(integer) > _MAX_SAFE_INTEGER:
+            raise ValueError(_RANGE_MESSAGE)
+        return str(integer)
     if isinstance(value, float):
-        return _number(value)
+        number = float.__float__(value)
+        # _number refuses a non-finite value with its own message.
+        if math.isfinite(number) and abs(number) > _MAX_SAFE_INTEGER:
+            raise ValueError(_RANGE_MESSAGE)
+        return _number(number)
     if isinstance(value, Mapping):
         return _object(value)
     if isinstance(value, (list, tuple)):
@@ -63,7 +72,8 @@ def _object(value: Mapping[object, object]) -> str:
     for key, item in value.items():
         if not isinstance(key, str):
             raise TypeError("Checkpoint input object keys must be strings")
-        members.append((_utf16(key), f"{_string(key)}:{_canonical(item)}"))
+        text = str.__str__(key)
+        members.append((_utf16(text), f"{_string(text)}:{_canonical(item)}"))
     # Big-endian UTF-16 bytes compare in the order of their code units, which RFC 8785 requires.
     members.sort(key=lambda member: member[0])
     return "{" + ",".join(member for _, member in members) + "}"

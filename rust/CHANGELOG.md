@@ -109,7 +109,8 @@ changes no stored data.
   `BatchHandlerContext` gains the same method. `checkpoint` without an input does not change.
 - `checkpoint_input_fingerprint(&input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
   canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
-  the TypeScript SDK. Each number is a double, so an integer above 2^53 loses its exact value.
+  the TypeScript SDK, and every SDK refuses the same inputs (SM-1274). A number larger than 2^53 - 1
+  in magnitude, such as `u64::MAX` or `1e21`, returns `Error::InvalidArgument`.
 - `TaskCheckpoint` gains `input_fingerprint`, the stored fingerprint or `None`. Code that builds a
   `TaskCheckpoint` with a struct literal must set the new field.
 

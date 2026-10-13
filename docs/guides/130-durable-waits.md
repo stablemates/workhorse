@@ -266,6 +266,13 @@ The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the inpu
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
 input.
 
+Each SDK refuses the same inputs with its error for an invalid argument, and the operation does not
+run:
+
+- a value that is not JSON, or a non-finite number;
+- a string or a key that is not valid Unicode text;
+- a number larger than 2^53 - 1 in magnitude, of any numeric type.
+
 | Stored fingerprint | Fingerprint of the call | Result                                                      |
 | ------------------ | ----------------------- | ----------------------------------------------------------- |
 | None               | Any, or none            | The stored value returns.                                   |

@@ -3,16 +3,19 @@ from __future__ import annotations
 import pytest
 
 from workhorse import Json, checkpoint_input_fingerprint
-from workhorse._checkpoint_input import _canonical
+from workhorse._checkpoint_input import _canonical, _number
 
 # The vectors of typescript/core/test/checkpoint-fingerprint.test.ts, which every SDK must match.
 # The last vector orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33.
+# 2**53 - 1 is the largest number magnitude that an input can hold.
 VECTORS: list[tuple[Json, str]] = [
     (None, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"),
     (True, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"),
     (0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"),
     (1.5, "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"),
-    (1e21, "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"),
+    (9_007_199_254_740_991, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"),
+    (-9_007_199_254_740_991, "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"),
+    (9_007_199_254_740_991.0, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"),
     (1e-7, "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"),
     ("é", "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"),
     ([], "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"),
@@ -74,7 +77,8 @@ def test_key_order_and_number_form_do_not_change_the_fingerprint() -> None:
     ],
 )
 def test_numbers_use_the_ecmascript_form(value: float, text: str) -> None:
-    assert _canonical(value) == text
+    # The fingerprint refuses a magnitude above 2**53 - 1, so this test calls the number form.
+    assert _number(float(value)) == text
 
 
 def test_strings_use_the_json_stringify_escapes() -> None:
@@ -89,8 +93,13 @@ def test_strings_use_the_json_stringify_escapes() -> None:
         ({"amount": float("nan")}, ValueError, "only finite numbers"),
         ([float("inf")], ValueError, "only finite numbers"),
         (-float("inf"), ValueError, "only finite numbers"),
-        (2**53, ValueError, "at most 2\\*\\*53 - 1"),
-        (-(2**53), ValueError, "at most 2\\*\\*53 - 1"),
+        (2**53, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        (-(2**53), ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        (2**64, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        ({"id": 2**53 + 1}, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        (float(2**53), ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        ([1e21], ValueError, "numbers must be at most 2\\*\\*53 - 1"),
+        (-1.7976931348623157e308, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
         ("\ud800", ValueError, "lone surrogate"),
         (["\ude00x"], ValueError, "lone surrogate"),
         ({"\ud83d": 1}, ValueError, "lone surrogate"),
@@ -104,3 +113,39 @@ def test_an_input_that_is_not_json_with_finite_numbers_is_refused(
 ) -> None:
     with pytest.raises(error, match=message):
         checkpoint_input_fingerprint(input)
+
+
+class _Small(int):
+    def __abs__(self) -> int:
+        return 0
+
+
+class _SmallFloat(float):
+    def __abs__(self) -> float:
+        return 0.0
+
+    def __repr__(self) -> str:
+        return "1.0"
+
+
+class _Text(str):
+    def encode(self, encoding: str = "utf-8", errors: str = "strict") -> bytes:
+        del encoding, errors
+        return b""
+
+    def __str__(self) -> str:
+        return "other"
+
+
+def test_a_subclass_cannot_change_the_fingerprint_or_the_limit() -> None:
+    # The base type of each value decides its form, so an override in a subclass has no effect.
+    with pytest.raises(ValueError, match="numbers must be at most 2\\*\\*53 - 1"):
+        checkpoint_input_fingerprint(_Small(2**53))
+    with pytest.raises(ValueError, match="numbers must be at most 2\\*\\*53 - 1"):
+        checkpoint_input_fingerprint({"id": _SmallFloat(1e21)})
+    assert checkpoint_input_fingerprint(_SmallFloat(1.5)) == checkpoint_input_fingerprint(1.5)
+    assert checkpoint_input_fingerprint({_Text("a"): _Text("b")}) == (
+        checkpoint_input_fingerprint({"a": "b"})
+    )
+    with pytest.raises(ValueError, match="lone surrogate"):
+        checkpoint_input_fingerprint(_Text("\ud800"))

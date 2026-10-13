@@ -7,9 +7,10 @@ import type { Json } from "./types.js";
  *
  * The canonical form sorts the keys of each object by their UTF-16 code units and writes no
  * whitespace. Numbers and strings use the `JSON.stringify` form. Thus two inputs that differ only
- * in key order have the same fingerprint. The input must be JSON with finite numbers, and its
- * strings and keys must be well-formed UTF-16, as RFC 8785 requires. As for a stored value, a
- * `toJSON` method applies first.
+ * in key order have the same fingerprint. The input must be JSON, and its strings and keys must be
+ * well-formed UTF-16, as RFC 8785 requires. Each number must be finite and at most 2^53 - 1 in
+ * magnitude. A larger number can be an integer that was rounded before this call, so every SDK
+ * refuses it (ADR 0098). As for a stored value, a `toJSON` method applies first.
  */
 export function checkpointInputFingerprint(input: Json): string {
   return createHash("sha256").update(canonicalJson(input), "utf8").digest("hex");
@@ -31,13 +32,31 @@ function wellFormed(text: string): string {
 function canonicalJson(input: Json): string {
   // A round trip applies toJSON and drops undefined object members, as a stored value does.
   const encoded = JSON.stringify(input, (_key, nested: unknown) => {
-    if (typeof nested === "number" && !Number.isFinite(nested)) {
-      throw new TypeError("Checkpoint input must contain only finite numbers");
+    const value = unboxedNumber(nested);
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
+        throw new TypeError("Checkpoint input must contain only finite numbers");
+      }
+      // Each double of 2^53 or more in magnitude is an integer, so this refuses no fraction.
+      if (Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+        throw new TypeError("Checkpoint input numbers must be at most 2^53 - 1 in magnitude");
+      }
     }
     return nested;
   });
   if (encoded === undefined) throw new TypeError("Checkpoint input must be JSON serializable");
   return canonical(JSON.parse(encoded) as unknown);
+}
+
+// JSON.stringify gives a boxed Number to the replacer as an object, then writes its value. The
+// valueOf call throws for any other object, in any realm.
+function unboxedNumber(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  try {
+    return Number.prototype.valueOf.call(value);
+  } catch {
+    return value;
+  }
 }
 
 function canonical(value: unknown): string {

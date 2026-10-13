@@ -125,8 +125,12 @@ charged, err := handler.Checkpoint("charge-card", func() (any, error) {
 - `CheckpointInputFingerprint(input)` returns the fingerprint: the SHA-256 digest of the RFC 8785
   canonical JSON of the input, as 64 lowercase hexadecimal characters. It gives the same digest as
   the other SDKs. `encoding/json` encodes the input first, so `MarshalJSON` methods and struct tags
-  apply. Each number is a double, so an integer above 2^53 loses its exact value. A non-finite
-  number returns an error.
+  apply. Every SDK refuses the same inputs (SM-1274). A non-finite number, a number larger than
+  2^53 - 1 in magnitude, or a string or key with invalid UTF-8 or a lone surrogate escape returns an
+  error that wraps the new
+  `ErrInvalidCheckpointInput`. `encoding/json` writes invalid UTF-8 as the escape `\ufffd`, so a
+  `MarshalJSON` method or a `json.RawMessage` that writes U+FFFD as an escape, in either case, is
+  refused too.
 - `TaskCheckpoint` gains `InputFingerprint`, the stored fingerprint or nil.
 - The `Checkpoint` methods now take a variadic `options ...CheckpointOptions` parameter. A call
   does not change, but a function value of the old method type must change its type.

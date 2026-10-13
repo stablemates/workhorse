@@ -93,6 +93,10 @@ fingerprint of the input with the result. If a later call gives an input with a 
 fingerprint, the task fails at once with `CheckpointInputConflictError`, and the operation does not
 run. If the call or the stored checkpoint has no input, the call compares nothing.
 `checkpointInputFingerprint` returns the SHA-256 digest of the RFC 8785 canonical JSON of an input.
+Every SDK refuses the same inputs (SM-1274). `checkpointInputFingerprint` raises a `TypeError` for a
+value that is not JSON, a non-finite number, a string or key with a lone surrogate, or a `Number`
+larger than `Number.MAX_SAFE_INTEGER` in magnitude, such as `2 ** 53` or `1e21`. A `Number` cannot
+show if an integer was rounded before the call, so the limit applies to every number.
 `TaskCheckpoint` gains `inputFingerprint`, and `Queue.saveCheckpoint` accepts `inputFingerprint`.
 `replayHandler` compares the `inputFingerprint` of a stored checkpoint in the same way. The other
 SDKs add the option in later releases.
