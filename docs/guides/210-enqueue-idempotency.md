@@ -146,6 +146,7 @@ client can repeat a request. For example, use the redelivery period of your webh
 - Maintenance runs `prune_enqueue_idempotency_v1` to delete expired bindings in bounded batches.
 - Housekeeping keeps a finished task's identity while a binding still points at it.
 - A queue purge deletes the bindings of the `blocked`, `ready`, and `scheduled` tasks it removes.
+  A task that the purge cancels keeps its key, as after a cancel.
 
 More detail: [Data model: Key exposure and expiry](../architecture/data-model.md#key-exposure-and-expiry) and [Data model: Key and limits](../architecture/data-model.md#key-and-limits).
 

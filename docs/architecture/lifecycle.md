@@ -190,6 +190,8 @@ definition. It appends `debounce_rejected` with the same bounded reason.
 - If the key window elapsed after the old task became active or terminal, Workhorse can accept a
   new pending identity.
 - Queue purge removes the key before the task identity. Thus a purged key can also accept new work.
+  A task that the purge cancels keeps its key, as after a cancel
+  ([Data model: Queue purge](data-model.md#queue-purge)).
 - `run_task_now_v1` deletes the debounce identity of a released task. Thus Workhorse returns
   `accepted` for the next request with the same key, as a new task.
 
@@ -246,7 +248,8 @@ throttle modes before expiry.
 
 - After expiry, a new request gets a new stable identity, even if Workhorse still retains the prior
   identity.
-- Queue purge removes the binding of a `blocked`, `ready`, or `scheduled` task. This also permits a
+- Queue purge removes the binding of a `blocked`, `ready`, or `scheduled` task that it deletes. A
+  task that the purge cancels keeps its binding, as after a cancel. Removal also permits a
   new acceptance.
 
 ### Promotion

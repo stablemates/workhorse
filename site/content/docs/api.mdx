@@ -104,8 +104,8 @@ transaction.
 - `pauseQueue`, `resumeQueue`, and `purgeQueue` control a full queue.
 - `schedules` reads recurring definitions, and `runTaskNow` starts one scheduled task early.
 
-Each of these mutations takes `{ actor, reason, requestId }`. A purge returns its deleted count. If
-you send the same purge request again, it has no new effect. `setQueueHistory` is a mutation that
+Each of these mutations takes `{ actor, reason, requestId }`. A purge returns the count of the tasks
+that it deleted or canceled. If you send the same purge request again, it has no new effect. `setQueueHistory` is a mutation that
 takes no such argument.
 
 ## Run tasks with Worker

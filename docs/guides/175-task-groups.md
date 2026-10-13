@@ -50,7 +50,7 @@ const { group } = await queue.taskGroup(
 ```
 
 A member task is finished when it becomes terminal: `succeeded`, `failed`, or `canceled`. A retry
-does not finish a member task. A purge of a queue also finishes a member task: it counts the deleted
+does not finish a member task. A purge of a queue also finishes a member task: it counts the purged
 task as `canceled`. When the group is sealed and every member task is finished,
 Workhorse finishes the group. The result is `succeeded` when every member task succeeded, and
 `failed` otherwise.
@@ -260,7 +260,7 @@ Thus, a member task that waits for a prerequisite, a signal, or a human decision
 open for a long time. Give such a member task a [deadline](140-deadlines-and-timeouts.md) if the
 group must finish. A canceled member task counts as not succeeded.
 
-A purge of a queue has the same effect for each member task that it deletes. The purge counts that
+A purge of a queue has the same effect for each member task that it purges. The purge counts that
 member task as `canceled`, and the group can finish.
 
 <details>
@@ -282,7 +282,7 @@ member task as `canceled`, and the group can finish.
 | Rust       | `Admin::cancel_task_group`              |
 | Ruby       | `Admin#cancel_task_group`               |
 
-**Purge.** `purge_queue_internal_v1` counts each deleted member task that is not terminal as
+**Purge.** `purge_queue_internal_v1` counts each purged member task that is not terminal as
 `canceled`, in the same transaction.
 
 More detail: [Task groups: Cancel](../architecture/task-groups.md#cancel), [Task groups: Purge](../architecture/task-groups.md#purge), and [Task groups: SDK calls](../architecture/task-groups.md#sdk-calls).

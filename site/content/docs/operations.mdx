@@ -1345,30 +1345,40 @@ More detail: [Operations and CLI: Bulk redrive](https://github.com/stablemates/w
 
 ### Empty a queue
 
-`admin purge` empties a queue. It deletes the tasks. It does not cancel them. Use it when the tasks
-in a queue cannot succeed.
+`admin purge` empties a queue. It deletes the waiting tasks. Use it when the tasks in a queue cannot
+succeed.
 
 **Example.** A bad deploy filled the queue `emails` with tasks. Their payloads make each handler
 crash.
 
 1. The engineer runs `admin purge emails` with a reason, `--env`, and the confirmation.
 2. Workhorse deletes the waiting tasks in `emails`. The tasks that workers run now stay.
-3. The command shows how many tasks it deleted.
+3. The command shows how many tasks it deleted or canceled.
 4. The runbook step times out and runs again with the same request identity. The command shows the
    result of the first purge again and deletes nothing more.
 
 If you use the same request identity with different audit fields, Workhorse refuses the purge.
+
+A task in another queue can wait for a task in the purged queue. If the purge deletes that waiting
+task too, nothing changes. Otherwise the purge does not delete the task in the purged queue. It
+cancels that task, and the waiting task then gets the same outcome as after a cancel. The count
+that the command shows includes the canceled tasks.
 
 <details>
 <summary>Reference: purge</summary>
 
 - `purge_queue_v1` deletes runtimes in `blocked`, `ready`, and `scheduled`, with their identities and
   history. It leaves `active` tasks. On the fast tier it deletes `ready` rows.
-- The command prints the deleted row count. Under `--json` it emits `deletedCount` beside `queue`.
+- If a pending edge from a purged task leads to a dependent outside the purge, the purge calls
+  `cancel_v1` for that task instead of a delete. The dependent's `on_cancellation` policy decides
+  its outcome. A released edge to a dependent that is already terminal does not stop the delete.
+- The command prints the count of deleted and canceled tasks. Under `--json` it emits that count as
+  `deletedCount` beside `queue`.
 - A reused request identity with different audit fields raises `PurgeIdempotencyConflictError`. The
   CLI prints `Refused:` and exits 1.
 
-More detail: [Operations and CLI: Purge](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#purge).
+More detail: [Operations and CLI: Purge](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#purge) and
+[Data model: Queue purge](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#queue-purge).
 
 </details>
 

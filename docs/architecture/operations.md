@@ -396,8 +396,10 @@ For `admin cancel`, attribution is optional.
 
 #### Purge
 
-`admin purge` prints the number of deleted rows. With `--json`, it emits that number as
-`deletedCount` next to `queue`.
+`admin purge` prints the number of tasks that the purge deleted or canceled. With `--json`, it emits
+that number as `deletedCount` next to `queue`. The purge cancels a task instead of a delete when a
+dependent outside the purge waits for it, as [Data model: Queue purge](data-model.md#queue-purge)
+describes. Thus the count includes the canceled tasks, although its name says deleted.
 
 If a reused request identity has different audit fields, Workhorse raises
 `PurgeIdempotencyConflictError`. The CLI reports it as `Refused:` and exits 1.
@@ -606,10 +608,10 @@ This section states the limits and defaults that operators must know.
 
 ### Schema and PostgreSQL
 
-- The canonical artifact installs version 70, the whole current schema.
+- The canonical artifact installs version 71, the whole current schema.
 - Version 6 is the migration baseline. Its frozen copy is `sql/releases/0006.sql`.
 - A schema change is an upgrade, not a reinstall. `migrateSchema` applies the ordered steps under
-  `sql/migrations/`, which run from 6 to 70.
+  `sql/migrations/`, which run from 6 to 71.
 - Workhorse does not upgrade a database below 6
   ([ADR 0073](../decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 - Workhorse requires only plain PostgreSQL 15+. Workhorse installs no extension beyond the default

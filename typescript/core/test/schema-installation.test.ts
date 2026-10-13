@@ -594,6 +594,10 @@ describe("schema installation", () => {
         version: 70,
         description: "lock purged runtime rows in identity order",
       },
+      {
+        version: 71,
+        description: "purge a queue that holds a prerequisite of a live dependent",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
