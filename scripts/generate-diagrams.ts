@@ -3,7 +3,7 @@ import path from "node:path";
 import { Resvg } from "@resvg/resvg-js";
 import type { Theme } from "./diagram-svg.js";
 import { repositoryRoot } from "./packages.js";
-import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
+import { diagrams } from "./diagrams.js";
 
 /**
  * Write or verify the documentation diagrams in `site/public/diagrams/`.
@@ -14,7 +14,6 @@ import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.
  * depend on the machine. `--check` compares the SVGs only.
  */
 
-const diagrams = [readmeOverview, readmeOverviewNarrow];
 const themes: readonly Theme[] = ["light", "dark"];
 const outputDirectory = path.join(repositoryRoot, "site/public/diagrams");
 const fonts = path.join(repositoryRoot, "node_modules/geist/dist/fonts");

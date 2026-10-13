@@ -29,6 +29,13 @@ email at the time in `payload.followUpAt`, here 16:00.
    result. The wait has ended, so `ctx.sleepUntil` returns at once. The handler sends the
    follow-up.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/durable-waits-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/durable-waits-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/durable-waits-dark.png">
+  <img src="../../site/public/diagrams/durable-waits-light.png" width="960" alt="A durable wait frees the worker, and the handler runs again from its first line">
+</picture>
+
 Thus, a durable wait releases the worker until its time comes. Each wait has a name. On a replay,
 the name tells Workhorse that the wait ended and that the handler can continue. Use `ctx.sleep` to
 wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
