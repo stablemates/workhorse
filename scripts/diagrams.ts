@@ -1,4 +1,5 @@
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
+import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
 
@@ -10,4 +11,6 @@ export const diagrams = [
   durableWaitsNarrow,
   tasksAndState,
   tasksAndStateNarrow,
+  leasesAndFences,
+  leasesAndFencesNarrow,
 ];

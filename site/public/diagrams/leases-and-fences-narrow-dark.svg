@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 456" width="400" height="456" role="img" aria-labelledby="leases-and-fences-narrow-dark-title leases-and-fences-narrow-dark-desc">
+<title id="leases-and-fences-narrow-dark-title">A lease gives a task one owner, and a fence token refuses a late write</title>
+<desc id="leases-and-fences-narrow-dark-desc">Worker A claims the task with fence token 41 and sends heartbeats. Its machine stops at 25 s, and the lease expires at 50 s. At about 52 s, worker B claims the task with fence token 57. At 70 s, worker A starts again. At 90 s, it tries to complete the task with token 41, and PostgreSQL refuses the write because the row has 57.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="456" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">0 s</text>
+<rect x="88" y="24" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="24" width="288" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="232" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A claims</text>
+<text x="232" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">fence 41 · expiry 30 s</text>
+<path d="M 232,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">10–20 s</text>
+<rect x="88" y="80" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="80" width="288" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="232" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A sends heartbeats</text>
+<text x="232" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">expiry 40 s → 50 s</text>
+<path d="M 232,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">25 s</text>
+<rect x="88" y="136" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="136" width="288" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="232" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A stops</text>
+<text x="232" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no heartbeats</text>
+<path d="M 232,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">50 s</text>
+<rect x="88" y="192" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="192" width="288" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="232" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the lease expires</text>
+<text x="232" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">owner A · fence 41</text>
+<path d="M 232,234 V 246" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="273" fill="#f2f4f5" font-size="9" font-family="Geist Mono">52 s</text>
+<rect x="88" y="248" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="248" width="288" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="232" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker B claims</text>
+<text x="232" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">owner B · fence 57</text>
+<path d="M 232,290 V 302" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="329" fill="#f2f4f5" font-size="9" font-family="Geist Mono">70 s</text>
+<rect x="88" y="304" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="304" width="288" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="232" y="323" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A starts again</text>
+<text x="232" y="337" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">runs the old handler</text>
+<path d="M 232,346 V 358" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="385" fill="#f2f4f5" font-size="9" font-family="Geist Mono">90 s</text>
+<rect x="88" y="360" width="288" height="42" rx="6" fill="#04080e"/>
+<rect x="88" y="360" width="288" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="232" y="379" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A tries to complete</text>
+<text x="232" y="393" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">fence 41 · refused · result dropped</text>
+<text x="24" y="424" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A write counts only if its worker ID and</text>
+<text x="24" y="439" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">fence token match the row.</text>
+</svg>
