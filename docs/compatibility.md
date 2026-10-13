@@ -1079,15 +1079,64 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
-The unreleased SDKs require schema version 69 before workers start. Migration
-`0066-add-task-groups-with-completion-callbacks.sql` adds the task group functions that every SDK
-statement catalogue calls. Migration `0067-count-task-group-outcomes-in-counter-shards.sql` moves
-the task group counts into counter shards. It also adds `dashboard_task_groups_v1`, which the
-dashboard of each SDK calls. Migration `0068-read-the-newest-task-group-events.sql` adds
-`list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
-Migration `0069-check-the-input-of-a-checkpoint-on-replay.sql` adds `save_checkpoint_v2`, which every
-SDK statement catalogue names. Migration
-`0070-fence-a-task-group-member-add-and-index-the-group-list.sql` makes a member add check the lease
-of its member task, so the floor is schema version 69. Run `workhorse schema migrate` before you
-start updated processes. A 0.7 process keeps working on version 69, because a migration inside a
-major line only adds.
+## Upgrade from 0.7.x to 0.8.0
+
+0.8.0 adds task groups and the checkpoint input check. Its SDKs call new SQL functions, so the
+schema floor rises. The upgrade is a rolling deployment, and a mixed fleet is supported while it
+runs.
+
+1. Run `workhorse schema migrate`. It applies migrations 0066 through 0070 and leaves the schema at
+   version 69.
+2. Roll out the 0.8.0 processes.
+
+A 0.7.0 or 0.7.1 database is at schema version 64. The migrations only add:
+
+| Migration                                                         | Schema version | Adds                                                                                                        |
+| ----------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `0066-add-task-groups-with-completion-callbacks.sql`              | 65             | The task group tables and functions that every SDK statement catalogue names                                |
+| `0067-count-task-group-outcomes-in-counter-shards.sql`            | 66             | Counter shards for task groups, and `dashboard_task_groups_v1`                                              |
+| `0068-read-the-newest-task-group-events.sql`                      | 67             | `list_newest_task_group_events_v1`, for the task group detail of the dashboard                              |
+| `0069-check-the-input-of-a-checkpoint-on-replay.sql`              | 68             | `task_checkpoint.input_fingerprint` and `save_checkpoint_v2`                                                |
+| `0070-fence-a-task-group-member-add-and-index-the-group-list.sql` | 69             | A lease check for a member add in `add_task_group_members_v1`, and the index `task_group_state_created_idx` |
+
+Migration 0070 is the first non-transactional step. It builds `task_group_state_created_idx` with
+`CREATE INDEX CONCURRENTLY`, so the build does not block writes to `task_group`. If the step fails
+part-way, the earlier statements stay applied and the schema stays at version 68. A failed build
+can leave an invalid index, and the rerun then skips the build. Before you run the step again, do
+these steps:
+
+1. Drop the invalid index:
+
+   ```sql
+   DROP INDEX CONCURRENTLY IF EXISTS workhorse.task_group_state_created_idx;
+   ```
+
+2. Run `workhorse schema migrate` again.
+
+[Non-transactional steps](schema-lifecycle.md#non-transactional-steps) gives the query that lists
+every invalid Workhorse index.
+
+The SDK schema floor rises from 54 to 69. Every SDK statement catalogue names `save_checkpoint_v2`,
+which schema version 68 adds. Schema version 69 also fences a member add: on an earlier schema, a
+worker whose lease expired can still add tasks to the group of its member task. A 0.8.0 process
+refuses a schema below version 69 at startup. Thus the
+migration must run before the first 0.8.0 process starts.
+
+A 0.7 process keeps working on schema version 69, because a migration inside a major line only
+adds. Thus old and new processes can run together during the rollout:
+
+- A 0.7 worker can run a member task. PostgreSQL counts the outcome of a member task in a trigger
+  on `task_outcome`, so the group counts do not depend on the SDK version.
+- A 0.7 process cannot create a task group, and its handlers cannot read or add to a group.
+- A 0.7 worker saves a checkpoint through `save_checkpoint_v1`. That function calls
+  `save_checkpoint_v2` with no input fingerprint, so its results do not change.
+
+A checkpoint that Workhorse saved before the upgrade has no input fingerprint. A checkpoint that a
+0.7 worker saves during the rollout also has none. If the stored checkpoint has no fingerprint,
+Workhorse does not check the input. The replay returns the stored value, even when the handler now
+gives an input. A 0.7 worker does not compare fingerprints at all. Thus the check applies only to
+checkpoints that a 0.8.0 worker saves with an input, and only when a 0.8.0 worker replays them.
+
+0.8.0 also changes two TypeScript behaviors. `Worker.runOnce()` returns `false` after a pass that
+only released tasks, and a child request with no queue goes to the queue of its parent task.
+[`CHANGELOG.md`](../CHANGELOG.md) gives the details of each change.

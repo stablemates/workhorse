@@ -1375,7 +1375,7 @@ and expired-lease recovery.
    `WorkerOptions.retryDelayMs`, or an explicit `Queue.recoverExpired` delay.
 2. The persisted retry policy.
 3. Without a policy, compatibility remains path-specific:
-   - Handler failure uses the legacy Sidekiq-inspired random delay
+   - Handler failure uses the legacy random delay
      `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds.
    - Lease recovery and execution timeout use a delay of 0.
 

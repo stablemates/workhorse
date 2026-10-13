@@ -789,6 +789,31 @@ and [Dashboard: Event feed](https://github.com/stablemates/workhorse/blob/main/d
 
 </details>
 
+## Follow task groups
+
+A [task group](/docs/task-groups) is a set of tasks that Workhorse tracks as one unit. The Task
+groups page shows the groups, newest first, with a progress bar for each group. You can filter the
+list by state.
+
+Open a group to see its counts, its times, its callback tasks, its member tasks, and its newest
+events. If the dashboard supports the task group cancel, the detail has a Cancel group button for
+a group that is not finished. The cancel requires a reason. Workhorse then cancels each member task that is not
+finished, and the group finishes with its callbacks.
+
+<details>
+<summary>Reference: task groups</summary>
+
+- The page is at the route `/groups`. The URL holds the state filter, the page, the page size, the
+  group, and the member position.
+- The `dashboard/v1` procedures are `taskGroups`, `taskGroupDetail`, and `cancelTaskGroup`.
+- The detail shows at most 100 events. `eventsTruncated` is true when the group has older events.
+- The cancel needs a dashboard that can change state. A TypeScript host also needs
+  `DashboardTaskController.cancelTaskGroup`. The other hosts need only a host that is not read-only.
+
+More detail: [Dashboard: Task groups page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#task-groups-page).
+
+</details>
+
 ## Change queue state and settings from the dashboard
 
 The dashboard can change queue state only through controllers that the host gives it. A controller
@@ -796,6 +821,7 @@ is an object that does one group of operator actions. With the controllers, the 
 these actions:
 
 - Cancel a task, run a scheduled task now, or redrive a dead letter.
+- Cancel a task group.
 - Pause or resume a queue, a schedule, or a worker.
 - Purge a queue.
 - Change the maintenance policy.
@@ -810,13 +836,13 @@ If the host did not authorize settings changes, the Settings page is read-only.
 <details>
 <summary>Reference: controllers and settings</summary>
 
-| Controller                    | Methods                                                                                                    |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `DashboardTaskController`     | `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`, `redriveTask`, `redriveDeadLetters`         |
-| `DashboardQueueController`    | `setQueuePaused`, `purgeQueue`                                                                             |
-| `DashboardScheduleController` | `setSchedulePaused`                                                                                        |
-| `DashboardWorkerController`   | `setWorkerPaused`                                                                                          |
-| `DashboardSettingsController` | `overrideMaintenancePolicy`, `revertMaintenancePolicy`, `overrideRetentionPolicy`, `revertRetentionPolicy` |
+| Controller                    | Methods                                                                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `DashboardTaskController`     | `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`, `redriveTask`, `redriveDeadLetters`, `cancelTaskGroup` |
+| `DashboardQueueController`    | `setQueuePaused`, `purgeQueue`                                                                                        |
+| `DashboardScheduleController` | `setSchedulePaused`                                                                                                   |
+| `DashboardWorkerController`   | `setWorkerPaused`                                                                                                     |
+| `DashboardSettingsController` | `overrideMaintenancePolicy`, `revertMaintenancePolicy`, `overrideRetentionPolicy`, `revertRetentionPolicy`            |
 
 - `dashboard_settings_v1` sets `editable` only when the host is writable and has a
   `DashboardSettingsController`.

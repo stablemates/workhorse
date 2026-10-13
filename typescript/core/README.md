@@ -51,6 +51,21 @@ export async function runQuickstart(databaseUrl: string) {
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external effects;
 named checkpoints prevent completed application stages from running after a later restart.
 
+## Task groups, checkpoint inputs, and single passes
+
+- A [task group](https://workhorse.run/docs/task-groups) tracks many tasks as one unit. After the
+  group is sealed and every member task is finished, Workhorse enqueues the callback tasks of the
+  group. `queue.taskGroup` creates a group, adds its tasks, and seals it in one transaction.
+- A handler can give the [input of a
+  checkpoint](https://workhorse.run/docs/durable-execution#check-the-input-of-a-checkpoint). Give it
+  as `ctx.checkpoint(name, operation, { input })`. If a later run gives a different input, the call
+  raises `CheckpointInputConflictError`, the task fails, and the operation does not run again. If
+  the stored checkpoint or the call has no input, Workhorse compares nothing.
+- `worker.runOnce()` returns true only when a handler ran. It returns false after a pass that only
+  [released the tasks that it
+  claimed](https://workhorse.run/docs/workers#return-a-task-that-the-worker-cannot-run). If you call
+  it in a loop, wait after false.
+
 ## Package boundary
 
 This package owns the PostgreSQL schema, protocol client, worker runtime, CLI, and operator API. Run
