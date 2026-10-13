@@ -11,7 +11,7 @@
         "scripts/soak/*.ts",
         "vitest*.config.ts"
       ],
-      "ignoreDependencies": ["@vitest/coverage-v8"]
+      "ignoreDependencies": ["@vitest/coverage-v8", "geist"]
     },
     "dashboard/app": {
       "entry": ["browser/react-grab.ts", "src/browser.tsx"]

@@ -1,6 +1,7 @@
 # ADR 0046: Make each README an entry point
 
-- **Status:** Accepted
+- **Status:** Accepted. [ADR 0100](0100-make-the-root-readme-a-product-overview.md) supersedes the
+  root README part. The published package README contract stays accepted.
 - **Date:** 2026-08-26
 - **Related:** Plane WH-441
 

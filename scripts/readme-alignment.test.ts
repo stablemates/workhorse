@@ -65,12 +65,6 @@ function fencedExamples(contents: string, language: string): string[] {
 
 const contracts: readonly ReadmeContract[] = [
   {
-    readme: "README.md",
-    example: "typescript/examples/quickstart.ts",
-    exampleLanguage: "ts",
-    languageSupport: (support) => `Node.js ${naturalList(support.node.tested)}`,
-  },
-  {
     readme: "typescript/core/README.md",
     example: "typescript/examples/quickstart.ts",
     exampleLanguage: "ts",
@@ -131,9 +125,11 @@ describe("SDK README alignment", () => {
 
   it("points every README at the agent documentation router exactly once", async () => {
     const wrongCount: string[] = [];
-    for (const contract of contracts) {
-      const pointers = (await read(contract.readme)).split(agentRouter).length - 1;
-      if (pointers !== 1) wrongCount.push(`${contract.readme}: found ${pointers}, expected 1`);
+    // The root README is a product overview with no first task (ADR 0100), so it has no SDK
+    // contract, but it still points an agent at the router.
+    for (const readme of ["README.md", ...contracts.map((contract) => contract.readme)]) {
+      const pointers = (await read(readme)).split(agentRouter).length - 1;
+      if (pointers !== 1) wrongCount.push(`${readme}: found ${pointers}, expected 1`);
     }
     expect(wrongCount).toEqual([]);
   });

@@ -56,7 +56,6 @@ interface GovernedSurface {
  * without having to carry a canonical command of their own.
  */
 const governedSurfaces: readonly GovernedSurface[] = [
-  { file: "README.md", commands: ["node", "ruby", "schema"] },
   { file: "typescript/core/README.md", commands: ["node", "schema"] },
   { file: "typescript/dashboard/README.md", commands: ["node"] },
   { file: "typescript/dashboard-server/README.md", commands: ["node"] },
