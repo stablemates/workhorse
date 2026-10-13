@@ -146,7 +146,7 @@ A Python, Go, Rust, or Ruby project has no `node_modules` that holds the binary.
 gives the package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.7.1 workhorse schema install
+npx --package @stablemates/workhorse@0.8.0 workhorse schema install
 ```
 
 Use the version of the Python package, the Go module, the `workhorse` crate, or the Ruby gem that
@@ -236,14 +236,14 @@ npm exec --no -- workhorse schema status --json
 The command exits with 0 if this build accepts the installed schema. It exits with 1 if this build
 refuses the schema, or if the PostgreSQL major version is too old. The JSON output gives the schema
 and the PostgreSQL results separately. This part of the output is for a current schema of release
-0.7.1:
+0.8.0:
 
 ```json
 {
   "schema": {
-    "installedVersion": 64,
-    "expectedVersion": 64,
-    "minimumVersion": 54,
+    "installedVersion": 71,
+    "expectedVersion": 71,
+    "minimumVersion": 69,
     "state": "current",
     "compatible": true,
     "refusal": null,
@@ -271,11 +271,11 @@ command that creates the database. In its place, each `vX.Y.Z` tag attaches the 
 2. Apply the file with `psql`.
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.7.1/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.8.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.7.1` release](https://github.com/stablemates/workhorse/releases/tag/v0.7.1) has the file.
+The [`v0.8.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.8.0) has the file.
 If you use a different version, change the two version numbers together. The file creates the
 schema that the SDK of the same release expects.
 

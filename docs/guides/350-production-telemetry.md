@@ -53,7 +53,7 @@ providers, and the Go worker uses `log/slog` for logs.
 
 - `@opentelemetry/api >=1.9.0 <2`
 - `@opentelemetry/api-logs >=0.200.0 <0.300.0`
-- `@stablemates/workhorse >=0.7.0 <0.8.0`
+- `@stablemates/workhorse >=0.8.0 <0.9.0`
 
 `registerOpenTelemetry()` calls `registerTelemetryProvider(provider)` and returns its cleanup
 function.

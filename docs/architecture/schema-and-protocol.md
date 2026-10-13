@@ -2336,7 +2336,7 @@ it, the consumer type-checks it under the same strict settings.
 | `go`           | `go get github.com/stablemates/workhorse/go`                          |
 | `rust`         | `cargo add workhorse`                                                 |
 | `schema`       | `npm exec --no -- workhorse schema install`                           |
-| `schemaPinned` | `npx --package @stablemates/workhorse@0.7.1 workhorse schema install` |
+| `schemaPinned` | `npx --package @stablemates/workhorse@0.8.0 workhorse schema install` |
 
 The four language commands have no version. The two schema commands are the deployment tool, not an
 adoption step. Their version must be equal to the SDK that the application depends on:
