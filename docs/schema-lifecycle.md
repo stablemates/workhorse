@@ -368,6 +368,18 @@ that runs below its floor would fail on the call itself, so the compatibility ch
 schema first. Because the pipeline migrates before any process from the new release starts, that
 refusal never reaches a rolling deployment.
 
+The documentation states the current schema version in a few sentences. `scripts/doc-schema-versions.test.ts`
+holds them to the code. It requires the last `SCHEMA_MIGRATIONS` step to name the highest file in
+`sql/migrations/` and to reach `WORKHORSE_SCHEMA_VERSION`. Then it requires these sentences to
+state the same numbers:
+
+- In `docs/features.md`, the schema version and SQL protocol of the snapshot and of the Versioned
+  SQL API row.
+- In the upgrade section of the newest release in `docs/compatibility.md`, the last migration, the
+  target schema version, the last row of the migration table, and the new schema floor.
+
+Thus a migration that changes the schema version fails the test until it updates these sentences.
+
 The bound closes only when the installed schema stops serving the client's protocol,
 which is one deliberate step and not a version number: a major release still adds, and the operator
 narrows the schema later with `workhorse schema contract`. Until that step runs, a client from the
