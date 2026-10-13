@@ -203,6 +203,21 @@ func TestTaskGroupBlockFormEnqueuesOnFinishAndOnSuccess(t *testing.T) {
 	if len(rest.Members) != 1 || rest.Members[0].Position != 3 || rest.NextAfter != nil {
 		t.Fatalf("unexpected last page: %+v", rest)
 	}
+	// When the member count is a multiple of the limit, the last full page has no next position.
+	exact, err := fixture.queue.ListTaskGroupMembers(fixture.ctx, block.Group.ID, workhorse.TaskGroupMemberQuery{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exact.Members) != 3 || exact.NextAfter != nil {
+		t.Fatalf("unexpected exact page: %+v", exact)
+	}
+	last, err := fixture.admin.ListTaskGroupMembers(fixture.ctx, block.Group.ID, workhorse.TaskGroupMemberQuery{After: 2, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last.Members) != 1 || last.Members[0].Position != 3 || last.NextAfter != nil {
+		t.Fatalf("unexpected exact last page: %+v", last)
+	}
 	if fromAdmin, err := fixture.admin.GetTaskGroup(fixture.ctx, block.Group.ID); err != nil || !reflect.DeepEqual(*fromAdmin, finished) {
 		t.Fatalf("admin read differs: %+v %v", fromAdmin, err)
 	}

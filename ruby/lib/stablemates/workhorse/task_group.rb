@@ -12,7 +12,8 @@ module Stablemates
 
     # A set of full-tier tasks that Workhorse tracks as one unit (ADR 0095). +state+ is :open,
     # :sealed, or :finished. +result+ is :succeeded or :failed when the group is finished, and nil
-    # before. +callbacks+ is an Array of TaskGroupCallback.
+    # before. +callbacks+ is an Array of TaskGroupCallback, in the order on_finish, on_success,
+    # on_failure.
     TaskGroup = Data.define(
       :id, :state, :result, :counts, :created_at, :sealed_at, :finished_at, :canceled_at, :canceled_by,
       :cancel_reason, :callbacks
@@ -171,7 +172,14 @@ module Stablemates
         )
       end
 
-      def member_page(rows, limit)
+      # The position after which one member is read when +rows+ is a full page, or nil. A full page
+      # can be the last page. list_task_group_members_v1 reads at most 1,000 members, so a read of
+      # +limit+ + 1 fails at the maximum. The read of one member tells the two apart.
+      def probe_after(rows, limit)
+        Values.parse_integer(rows.last.fetch("position")) if rows.length == limit
+      end
+
+      def member_page(rows, more)
         members = rows.map do |row|
           state = row.fetch("state")
           outcome = row.fetch("outcome")
@@ -186,7 +194,7 @@ module Stablemates
             counted_at: Values.parse_time(row.fetch("counted_at"))
           )
         end
-        TaskGroupMemberPage.new(members: members, next_after: (members.length == limit) ? members.last.position : nil)
+        TaskGroupMemberPage.new(members: members, next_after: more ? members.last.position : nil)
       end
 
       def event(row)

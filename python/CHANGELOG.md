@@ -111,6 +111,12 @@ The Python SDK adds task groups (SM-1233). The names follow the TypeScript SDK, 
   `TaskGroupBlockResult`, `TaskGroupDrift`, `TaskGroupRecordedCounts`, `TaskGroupRepair`,
   `TaskGroupContext`, `AsyncTaskGroupContext`, their literal types, and the constants
   `MAX_TASK_GROUP_MEMBERS`, `MAX_TASK_GROUP_PAGE_SIZE`, and `MAX_TASK_GROUP_DRIFT_LIMIT`.
+- `TaskGroup.callbacks` lists the requested callbacks in the order `on_finish`, `on_success`,
+  `on_failure` (SM-1277). Before, the tuple had the key order of the PostgreSQL `jsonb` object, for
+  example `on_finish`, `on_failure`, `on_success`. `list_task_group_members` of each `Queue` and
+  `Admin` returns `next_after=None` on the last page, also when the page is full. Before, a full
+  last page gave a `next_after` that read an empty page. A full page now costs one more read of one
+  member. The change adds no SQL function and no migration.
 
 ### Checkpoint input check
 

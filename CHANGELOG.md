@@ -111,6 +111,15 @@ puts the task in the queue of the member task, not in the `defaultQueue` of the 
 `repairTaskGroupDrift`. `MaintenancePhase` gains `task_groups`. The other SDKs add task groups in
 later releases.
 
+TypeScript task group reads return the callbacks and the last member page as the documentation
+states (SM-1277). `TaskGroup.callbacks` lists the requested callbacks in the order `onFinish`,
+`onSuccess`, `onFailure`. Before, the list had the key order of the PostgreSQL `jsonb` object, for
+example `onFinish`, `onFailure`, `onSuccess`. `listTaskGroupMembers` of `Queue` and `Admin` returns
+`nextAfter: null` on the last page, also when the page is full. Before, a full last page gave a
+`nextAfter` that read an empty page. A full page now costs one more read of one member.
+`workhorse admin task-group` takes its `nextAfter` from `Admin.listTaskGroupMembers`. The change adds
+no SQL function and no migration.
+
 TypeScript gains `replayHandler` (SM-1210). A test can run new handler code against the stored
 durable state of a task before a deployment, without a database or a worker. The state is a plain
 JSON `DurableState` value with stored checkpoints, timer waits, signals, human decisions, and

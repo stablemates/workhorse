@@ -32,6 +32,7 @@ from ._task_groups import (
     events as _events,
     member_page as _member_page,
     member_parameters as _member_parameters,
+    member_probe_parameters as _member_probe_parameters,
     optional_task_group as _optional_task_group,
     repairs as _repairs,
 )
@@ -595,8 +596,11 @@ class Admin(_AdminOperations):
         self, group_id: str, *, after: int = 0, limit: int = 100
     ) -> TaskGroupMemberPage:
         _assert_sync_compatible(self._executor)
-        parameters = _member_parameters(group_id, after, limit)
-        return _member_page(self._sync_rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+        rows = self._sync_rows(_LIST_TASK_GROUP_MEMBERS, _member_parameters(group_id, after, limit))
+        probe = _member_probe_parameters(group_id, rows, limit)
+        return _member_page(
+            rows, probe is not None and bool(self._sync_rows(_LIST_TASK_GROUP_MEMBERS, probe))
+        )
 
     def list_task_group_events(
         self, group_id: str, *, limit: int = 1_000
@@ -855,8 +859,14 @@ class AsyncAdmin(_AdminOperations):
         self, group_id: str, *, after: int = 0, limit: int = 100
     ) -> TaskGroupMemberPage:
         await _assert_async_compatible(self._executor)
-        parameters = _member_parameters(group_id, after, limit)
-        return _member_page(await self._async_rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+        rows = await self._async_rows(
+            _LIST_TASK_GROUP_MEMBERS, _member_parameters(group_id, after, limit)
+        )
+        probe = _member_probe_parameters(group_id, rows, limit)
+        return _member_page(
+            rows,
+            probe is not None and bool(await self._async_rows(_LIST_TASK_GROUP_MEMBERS, probe)),
+        )
 
     async def list_task_group_events(
         self, group_id: str, *, limit: int = 1_000

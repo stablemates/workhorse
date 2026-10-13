@@ -159,6 +159,19 @@ async fn a_sealed_group_runs_its_callback_after_a_member_adds_a_task() {
         .unwrap();
     assert_eq!(rest.members.len(), 1);
     assert_eq!(rest.next_after, None);
+    // When the member count is a multiple of the limit, the last full page has no next position.
+    let exact = harness
+        .queue
+        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 0, limit: 2 })
+        .await
+        .unwrap();
+    assert_eq!((exact.members.len(), exact.next_after), (2, None));
+    let last = harness
+        .admin
+        .list_task_group_members(group.id, TaskGroupMemberQuery { after: 1, limit: 1 })
+        .await
+        .unwrap();
+    assert_eq!((last.members.len(), last.next_after), (1, None));
     let member = harness.queue.find_task_group(rest.members[0].task_id).await.unwrap().unwrap();
     assert_eq!((member.role, member.callback), (TaskGroupRole::Member, None));
 }
@@ -192,6 +205,10 @@ async fn an_operator_cancel_finishes_an_open_group_with_its_failure_callback() {
     assert_eq!(canceled.result, Some(TaskGroupResult::Failed));
     assert_eq!(canceled.counts.canceled, 2);
     assert_eq!(canceled.canceled_by.as_deref(), Some("ops"));
+    // PostgreSQL stores the callbacks as jsonb, which puts `on_failure` before `on_success`. The
+    // SDK keeps the documented order.
+    let kinds: Vec<_> = canceled.callbacks.iter().map(|callback| callback.kind).collect();
+    assert_eq!(kinds, [TaskGroupCallbackKind::OnSuccess, TaskGroupCallbackKind::OnFailure]);
     let on_failure = canceled.callbacks.iter().find(|c| c.kind == TaskGroupCallbackKind::OnFailure);
     assert!(on_failure.unwrap().task_id.is_some());
     let on_success = canceled.callbacks.iter().find(|c| c.kind == TaskGroupCallbackKind::OnSuccess);

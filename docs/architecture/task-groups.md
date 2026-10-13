@@ -403,6 +403,9 @@ without a lock. For a finished group, they are the counts on its row. `task_grou
 
 `callbacks` is a JSON object with one key for each requested callback, such as
 `{"on_finish": {"taskId": null}}`. `taskId` is set when the finished group enqueued that callback.
+PostgreSQL orders the keys of a `jsonb` object by length, so the key order of `callbacks` is not
+the documented order. Each SDK reads the keys in the order `onFinish`, `onSuccess`, `onFailure`, and
+its `TaskGroup` lists the requested callbacks in that order.
 
 `dashboard_task_groups_v1` takes `state` (`all`, `open`, `sealed`, or `finished`; default `all`),
 `page` (1 through 1,000; default 1), and `pageSize` (1 through 100; default 50). It returns `state`,
@@ -420,7 +423,15 @@ newest 101 events through `list_newest_task_group_events_v1`, shows 100, and set
 when the group has older events.
 
 `Queue` and `Admin` both have `getTaskGroup` and `listTaskGroupMembers`. `Admin` also has
-`listTaskGroupEvents`. `workhorse admin task-groups` and `workhorse admin task-group` make the reads of
+`listTaskGroupEvents`.
+
+`listTaskGroupMembers` takes `after` (default 0) and `limit` (1 through 1,000; default 100). It
+returns at most `limit` members after the position `after`, and `nextAfter`. `nextAfter` is the
+position of the last member of the page when one or more members follow it. It is `null` on the
+last page, also when the page is full. The Python, Rust, and Ruby SDKs name it `next_after`, and
+Go names it `NextAfter`. When a page is full, the SDK calls `list_task_group_members_v1` a second
+time for one member after the last position. A read of `limit + 1` members cannot serve a page of
+1,000, because the function reads at most 1,000. The two reads are separate statements. `workhorse admin task-groups` and `workhorse admin task-group` make the reads of
 the dashboard list and detail, as [Operations and CLI: Task groups](operations.md#task-groups)
 describes. A handler reads the group of its task through `ctx.taskGroup.get()`, which
 calls `task_group_for_task_v1` one time for each handler activation.

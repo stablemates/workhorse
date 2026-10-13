@@ -98,6 +98,12 @@ goes to the queue of that task. After the lease of that task ends, `AddToTaskGro
 `TaskGroupMembershipConflictError`, which match `ErrTaskGroupClosed`, `ErrTaskGroupLimitExceeded`,
 and `ErrTaskGroupMembershipConflict`. A fast-tier member gives `FastTierUnsupportedError`.
 
+`ListTaskGroupMembers` of `Queue` and `Admin` returns a nil `NextAfter` on the last page, also when
+the page is full (SM-1277). Before, a full last page gave a `NextAfter` that read an empty page. A
+full page now costs one more read of one member. `TaskGroup.Callbacks` keeps the order `OnFinish`,
+`OnSuccess`, `OnFailure`, and a test now asserts it. The change adds no SQL function and no
+migration.
+
 ### Checkpoint input
 
 A checkpoint finds its stored result by name only. If a deployment changes the input of a checkpoint

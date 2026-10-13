@@ -74,6 +74,7 @@ export interface TaskGroup {
   canceledAt: Date | null;
   canceledBy: string | null;
   cancelReason: string | null;
+  /** The requested callbacks in the order `onFinish`, `onSuccess`, `onFailure`. */
   callbacks: TaskGroupCallback[];
 }
 
@@ -296,6 +297,8 @@ interface TaskGroupRow {
   callbacks: Record<string, { taskId: string | null }>;
 }
 
+// The entries are in the documented callback order. PostgreSQL returns the callbacks as jsonb,
+// which orders keys by length, so `taskGroup` reads them in this order and not in row order.
 const callbackKinds: Readonly<Record<string, TaskGroupCallbackKind>> = {
   on_finish: "onFinish",
   on_success: "onSuccess",
@@ -320,10 +323,10 @@ function taskGroup(row: TaskGroupRow): TaskGroup {
     canceledAt: nullableRowTimestamp(row.canceled_at, "canceled_at"),
     canceledBy: row.canceled_by,
     cancelReason: row.cancel_reason,
-    callbacks: Object.entries(row.callbacks).map(([kind, callback]) => ({
-      kind: callbackKinds[kind]!,
-      taskId: callback.taskId,
-    })),
+    callbacks: Object.entries(callbackKinds).flatMap(([column, kind]) => {
+      const callback = row.callbacks[column];
+      return callback === undefined ? [] : [{ kind, taskId: callback.taskId }];
+    }),
   };
 }
 
@@ -516,6 +519,19 @@ export class TaskGroupsModule extends QueueModule {
       added_at: Date | string;
       counted_at: Date | string | null;
     }>(SQL_STATEMENTS["list_task_group_members_v1"], [groupId, after, limit]);
+    // A full page can be the last page. `list_task_group_members_v1` reads at most 1,000 members,
+    // so a read of `limit + 1` fails at the maximum. A read of one member after a full page tells
+    // the two apart, and `nextAfter` is null when no member follows.
+    const last = result.rows.length === limit ? result.rows.at(-1)!.position : null;
+    const more =
+      last !== null &&
+      (
+        await this.context.database.query(SQL_STATEMENTS["list_task_group_members_v1"], [
+          groupId,
+          last,
+          1,
+        ])
+      ).rows.length > 0;
     const members = result.rows.map((row) => ({
       position: row.position,
       taskId: row.task_id,
@@ -528,7 +544,7 @@ export class TaskGroupsModule extends QueueModule {
     }));
     return {
       members,
-      nextAfter: members.length === limit ? members[members.length - 1]!.position : null,
+      nextAfter: more ? last : null,
     };
   }
 

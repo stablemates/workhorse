@@ -643,18 +643,10 @@ export class WorkhorseAdminClient {
       this.admin.listTaskGroupMembers(groupId, query),
       this.newestTaskGroupEvents(groupId, TASK_GROUP_DETAIL_EVENT_LIMIT + 1),
     ]);
-    // `listTaskGroupMembers` gives a next position for each full page, also for the last one. A
-    // probe of one member tells a last full page from a page that has more members after it.
-    const nextAfter =
-      members.nextAfter === null ||
-      (await this.admin.listTaskGroupMembers(groupId, { after: members.nextAfter, limit: 1 }))
-        .members.length === 0
-        ? null
-        : members.nextAfter;
     return {
       group,
       members: members.members,
-      nextAfter,
+      nextAfter: members.nextAfter,
       events: events.slice(0, TASK_GROUP_DETAIL_EVENT_LIMIT),
       eventsTruncated: events.length > TASK_GROUP_DETAIL_EVENT_LIMIT,
     };

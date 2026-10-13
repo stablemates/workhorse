@@ -296,9 +296,9 @@ group through `Admin.getTaskGroup`. Then it reads one member page through
 - `eventsTruncated`, `true` when the group has older events than these 100.
 
 `--limit` is from 1 through `MAX_TASK_GROUP_PAGE_SIZE` (1,000). Its default is 100. `--after` is from
-0 through 2,147,483,647, the range of a PostgreSQL `integer`. `Admin.listTaskGroupMembers` gives a
-next position for each full page. Thus, after a full page, the client reads one more member after
-the last position, and it sets `nextAfter` to `null` when no member follows. The reads are separate
+0 through 2,147,483,647, the range of a PostgreSQL `integer`. `nextAfter` is the `nextAfter` of
+`Admin.listTaskGroupMembers`, which is `null` when no member follows the page, also after a full
+page. [Task groups: Reads](task-groups.md#reads) states how the SDK finds it. The reads are separate
 statements, so the detail is not one snapshot.
 
 The group id must be a UUID. Any other value is a usage error and exits 64. An unknown group prints

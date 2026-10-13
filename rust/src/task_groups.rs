@@ -283,7 +283,15 @@ impl<E: Executor> Queue<E> {
             .executor()
             .rows(sql::LIST_TASK_GROUP_MEMBERS_V1, &[&group_id, &after, &limit])
             .await?;
-        member_page(&rows, limit)
+        let more = match probe_after(&rows, limit)? {
+            Some(last) => !self
+                .executor()
+                .rows(sql::LIST_TASK_GROUP_MEMBERS_V1, &[&group_id, &last, &1_i32])
+                .await?
+                .is_empty(),
+            None => false,
+        };
+        member_page(&rows, more)
     }
 
     /// The group a task is a member of, or whose callback the task is.
@@ -307,7 +315,14 @@ impl<E: Executor> Admin<E> {
         let after = after(query.after)?;
         let rows =
             self.query(sql::LIST_TASK_GROUP_MEMBERS_V1, &[&group_id, &after, &limit]).await?;
-        member_page(&rows, limit)
+        let more = match probe_after(&rows, limit)? {
+            Some(last) => !self
+                .query(sql::LIST_TASK_GROUP_MEMBERS_V1, &[&group_id, &last, &1_i32])
+                .await?
+                .is_empty(),
+            None => false,
+        };
+        member_page(&rows, more)
     }
 
     /// Reads a group's history in time order: create, seal, cancel, finish, callbacks, repairs.
@@ -657,7 +672,18 @@ fn task_group(row: &Row) -> Result<TaskGroup, Error> {
     })
 }
 
-fn member_page(rows: &[Row], limit: i32) -> Result<TaskGroupMemberPage, Error> {
+/// The position after which one member is read when `rows` is a full page, or `None`.
+///
+/// A full page can be the last page. `list_task_group_members_v1` reads at most 1,000 members, so a
+/// read of `limit + 1` fails at the maximum. The read of one member tells the two apart.
+fn probe_after(rows: &[Row], limit: i32) -> Result<Option<i32>, Error> {
+    match rows.last() {
+        Some(last) if rows.len() == limit as usize => Ok(Some(last.try_get("position")?)),
+        _ => Ok(None),
+    }
+}
+
+fn member_page(rows: &[Row], more: bool) -> Result<TaskGroupMemberPage, Error> {
     let members = rows
         .iter()
         .map(|row| {
@@ -681,10 +707,7 @@ fn member_page(rows: &[Row], limit: i32) -> Result<TaskGroupMemberPage, Error> {
             })
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let next_after = match members.last() {
-        Some(last) if members.len() == limit as usize => Some(last.position),
-        _ => None,
-    };
+    let next_after = members.last().filter(|_| more).map(|last| last.position);
     Ok(TaskGroupMemberPage { members, next_after })
 }
 
