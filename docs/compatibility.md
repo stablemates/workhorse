@@ -428,8 +428,10 @@ Before publication, the publish task generates a PEP 740 attestation beside each
 An attestation rehearsal job proves on every run, dry runs included, that the pinned uv uploads them.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
-a clean worktree and a matching `go/CHANGELOG.md` heading. It rehearses the module release, resets
-the test database, runs `pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
+a clean worktree and a matching `go/CHANGELOG.md` heading. It also requires that `HEAD` is an
+ancestor of `origin/main`, and that `vX.Y.Z` and `python/vX.Y.Z` on origin point to `HEAD`. It
+rehearses the module release, resets the test database, runs `pnpm check`, creates an annotated
+tag, and pushes that tag to `origin`.
 
 ## What SemVer governs
 
@@ -705,8 +707,12 @@ for the distribution being published.
 
 Every release publishes the same version to npm, PyPI, the Go module proxy, crates.io, and RubyGems
 from one source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
-candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
-first tag and the last, so every tag names the candidate commit.
+candidate is cut, and a slipped date means a new candidate. The candidate commit is a commit on
+`main`, and every tag of the train points to it, so every tag names the candidate commit. Other
+commits can land on `main` during the release. Thus the maintainer must create each tag on the
+candidate SHA, for example `git tag --annotate vX.Y.Z <sha>`, not on the current tip of `main`.
+Nobody may cancel the `main` CI push run of the candidate commit, because each release workflow
+requires that run to succeed.
 
 The Rust crate and the Ruby gem have no tag of their own. Each rides the npm `v*` tag and publishes
 after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
@@ -812,8 +818,9 @@ The Ruby gem keeps its own [`ruby/CHANGELOG.md`](../ruby/CHANGELOG.md), which th
 
 1. Update all TypeScript package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
-2. Tag `vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit. It refuses
-   a tag that fails the [release check](#release-train) for any line.
+2. Tag the candidate SHA with `git tag --annotate vX.Y.Z <sha>`, then push the tag. The workflow
+   requires a successful `main` CI push run for that commit. It refuses a tag that fails the
+   [release check](#release-train) for any line.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL. It then runs `pnpm release:verify npm` against those tarballs, so
@@ -840,7 +847,8 @@ pipeline.
 ### Python distribution
 
 1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
-2. Tag `python/vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit.
+2. Tag the candidate SHA with `git tag --annotate python/vX.Y.Z <sha>`, then push the tag. The
+   workflow requires a successful `main` CI push run for that commit.
 3. `pnpm python:release-check` runs the [release check](#release-train). It rebuilds the embedded
    dashboard bundle, checks Python format, lint, types, and dependencies, then runs every Python
    test against PostgreSQL. It builds the wheel and source distribution once and tests those exact
@@ -864,12 +872,25 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
 ### Go module
 
 1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
-2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
-3. The script runs `pnpm go:release-check X.Y.Z`, which runs the [release check](#release-train).
+2. Fetch origin. Then check out the candidate commit in a clean worktree with
+   `git switch --detach <sha>`. Do not use the current tip of `main`, because other commits can
+   land on `main` during the release.
+3. Run `scripts/release-go.sh X.Y.Z` from that checkout. Before the long checks, the script fetches
+   `main` from origin. It refuses to continue in these conditions, and names the tag or commit:
+   1. The version has no PEP 440 spelling for the Python tag.
+   2. The worktree is not clean.
+   3. `HEAD` is not an ancestor of `origin/main`.
+   4. `vX.Y.Z` or `python/vX.Y.Z` does not exist on origin. The Python tag uses the PEP 440
+      spelling of a prerelease.
+   5. One of those tags points to a commit other than `HEAD`. The script peels an annotated tag to
+      its commit.
+   6. `go/vX.Y.Z` already exists locally or on origin.
+4. The script runs `pnpm go:release-check X.Y.Z`, which runs the [release check](#release-train).
    Next, it stages a file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs
    `pnpm release:verify go` against that proxy, so a post-publish check the module cannot satisfy
    fails before the tag.
-4. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
+5. The script runs `pnpm check`, creates `go/vX.Y.Z` on `HEAD`, and pushes the tag only after the
+   gate passes.
 
 ### Rust crate
 
@@ -879,11 +900,12 @@ own and publishes from the npm `v*` tag. The crate joined the release train at `
 release, crates.io held only the `0.0.0` placeholder that reserved the name.
 
 1. Set `version` in `rust/Cargo.toml` to the release version and commit it with the candidate.
-2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm rust:release-check`.
-   It packages the crate with verification and builds a clean consumer from the packaged archive.
-   With PostgreSQL available, that consumer enqueues one task. It then runs
-   `pnpm release:verify crate` against the unpacked archive, so a post-publish check the crate
-   cannot satisfy fails before anything is published.
+2. Use the `vX.Y.Z` tag that the [npm packages](#npm-packages) step creates on the candidate SHA.
+   Do not create another tag. The build job of `.github/workflows/release.yml` runs
+   `pnpm rust:release-check`. It packages the crate with verification and builds a clean consumer
+   from the packaged archive. With PostgreSQL available, that consumer enqueues one task. It then
+   runs `pnpm release:verify crate` against the unpacked archive, so a post-publish check the
+   crate cannot satisfy fails before anything is published.
 3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
    writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
    The [release check](#release-train) in the build job refuses that tag before npm publishes.
@@ -914,7 +936,9 @@ crate, it has no tag of its own and publishes from the npm `v*` tag. It joined t
 1. Set `VERSION` in `ruby/lib/stablemates/workhorse/version.rb` to the release version. Move the
    `## Unreleased` entries of `ruby/CHANGELOG.md` under a `## X.Y.Z` heading, and commit both with
    the candidate.
-2. Tag `vX.Y.Z`. The build job of `.github/workflows/release.yml` runs `pnpm ruby:release-check`.
+2. Use the `vX.Y.Z` tag that the [npm packages](#npm-packages) step creates on the candidate SHA.
+   Do not create another tag. The build job of `.github/workflows/release.yml` runs
+   `pnpm ruby:release-check`.
    It runs the Ruby gates, then builds the `.gem` once with `gem build --strict`. It installs that
    archive into an empty gem home and runs a clean consumer project without Bundler. With PostgreSQL
    available, that consumer enqueues one task and runs it through a worker.

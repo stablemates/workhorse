@@ -5,7 +5,9 @@
 - **Amended by:** [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md) (the specification assembles eight
   surfaces; the eighth is the Rust API),
   [ADR 0084](0084-govern-the-ruby-api-as-a-ninth-surface.md) (the specification assembles nine surfaces; the
-  ninth is the Ruby API)
+  ninth is the Ruby API),
+  [ADR 0102](0102-keep-main-open-during-a-release-by-tagging-the-candidate-commit.md) (every tag of
+  the release train points to the candidate commit, and other commits can land on `main`)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
