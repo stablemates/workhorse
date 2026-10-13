@@ -19,6 +19,13 @@ default lease of 30 s.
 5. Soon after, worker B claims the task. The handler asks the provider again, and the provider sends
    a second email.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/delivery-crash-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/delivery-crash-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/delivery-crash-dark.png">
+  <img src="../../site/public/diagrams/delivery-crash-light.png" width="960" alt="A crash after the email and before the completion sends the email two times">
+</picture>
+
 No queue can prevent this problem. The mail provider and your database are two different systems.
 They cannot commit as one transaction. A queue that promises exactly-once delivery also needs a
 handler that is safe to run again. Workhorse states this requirement directly.
@@ -91,6 +98,13 @@ the first two calls in checkpoints. The invoice renderer fails one time.
    value. The card is not charged again.
 4. Still in attempt 2, `renderInvoice` succeeds. Workhorse stores its result, and the handler calls
    `sendEmail`.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/delivery-checkpoints-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/delivery-checkpoints-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/delivery-checkpoints-dark.png">
+  <img src="../../site/public/diagrams/delivery-checkpoints-light.png" width="960" alt="A checkpoint stores a result, and a later attempt reads it">
+</picture>
 
 ```ts
 worker.handle("invoice.send", async (payload: { amount: number; email: string }, ctx) => {

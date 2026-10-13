@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 316" width="960" height="316" role="img" aria-labelledby="delivery-checkpoints-dark-title delivery-checkpoints-dark-desc">
+<title id="delivery-checkpoints-dark-title">A checkpoint stores a result, and a later attempt reads it</title>
+<desc id="delivery-checkpoints-dark-desc">In attempt 1, the charge checkpoint charges the card and Workhorse stores the result. Then renderInvoice throws, and Workhorse schedules a retry. In attempt 2, the charge checkpoint returns the stored value, the invoice checkpoint runs and is stored, and sendEmail runs.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="316" fill="#04080e"/>
+<path d="M 304,102 H 362" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 594,102 H 652" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 656,166 H 598" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="44" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Attempt 1</text>
+<text x="24" y="59" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">renderInvoice fails one time</text>
+<text x="366" y="44" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">task_checkpoint</text>
+<text x="366" y="59" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">one row for each stored name</text>
+<text x="656" y="44" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Attempt 2</text>
+<text x="656" y="59" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the handler starts from the top</text>
+<rect x="24" y="80" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="80" width="280" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="164" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge</text>
+<text x="164" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">runs · charges the card</text>
+<rect x="24" y="144" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="144" width="280" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="164" y="164" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice</text>
+<text x="164" y="178" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">renderInvoice throws</text>
+<rect x="24" y="208" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="208" width="280" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="164" y="228" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sendEmail</text>
+<text x="164" y="242" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">not reached</text>
+<rect x="366" y="80" width="224" height="44" rx="6" fill="#04080e"/>
+<rect x="366" y="80" width="224" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="478" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge</text>
+<text x="478" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stored in attempt 1</text>
+<rect x="366" y="144" width="224" height="44" rx="6" fill="#04080e"/>
+<rect x="366" y="144" width="224" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="478" y="164" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice</text>
+<text x="478" y="178" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stored in attempt 2</text>
+<rect x="656" y="80" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="656" y="80" width="280" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="796" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge</text>
+<text x="796" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">returns the stored value</text>
+<rect x="656" y="144" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="656" y="144" width="280" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="796" y="164" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice</text>
+<text x="796" y="178" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">runs · result stored</text>
+<rect x="656" y="208" width="280" height="44" rx="6" fill="#04080e"/>
+<rect x="656" y="208" width="280" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="796" y="228" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sendEmail</text>
+<text x="796" y="242" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">runs · no checkpoint</text>
+<rect x="314" y="84" width="40" height="12" rx="2" fill="#04080e"/>
+<text x="334" y="93" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">STORE</text>
+<rect x="606" y="84" width="36" height="12" rx="2" fill="#04080e"/>
+<text x="624" y="93" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">READ</text>
+<rect x="606" y="148" width="40" height="12" rx="2" fill="#04080e"/>
+<text x="626" y="157" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">STORE</text>
+<text x="24" y="300" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">sendEmail has no checkpoint. It can run again, so give it a provider idempotency key.</text>
+</svg>

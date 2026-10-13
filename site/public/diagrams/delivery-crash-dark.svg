@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 408" width="960" height="408" role="img" aria-labelledby="delivery-crash-dark-title delivery-crash-dark-desc">
+<title id="delivery-crash-dark-title">A crash after the email and before the completion sends the email two times</title>
+<desc id="delivery-crash-dark-desc">Worker A claims the task, and the mail provider sends the email at 1 s. At 2 s, the process of worker A stops before it records the completion. At about 30 s, the lease expires and the task is ready again. Worker B claims the task and runs the handler again, so the provider sends a second email.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="408" fill="#04080e"/>
+<path d="M 224,164 V 124" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 416.5,204 V 312" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 812,240 V 124" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 857.5,280 V 312" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="269.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
+<text x="416.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">1 s</text>
+<text x="563.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">2 s</text>
+<text x="710.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">about 30 s</text>
+<text x="857.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">soon after</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="104" fill="#f2f4f5" font-size="10" font-family="Geist Mono">runtime row</text>
+<text x="24" y="188" fill="#f2f4f5" font-size="10" font-family="Geist Mono">worker A</text>
+<text x="24" y="264" fill="#f2f4f5" font-size="10" font-family="Geist Mono">worker B</text>
+<text x="24" y="340" fill="#f2f4f5" font-size="10" font-family="Geist Mono">mail provider</text>
+<rect x="200" y="80" width="433" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="80" width="433" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="416.5" y="98" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">owner A · active</text>
+<text x="416.5" y="112" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">lease until 30 s</text>
+<rect x="641" y="80" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="641" y="80" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="710.5" y="98" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<text x="710.5" y="112" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">lease expired</text>
+<rect x="788" y="80" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="788" y="80" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="857.5" y="104" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">owner B · active</text>
+<rect x="200" y="164" width="286" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="164" width="286" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="343" y="182" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
+<text x="343" y="196" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">attempt 1</text>
+<rect x="494" y="164" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="494" y="164" width="139" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="563.5" y="182" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">process stops</text>
+<text x="563.5" y="196" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no completion</text>
+<rect x="788" y="240" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="788" y="240" width="139" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="857.5" y="258" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
+<text x="857.5" y="272" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">attempt 2</text>
+<rect x="347" y="316" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="347" y="316" width="139" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="416.5" y="340" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">email 1 sent</text>
+<rect x="788" y="316" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="788" y="316" width="139" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="857.5" y="334" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">email 2 sent</text>
+<text x="857.5" y="348" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a duplicate</text>
+<rect x="204" y="136" width="40" height="12" rx="2" fill="#04080e"/>
+<text x="224" y="145" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">CLAIM</text>
+<rect x="398.5" y="252" width="36" height="12" rx="2" fill="#04080e"/>
+<text x="416.5" y="261" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">SEND</text>
+<rect x="792" y="212" width="40" height="12" rx="2" fill="#04080e"/>
+<text x="812" y="221" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">CLAIM</text>
+<rect x="875.5" y="288" width="36" height="12" rx="2" fill="#04080e"/>
+<text x="893.5" y="297" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">SEND</text>
+<text x="24" y="392" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The handler ran two times. Write it so that a second run causes no damage.</text>
+</svg>
