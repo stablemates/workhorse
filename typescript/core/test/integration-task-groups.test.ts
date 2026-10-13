@@ -72,10 +72,12 @@ describe("task groups", () => {
       result: "succeeded",
       counts: { total: 3, succeeded: 3, pending: 0 },
     });
-    expect(finished!.callbacks.map((callback) => callback.kind).toSorted()).toEqual([
-      "onFailure",
+    // PostgreSQL stores the callbacks as jsonb, which orders keys by length. The SDK keeps the
+    // documented order.
+    expect(finished!.callbacks.map((callback) => callback.kind)).toEqual([
       "onFinish",
       "onSuccess",
+      "onFailure",
     ]);
     expect(finished!.callbacks.find((callback) => callback.kind === "onFailure")!.taskId).toBe(
       null,
@@ -97,6 +99,12 @@ describe("task groups", () => {
     expect(page.nextAfter).toBe(2);
     const rest = await admin.listTaskGroupMembers(group.id, { after: page.nextAfter! });
     expect(rest).toMatchObject({ members: [{ position: 3 }], nextAfter: null });
+    // When the member count is a multiple of the limit, the last full page has no next position.
+    const exact = await queue.listTaskGroupMembers(group.id, { limit: 3 });
+    expect(exact.members.map((item) => item.position)).toEqual([1, 2, 3]);
+    expect(exact.nextAfter).toBeNull();
+    const last = await admin.listTaskGroupMembers(group.id, { after: 2, limit: 1 });
+    expect(last).toMatchObject({ members: [{ position: 3 }], nextAfter: null });
   });
 
   it("lets a callback handler read the group and its counts through ctx.taskGroup", async () => {

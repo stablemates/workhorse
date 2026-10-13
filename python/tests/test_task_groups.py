@@ -121,8 +121,14 @@ def test_block_form_creates_adds_and_seals_then_enqueues_on_finish_and_on_succes
         assert finished is not None
         assert (finished.state, finished.result) == ("finished", "succeeded")
         assert (finished.counts.succeeded, finished.counts.pending) == (3, 0)
+        # PostgreSQL stores the callbacks as jsonb, which orders keys by length. The SDK keeps the
+        # documented order.
+        assert [callback.kind for callback in finished.callbacks] == [
+            "on_finish",
+            "on_success",
+            "on_failure",
+        ]
         by_kind = {callback.kind: callback.task_id for callback in finished.callbacks}
-        assert sorted(by_kind) == ["on_failure", "on_finish", "on_success"]
         assert by_kind["on_failure"] is None
         assert by_kind["on_finish"] is not None
         assert task_types(connection, "block-callbacks") == ["finished", "succeeded"]
@@ -143,6 +149,11 @@ def test_block_form_creates_adds_and_seals_then_enqueues_on_finish_and_on_succes
         rest = admin.list_task_group_members(group.id, after=2)
         assert [item.position for item in rest.members] == [3]
         assert rest.next_after is None
+        # When the member count is a multiple of the limit, the last full page has no next position.
+        exact = queue.list_task_group_members(group.id, limit=3)
+        assert ([item.position for item in exact.members], exact.next_after) == ([1, 2, 3], None)
+        last = admin.list_task_group_members(group.id, after=2, limit=1)
+        assert ([item.position for item in last.members], last.next_after) == ([3], None)
         assert admin.get_task_group(group.id) == finished
 
 
@@ -692,6 +703,10 @@ async def test_async_clients_and_worker_use_task_groups(database_url: str, async
         )
         page = await admin.list_task_group_members(group.id)
         assert [item.position for item in page.members] == [1, 2]
+        first = await queue.list_task_group_members(group.id, limit=1)
+        assert ([item.position for item in first.members], first.next_after) == ([1], 1)
+        exact = await admin.list_task_group_members(group.id, limit=2)
+        assert ([item.position for item in exact.members], exact.next_after) == ([1, 2], None)
         events = await admin.list_task_group_events(group.id)
         assert events[0].type == "created"
         assert await admin.list_task_group_drift() == ()
@@ -742,8 +757,10 @@ async def test_async_psycopg_clients_and_worker_use_task_groups(
         finished = await queue.get_task_group(group.id)
         assert finished is not None and finished.result == "succeeded"
         assert await admin.get_task_group(group.id) == finished
-        page = await queue.list_task_group_members(group.id)
+        page = await queue.list_task_group_members(group.id, limit=1)
         assert [(item.position, item.outcome) for item in page.members] == [(1, "succeeded")]
+        assert page.next_after is None
+        assert (await admin.list_task_group_members(group.id, limit=1)).next_after is None
         assert [event.type for event in await admin.list_task_group_events(group.id)][-1] == (
             "callback_enqueued"
         )

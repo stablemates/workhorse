@@ -668,8 +668,18 @@ func listTaskGroupMembers(
 		})
 	}
 	page := TaskGroupMemberPage{Members: members}
-	if len(members) == limit {
-		next := members[len(members)-1].Position
+	if len(members) < limit {
+		return page, nil
+	}
+	// A full page can be the last page. list_task_group_members_v1 reads at most 1,000 members, so
+	// a read of limit + 1 fails at the maximum. A read of one member after the page tells the two
+	// apart, so NextAfter is nil when no member follows.
+	next := members[len(members)-1].Position
+	following, err := executor.Query(ctx, statement, groupID, next, 1)
+	if err != nil {
+		return TaskGroupMemberPage{}, err
+	}
+	if len(following) > 0 {
 		page.NextAfter = &next
 	}
 	return page, nil

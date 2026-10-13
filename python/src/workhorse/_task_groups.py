@@ -44,13 +44,12 @@ CANCEL = _statement("cancel_task_group_v1")
 LIST_DRIFT = _statement("list_task_group_drift_v1")
 REPAIR_DRIFT = _statement("repair_task_group_drift_v1")
 
-# The callback order PostgreSQL stores and the keys create_task_group_v1 reads.
+# The documented callback order, with the keys that create_task_group_v1 reads.
 CALLBACK_KEYS: tuple[tuple[TaskGroupCallbackKind, str], ...] = (
     ("on_finish", "onFinish"),
     ("on_success", "onSuccess"),
     ("on_failure", "onFailure"),
 )
-_CALLBACK_KINDS = frozenset(kind for kind, _key in CALLBACK_KEYS)
 
 
 def callback_requests(
@@ -142,13 +141,15 @@ def task_group(row: Row) -> TaskGroup:
         canceled_at=cast(datetime | None, row["canceled_at"]),
         canceled_by=cast(str | None, row["canceled_by"]),
         cancel_reason=cast(str | None, row["cancel_reason"]),
+        # PostgreSQL returns the callbacks as jsonb, which orders keys by length. Read them in the
+        # documented order instead.
         callbacks=tuple(
             TaskGroupCallback(
                 kind=kind,
-                task_id=_optional_text(callback.get("taskId")),
+                task_id=_optional_text(callbacks[kind].get("taskId")),
             )
-            for kind, callback in callbacks.items()
-            if kind in _CALLBACK_KINDS
+            for kind, _key in CALLBACK_KEYS
+            if kind in callbacks
         ),
     )
 
@@ -174,7 +175,18 @@ def task_group_link(rows: Sequence[Row]) -> TaskGroupLink | None:
     )
 
 
-def member_page(rows: Sequence[Row], limit: int) -> TaskGroupMemberPage:
+def member_probe_parameters(
+    group_id: str, rows: Sequence[Row], limit: int
+) -> tuple[object, ...] | None:
+    """The parameters that read one member after a full page, or None for a page that is not full.
+
+    A full page can be the last page. `list_task_group_members_v1` reads at most 1,000 members, so
+    a read of `limit + 1` fails at the maximum. The read of one member tells the two apart.
+    """
+    return (group_id, _integer(rows[-1]["position"]), 1) if len(rows) == limit else None
+
+
+def member_page(rows: Sequence[Row], more: bool) -> TaskGroupMemberPage:
     members = tuple(
         TaskGroupMember(
             position=_integer(row["position"]),
@@ -190,7 +202,7 @@ def member_page(rows: Sequence[Row], limit: int) -> TaskGroupMemberPage:
     )
     return TaskGroupMemberPage(
         members=members,
-        next_after=members[-1].position if len(members) == limit else None,
+        next_after=members[-1].position if more else None,
     )
 
 

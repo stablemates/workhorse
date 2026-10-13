@@ -98,6 +98,11 @@ changes no stored data.
 - `Error` gains `TaskGroupClosed` (`P1008`), `TaskGroupLimitExceeded` (`P1009`), and
   `TaskGroupMembershipConflict` (`P1010`), with their `DETAIL` documents. `Operation` gains
   `AddToTaskGroup`.
+- `list_task_group_members` of `Queue` and `Admin` returns `next_after: None` on the last page,
+  also when the page is full (SM-1277). Before, a full last page gave a `next_after` that read an
+  empty page. A full page now costs one more read of one member. `TaskGroup::callbacks` keeps the
+  order `on_finish`, `on_success`, `on_failure`, and a test now asserts it. The change adds no SQL
+  function and no migration.
 - Checkpoint input check (SM-1263,
   [ADR 0098](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0098-check-the-input-of-a-checkpoint-on-replay.md)).
   `HandlerContext::checkpoint_with_input(name, &input, op)` stores the fingerprint of the input with

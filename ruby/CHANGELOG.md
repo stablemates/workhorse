@@ -111,6 +111,11 @@ end
   statement runs in the caller's transaction, so the member tasks still commit with it.
 - `TaskGroupClosedError` (`P1008`), `TaskGroupLimitExceededError` (`P1009`), and
   `TaskGroupMembershipConflictError` (`P1010`) report the task group refusals.
+- `Queue#list_task_group_members` and `Admin#list_task_group_members` return a nil `next_after`
+  on the last page, also when the page is full (SM-1277). Before, a full last page gave a
+  `next_after` that read an empty page. A full page now costs one more read of one member.
+  `TaskGroup#callbacks` keeps the order `on_finish`, `on_success`, `on_failure`, and a test now
+  asserts it. The change adds no SQL function and no migration.
 
 ### Checkpoint input
 

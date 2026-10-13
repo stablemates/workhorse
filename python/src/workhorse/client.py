@@ -54,6 +54,7 @@ from ._task_groups import (
     encode_callbacks as _encode_callbacks,
     member_page as _member_page,
     member_parameters as _member_parameters,
+    member_probe_parameters as _member_probe_parameters,
     one_task_group as _one_task_group,
     optional_task_group as _optional_task_group,
     task_group_link as _task_group_link,
@@ -492,8 +493,13 @@ class Queue:
         self, group_id: str, *, after: int = 0, limit: int = 100
     ) -> TaskGroupMemberPage:
         """Read the member tasks of a group in the order they joined, one page at a time."""
-        parameters = _member_parameters(group_id, after, limit)
-        return _member_page(self._executor.rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+        rows = self._executor.rows(
+            _LIST_TASK_GROUP_MEMBERS, _member_parameters(group_id, after, limit)
+        )
+        probe = _member_probe_parameters(group_id, rows, limit)
+        return _member_page(
+            rows, probe is not None and bool(self._executor.rows(_LIST_TASK_GROUP_MEMBERS, probe))
+        )
 
     def find_task_group(self, task_id: str) -> TaskGroupLink | None:
         """The group a task is a member of, or whose callback the task is."""
@@ -910,8 +916,14 @@ class AsyncQueue:
         self, group_id: str, *, after: int = 0, limit: int = 100
     ) -> TaskGroupMemberPage:
         """Read the member tasks of a group in the order they joined, one page at a time."""
-        parameters = _member_parameters(group_id, after, limit)
-        return _member_page(await self._executor.rows(_LIST_TASK_GROUP_MEMBERS, parameters), limit)
+        rows = await self._executor.rows(
+            _LIST_TASK_GROUP_MEMBERS, _member_parameters(group_id, after, limit)
+        )
+        probe = _member_probe_parameters(group_id, rows, limit)
+        return _member_page(
+            rows,
+            probe is not None and bool(await self._executor.rows(_LIST_TASK_GROUP_MEMBERS, probe)),
+        )
 
     async def find_task_group(self, task_id: str) -> TaskGroupLink | None:
         """The group a task is a member of, or whose callback the task is."""

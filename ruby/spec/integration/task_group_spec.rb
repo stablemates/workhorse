@@ -61,8 +61,10 @@ RSpec.describe "Task groups against PostgreSQL" do
 
     group = queue.get_task_group(result.group.id)
     expect([group.state, group.result, group.counts.succeeded, group.counts.pending]).to eq([:finished, :succeeded, 3, 0])
-    expect(group.callbacks.to_h { |item| [item.kind, !item.task_id.nil?] })
-      .to eq({on_finish: true, on_success: true, on_failure: false})
+    # PostgreSQL stores the callbacks as jsonb, which orders keys by length. The SDK keeps the
+    # documented order.
+    expect(group.callbacks.map { |item| [item.kind, !item.task_id.nil?] })
+      .to eq([[:on_finish, true], [:on_success, true], [:on_failure, false]])
     expect(links.map(&:first)).to contain_exactly("group.report", "group.succeeded")
     report = links.to_h.fetch("group.report")
     expect([report.role, report.callback, report.group.id, report.group.counts.total])
@@ -105,6 +107,11 @@ RSpec.describe "Task groups against PostgreSQL" do
       .to all(eq([@queue_name, "group.member", :ready, nil]))
     rest = queue.list_task_group_members(group.id, after: page.next_after, limit: 2)
     expect([rest.members.map(&:task_id), rest.next_after]).to eq([second.map(&:task_id), nil])
+    # When the member count is a multiple of the limit, the last full page has no next position.
+    exact = queue.list_task_group_members(group.id, limit: 3)
+    expect([exact.members.map(&:position), exact.next_after]).to eq([[1, 2, 3], nil])
+    last = admin.list_task_group_members(group.id, after: 2, limit: 1)
+    expect([last.members.map(&:position), last.next_after]).to eq([[3], nil])
     expect(admin.list_task_group_members(group.id).members.length).to eq(3)
     expect(admin.get_task_group(group.id)).to eq(queue.get_task_group(group.id))
 

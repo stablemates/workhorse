@@ -902,6 +902,7 @@ interface TaskGroup {
   canceledAt: Date | null;
   canceledBy: string | null;
   cancelReason: string | null;
+  /** The requested callbacks in the order `onFinish`, `onSuccess`, `onFailure`. */
   callbacks: TaskGroupCallback[];
 }
 

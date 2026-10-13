@@ -420,6 +420,7 @@ class TaskGroup:
     canceled_at: datetime | None
     canceled_by: str | None
     cancel_reason: str | None
+    # The requested callbacks in the order on_finish, on_success, on_failure.
     callbacks: tuple[TaskGroupCallback, ...]
 
 

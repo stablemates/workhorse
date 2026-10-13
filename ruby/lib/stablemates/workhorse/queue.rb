@@ -155,7 +155,9 @@ module Stablemates
 
         assert_compatible
         rows = @executor.rows(SqlCatalogue::LIST_TASK_GROUP_MEMBERS_V1, [group_id, after.to_s, limit.to_s])
-        TaskGroups.member_page(rows, limit)
+        last = TaskGroups.probe_after(rows, limit)
+        more = !last.nil? && @executor.rows(SqlCatalogue::LIST_TASK_GROUP_MEMBERS_V1, [group_id, last.to_s, "1"]).any?
+        TaskGroups.member_page(rows, more)
       end
 
       # The TaskGroupLink of the group +task_id+ is a member of, or whose callback it is, or nil.
