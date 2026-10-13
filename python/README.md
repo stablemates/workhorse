@@ -70,17 +70,34 @@ print(task_id)
 Handlers receive at-least-once delivery. Use stable provider idempotency keys around external
 effects; named checkpoints prevent completed application stages from running after a later restart.
 
-An `AsyncWorker` checkpoint operation follows asyncio cancellation. When a timeout or task group
-cancels the handler's `await context.checkpoint(name, operation)`, the worker cancels the
-operation and waits for its cleanup before the cancellation reaches the handler. Cancellation
-before the operation returns stops the save, even when the operation catches the cancellation and
-returns a value, so a later attempt runs it again. Once the operation returns, its save may already
-be under way. The worker waits for that save instead of undoing it, so the handler sees
-`CancelledError` while a later attempt replays the saved value. A cancelled await therefore never
-proves that no checkpoint exists, and it does not undo the operation's effects on other systems.
+An `AsyncWorker` checkpoint operation follows asyncio cancellation. When a timeout or an
+`asyncio.TaskGroup` cancels the handler's `await context.checkpoint(name, operation)`, the worker
+cancels the operation and waits for its cleanup before the cancellation reaches the handler.
+Cancellation before the operation returns stops the save, even when the operation catches the
+cancellation and returns a value, so a later attempt runs it again. Once the operation returns, its
+save may already be under way. The worker waits for that save instead of undoing it, so the handler
+sees `CancelledError` while a later attempt replays the saved value. A cancelled await therefore
+never proves that no checkpoint exists, and it does not undo the operation's effects on other
+systems.
 
 The operation runs on the event loop in a copy of the handler's context. It sees the handler's
 context variables and current OpenTelemetry span, so its spans are children of the handler span.
+
+## Task groups, checkpoint inputs, and single passes
+
+- A [task group](https://workhorse.run/docs/task-groups) tracks many tasks as one unit. After the
+  group is sealed and every member task is finished, Workhorse enqueues the callback tasks of the
+  group. The `with queue.task_group(...)` block creates a group, adds its tasks, and seals it in one
+  transaction.
+- A handler can give the [input of a
+  checkpoint](https://workhorse.run/docs/durable-execution#check-the-input-of-a-checkpoint). Give it
+  as `context.checkpoint(name, operation, input=...)`. If a later run gives a different input, the
+  call raises `CheckpointInputConflictError`, the task fails, and the operation does not run again.
+  If the stored checkpoint or the call has no input, Workhorse compares nothing.
+- `run_once()` returns `True` only when a handler ran. It returns `False` after a pass that only
+  [released the tasks that it
+  claimed](https://workhorse.run/docs/workers#return-a-task-that-the-worker-cannot-run). If you call
+  it in a loop, wait after `False`.
 
 ## Package boundary
 

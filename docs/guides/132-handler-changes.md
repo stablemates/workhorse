@@ -5,9 +5,10 @@
 A task can wait for hours or days on a timer, a signal, or a human decision. During that time, a
 deployment can replace the handler code. When the task resumes, the new code replays the checkpoints
 that the old code stored. A replay is a later run of the handler for the same task. Workhorse
-detects some changes, such as a changed absolute wait time. It does not detect a checkpoint that the
-new code adds, removes, moves, or computes in a different way. Thus a task can complete with a wrong
-result and no error. This guide gives two patterns that keep each task on the code that started it.
+detects some changes, such as a changed absolute wait time. If the handler gives the input of a
+checkpoint, Workhorse also detects a changed input. Workhorse does not detect a checkpoint that new
+code adds, removes, or moves. It does not detect a new operation or an input that the handler does
+not give. Thus a task can complete with a wrong result and no error. This guide gives two patterns that keep each task on the code that started it.
 
 ## See how a changed handler gives a wrong result
 
@@ -38,25 +39,30 @@ await ctx.checkpoint("ship", () => warehouse.reserveAndShip(payload.orderId));
 ```
 
 A changed absolute wait time, child request, or human-decision context is different, because
-Workhorse detects it. A changed relative wait duration gives no error, and the first wake time
-stays. Read [130-durable-waits.md](130-durable-waits.md) for these replay rules.
+Workhorse detects it. A changed checkpoint input is also different, if the old and the new code
+both give the input. A changed relative wait duration gives no error, and the first wake time
+stays. Read [130-durable-waits.md](130-durable-waits.md) for these replay rules and for the input of a checkpoint.
 
 <details>
 <summary>Reference: what a replay compares</summary>
 
-| Change in the new code                                 | Result on replay                                     |
-| ------------------------------------------------------ | ---------------------------------------------------- |
-| A checkpoint name that the task has not stored         | The operation runs, and Workhorse stores its value   |
-| A stored checkpoint name that the code no longer calls | The stored row stays, and nothing reads it           |
-| Stored checkpoint names in a different order           | Each call returns its stored value                   |
-| A stored checkpoint name with a new operation          | The stored value returns; the operation does not run |
-| A changed relative wait duration                       | The first stored target stays                        |
-| A changed absolute wait target                         | `WaitConflictError`                                  |
-| A changed child request or child set                   | `ChildConflictError`                                 |
-| A changed human-decision context                       | `HumanWaitConflictError`                             |
+| Change in the new code                                         | Result on replay                                           |
+| -------------------------------------------------------------- | ---------------------------------------------------------- |
+| A checkpoint name that the task has not stored                 | The operation runs, and Workhorse stores its value         |
+| A stored checkpoint name that the code no longer calls         | The stored row stays, and nothing reads it                 |
+| Stored checkpoint names in a different order                   | Each call returns its stored value                         |
+| A stored checkpoint name with a new operation                  | The stored value returns; the operation does not run       |
+| A changed checkpoint input, and both runs give an input        | `CheckpointInputConflictError`; the operation does not run |
+| A changed checkpoint input, and one of the runs gives no input | The stored value returns; the operation does not run       |
+| A changed relative wait duration                               | The first stored target stays                              |
+| A changed absolute wait target                                 | `WaitConflictError`                                        |
+| A changed child request or child set                           | `ChildConflictError`                                       |
+| A changed human-decision context                               | `HumanWaitConflictError`                                   |
 
 `HandlerContext.checkpoint(name, operation)` reads an existing value before it runs user code.
-The primary key `(task_id, checkpoint_name)` makes each name immutable for the task.
+If the call gives an input and the stored checkpoint has an input fingerprint, the call compares
+the two fingerprints first. The primary key `(task_id, checkpoint_name)` makes each name immutable
+for the task.
 
 More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint), [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle.md#scheduling-a-timer-wait), and [Schema and protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
 

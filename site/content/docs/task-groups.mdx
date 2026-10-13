@@ -450,6 +450,37 @@ More detail: [Task groups: Cancel](https://github.com/stablemates/workhorse/blob
 
 </details>
 
+## Follow a group in the dashboard
+
+An operator can follow a group without code. The Task groups page of the dashboard lists the
+groups, newest first, and filters them by state. Each row has a progress bar of the succeeded,
+failed, and canceled member tasks.
+
+The detail of a group shows its counts, its times, its callback tasks, its member tasks one page at
+a time, and its newest events. If the dashboard supports the task group cancel, it can also cancel
+a group that is not finished. The cancel has the same result as `Admin.cancelTaskGroup`, and the operator must give a
+reason.
+
+<details>
+<summary>Reference: dashboard</summary>
+
+| `dashboard/v1` procedure | Returns                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| `taskGroups`             | One page of groups, newest first, filtered by `state`                        |
+| `taskGroupDetail`        | One group, one page of its member tasks after `after`, and its newest events |
+| `cancelTaskGroup`        | The group after `cancel_task_group_v1`                                       |
+
+- The page is at the route `/groups`.
+- A page of groups or of member tasks holds 25, 50, or 100 entries. The default is 50.
+- The detail shows at most 100 events. `eventsTruncated` is true when the group has older events.
+- The detail offers the cancel only when the dashboard can change state. A TypeScript host also
+  needs `DashboardTaskController.cancelTaskGroup`. The Go, Python, Rust, and Ruby hosts need only
+  a host that is not read-only.
+
+More detail: [Dashboard: Task groups page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#task-groups-page).
+
+</details>
+
 ## Know which tasks can join a group
 
 A task joins a group only when an add enqueues it. Thus, a caller cannot add a task that already

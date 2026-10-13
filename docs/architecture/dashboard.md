@@ -649,6 +649,136 @@ Since schema version 37, each queue row carries `tier`, `recordAttempts`, and `r
 `queue_control`. A queue without a control row reports `full`, `false`, and `false`. An older
 schema omits the three keys, and the Queues page shows a dash in its Tier column.
 
+### Task groups page
+
+The Task groups page shows the [task groups](task-groups.md) of the database. It has a list of
+groups and a detail view for each group. Three `dashboard/v1` procedures serve it, and
+`dashboard/v1/conformance.json` covers each of them.
+
+| Procedure         | Kind     | Input                                                        | Response                                   |
+| ----------------- | -------- | ------------------------------------------------------------ | ------------------------------------------ |
+| `taskGroups`      | Read     | `state`, `page`, `pageSize`                                  | `DashboardTaskGroupsPage`                  |
+| `taskGroupDetail` | Read     | `id`, `after`, `pageSize`                                    | `DashboardTaskGroupDetail`, or `NOT_FOUND` |
+| `cancelTaskGroup` | Mutation | `id`, and an `audit` with `actor`, `reason`, and `requestId` | `DashboardTaskGroup`, or `NOT_FOUND`       |
+
+The input limits are:
+
+| Field       | Values                                                         | Default |
+| ----------- | -------------------------------------------------------------- | ------- |
+| `state`     | `all`, `open`, `sealed`, or `finished`                         | `all`   |
+| `page`      | 1 through `dashboardPageMax`, 100                              | 1       |
+| `pageSize`  | 25, 50, or 100 (`dashboardTaskGroupPageSizes`)                 | 50      |
+| `id`        | A UUID                                                         |         |
+| `after`     | 0 through 100,000, or null; null and 0 start at position 1     | null    |
+| `reason`    | 1 through 2,000 characters; the TypeScript host trims it first |         |
+| `requestId` | 1 through 512 UTF-8 bytes                                      |         |
+
+`typescript/dashboard-server/src/server/task-group-statements.ts` holds the SQL of the three
+procedures. `typescript/dashboard-server/spec/generate-bindings.ts` copies it into the Go, Python,
+Rust, and Ruby bindings. Thus the five backends send the same SQL for the list and the detail. The
+cancel uses a different path in TypeScript, as [Cancel](#cancel) describes. The statements call
+only functions and name no task group table. Thus the task group tables are not a governed dashboard
+read ([Task groups: Reads](task-groups.md#reads)).
+
+#### Task group document
+
+`DashboardTaskGroup` is the snapshot of `get_task_group_v1`. Each procedure returns it in the same
+form:
+
+- `id`, `state` (`open`, `sealed`, or `finished`), and `result` (`succeeded`, `failed`, or null
+  until the group finishes).
+- `counts`, with `total`, `succeeded`, `failed`, `canceled`, and `pending`.
+- `createdAt`, `sealedAt`, `finishedAt`, and `canceledAt`, as UTC times with three fractional
+  digits. A time that did not occur is null.
+- `canceledBy` and `cancelReason`. The three cancel fields are all set or all null. A canceled
+  group finishes through its member outcomes, so `state` and `canceledAt` are independent.
+- `callbacks`, one `{ kind, taskId }` for each callback that the creator requested, in the order
+  `onFinish`, `onSuccess`, `onFailure`. `taskId` is null until the finished group enqueues the
+  callback.
+
+#### List
+
+`taskGroups` calls `dashboard_task_groups_v1` and returns `state`, `page`, `pageSize`, `hasMore`,
+and `groups`, newest first. The function reads one group more than the page, so `hasMore` costs
+no count of all groups. The function accepts pages up to 1,000, but the procedure input stops at
+page 100.
+
+#### Detail
+
+`taskGroupDetail` is one statement over `get_task_group_v1`, `list_task_group_members_v1`, and
+`list_newest_task_group_events_v1`. It returns these fields:
+
+| Field             | Value                                                                             |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `group`           | The task group document                                                           |
+| `members`         | At most `pageSize` member tasks after the position `after`, in position order     |
+| `nextAfter`       | The position of the last member on the page when a later member exists, else null |
+| `events`          | The newest events first, at most `dashboardTaskGroupEventLimit`, 100              |
+| `eventsTruncated` | True when the group has older events that `events` does not carry                 |
+| `canCancel`       | True when this dashboard can cancel the group, as [Cancel](#cancel) describes     |
+
+The statement reads one member more than `pageSize` and 101 events, so `nextAfter` and
+`eventsTruncated` cost no count. Each member has `position`, `taskId`, `queue`, `taskType`,
+`state`, `outcome`, `addedAt`, and `countedAt`:
+
+- `queue` and `taskType` are null when a purge or retention deleted the task row. `state` is then
+  null too.
+- `outcome` is the outcome that the group counted. It is null while the member is pending.
+
+Each event has `id`, `type`, `details`, and `occurredAt`. If the group does not exist, the procedure
+returns `NOT_FOUND`.
+
+#### Cancel
+
+`cancelTaskGroup` is a mutation. It seals the group and cancels each member task that is not
+terminal, through `cancel_task_group_v1`
+([Task groups: Cancel](task-groups.md#cancel)). The canceled members count as not succeeded. The
+group then finishes as usual, and its result selects the callbacks. If every member task already
+succeeded, or the group has no member tasks, the result is `succeeded`. A finished group does not
+change, and the procedure returns its snapshot.
+
+The backends differ in how they cancel and in when they allow it:
+
+| Backend                    | Cancel path                                                                                                                 | `canCancel` is true when                                                                     | `FORBIDDEN` when                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------- |
+| TypeScript                 | `DashboardTaskController.cancelTaskGroup`. `createDashboardOperatorControllers` implements it with `Admin.cancelTaskGroup`. | The operator mode is `writable` and the host gives `DashboardTaskController.cancelTaskGroup` | The host gives no cancel controller |
+| Go, Python, Rust, and Ruby | The shared cancel statement, which calls `cancel_task_group_v1`                                                             | The host is not read-only                                                                    | The host is read-only               |
+
+Every backend also returns `FORBIDDEN` for a mutation when its operator mode is read-only. The
+authenticated actor replaces the browser `audit.actor`, as
+[Mutations and attribution](#mutations-and-attribution) describes. `cancel_task_group_v1` requires
+an actor of 1 through 200 characters. If the group does not exist, the
+procedure returns `NOT_FOUND`.
+
+#### Page
+
+The sidebar entry Task groups opens the route `/groups`. The address bar holds the view, so a reload
+or a copied link shows the same page:
+
+- The list uses the query parameters `state`, `page`, and `pageSize`.
+- The detail uses `group`, the group ID, `after`, the member position, and `pageSize`.
+- A default value stays out of the URL. A value out of range falls back to its default.
+
+The list has a state filter (All, Open, Sealed, and Finished) and a table with the columns Group,
+State, Progress, Failed, Canceled, Created, and Finished. The progress bar draws the succeeded,
+failed, and canceled member tasks of the counts. Previous page and Next page move between pages.
+On page 100 with more groups, the page says that it is the last page that the list reads.
+
+The detail shows these parts:
+
+1. The state, the progress bar, the five counts, and the four times. A canceled group also shows
+   who canceled it and why. An open group shows that it cannot finish until the application seals
+   it.
+2. Callbacks: a link to each callback task, or the reason that the callback has no task yet.
+3. Member tasks: the columns #, Task, Type, Queue, State, Counted outcome, and Added, with pages
+   of `pageSize` members.
+4. Events: the newest group events first. If `eventsTruncated` is true, the page says that it does
+   not show the older events.
+
+If the group is not finished and `canCancel` is true, the detail has a Cancel group button. The
+button opens a confirmation that requires a reason. If `canCancel` is false, the detail says that
+this dashboard cannot cancel task groups.
+
 ### Timestamp rendering
 
 `dashboard_iso_v1(p_value timestamptz)` renders procedure timestamps in UTC with millisecond

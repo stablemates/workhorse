@@ -54,7 +54,7 @@ columns, and limits of that area. For an explanation of a concept, read the
 
 - The [`dashboard/v1` wire contract](architecture/dashboard.md#dashboard-wire-contract)
 - The [dashboard package boundary](architecture/dashboard.md#dashboard-package-boundary), including
-  authentication
+  the [Task groups page](architecture/dashboard.md#task-groups-page) and authentication
 
 ### [Telemetry](architecture/telemetry.md)
 
