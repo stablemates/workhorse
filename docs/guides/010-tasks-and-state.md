@@ -19,6 +19,13 @@ task one time, and the task succeeds.
    `task_outcome` row with the state `succeeded` and the result.
 4. The `task` row and the `task_outcome` row stay. Workhorse does not update them again.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/tasks-and-state-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/tasks-and-state-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/tasks-and-state-dark.png">
+  <img src="../../site/public/diagrams/tasks-and-state-light.png" width="960" alt="One task after enqueue, after the claim, and after success">
+</picture>
+
 Each table has one purpose:
 
 - **`task`** holds the stable ID and the accepted definition: queue, type, payload, attempt budget,
