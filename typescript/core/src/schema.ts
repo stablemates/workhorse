@@ -496,6 +496,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     kind: "additive",
     execution: "nontransactional",
   },
+  {
+    fromVersion: 69,
+    toVersion: 70,
+    file: "0071-lock-purged-runtime-rows-in-identity-order.sql",
+    description: "lock purged runtime rows in identity order",
+    kind: "additive",
+  },
 ];
 
 /**

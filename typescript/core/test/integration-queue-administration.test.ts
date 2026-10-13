@@ -3,7 +3,40 @@ import { describe, expect, it } from "vitest";
 import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin, adminAudit, waitForDatabaseCondition } = createIntegrationTestContext(
+  import.meta.url,
+);
+
+const blockedBy = async (pid: number) => {
+  const blocked = await pool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+    [pid],
+  );
+  return blocked.rows[0]!.count > 0;
+};
+
+// Task IDs are random. Enqueue two tasks under new queue names until the identities come in the
+// given order. A purge that locks in scan order then takes the higher task first in one of the two
+// orders, whichever plan PostgreSQL uses.
+const enqueueOrders = ["higher first", "lower first"] as const;
+
+async function enqueueInOrder(
+  prefix: string,
+  order: (typeof enqueueOrders)[number],
+  tier?: "fast",
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    const queueName = `${prefix}-${order.replace(" ", "-")}-${attempt}`;
+    if (tier) await admin.setQueueTier(queueName, tier, adminAudit("lock order"));
+    const first = await queue.enqueue("purge-lock-order", {}, { queue: queueName });
+    const second = await queue.enqueue("purge-lock-order", {}, { queue: queueName });
+    if (first > second === (order === "higher first")) {
+      return first > second
+        ? { queueName, lower: second, higher: first }
+        : { queueName, lower: first, higher: second };
+    }
+  }
+}
 
 describe("queue administration", () => {
   it("replays a purge request without deleting tasks that arrived afterward", async () => {
@@ -173,6 +206,102 @@ describe("queue administration", () => {
     } finally {
       await inserter.query("ROLLBACK").catch(() => undefined);
       inserter.release();
+    }
+  });
+
+  it.each(enqueueOrders)(
+    "locks purged tasks in identity order, as an enqueue locks two prerequisites (%s)",
+    async (order) => {
+      const { queueName, lower, higher } = await enqueueInOrder("purge-lock-order", order);
+      const holder = await pool.connect();
+      const observer = await pool.connect();
+      try {
+        // The first lock of an enqueue that names both tasks as prerequisites.
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE",
+          [lower],
+        );
+        const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!
+          .pid;
+        // Catch a failure now, because it can arrive before the reply to ROLLBACK.
+        const purge = admin
+          .purgeQueue(queueName, adminAudit("purge in lock order"))
+          .catch((error: unknown) => error);
+        await waitForDatabaseCondition(() => blockedBy(pid));
+        // The purge waits for the lower runtime row and holds no other row of the two tasks.
+        await observer.query("BEGIN");
+        for (const statement of [
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR KEY SHARE NOWAIT",
+          "SELECT 1 FROM workhorse.task WHERE id = $1 FOR KEY SHARE NOWAIT",
+        ]) {
+          for (const id of [lower, higher]) {
+            await expect(observer.query(statement, [id])).resolves.toMatchObject({ rowCount: 1 });
+          }
+        }
+        await observer.query("ROLLBACK");
+        // So the enqueue takes all of its locks while the purge waits. It rolls back, because a
+        // purge refuses to delete the prerequisite of a live dependent (SM-1284).
+        await observer.query("BEGIN");
+        await expect(
+          queue.forDatabase(observer).enqueue(
+            "purge-lock-order-dependent",
+            {},
+            {
+              queue: queueName,
+              dependencies: {
+                prerequisiteTaskIds: [higher, lower],
+                onSuccess: "release",
+                onFailure: "fail",
+                onCancellation: "cancel",
+              },
+            },
+          ),
+        ).resolves.toEqual(expect.any(String));
+        await observer.query("ROLLBACK");
+        await holder.query("ROLLBACK");
+        expect(await purge).toBe(2);
+        await expect(admin.getTask(lower)).resolves.toBeNull();
+        await expect(admin.getTask(higher)).resolves.toBeNull();
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        await observer.query("ROLLBACK").catch(() => undefined);
+        holder.release();
+        observer.release();
+      }
+    },
+  );
+
+  it.each(enqueueOrders)("locks purged fast-tier tasks in identity order (%s)", async (order) => {
+    const { queueName, lower, higher } = await enqueueInOrder(
+      "purge-fast-lock-order",
+      order,
+      "fast",
+    );
+    const holder = await pool.connect();
+    const observer = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR KEY SHARE", [lower]);
+      const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!
+        .pid;
+      const purge = admin
+        .purgeQueue(queueName, adminAudit("purge fast tasks in lock order"))
+        .catch((error: unknown) => error);
+      await waitForDatabaseCondition(() => blockedBy(pid));
+      // The purge locked both runtime rows, then waits for the lower task row before the higher one.
+      await observer.query("BEGIN");
+      await expect(
+        observer.query("SELECT 1 FROM workhorse.task WHERE id = $1 FOR KEY SHARE NOWAIT", [higher]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await observer.query("ROLLBACK");
+      await holder.query("ROLLBACK");
+      expect(await purge).toBe(2);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await observer.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+      observer.release();
     }
   });
 });

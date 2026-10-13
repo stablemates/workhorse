@@ -568,8 +568,9 @@ Why this ordering is safe:
   then see its outcome.
 - Key-share locks do not conflict with the non-key updates that claims and heartbeats make. An open
   dependent enqueue therefore does not delay dispatch of its prerequisite.
-- The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`. Neither side
-  holds one row while it waits for the other.
+- The runtime-then-task order matches `complete_v1` and `purge_queue_internal_v1`. A purge also
+  locks each table in identity order, as [Queue purge](#queue-purge) states. Neither side holds one
+  row while it waits for the other.
 
 A request that declares no prerequisite runs none of that. `enqueue_batch_v1` guards these steps on
 a prerequisite count above zero:
@@ -2682,6 +2683,21 @@ that watermark.
 
 The internal `purge_queue_internal_v1` explicitly deletes associated history before deleting queued
 identities. The public four-argument `purge_queue_v1` adds the `Admin` contract.
+
+Before its first delete, `purge_queue_internal_v1` locks its rows in this order:
+
+1. The `task_runtime` rows of the `blocked`, `ready`, and `scheduled` tasks of the queue, in
+   identity order, `FOR UPDATE`.
+2. The `task` rows of the same tasks, in identity order, `FOR UPDATE`.
+3. After the full-tier deletes, the `ready` rows of the queue in `fast_task_runtime`, in identity
+   order, then their `task` rows, in identity order.
+
+`lock_enqueue_prerequisites_internal_v1` locks the prerequisites of an enqueue in the same order:
+every `task_runtime` row, then every `task` row, each in identity order. Thus a purge and an enqueue
+that names two tasks of the purged queue as prerequisites do not deadlock. The second of the two
+waits for the first. Before schema version 70, the purge locked the rows in scan order, and
+PostgreSQL could abort one of the two with `40P01`. The member count of a purge then locks shard
+rows and group rows, as [Task groups: Purge](task-groups.md#purge) describes.
 
 `queue_purge_request` stores:
 

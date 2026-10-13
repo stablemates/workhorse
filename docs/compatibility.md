@@ -1085,8 +1085,8 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 schema floor rises. The upgrade is a rolling deployment, and a mixed fleet is supported while it
 runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0066 through 0070 and leaves the schema at
-   version 69.
+1. Run `workhorse schema migrate`. It applies migrations 0066 through 0071 and leaves the schema at
+   version 70.
 2. Roll out the 0.8.0 processes.
 
 A 0.7.0 or 0.7.1 database is at schema version 64. The migrations only add:
@@ -1098,6 +1098,7 @@ A 0.7.0 or 0.7.1 database is at schema version 64. The migrations only add:
 | `0068-read-the-newest-task-group-events.sql`                      | 67             | `list_newest_task_group_events_v1`, for the task group detail of the dashboard                              |
 | `0069-check-the-input-of-a-checkpoint-on-replay.sql`              | 68             | `task_checkpoint.input_fingerprint` and `save_checkpoint_v2`                                                |
 | `0070-fence-a-task-group-member-add-and-index-the-group-list.sql` | 69             | A lease check for a member add in `add_task_group_members_v1`, and the index `task_group_state_created_idx` |
+| `0071-lock-purged-runtime-rows-in-identity-order.sql`             | 70             | A lock order for `purge_queue_internal_v1`: every runtime row, then every task row, each in identity order  |
 
 Migration 0070 is the first non-transactional step. It builds `task_group_state_created_idx` with
 `CREATE INDEX CONCURRENTLY`, so the build does not block writes to `task_group`. If the step fails
@@ -1122,7 +1123,11 @@ worker whose lease expired can still add tasks to the group of its member task. 
 refuses a schema below version 69 at startup. Thus the
 migration must run before the first 0.8.0 process starts.
 
-A 0.7 process keeps working on schema version 69, because a migration inside a major line only
+Schema version 70 does not raise the floor, so it stays 69. Migration 0071 changes only the lock
+order of a queue purge, and no SDK statement changes. Every process uses the new lock order when
+the migration commits.
+
+A 0.7 process keeps working on schema version 70, because a migration inside a major line only
 adds. Thus old and new processes can run together during the rollout:
 
 - A 0.7 worker can run a member task. PostgreSQL counts the outcome of a member task in a trigger
