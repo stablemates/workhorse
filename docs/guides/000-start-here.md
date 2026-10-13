@@ -39,6 +39,7 @@ How a task operates while a worker runs it.
 | [110 Retries](110-retries.md)                               | Attempt budgets, backoff policies, and who sets the delay |
 | [120 Cancellation](120-cancellation.md)                     | How to request that a task stops                          |
 | [130 Durable waits](130-durable-waits.md)                   | How to wait for an hour and keep the worker slot free     |
+| [132 Handler changes](132-handler-changes.md)               | How to deploy new handler code while tasks wait           |
 | [135 Signals](135-signals.md)                               | How to wait for an event from your application            |
 | [140 Deadlines and timeouts](140-deadlines-and-timeouts.md) | Two different time limits, and which one to use           |
 | [145 Human decisions](145-human-decisions.md)               | How to free the worker while a person makes a decision    |
@@ -66,6 +67,7 @@ How a task operates while a worker runs it.
 
 |                                                         |                                                       |
 | ------------------------------------------------------- | ----------------------------------------------------- |
+| [305 Fast tier](305-fast-tier.md)                       | When a queue can record less for each task            |
 | [310 Workers](310-workers.md)                           | The processes that run your tasks, and how they stop  |
 | [315 Batch handlers](315-batch-handlers.md)             | How to process many compatible tasks in one call      |
 | [320 Statistics](320-statistics.md)                     | How to count tasks without a high database load       |
@@ -83,6 +85,7 @@ How a task operates while a worker runs it.
 | [370 Dashboard authentication](370-dashboard-authentication.md) | How to protect a dashboard that others can reach       |
 | [380 Admin CLI and TUI](380-admin-cli-and-tui.md)               | How to operate a queue from the terminal               |
 | [385 AI agent integration](385-agent-integration.md)            | How an AI agent gets from the docs to a confirmed task |
+| [390 Connection pooling](390-connection-pooling.md)             | How to run Workhorse behind a connection pooler        |
 | [395 Serverless web tiers](395-serverless-web-tiers.md)         | How to enqueue from serverless and edge runtimes       |
 
 ## Add a guide
