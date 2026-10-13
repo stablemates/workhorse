@@ -1,54 +1,308 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { publishedPackages } from "./packages.js";
+import { publishedPackages, repositoryRoot } from "./packages.js";
 
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
+/**
+ * The release check that every release tag runs before anything publishes.
+ *
+ * One release puts one version on npm, PyPI, the Go module proxy, crates.io, and RubyGems from one
+ * commit. The crate and gem jobs of `.github/workflows/release.yml` skip publication when their
+ * version disagrees with the tag, and the job still succeeds. So this check, not the publish jobs,
+ * has to refuse a candidate that leaves one line behind. It reads every file that carries the
+ * release version and reports every disagreement at once, whichever tag runs it.
+ */
+
 const releaseVersionPattern = "[0-9]+\\.[0-9]+\\.[0-9]+(?:[ab][0-9]+|rc[0-9]+|-[-0-9A-Za-z.]+)?";
-
-async function read(relativePath: string): Promise<string> {
-  return readFile(path.join(repositoryRoot, relativePath), "utf8");
-}
 
 type ReleaseTarget = "go" | "npm" | "python";
 
-function releaseVersion(target: ReleaseTarget, tag: string): string {
+/** One release, spelled the way each ecosystem requires. */
+interface TrainVersion {
+  /** SemVer: npm, Go, crates.io, and the Ruby `VERSION` constant. */
+  readonly semver: string;
+  /** PEP 440: the Python distribution. */
+  readonly pep440: string;
+  /** The normalized form Bundler writes into a lockfile, for example `0.9.0.pre.rc.1`. */
+  readonly gem: string;
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+}
+
+const pep440Kinds: Readonly<Record<string, string>> = {
+  alpha: "a",
+  a: "a",
+  beta: "b",
+  b: "b",
+  rc: "rc",
+};
+const semverKinds: Readonly<Record<string, string>> = { a: "alpha", b: "beta", rc: "rc" };
+
+function tagVersion(target: ReleaseTarget, tag: string): string {
   const prefix = target === "npm" ? "" : `${target}/`;
   const match = new RegExp(`^${prefix}v(${releaseVersionPattern})$`).exec(tag);
   if (!match) throw new Error(`Expected a ${prefix}vX.Y.Z release tag, received ${tag}`);
   return match[1]!;
 }
 
+/**
+ * Both spellings of the tag's version. A prerelease maps between SemVer `-alpha.N`, `-beta.N`, and
+ * `-rc.N` and PEP 440 `aN`, `bN`, and `rcN`. A Python tag must use the PEP 440 spelling and the
+ * other tags the SemVer one, because each publication step compares its tag literally.
+ */
+function trainVersion(target: ReleaseTarget, version: string): TrainVersion {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+)|-(.+))?$/.exec(version);
+  if (!match) throw new Error(`${version} is not a release version`);
+  const [, major, minor, patch, pepKind, pepNumber, semverSuffix] = match;
+  const base = `${major}.${minor}.${patch}`;
+  let semver = base;
+  let pep440: string | undefined = base;
+  if (pepKind) {
+    semver = `${base}-${semverKinds[pepKind]}.${pepNumber}`;
+    pep440 = version;
+  } else if (semverSuffix) {
+    semver = version;
+    const prerelease = /^(alpha|a|beta|b|rc)\.?(\d+)$/.exec(semverSuffix);
+    pep440 = prerelease ? `${base}${pep440Kinds[prerelease[1]!]}${prerelease[2]}` : undefined;
+  }
+  if (!pep440) throw new Error(`${version} has no PEP 440 spelling for the Python distribution`);
+  const expected = target === "python" ? pep440 : semver;
+  if (version !== expected) {
+    const line = target === "python" ? "Python" : target === "go" ? "Go" : "npm";
+    throw new Error(`Expected the ${line} tag to spell ${version} as ${expected}`);
+  }
+  return {
+    semver,
+    pep440,
+    gem: semver.replace("-", ".pre."),
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+  };
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function requireChangelogVersion(relativePath: string, version: string): Promise<void> {
-  const changelog = await read(relativePath);
-  if (!new RegExp(`^## ${escapeRegExp(version)}(?:\\s|$)`, "m").test(changelog)) {
-    throw new Error(`${relativePath} has no ${version} release entry`);
+class ReleaseFiles {
+  readonly problems: string[] = [];
+
+  constructor(readonly root: string) {}
+
+  /** The file's contents, or `undefined` after recording that it is missing. */
+  async read(relativePath: string): Promise<string | undefined> {
+    try {
+      return await readFile(path.join(this.root, relativePath), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      this.problems.push(`${relativePath} is missing`);
+      return undefined;
+    }
+  }
+
+  async exists(relativePath: string): Promise<boolean> {
+    try {
+      await stat(path.join(this.root, relativePath));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  /** Records a disagreement unless `pattern`'s first group in the file is `expected`. */
+  async requireVersion(
+    relativePath: string,
+    pattern: RegExp,
+    expected: string,
+    subject = "a version",
+  ): Promise<void> {
+    const contents = await this.read(relativePath);
+    if (contents === undefined) return;
+    const declared = pattern.exec(contents)?.[1];
+    if (declared === undefined) this.problems.push(`${relativePath} declares no ${subject}`);
+    else if (declared !== expected) {
+      this.problems.push(`${relativePath} is ${declared} but the tag is ${expected}`);
+    }
+  }
+
+  async requireChangelogEntry(relativePath: string, version: string): Promise<void> {
+    const changelog = await this.read(relativePath);
+    if (changelog === undefined) return;
+    if (!new RegExp(`^## ${escapeRegExp(version)}(?:\\s|$)`, "m").test(changelog)) {
+      this.problems.push(`${relativePath} has no ${version} release entry`);
+    }
   }
 }
 
-export async function checkRelease(target: ReleaseTarget, tag: string): Promise<void> {
-  const version = releaseVersion(target, tag);
-  if (target === "npm") {
-    for (const entry of await publishedPackages()) {
-      if (entry.version !== version) {
-        throw new Error(`${entry.manifest} is ${entry.version} but the tag is ${version}`);
-      }
-    }
-  } else if (target === "python") {
-    const manifest = await read("python/pyproject.toml");
-    const declaredVersion = /^version = "([^"]+)"$/m.exec(manifest)?.[1];
-    if (!declaredVersion) throw new Error("python/pyproject.toml declares no project version");
-    if (declaredVersion !== version) {
-      throw new Error(`python/pyproject.toml is ${declaredVersion} but the tag is ${version}`);
+/** The npm manifests, the core version constant, the peer ranges, and `support.json`. */
+async function checkNpmLine(files: ReleaseFiles, version: TrainVersion): Promise<void> {
+  const packages = await publishedPackages(files.root);
+  const names = new Set(packages.map((entry) => entry.name));
+  for (const entry of packages) {
+    if (entry.version !== version.semver) {
+      files.problems.push(`${entry.manifest} is ${entry.version} but the tag is ${version.semver}`);
     }
   }
-  await requireChangelogVersion(
-    target === "npm" ? "CHANGELOG.md" : `${target}/CHANGELOG.md`,
-    version,
+  await files.requireVersion(
+    "typescript/core/src/version.ts",
+    /WORKHORSE_VERSION = "([^"]+)"/,
+    version.semver,
   );
+
+  // A 0.x minor may break, so a peer covers one minor line. From 1.0.0 it covers the major line.
+  const range =
+    version.major === 0
+      ? `>=0.${version.minor}.0 <0.${version.minor + 1}.0`
+      : `>=${version.major}.0.0 <${version.major + 1}.0.0`;
+  for (const manifest of [
+    ...packages.map((entry) => entry.manifest),
+    "dashboard/app/package.json",
+  ]) {
+    const contents = await files.read(manifest);
+    if (contents === undefined) continue;
+    const peers = (JSON.parse(contents) as { peerDependencies?: Record<string, string> })
+      .peerDependencies;
+    for (const [name, declared] of Object.entries(peers ?? {})) {
+      if (names.has(name) && declared !== range) {
+        files.problems.push(
+          `${manifest} requires ${name} ${declared} but the release needs ${range}`,
+        );
+      }
+    }
+  }
+
+  const support = await files.read("support.json");
+  if (support !== undefined) {
+    const install = (JSON.parse(support) as { install?: Record<string, string> }).install ?? {};
+    for (const [key, command] of Object.entries(install)) {
+      for (const match of command.matchAll(
+        /(?:\/download\/v|@stablemates\/workhorse@)([^/\s]+)/g,
+      )) {
+        if (match[1] !== version.semver) {
+          files.problems.push(
+            `support.json install.${key} is ${match[1]} but the tag is ${version.semver}`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/** Every Ruby lockfile that resolves the gem from its path. */
+async function rubyLockfiles(root: string): Promise<string[]> {
+  let entries: string[] = [];
+  try {
+    entries = await readdir(path.join(root, "ruby/gemfiles"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return [
+    "ruby/Gemfile.lock",
+    ...entries
+      .filter((entry) => entry.endsWith(".lock"))
+      .toSorted()
+      .map((entry) => `ruby/gemfiles/${entry}`),
+  ];
+}
+
+async function checkOtherLines(files: ReleaseFiles, version: TrainVersion): Promise<void> {
+  await files.requireVersion(
+    "python/pyproject.toml",
+    /^version = "([^"]+)"$/m,
+    version.pep440,
+    "project version",
+  );
+  await files.requireVersion(
+    "python/src/workhorse/_version.py",
+    /^WORKHORSE_VERSION = "([^"]+)"$/m,
+    version.pep440,
+  );
+  await files.requireVersion(
+    "python/uv.lock",
+    /^name = "stablemates-workhorse"\nversion = "([^"]+)"$/m,
+    version.pep440,
+    "stablemates-workhorse version",
+  );
+  await files.requireVersion("go/version.go", /^const Version = "([^"]+)"$/m, version.semver);
+  for (const manifest of ["rust/Cargo.toml", "Cargo.lock"]) {
+    await files.requireVersion(
+      manifest,
+      /^name = "workhorse"\nversion = "([^"]+)"$/m,
+      version.semver,
+      "workhorse version",
+    );
+  }
+  await files.requireVersion(
+    "ruby/lib/stablemates/workhorse/version.rb",
+    /^\s*VERSION = "([^"]+)"$/m,
+    version.semver,
+  );
+  for (const lockfile of await rubyLockfiles(files.root)) {
+    const contents = await files.read(lockfile);
+    if (contents === undefined) continue;
+    const resolved = [...contents.matchAll(/^\s+stablemates-workhorse \(([^)]+)\)$/gm)].map(
+      (match) => match[1],
+    );
+    if (resolved.length === 0)
+      files.problems.push(`${lockfile} declares no stablemates-workhorse version`);
+    for (const declared of new Set(resolved)) {
+      if (declared !== version.gem) {
+        files.problems.push(`${lockfile} is ${declared} but the tag is ${version.gem}`);
+      }
+    }
+  }
+}
+
+/** The changelog of every released line, including each npm package that keeps its own. */
+async function checkChangelogs(files: ReleaseFiles, version: TrainVersion): Promise<void> {
+  await files.requireChangelogEntry("CHANGELOG.md", version.semver);
+  await files.requireChangelogEntry("python/CHANGELOG.md", version.pep440);
+  for (const line of ["go", "rust", "ruby"]) {
+    await files.requireChangelogEntry(`${line}/CHANGELOG.md`, version.semver);
+  }
+  for (const entry of await publishedPackages(files.root)) {
+    const changelog = `${entry.location}/CHANGELOG.md`;
+    if (await files.exists(changelog)) await files.requireChangelogEntry(changelog, version.semver);
+  }
+}
+
+/**
+ * A minor or major release freezes the clean-install artifact of the schema version it ships
+ * (`docs/schema-lifecycle.md`). A patch release ships no new schema version to freeze.
+ */
+async function checkFrozenSchema(files: ReleaseFiles, version: TrainVersion): Promise<void> {
+  if (version.patch !== 0) return;
+  const catalogue = await files.read("typescript/core/src/queue/sql-catalogue.generated.ts");
+  if (catalogue === undefined) return;
+  const schemaVersion = /WORKHORSE_SCHEMA_VERSION = (\d+);/.exec(catalogue)?.[1];
+  if (!schemaVersion) {
+    files.problems.push(
+      "typescript/core/src/queue/sql-catalogue.generated.ts declares no schema version",
+    );
+    return;
+  }
+  const artifact = `sql/releases/${schemaVersion.padStart(4, "0")}.sql`;
+  if (!(await files.exists(artifact))) {
+    files.problems.push(
+      `${artifact} is missing, but release ${version.semver} must freeze schema version ${schemaVersion}`,
+    );
+  }
+}
+
+export async function checkRelease(
+  target: ReleaseTarget,
+  tag: string,
+  root = repositoryRoot,
+): Promise<void> {
+  const version = trainVersion(target, tagVersion(target, tag));
+  const files = new ReleaseFiles(root);
+  await checkNpmLine(files, version);
+  await checkOtherLines(files, version);
+  await checkChangelogs(files, version);
+  await checkFrozenSchema(files, version);
+  if (files.problems.length > 0) throw new Error(files.problems.join("\n"));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {

@@ -736,6 +736,30 @@ of the exact public version in a clean environment. It then runs a minimal enque
 test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
 the remaining stages stay blocked, and the fix ships as a new candidate.
 
+The release check stops a candidate that leaves one line behind. In `release.yml`, the crate and the
+gem skip publication when their version does not match the tag, and the run still succeeds. So the
+check must refuse the candidate before the first registry receives it. `pnpm release:check <npm|python|go>
+<tag>` runs the same checks for each tag. `pnpm npm:release-check`, `pnpm python:release-check`, and
+`pnpm go:release-check` call it first. It fails, and lists each problem, if one of these is true:
+
+1. A file does not carry the release version. The files are every published `package.json`,
+   `typescript/core/src/version.ts`, `python/pyproject.toml`, `python/src/workhorse/_version.py`,
+   `python/uv.lock`, `go/version.go`, `rust/Cargo.toml`, `Cargo.lock`,
+   `ruby/lib/stablemates/workhorse/version.rb`, and each Ruby lockfile.
+2. A peer range on a published package does not cover the release. For a `0.x` release, the range
+   is the release's minor line. From the first major release, the range is its major line. The
+   check reads every published `package.json` and `dashboard/app/package.json`.
+3. An `install` command in `support.json` names another version.
+4. A changelog has no `## X.Y.Z` entry for the release. The changelogs are `CHANGELOG.md`,
+   `python/CHANGELOG.md`, `go/CHANGELOG.md`, `rust/CHANGELOG.md`, `ruby/CHANGELOG.md`, and the
+   changelog of each published npm package that has one.
+5. The release is a minor or major release, and `sql/releases/<NNNN>.sql` does not exist for
+   `WORKHORSE_SCHEMA_VERSION`. The first major release adds no migration, so the last `0.x` minor
+   already froze its artifact.
+
+The Python files and `python/CHANGELOG.md` use the PEP 440 spelling of a prerelease, and the other
+files use the SemVer spelling. The check changes no publication step of a workflow.
+
 `pnpm release:verify <python|npm|crate|go> X.Y.Z` holds the version checks as exact commands and
 the output each must print. After each stage publishes, the handoff runs that stage's target
 instead of restating commands. Each target installs the public version into a fresh scratch
@@ -788,8 +812,8 @@ The Ruby gem keeps its own [`ruby/CHANGELOG.md`](../ruby/CHANGELOG.md), which th
 
 1. Update all TypeScript package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
-2. Tag `vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit and refuses
-   a tag that disagrees with any manifest or lacks a `CHANGELOG.md` entry.
+2. Tag `vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit. It refuses
+   a tag that fails the [release check](#release-train) for any line.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL. It then runs `pnpm release:verify npm` against those tarballs, so
@@ -817,9 +841,10 @@ pipeline.
 
 1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
 2. Tag `python/vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit.
-3. `pnpm python:release-check` validates the version and changelog, rebuilds the embedded dashboard
-   bundle, checks Python format, lint, types, and dependencies, then runs every Python test against
-   PostgreSQL. It builds the wheel and source distribution once and tests those exact files.
+3. `pnpm python:release-check` runs the [release check](#release-train). It rebuilds the embedded
+   dashboard bundle, checks Python format, lint, types, and dependencies, then runs every Python
+   test against PostgreSQL. It builds the wheel and source distribution once and tests those exact
+   files.
    It then runs `pnpm release:verify python` against that wheel, so a post-publish check the
    package cannot satisfy fails the rehearsal before `python/vX.Y.Z` is tagged.
 4. The `attestation-rehearsal` job runs on every run, dry runs included, without the `pypi`
@@ -840,9 +865,10 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
 
 1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
 2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
-3. The script runs `pnpm go:release-check X.Y.Z`, which validates the changelog entry and stages a
-   file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs `pnpm release:verify go`
-   against that proxy, so a post-publish check the module cannot satisfy fails before the tag.
+3. The script runs `pnpm go:release-check X.Y.Z`, which runs the [release check](#release-train).
+   Next, it stages a file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs
+   `pnpm release:verify go` against that proxy, so a post-publish check the module cannot satisfy
+   fails before the tag.
 4. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
 ### Rust crate
@@ -860,6 +886,7 @@ release, crates.io held only the `0.0.0` placeholder that reserved the name.
    cannot satisfy fails before anything is published.
 3. After npm publishes, the `crates-io` job compares the crate version with the tag. A mismatch
    writes a notice and publishes nothing, so a release that leaves the crate behind still succeeds.
+   The [release check](#release-train) in the build job refuses that tag before npm publishes.
 4. On a match, the job exchanges its OIDC identity for a crates.io token and runs
    `cargo publish --package workhorse --locked`, which verifies the package again before the upload.
 
@@ -893,6 +920,7 @@ crate, it has no tag of its own and publishes from the npm `v*` tag. It joined t
    available, that consumer enqueues one task and runs it through a worker.
 3. After npm publishes, the `rubygems` job compares the gem version with the tag. A mismatch writes a
    notice and publishes nothing, so a release that leaves the gem behind still succeeds.
+   The [release check](#release-train) in the build job refuses that tag before npm publishes.
 4. On a match, `rubygems/release-gem` exchanges the job's OIDC identity for a RubyGems API key and
    runs `rake release` in `ruby/`. That task builds the gem and pushes it with a Sigstore
    attestation. It finds the train tag already in place, so it pushes no tag. The action then waits

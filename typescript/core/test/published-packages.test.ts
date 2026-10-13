@@ -336,7 +336,8 @@ describe("consumers of the package list", () => {
     expect(releaseCheck).toContain("for (const entry of packages)");
     expect(releaseCheck).toContain("entry.location");
     expect(releaseCheck).toContain('"pack",');
-    expect(versionCheck).toContain("for (const entry of await publishedPackages())");
+    expect(versionCheck).toContain("const packages = await publishedPackages(files.root)");
+    expect(versionCheck).toContain("for (const entry of packages)");
     expect(versionCheck).toContain("entry.manifest");
     expect(publish).toContain("const packages = await publishedPackages()");
     expect(publish).toContain("entry.tarball");

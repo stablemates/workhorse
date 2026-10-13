@@ -40,13 +40,16 @@ interface Manifest {
   readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>;
 }
 
-async function readManifest(relativePath: string): Promise<Manifest> {
-  return JSON.parse(await readFile(path.join(repositoryRoot, relativePath), "utf8")) as Manifest;
+async function readManifest(relativePath: string, root: string): Promise<Manifest> {
+  return JSON.parse(await readFile(path.join(root, relativePath), "utf8")) as Manifest;
 }
 
-async function readWorkspaceManifest(relativePath: string): Promise<Manifest | undefined> {
+async function readWorkspaceManifest(
+  relativePath: string,
+  root: string,
+): Promise<Manifest | undefined> {
   try {
-    return await readManifest(relativePath);
+    return await readManifest(relativePath, root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -58,8 +61,12 @@ function tarballName(name: string, version: string): string {
   return `${name.replace(/^@/, "").replace(/\//g, "-")}-${version}.tgz`;
 }
 
-async function describe(relativePath: string, directory: string): Promise<PublishedPackage> {
-  const manifest = await readManifest(relativePath);
+async function describe(
+  relativePath: string,
+  directory: string,
+  root: string,
+): Promise<PublishedPackage> {
+  const manifest = await readManifest(relativePath, root);
   const name = manifest.name;
   const version = manifest.version;
   if (!name || !version) throw new Error(`${relativePath} declares no name or version`);
@@ -74,13 +81,15 @@ async function describe(relativePath: string, directory: string): Promise<Publis
 }
 
 /** `@stablemates/workhorse`, which lives at `typescript/core`. */
-export async function corePackage(): Promise<PublishedPackage> {
-  return describe("typescript/core/package.json", "core");
+export async function corePackage(root = repositoryRoot): Promise<PublishedPackage> {
+  return describe("typescript/core/package.json", "core", root);
 }
 
 /** Publishable workspace packages other than core, in directory order. */
-export async function workspacePackages(): Promise<readonly PublishedPackage[]> {
-  const entries = await readdir(path.join(repositoryRoot, "typescript"), { withFileTypes: true });
+export async function workspacePackages(
+  root = repositoryRoot,
+): Promise<readonly PublishedPackage[]> {
+  const entries = await readdir(path.join(root, "typescript"), { withFileTypes: true });
   const directories = entries
     .filter((entry) => entry.isDirectory() && entry.name !== "core")
     .map((entry) => entry.name);
@@ -89,9 +98,9 @@ export async function workspacePackages(): Promise<readonly PublishedPackage[]> 
   const described = await Promise.all(
     directories.map(async (directory) => {
       const relativePath = `typescript/${directory}/package.json`;
-      const manifest = await readWorkspaceManifest(relativePath);
+      const manifest = await readWorkspaceManifest(relativePath, root);
       if (!manifest) return undefined;
-      return manifest.private === true ? undefined : await describe(relativePath, directory);
+      return manifest.private === true ? undefined : await describe(relativePath, directory, root);
     }),
   );
   return described.filter((entry): entry is PublishedPackage => entry !== undefined);
@@ -122,8 +131,10 @@ function requiredPublishedPackages(manifest: Manifest, names: ReadonlySet<string
  * are left out, which is what breaks the cycle between core and the dashboard facade. Packages with
  * no remaining requirement go in name order, so the order is stable.
  */
-export async function publishedPackages(): Promise<readonly PublishedPackage[]> {
-  const candidates = [await corePackage(), ...(await workspacePackages())];
+export async function publishedPackages(
+  root = repositoryRoot,
+): Promise<readonly PublishedPackage[]> {
+  const candidates = [await corePackage(root), ...(await workspacePackages(root))];
   const names = new Set(candidates.map((entry) => entry.name));
   const requirements = new Map(
     await Promise.all(
@@ -131,7 +142,7 @@ export async function publishedPackages(): Promise<readonly PublishedPackage[]> 
         async (entry) =>
           [
             entry.name,
-            new Set(requiredPublishedPackages(await readManifest(entry.manifest), names)),
+            new Set(requiredPublishedPackages(await readManifest(entry.manifest, root), names)),
           ] as const,
       ),
     ),
