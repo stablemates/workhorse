@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 596" width="400" height="596" role="img" aria-labelledby="durable-waits-narrow-dark-title durable-waits-narrow-dark-desc">
+<title id="durable-waits-narrow-dark-title">A durable wait frees the worker, and the handler runs again from its first line</title>
+<desc id="durable-waits-narrow-dark-desc">Worker A runs the welcome checkpoint, then the handler sleeps until 16:00 and frees the worker. No worker holds the task during the wait. At 16:00, worker B runs the handler from its first line. The welcome checkpoint returns its stored result, the ended wait returns at once, and the handler sends the follow-up. Both runs are attempt 1.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="596" fill="#04080e"/>
+<text x="24" y="36" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Run 1</text>
+<text x="24" y="51" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">worker A · 14:00 · attempt 1 · fence 1</text>
+<text x="24" y="74" fill="#95999d" font-size="9" font-family="Geist Mono">checkpoint("welcome")</text>
+<rect x="24" y="80" width="352" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="80" width="352" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="200" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs</text>
+<text x="200" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">sends the welcome · result stored</text>
+<text x="24" y="142" fill="#95999d" font-size="9" font-family="Geist Mono">sleepUntil("follow-up-window")</text>
+<rect x="24" y="148" width="352" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="148" width="352" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="200" y="168" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">pauses</text>
+<text x="200" y="182" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">until 16:00 · frees the slot</text>
+<text x="24" y="210" fill="#95999d" font-size="9" font-family="Geist Mono">checkpoint("follow-up")</text>
+<text x="200" y="238" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
+<rect x="24" y="272" width="352" height="52" rx="6" fill="#04080e"/>
+<rect x="24" y="272" width="352" height="52" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="200" y="294" fill="#f2f4f5" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">the wait · 14:00 to 16:00</text>
+<text x="200" y="309" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no worker holds the task · scheduled, no owner</text>
+<text x="24" y="352" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Run 2</text>
+<text x="24" y="367" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">worker B · 16:00 · attempt 1 · fence 2</text>
+<text x="24" y="390" fill="#95999d" font-size="9" font-family="Geist Mono">checkpoint("welcome")</text>
+<rect x="24" y="396" width="352" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="396" width="352" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="200" y="416" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">replays</text>
+<text x="200" y="430" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stored result · no second email</text>
+<text x="24" y="458" fill="#95999d" font-size="9" font-family="Geist Mono">sleepUntil("follow-up-window")</text>
+<rect x="24" y="464" width="352" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="464" width="352" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="200" y="484" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">returns</text>
+<text x="200" y="498" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the wait ended</text>
+<text x="24" y="526" fill="#95999d" font-size="9" font-family="Geist Mono">checkpoint("follow-up")</text>
+<rect x="24" y="532" width="352" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="532" width="352" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="200" y="552" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs</text>
+<text x="200" y="566" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">sends the follow-up · task succeeds</text>
+</svg>

@@ -145,11 +145,11 @@ export class Diagram {
     }
   }
 
-  /** Centered text rows from baseline `y`, 15 px apart. */
-  rows(x: number, y: number, rows: readonly Row[]): void {
+  /** Text rows from baseline `y`, 15 px apart, centered on `x` unless `anchor` is `start`. */
+  rows(x: number, y: number, rows: readonly Row[], anchor: "middle" | "start" = "middle"): void {
     rows.forEach(([text, size, color, family, weight], index) => {
       this.#parts.push(
-        `<text x="${x}" y="${y + index * 15}" fill="${this.#palette[color]}" font-size="${size}" font-family="${family}" font-weight="${weight}" text-anchor="middle">${text}</text>`,
+        `<text x="${x}" y="${y + index * 15}" fill="${this.#palette[color]}" font-size="${size}" font-family="${family}" font-weight="${weight}" text-anchor="${anchor}">${text}</text>`,
       );
     });
   }
@@ -161,10 +161,15 @@ export class Diagram {
     );
   }
 
-  /** Left-aligned mono text, for a legend. */
-  text(x: number, y: number, text: string): void {
+  /** Left-aligned mono text, for a legend or a line of code. */
+  text(
+    x: number,
+    y: number,
+    text: string,
+    { size = 9, color = "muted" }: { readonly size?: number; readonly color?: Color } = {},
+  ): void {
     this.#parts.push(
-      `<text x="${x}" y="${y}" fill="${this.#palette.muted}" font-size="9" font-family="${MONO}">${text}</text>`,
+      `<text x="${x}" y="${y}" fill="${this.#palette[color]}" font-size="${size}" font-family="${MONO}">${text}</text>`,
     );
   }
 

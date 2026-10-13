@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { diagrams } from "./diagrams.js";
 import { repositoryRoot } from "./packages.js";
-import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 
-describe("README overview diagram", () => {
-  for (const diagram of [readmeOverview, readmeOverviewNarrow]) {
+describe("documentation diagrams", () => {
+  for (const diagram of diagrams) {
     for (const theme of ["light", "dark"] as const) {
       it(`matches the committed ${diagram.slug}-${theme}.svg`, async () => {
         const file = path.join(repositoryRoot, `site/public/diagrams/${diagram.slug}-${theme}.svg`);
