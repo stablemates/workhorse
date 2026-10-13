@@ -364,13 +364,15 @@ more work that must finish before the callbacks run.
 
 1. The group is sealed. The `imports.row` task for row 512 runs.
 2. Its handler calls `ctx.taskGroup.add` with three `imports.attachment` tasks.
-3. Workhorse checks that the task is an active member of the group with the current fence token.
-   It adds the three tasks as member tasks.
+3. Workhorse checks that the task is an active member of the group and that its worker holds the
+   current lease. It adds the three tasks as member tasks.
 4. The row task is not terminal while it adds, so the group cannot finish before the add.
 5. The group finishes after the three attachment tasks and every other member task are finished.
 
 Thus, the callbacks see the work that member tasks add. Only a running member task can add after
-the seal. A task that is not a member gets an error. No task can join a canceled group.
+the seal. A task that is not a member gets an error. Workhorse also refuses the add if the lease of
+the worker expired, if a cancel was requested for the task, or if its deadline or attempt timeout
+passed. No task can join a canceled group.
 
 If a request that a handler adds names no queue, Workhorse puts the task in the queue of the member
 task that adds it. A worker just ran that member task, so a worker serves its queue. If the new task
@@ -389,7 +391,10 @@ needs a different queue, name that queue on the request.
 
 `add_task_group_members_v1` takes the member task, the worker, and the fence token. It refuses the
 add with `P1008` and the reason `not_running_member` when they do not name an `active` member of
-the group. The batch context of every SDK also has the read and the add for each task in the
+the group with the current lease. The add also refuses when `expires_at`, `deadline_at`, or
+`attempt_timeout_at` of the member task has passed, or when `cancel_requested_at` is set. It locks
+the runtime row of the member task first, so it cannot deadlock with the completion of that task.
+The batch context of every SDK also has the read and the add for each task in the
 batch, with the same lease check and the same queue rule.
 
 More detail: [Task groups: Add](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#add), [Task groups: Queue of a request with no queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#queue-of-a-request-with-no-queue), and [Task groups: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#batch-handlers).

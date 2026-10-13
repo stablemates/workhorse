@@ -19,21 +19,22 @@ upgrade steps.
 
 ## Unreleased
 
-Requires **schema v68**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+Requires **schema v69**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **68**.
+1. Run `workhorse schema migrate`. The final schema version is **69**.
 2. Roll out the updated processes.
 
-The SDK compatibility floor is schema version **68**, which migration 0069 reaches. The floor rises
+The SDK compatibility floor is schema version **69**, which migration 0070 reaches. The floor rises
 from 54. Every SDK statement catalogue now names the task group functions that migration 0066 adds,
 and `save_checkpoint_v2`, which migration 0069 adds. The dashboard of each SDK calls
 `dashboard_task_groups_v1`, which migration 0067 adds, and `list_newest_task_group_events_v1`, which
-migration 0068 adds. An updated process refuses a schema below version 68 at startup. A 0.7 process
-keeps working on version 68, because a migration inside a major line only adds.
+migration 0068 adds. Migration 0070 fences a member add, so an updated process does not add tasks to
+a group without that check. An updated process refuses a schema below version 69 at startup. A 0.7
+process keeps working on version 69, because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
 [ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
@@ -74,6 +75,18 @@ given input fingerprints are both present and differ. `save_checkpoint_v1` now c
 `save_checkpoint_v2` with no fingerprint, so its results do not change. The checkpoint reads of each
 statement catalogue return the new column. Existing rows keep a NULL fingerprint. The migration adds
 the column without a table scan.
+
+Migration 0070 (`0070-fence-a-task-group-member-add-and-index-the-group-list.sql`) fences a task
+group member add (SM-1273). `add_task_group_members_v1` now locks the runtime row of the member task
+first, before the shard rows and the group row, as a completion does. Then it refuses the add with
+`P1008` and the reason `not_running_member` if the lease of the member task expired, its deadline or
+attempt timeout passed, or a cancel was requested. Before, a worker whose lease expired could add
+tasks after Workhorse gave the member task to a new worker. The signature does not change. The
+migration also adds `task_group_state_created_idx`, so `dashboard_task_groups_v1` reads one page of
+a state without a read of the groups of other states. The migration is a non-transactional step: it
+builds the index with `CREATE INDEX CONCURRENTLY`, so writes to `task_group` continue. If it fails
+part-way, drop the invalid index before the rerun, as `docs/schema-lifecycle.md` describes. It
+changes no stored data.
 
 TypeScript `HandlerContext.checkpoint` gains the option `input` (SM-1211). The worker stores the
 fingerprint of the input with the result. If a later call gives an input with a different

@@ -586,6 +586,10 @@ describe("schema installation", () => {
         version: 68,
         description: "check the input of a checkpoint on replay",
       },
+      {
+        version: 69,
+        description: "fence a task group member add and index the group list",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

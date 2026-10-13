@@ -1811,6 +1811,7 @@
       "dependency_counter_drift_v1",
       "enqueue_batch_v1",
       "enqueue_debounce_v1",
+      "enqueue_prerequisite_task_ids_internal_v1",
       "enqueue_throttle_v1",
       "enqueue_v1",
       "evaluate_queue_health_v1",

@@ -357,7 +357,7 @@ rest are optional TypeScript packages.
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 68 are their compatibility boundary instead. Their version numbers still match the npm
+5 and schema version 69 are their compatibility boundary instead. Their version numbers still match the npm
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
@@ -1051,13 +1051,15 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
-The unreleased SDKs require schema version 68 before workers start. Migration
+The unreleased SDKs require schema version 69 before workers start. Migration
 `0066-add-task-groups-with-completion-callbacks.sql` adds the task group functions that every SDK
 statement catalogue calls. Migration `0067-count-task-group-outcomes-in-counter-shards.sql` moves
 the task group counts into counter shards. It also adds `dashboard_task_groups_v1`, which the
 dashboard of each SDK calls. Migration `0068-read-the-newest-task-group-events.sql` adds
 `list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
 Migration `0069-check-the-input-of-a-checkpoint-on-replay.sql` adds `save_checkpoint_v2`, which every
-SDK statement catalogue names, so the floor is schema version 68. Run `workhorse schema migrate`
-before you start updated processes. A 0.7 process keeps working on version 68, because a migration
-inside a major line only adds.
+SDK statement catalogue names. Migration
+`0070-fence-a-task-group-member-add-and-index-the-group-list.sql` makes a member add check the lease
+of its member task, so the floor is schema version 69. Run `workhorse schema migrate` before you
+start updated processes. A 0.7 process keeps working on version 69, because a migration inside a
+major line only adds.

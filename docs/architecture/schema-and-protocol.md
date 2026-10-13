@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 68 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 69 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 68 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 69 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0069`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0070`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 68.
+- An installed version below the baseline 6 or above the current 69.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,9 +139,11 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 68 and newer inside the major line, and client protocol 5 only. Schema version 68
-is the floor because it adds `save_checkpoint_v2`, which every SDK catalogue names. Schema version
-67 adds `list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
+schema versions 69 and newer inside the major line, and client protocol 5 only. Schema version 69
+is the floor because it fences a member add in `add_task_group_members_v1`. On an earlier schema, a
+worker whose lease expired can still add tasks to the group of its member task. The floor is thus
+above the derived floor, 68. Schema version 68 adds `save_checkpoint_v2`, which every SDK catalogue
+names. Schema version 67 adds `list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
 Schema version 66 adds `dashboard_task_groups_v1`, which the dashboard of
 each SDK also calls. Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor
 was 54, because earlier schemas treat the terminal failure override as an immediate retry.
@@ -220,7 +222,7 @@ executor that only counts empty polls fails on every run instead of once under l
 All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 68, includes it.
+Thus workers require schema version 54 or newer. The current floor, 69, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -607,7 +609,7 @@ Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
 
-`python/src/workhorse/_protocol.py` accepts schema version 68 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 69 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and

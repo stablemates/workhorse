@@ -488,6 +488,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "check the input of a checkpoint on replay",
     kind: "additive",
   },
+  {
+    fromVersion: 68,
+    toVersion: 69,
+    file: "0070-fence-a-task-group-member-add-and-index-the-group-list.sql",
+    description: "fence a task group member add and index the group list",
+    kind: "additive",
+    execution: "nontransactional",
+  },
 ];
 
 /**
