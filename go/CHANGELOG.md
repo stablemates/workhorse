@@ -16,7 +16,7 @@ Requires **schema v69** and Go **1.25** or newer.
 
 **Migrate the schema before starting updated processes.** The upgrade is a rolling deployment:
 
-1. Run `workhorse schema migrate`. The final schema version is **70**.
+1. Run `workhorse schema migrate`. The final schema version is **71**.
 2. Roll out the updated processes.
 
 The SDK compatibility floor is schema version **69**, which migration 0070 reaches. The floor rises
@@ -25,7 +25,7 @@ and `save_checkpoint_v2`, which migration 0069 adds. The dashboard of each SDK c
 `dashboard_task_groups_v1`, which migration 0067 adds, and `list_newest_task_group_events_v1`, which
 migration 0068 adds. Migration 0070 fences a member add, so an updated process does not add tasks to
 a group without that check. An updated process refuses a schema below version 69 at startup. A 0.7
-process keeps working on version 70, because a migration inside a major line only adds.
+process keeps working on version 71, because a migration inside a major line only adds.
 
 Migration 0066 (`0066-add-task-groups-with-completion-callbacks.sql`) adds task groups (SM-1231,
 [ADR 0095](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0095-add-task-groups-with-completion-callbacks.md)).
@@ -87,6 +87,20 @@ PostgreSQL aborted one of them with `40P01`. The purge now locks every runtime r
 row, each in identity order. The signature and the deleted count do not change. The migration does
 not raise the SDK compatibility floor, because no SDK statement changes and every process gets the
 new lock order when the migration commits. It changes no stored data.
+
+Migration 0072 (`0072-purge-a-queue-that-holds-a-prerequisite-of-a-live-dependent.sql`) lets a
+queue purge succeed when it holds a prerequisite of a waiting dependent (SM-1284,
+[ADR 0101](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0101-cancel-a-purged-prerequisite-whose-dependent-stays.md)).
+Before, the purge deleted that prerequisite, and PostgreSQL refused the delete with `23001`. The
+whole purge then failed, also when the dependent was in the same queue. Now the purge deletes a
+dependent in the same purge with its prerequisite. If the dependent stays, for example in another
+queue, the purge cancels the prerequisite instead of a delete. The dependent's own
+`on_cancellation` policy then decides its outcome, as after a cancel. The canceled task keeps its
+history and its keys. The purge count, `deleted_count` and `deletedCount`, includes the canceled
+tasks. The purge locks the dependents after its own tasks, as a cancel does, so it has no
+deadlock that a cancel of the same tasks does not also have. Two purges run one after the
+other, also for different queues. The migration does not raise the SDK compatibility
+floor, because no SDK statement or result shape changes. It changes no stored data.
 
 `Queue` gains `CreateTaskGroup`, `AddToTaskGroup`, `SealTaskGroup`, the block form `TaskGroup`,
 `GetTaskGroup`, `ListTaskGroupMembers`, and `FindTaskGroup` (SM-1234). The block form creates,

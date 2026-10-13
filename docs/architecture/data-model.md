@@ -507,7 +507,8 @@ The ownership relation stores scope and full key hash, never the raw key.
 
 A new request can replace expired ownership. Housekeeping prunes expired bindings before
 terminal task identity. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
-and `scheduled` tasks it purges, and of purged ready fast-tier tasks.
+and `scheduled` tasks it deletes, and of purged ready fast-tier tasks. A task that the purge cancels
+keeps its binding, as after a cancel ([Queue purge](#queue-purge)).
 
 ### `task_dependency`
 
@@ -2684,20 +2685,81 @@ that watermark.
 The internal `purge_queue_internal_v1` explicitly deletes associated history before deleting queued
 identities. The public four-argument `purge_queue_v1` adds the `Admin` contract.
 
-Before its first delete, `purge_queue_internal_v1` locks its rows in this order:
+`purge_queue_internal_v1` first takes the transaction advisory lock
+`hashtextextended('workhorse:purge-queue', 0)`, before any row lock. Thus two purges run one after
+the other, also for different queues, and a purge waits until any other purge commits. Without the
+lock, two purges whose queues depend on each other could lock the same rows in opposite orders: a
+purge of `q1` holds its task `C` and waits for the dependent `B` in `q2`, while a purge of `q2`
+holds `B` and waits for its dependent `C`. PostgreSQL would then abort one of them with `40P01`.
+`purge_queue_v1` is the only caller. Before the call, it holds only the advisory lock of its
+request identity, and no row lock.
+
+The lock has one limit. A transaction that already holds task row locks, for example after a cancel
+or an enqueue, must not call a purge. If it does, it can deadlock with another purge:
+
+1. The transaction T1 holds a lock on the task `X`.
+2. A purge in T2 takes the purge lock and waits for `X`.
+3. T1 then calls a purge and waits for the purge lock.
+4. Each waits for the other, and PostgreSQL aborts one of them with `40P01`.
+
+The admin CLI and the dashboard run a purge in its own transaction, so the limit does not apply to
+them. It applies to an `Admin` that runs in a transaction of the caller (SM-1289).
+
+Before its first delete, `purge_queue_internal_v1` locks its full-tier rows in this order:
 
 1. The `task_runtime` rows of the `blocked`, `ready`, and `scheduled` tasks of the queue, in
    identity order, `FOR UPDATE`.
 2. The `task` rows of the same tasks, in identity order, `FOR UPDATE`.
-3. After the full-tier deletes, the `ready` rows of the queue in `fast_task_runtime`, in identity
-   order, then their `task` rows, in identity order.
+3. The `task_runtime` rows of the `blocked` tasks in other queues that a pending edge from a purged
+   task reaches, in identity order, `FOR NO KEY UPDATE`.
+
+After the full-tier deletes and cancels, it locks the `ready` rows of the queue in
+`fast_task_runtime`, in identity order, then their `task` rows, in identity order. It then deletes
+those tasks.
 
 `lock_enqueue_prerequisites_internal_v1` locks the prerequisites of an enqueue in the same order:
-every `task_runtime` row, then every `task` row, each in identity order. Thus a purge and an enqueue
-that names two tasks of the purged queue as prerequisites do not deadlock. The second of the two
-waits for the first. Before schema version 70, the purge locked the rows in scan order, and
-PostgreSQL could abort one of the two with `40P01`. The member count of a purge then locks shard
-rows and group rows, as [Task groups: Purge](task-groups.md#purge) describes.
+every `task_runtime` row, then every `task` row, each in identity order, `FOR KEY SHARE`. Thus a
+purge and an enqueue that names two tasks of the purged queue as prerequisites do not deadlock. The
+second of the two waits for the first. Before schema version 70, the purge locked the rows in scan
+order, and PostgreSQL could abort one of the two with `40P01`. The member count of a purge then
+locks shard rows and group rows, as [Task groups: Purge](task-groups.md#purge) describes.
+
+Steps 1 and 3 follow the lock protocol of a cancel ([Resolver lock order](#resolver-lock-order)): the
+prerequisites first, then their dependents `FOR NO KEY UPDATE` in identity order. A cancel below
+locks a rejected dependent `FOR UPDATE` before settlement deletes its runtime row, and it locks the
+next dependency levels one at a time ([Propagation and cascades](#propagation-and-cascades)). Thus:
+
+- A terminal transition of a purged task, such as a concurrent cancel or a cascade, locks the task
+  before its dependents too. It cannot deadlock with the purge.
+- The step 3 lock does not conflict with the key-share lock of an enqueue. An enqueue that names a
+  purged task and a dependent that its policy releases cannot deadlock with the purge.
+- An enqueue that names a purged task and a dependent that its policy cancels or fails can deadlock
+  with the purge. PostgreSQL then aborts one of them with `40P01`. A cancel of the same task has the
+  same limit (SM-1286).
+
+`task_dependency.prerequisite_task_id` restricts deletion, so the purge sorts its tasks into two
+sets (ADR 0101):
+
+| Purged task                                                                                               | Action                                                   |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| An edge leads to a dependent outside the purge, unless the edge is released and the dependent is terminal | Stays. The purge cancels it.                             |
+| A pending or released edge leads to a purged task that stays                                              | Stays. The purge cancels it.                             |
+| Any other                                                                                                 | The purge deletes it, with its history and its bindings. |
+
+1. The purge deletes every edge whose dependent or prerequisite it deletes, then the tasks.
+   Before schema version 71, the delete of a prerequisite failed with `23001`, also when the same
+   delete removed its dependent.
+2. After the deletes, the purge calls `cancel_v1(task_id, NULL, 'queue purge')` for each task that
+   stays. It cancels them in the order of their longest path to a dependent outside the purge,
+   shortest first, and then in identity order. Thus each task is canceled after its dependents
+   that stay.
+3. The trigger on each canceled outcome resolves the dependents with the `canceled` state, as
+   [Outcome trigger](#outcome-trigger) describes. Each dependent's `on_cancellation` policy thus
+   decides its outcome, as for a cancel.
+4. A canceled task keeps its history and its idempotency, debounce, and throttle bindings, as
+   after a cancel. Retention removes it later.
+
+The result `deleted_count` counts the deleted and the canceled tasks. The name predates ADR 0101.
 
 `queue_purge_request` stores:
 
@@ -3133,6 +3195,8 @@ characters, and the character length.
 - A material replay raises `P1006` before it deletes anything.
 - Since migration 0066, the purge counts each deleted member task of a task group as `canceled` in
   the same transaction ([Purge](task-groups.md#purge)).
+- Since migration 0072, `deleted_count` also counts the tasks that the purge cancels, because a
+  dependent outside the purge still waits for them ([Queue purge](#queue-purge)).
 
 ### `worker_registry`
 

@@ -294,7 +294,12 @@ module Stablemates
 
       def resume_queue(queue, audit:) = set_queue_paused(queue, false, audit)
 
-      # Deletes every pending task in the queue and returns how many PostgreSQL deleted.
+      # Deletes every pending task in the queue and returns how many tasks it deleted or canceled.
+      # A task that a dependent in another queue waits for is canceled, not deleted.
+      #
+      # Do not call it in a transaction that already holds task row locks, for example after a
+      # cancel or an enqueue. Two purges run one after the other, so such a transaction can
+      # deadlock with another purge.
       def purge_queue(queue, audit:)
         name(queue, "queue")
         audit(audit)

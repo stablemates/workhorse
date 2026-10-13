@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 70 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 71 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 70 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 71 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0071`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0072`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 70.
+- An installed version below the baseline 6 or above the current 71.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -143,7 +143,9 @@ schema versions 69 and newer inside the major line, and client protocol 5 only. 
 is the floor because it fences a member add in `add_task_group_members_v1`. On an earlier schema, a
 worker whose lease expired can still add tasks to the group of its member task. The floor is thus
 above the derived floor, 68. Schema version 70 does not raise the floor: it changes only the lock
-order of `purge_queue_internal_v1`, which no SDK statement calls directly. Schema version 68 adds `save_checkpoint_v2`, which every SDK catalogue
+order of `purge_queue_internal_v1`, which no SDK statement calls directly. Schema version 71 does
+not raise the floor either: it changes how that function treats a prerequisite of a waiting
+dependent, and no SDK statement or result shape changes. Schema version 68 adds `save_checkpoint_v2`, which every SDK catalogue
 names. Schema version 67 adds `list_newest_task_group_events_v1`, which the task group detail of each SDK dashboard calls.
 Schema version 66 adds `dashboard_task_groups_v1`, which the dashboard of
 each SDK also calls. Schema version 65 adds the task group functions that every SDK catalogue calls. Earlier, the floor

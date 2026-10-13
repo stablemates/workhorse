@@ -326,6 +326,10 @@ reads the member tasks among them. After the deletes, it counts each of them as 
 once. Thus the group can finish, and a
 callback that it enqueues on the purged queue stays.
 
+A purged task that a dependent outside the purge waits for is not deleted. The purge cancels it
+with `cancel_v1` after the deletes, so its `task_outcome` row counts it as for any cancel
+([Data model: Queue purge](data-model.md#queue-purge)).
+
 ## Drift and repair
 
 `list_task_group_drift_v1(p_limit integer)` reads groups that are not finished, in identity order,

@@ -503,6 +503,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "lock purged runtime rows in identity order",
     kind: "additive",
   },
+  {
+    fromVersion: 70,
+    toVersion: 71,
+    file: "0072-purge-a-queue-that-holds-a-prerequisite-of-a-live-dependent.sql",
+    description: "purge a queue that holds a prerequisite of a live dependent",
+    kind: "additive",
+  },
 ];
 
 /**

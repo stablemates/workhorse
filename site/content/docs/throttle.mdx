@@ -233,7 +233,8 @@ Usually, a key is free again when its window closes. An operator can release a k
    new `taskId`.
 
 A queue purge releases the key of each pending task that it deletes. Thus, the next request with
-that key creates a new task.
+that key creates a new task. A task that the purge cancels, because a task in another queue waits
+for it, keeps its key, as after a cancel.
 
 <details>
 <summary>Reference: fresh acceptance</summary>
@@ -241,6 +242,7 @@ that key creates a new task.
 - After the window ends, a request is `accepted` as a new task, even if the old key record is still
   stored.
 - A queue purge removes the binding of a pending task. The next request is `accepted`.
+- A task that the purge cancels keeps its binding, as after a cancel.
 
 More detail: [Task lifecycle: Fresh acceptance after expiry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#fresh-acceptance-after-expiry).
 

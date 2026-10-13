@@ -721,6 +721,49 @@ describe("task groups", () => {
     });
   });
 
+  it("counts a member that a purge cancels for a waiting dependent once", async () => {
+    const { group } = await queue.taskGroup(callbacks("purge-kept-members"), (builder) =>
+      builder.add([
+        member("purge-kept-members", 1),
+        member("purge-kept-members", 2),
+        member("purge-kept-other", 3),
+      ]),
+    );
+    const { members } = await admin.listTaskGroupMembers(group.id);
+    const keptId = members[0]!.taskId;
+    // A dependent outside the purge waits for the first member, so the purge cancels it.
+    const dependentId = await queue.enqueue("purge-kept-dependent", null, {
+      queue: "purge-kept-dependents",
+      dependencies: {
+        prerequisiteTaskIds: [keptId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await completeAll("purge-kept-other");
+    await expect(admin.purgeQueue("purge-kept-members", adminAudit("purge"))).resolves.toBe(2);
+    await expect(queue.getTaskGroup(group.id)).resolves.toMatchObject({
+      state: "finished",
+      result: "failed",
+      counts: { succeeded: 1, canceled: 2 },
+    });
+    await expect(admin.getTask(dependentId)).resolves.toMatchObject({ state: "canceled" });
+    // The canceled member and the callbacks stay in the purged queue.
+    await expect(callbackTypes("purge-kept-members")).resolves.toEqual([
+      "failed",
+      "finished",
+      "member",
+    ]);
+    await expect(admin.listTaskGroupMembers(group.id)).resolves.toMatchObject({
+      members: [
+        { position: 1, outcome: "canceled", state: "canceled", queue: "purge-kept-members" },
+        { position: 2, outcome: "canceled", state: null, queue: null },
+        { position: 3, outcome: "succeeded", state: "succeeded" },
+      ],
+    });
+  });
+
   it("finds and repairs a counter that disagrees with the member outcomes", async () => {
     const { group } = await queue.taskGroup(callbacks("drift-cb"), (builder) =>
       builder.add([member("drift-members", 1), member("drift-members", 2)]),
