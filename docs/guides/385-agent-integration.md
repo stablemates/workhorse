@@ -135,7 +135,7 @@ A Python, Go, Rust, or Ruby project has no Node.js dependencies. It names the ve
 command. This version must be equal to the SDK version of the application:
 
 ```bash
-npx --package @stablemates/workhorse@0.7.1 workhorse schema install
+npx --package @stablemates/workhorse@0.8.0 workhorse schema install
 ```
 
 The machine that runs the deployment needs Node.js for this command. [the compatibility reference](../compatibility.md#supported-versions)

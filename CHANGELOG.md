@@ -17,7 +17,10 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
-## Unreleased
+## 0.8.0 — 2026-10-13
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
+All five SDKs ship task groups and the checkpoint input check in this release.
 
 Requires **schema v69**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
@@ -121,8 +124,8 @@ value that is not JSON, a non-finite number, a string or key with a lone surroga
 larger than `Number.MAX_SAFE_INTEGER` in magnitude, such as `2 ** 53` or `1e21`. A `Number` cannot
 show if an integer was rounded before the call, so the limit applies to every number.
 `TaskCheckpoint` gains `inputFingerprint`, and `Queue.saveCheckpoint` accepts `inputFingerprint`.
-`replayHandler` compares the `inputFingerprint` of a stored checkpoint in the same way. The other
-SDKs add the option in later releases.
+`replayHandler` compares the `inputFingerprint` of a stored checkpoint in the same way. The Python,
+Go, Rust, and Ruby SDKs ship the same check in 0.8.0. Their changelogs give the details.
 
 TypeScript `Queue` gains `createTaskGroup`, `addToTaskGroup`, `sealTaskGroup`, the block form
 `taskGroup`, `getTaskGroup`, `listTaskGroupMembers`, and `findTaskGroup`. The block form creates,
@@ -131,8 +134,8 @@ running member task adds tasks through `ctx.taskGroup.add()`. If a request names
 puts the task in the queue of the member task, not in the `defaultQueue` of the `Queue` (SM-1251,
 [ADR 0097](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md)). `Admin` gains `getTaskGroup`,
 `listTaskGroupMembers`, `listTaskGroupEvents`, `cancelTaskGroup`, `listTaskGroupDrift`, and
-`repairTaskGroupDrift`. `MaintenancePhase` gains `task_groups`. The other SDKs add task groups in
-later releases.
+`repairTaskGroupDrift`. `MaintenancePhase` gains `task_groups`. The Python, Go, Rust, and Ruby SDKs
+ship task groups in 0.8.0. Their changelogs give the details.
 
 TypeScript task group reads return the callbacks and the last member page as the documentation
 states (SM-1277). `TaskGroup.callbacks` lists the requested callbacks in the order `onFinish`,
@@ -149,6 +152,22 @@ JSON `DurableState` value with stored checkpoints, timer waits, signals, human d
 children. The replay raises `HandlerReplayError` when the code asks for a new name before a stored
 name, or when a wait, human decision, or child request conflicts with the stored request. It
 reports the replayed, new, and unused names. The change adds no SQL function and no migration.
+
+The `workhorse admin` CLI gains three task group commands (SM-1257). `task-groups` lists task
+groups newest first, with an optional `--state`, `--limit`, and `--page`. `task-group <group-id>`
+shows the group, one page of its member tasks after `--after`, and its newest 100 events.
+`cancel-task-group <group-id>` cancels a group through `Admin.cancelTaskGroup`. It is a guarded
+command, so it requires `--env`, a confirmation, and `--reason`. If the group is already finished,
+the command reports `already_finished` and exits with 1. Each command has a `--json` form. The
+protocol manifest adds `dashboard_task_groups_v1` and `list_newest_task_group_events_v1` to the
+admin statements. The change adds no migration.
+
+`createDashboardHost` gains the option `workhorseRevision` (SM-1215). It is the Git commit that a
+host was built from, such as a deployment of `main`. The dashboard shows its short form beside the
+version and links it to the commit. The value must be a hexadecimal commit hash of 7 to 64
+characters, or `createDashboardHost` raises a `TypeError`. The runtime config of the dashboard
+gains the optional field `workhorseRevision`. A host without the option shows the dashboard as
+before.
 
 ### Behaviour changes
 
@@ -167,6 +186,18 @@ reports the replayed, new, and unused names. The change adds no SQL function and
   a second call inside `pollMs` returned `false` without a claim. Now the worker keeps no state between calls, so the next call claims at
   once. `pollMs` no longer changes `runOnce()`. If you call `runOnce()` in a loop, wait after
   `false`. The Python, Go, Rust, and Ruby workers already return `false` for that pass.
+- A continuous worker that released every task of a claim now waits for its next poll before it
+  claims again (SM-1247). A worker releases a task when it has no handler for the task type, for
+  example during a rolling deployment. Before, the release notification ended the empty wait of the
+  same worker, so it claimed the task again after 0 to 50 ms. One listening worker released one task
+  about 30 times each second. Now a notification does not end this release wait. Only its deadline,
+  a stop, or a pause ends it. The deadline is the poll interval while the listener is active, or the
+  poll backoff without a listener. Thus a worker claims a task that it cannot run at most once in
+  each poll interval. The workers of all five SDKs make this change.
+- A dashboard mutation refuses an `audit.requestId` of more than 512 UTF-8 bytes with `BAD_REQUEST`
+  (SM-1253). The dashboard measures the value as sent, before trim. Before, the input check accepted
+  it, the SQL audit function refused it, and the client got an internal server error. The dashboard
+  hosts of all five SDKs make the same check before any SQL runs.
 
 ## 0.7.1 — 2026-10-09
 

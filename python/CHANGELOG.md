@@ -8,7 +8,9 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.8.0 — 2026-10-13
+
+The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
 
 Requires **schema v69** and Python **3.12** or newer.
 
@@ -176,6 +178,20 @@ A Python handler can give the input of a checkpoint (SM-1261,
 - `Worker.run_once()` and `AsyncWorker.run_once()` do not change: a pass that released every task
   that it claimed returns `False`, and the next call claims at once (SM-1259, [ADR 0099](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0099-report-a-released-only-single-pass-as-no-progress.md)). TypeScript
   `runOnce()` now does the same. If you call `run_once()` in a loop, wait after `False`.
+- A continuous worker that released every task of a claim now waits for its next poll before it
+  claims again (SM-1247). A worker releases a task when it has no handler for the task type, for
+  example during a rolling deployment. Before, the release notification ended the empty wait of the
+  same worker, so it claimed the task again after 0 to 50 ms. One listening worker released one task
+  about 30 times each second. Now a notification does not end this release wait. Only its deadline,
+  a stop, or a pause ends it. The deadline is the poll interval while the listener is active, or the
+  poll backoff without a listener. Thus a worker claims a task that it cannot run at most once in
+  each poll interval.
+- The WSGI dashboard refuses a mutation whose `audit.requestId` is more than 512 UTF-8 bytes
+  with `BAD_REQUEST`, before any SQL runs (SM-1253). It measures the value as sent, before trim.
+  Before, the SQL audit function refused the value, and the client got an internal server error.
+- The generated `workhorse.dashboard_v1.DashboardRuntimeConfig` gains the optional key
+  `workhorseRevision` (SM-1215). The TypeScript dashboard host sets it to show the source commit
+  beside the version. The Python dashboard does not set it, so it shows the dashboard as before.
 
 ## 0.7.1 — 2026-10-09
 

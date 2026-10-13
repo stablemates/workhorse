@@ -4,11 +4,6 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  MINIMUM_SCHEMA_VERSION,
-  WORKHORSE_SCHEMA_VERSION,
-} from "../typescript/core/src/queue/sql-catalogue.generated.js";
-
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryBlob = "https://github.com/stablemates/workhorse/blob/main/";
 const coldExportGuide = "docs/guides/335-cold-export.md#a-day-is-a-utc-day";
@@ -243,23 +238,61 @@ describe("0.7.1 release notes", () => {
   });
 });
 
-/** The unreleased notes: migration 0066 adds task groups and raises the compatibility floor. */
-const unreleased = "## Unreleased";
+/** The 0.8.0 release: the first entry whose notes cover migrations 0066 through 0072. */
+const taskGroups = "## 0.8.0 — 2026-10-13";
 
-describe("unreleased notes", () => {
+describe("0.8.0 release notes", () => {
   describe.each(changelogs)("%s", (path) => {
-    const section = entry(path, unreleased);
+    const section = entry(path, taskGroups);
 
     it("states the current schema, compatibility floor, and migration before rollout", () => {
-      expect(section).toMatch(
-        new RegExp(`^Requires \\*\\*schema v${MINIMUM_SCHEMA_VERSION}\\*\\*`, "m"),
-      );
-      expect(section).toMatch(phrase(`final schema version is **${WORKHORSE_SCHEMA_VERSION}**`));
-      expect(section).toMatch(
-        phrase(`compatibility floor is schema version **${MINIMUM_SCHEMA_VERSION}**`),
-      );
+      expect(section).toMatch(/^Requires \*\*schema v69\*\*/m);
+      expect(section).toMatch(phrase("final schema version is **71**"));
+      expect(section).toMatch(phrase("compatibility floor is schema version **69**"));
       expect(section).toMatch(phrase("Migration 0066"));
       expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
+
+    it("does not defer task groups or the checkpoint input check to a later release", () => {
+      expect(section).not.toMatch(phrase("in later releases"));
+    });
+
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, section)
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+
+  it("names every migration added after 0.7.1 in the root notes", () => {
+    // 0.7.0 and 0.7.1 shipped schema version 64, and 0.8.0 ships 71, so migrations 0066 through
+    // 0072 are new in 0.8.0.
+    const section = entry("CHANGELOG.md", taskGroups);
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 65 && Number(number) <= 72,
+      );
+    expect(added).toHaveLength(7);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
+
+  it("say in the root notes that all five SDKs ship task groups and the checkpoint input check", () => {
+    expect(entry("CHANGELOG.md", taskGroups)).toMatch(
+      phrase("All five SDKs ship task groups and the checkpoint input check in this release"),
+    );
+  });
+
+  it("give the Ruby upgrade step for the eighth TaskCheckpoint member", () => {
+    const section = entry("ruby/CHANGELOG.md", taskGroups);
+    expect(section).toMatch(phrase("adds `input_fingerprint` as its eighth member"));
+    expect(section).toMatch(phrase("seven positional arguments raises `ArgumentError`"));
+    expect(section).toMatch(phrase("no compatible constructor"));
   });
 });

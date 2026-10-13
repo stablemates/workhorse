@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0 — 2026-10-13
+
+- No code changes. The peer range on `@stablemates/workhorse` is `>=0.8.0 <0.9.0`, so the adapter
+  installs beside the 0.8.0 core.
+
 ## 0.7.1 — 2026-10-09
 
 - No changes. 0.7.0 never published to npm, so 0.7.1 is the first release with the 0.7.0 change
