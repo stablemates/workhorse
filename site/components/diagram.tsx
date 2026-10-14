@@ -23,7 +23,7 @@ export function Diagram({ name, alt }: { name: string; alt: string }) {
     <>
       <button
         type="button"
-        className="group relative block w-full cursor-zoom-in text-left"
+        className="not-prose group my-8 block w-full cursor-zoom-in text-left"
         aria-label={`Open the diagram at full size: ${alt}`}
         aria-haspopup="dialog"
         onClick={() => dialog.current?.showModal()}
@@ -36,9 +36,10 @@ export function Diagram({ name, alt }: { name: string; alt: string }) {
         ))}
         <span
           aria-hidden
-          className="absolute top-2 right-2 rounded-md border border-fd-border bg-fd-background/90 p-1.5 text-fd-muted-foreground opacity-70 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+          className="mt-2 flex items-center justify-end gap-1.5 font-mono text-xs text-fd-muted-foreground transition-colors group-hover:text-fd-foreground group-focus-visible:text-fd-foreground"
         >
-          <HugeiconsIcon icon={ArrowExpand01Icon} size={14} strokeWidth={1.8} />
+          <HugeiconsIcon icon={ArrowExpand01Icon} size={13} strokeWidth={1.8} />
+          Full size
         </span>
       </button>
       <dialog
