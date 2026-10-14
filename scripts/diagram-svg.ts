@@ -128,9 +128,11 @@ export class Diagram {
       store: [this.#ink(0.05), p.muted, "", "1"],
       external: [this.#ink(0.03), this.#ink(0.4), ' stroke-dasharray="4,3"', "1"],
     }[kind];
+    // A short or narrow bar keeps square corners, so it does not become a pill.
+    const rx = Math.min(6, h / 4, w / 4);
     this.#parts.push(
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${p.paper}"/>`,
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${fill}" stroke="${stroke}" stroke-width="${width}"${dash}/>`,
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${p.paper}"/>`,
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${width}"${dash}/>`,
     );
     if (name === undefined) return;
     const cx = x + w / 2;

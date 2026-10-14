@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="retry-attempts-narrow-dark-title retry-attempts-narrow-dark-desc">
+<title id="retry-attempts-narrow-dark-title">Each failure uses one attempt, and the wait doubles after each failure</title>
+<desc id="retry-attempts-narrow-dark-desc">Attempt 1 fails at 0 s and waits 30 s. Attempt 2 fails at 30 s and waits 60 s. At 90 s, the worker stops during attempt 3. The lease expires about 30 s later, and attempt 4 waits 120 s. Attempt 4 fails at about 240 s and waits 240 s. Attempt 5 fails at about 480 s, and Workhorse writes a failed outcome.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="400" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">0 s</text>
+<rect x="104" y="24" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="24" width="272" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="240" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 1 fails</text>
+<text x="240" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">error · waits 30 s</text>
+<path d="M 240,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">30 s</text>
+<rect x="104" y="80" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="80" width="272" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="240" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 2 fails</text>
+<text x="240" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">error · waits 60 s</text>
+<path d="M 240,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">90 s</text>
+<rect x="104" y="136" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="136" width="272" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="240" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 3: worker stops</text>
+<text x="240" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no completion</text>
+<path d="M 240,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">about 120 s</text>
+<rect x="104" y="192" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="192" width="272" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="240" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the lease expires</text>
+<text x="240" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">waits 120 s</text>
+<path d="M 240,234 V 246" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="273" fill="#f2f4f5" font-size="9" font-family="Geist Mono">240 s</text>
+<rect x="104" y="248" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="248" width="272" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="240" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 4 fails</text>
+<text x="240" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">error · waits 240 s</text>
+<path d="M 240,290 V 302" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="329" fill="#f2f4f5" font-size="9" font-family="Geist Mono">480 s</text>
+<rect x="104" y="304" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="304" width="272" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="240" y="323" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt 5 fails</text>
+<text x="240" y="337" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">failed · no attempts left</text>
+<text x="24" y="368" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A thrown error and an expired lease both</text>
+<text x="24" y="383" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">use one attempt. The wait comes from the policy.</text>
+</svg>
