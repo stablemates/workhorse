@@ -270,6 +270,8 @@ If the app server uses two separate commits, the result is different. The app se
 `acc-7`, and then its process stops before the enqueue. The account exists, but no task sends its
 email.
 
+<Diagram name="enqueue-outcomes" alt="One transaction keeps the account and its task together" />
+
 Workhorse does not commit or roll back your transaction. Your code controls the transaction, so
 your rollback also removes the task.
 

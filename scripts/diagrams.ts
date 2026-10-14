@@ -54,6 +54,7 @@ import {
   groupStatesNarrow,
 } from "./task-groups-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
+import { enqueueOutcomes, enqueueOutcomesNarrow } from "./transactional-enqueue-diagram.js";
 
 /** Every diagram that `pnpm diagrams:generate` writes to `site/public/diagrams/`. */
 export const diagrams = [
@@ -107,4 +108,6 @@ export const diagrams = [
   groupStatesNarrow,
   agentLoop,
   agentLoopNarrow,
+  enqueueOutcomes,
+  enqueueOutcomesNarrow,
 ];
