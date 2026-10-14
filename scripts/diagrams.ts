@@ -1,3 +1,9 @@
+import {
+  deliveryCheckpoints,
+  deliveryCheckpointsNarrow,
+  deliveryCrash,
+  deliveryCrashNarrow,
+} from "./delivery-guarantees-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
@@ -13,4 +19,8 @@ export const diagrams = [
   tasksAndStateNarrow,
   leasesAndFences,
   leasesAndFencesNarrow,
+  deliveryCrash,
+  deliveryCrashNarrow,
+  deliveryCheckpoints,
+  deliveryCheckpointsNarrow,
 ];
