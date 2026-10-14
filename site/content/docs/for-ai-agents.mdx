@@ -120,6 +120,8 @@ An integration has four parts. Each part has one correct place in the applicatio
    named piece of handler code. Workhorse stores its result, so a later run uses the stored result.
 4. **The failure policy.** The enqueue sets the number of attempts and the time limits.
 
+<Diagram name="agent-integration-parts" alt="The four parts of an integration, and where each one runs" />
+
 After the worker completes the task, read the task with its identifier. The subsections below show
 each part.
 
