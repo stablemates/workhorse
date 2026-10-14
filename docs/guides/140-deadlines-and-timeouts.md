@@ -18,6 +18,13 @@ app enqueues the task at 18:00 with a deadline of 20:00 and an exponential retry
 4. Soon after 20:00, the maintenance of a worker finds the passed deadline. Workhorse ends the task
    as failed, and attempt 4 does not start.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/deadlines-deadline-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/deadlines-deadline-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/deadlines-deadline-dark.png">
+  <img src="../../site/public/diagrams/deadlines-deadline-light.png" width="960" alt="A deadline ends the task, even if attempts are left">
+</picture>
+
 Thus, a deadline ends the task even if the attempt budget has attempts left.
 
 To set a deadline, give `deadline` when you enqueue the task. The deadline is a time, not a
@@ -85,6 +92,13 @@ More detail: [Task lifecycle: Deadlines and execution timeouts](../architecture/
    [retry rules](110-retries.md) and schedules attempt 2.
 4. The worker aborts the signal of the handler.
 5. Attempt 2 starts with a full budget of 2 min.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/deadlines-timeout-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/deadlines-timeout-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/deadlines-timeout-dark.png">
+  <img src="../../site/public/diagrams/deadlines-timeout-light.png" width="960" alt="An execution timeout ends one attempt, and the task continues">
+</picture>
 
 Thus, a timeout ends one attempt, and the task can continue with a new attempt.
 

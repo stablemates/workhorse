@@ -5,6 +5,12 @@ import {
   deliveryCrash,
   deliveryCrashNarrow,
 } from "./delivery-guarantees-diagram.js";
+import {
+  deadlineEnds,
+  deadlineEndsNarrow,
+  timeoutEnds,
+  timeoutEndsNarrow,
+} from "./deadlines-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { externalWaits, externalWaitsNarrow } from "./external-waits-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
@@ -49,4 +55,8 @@ export const diagrams = [
   signalsWaitNarrow,
   signalsOnce,
   signalsOnceNarrow,
+  deadlineEnds,
+  deadlineEndsNarrow,
+  timeoutEnds,
+  timeoutEndsNarrow,
 ];
