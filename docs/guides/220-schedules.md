@@ -163,6 +163,13 @@ The result of each catch-up policy is different:
 - **`latest`.** Workhorse fires one task, for Thursday at 02:00.
 - **`all`.** Workhorse fires four tasks, one for each missed occurrence.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/schedules-catchup-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/schedules-catchup-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/schedules-catchup-dark.png">
+  <img src="../../site/public/diagrams/schedules-catchup-light.png" width="960" alt="After a gap, the catch-up policy decides which missed occurrences fire">
+</picture>
+
 By default, Workhorse skips missed occurrences. A worker evaluates only its current maintenance
 interval, and then waits for the next occurrence. Thus, a pause or a worker outage does not make a
 backlog of tasks.
