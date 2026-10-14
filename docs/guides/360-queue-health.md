@@ -17,6 +17,13 @@ its lease on task `invoice-7` expired. A lease is the time in which one worker o
    gives expired leases back to the queue.
 3. At 5 ms, the report counts tasks by state. It counts `invoice-7` as ready.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/queue-health-snapshot-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/queue-health-snapshot-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/queue-health-snapshot-dark.png">
+  <img src="../../site/public/diagrams/queue-health-snapshot-light.png" width="960" alt="Two queries can report a problem that does not exist; one statement cannot">
+</picture>
+
 The report shows an expired lease and also the result of its recovery. The queue has no problem,
 but the report shows one.
 
@@ -139,6 +146,13 @@ compared to the interval of the work that it watches. Thus a small delay does no
    reason `stalled-promotion`.
 3. The leases of the tasks that were running expire. No worker tick recovers them.
 4. The verdict adds a second critical reason, `expired-leases`.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/queue-health-verdict-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/queue-health-verdict-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/queue-health-verdict-dark.png">
+  <img src="../../site/public/diagrams/queue-health-verdict-light.png" width="960" alt="The verdict collects one reason for each budget that the queue exceeds">
+</picture>
 
 Each reason has a stable code, the observed value, and the budget that the value exceeds. The codes
 have two severities:

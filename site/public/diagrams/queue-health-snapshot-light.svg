@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 216" width="960" height="216" role="img" aria-labelledby="queue-health-snapshot-light-title queue-health-snapshot-light-desc">
+<title id="queue-health-snapshot-light-title">Two queries can report a problem that does not exist; one statement cannot</title>
+<desc id="queue-health-snapshot-light-desc">A report reads billing with two separate queries. At 0 ms, the first query finds the expired lease of invoice-7. At 3 ms, recovery makes invoice-7 ready again. At 5 ms, the second query counts invoice-7 as ready. The report shows a problem and its recovery together. Queue.health() reads all exact values in one SQL statement, so every value is from the instant capturedAt.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="216" fill="#f9fafb"/>
+<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">billing</text>
+<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">invoice-7 · worker A stopped</text>
+<text x="317.3333333333333" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 ms</text>
+<text x="568" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">3 ms</text>
+<text x="818.6666666666666" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">5 ms</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
+<text x="24" y="97" fill="#1a2027" font-size="10" font-family="Geist Mono">two queries</text>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="317.3333333333333" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">query 1: expired leases</text>
+<text x="317.3333333333333" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">finds invoice-7</text>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="568" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">recovery</text>
+<text x="568" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">invoice-7 is ready again</text>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="818.6666666666666" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">query 2: tasks by state</text>
+<text x="818.6666666666666" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">counts invoice-7 as ready</text>
+<text x="24" y="153" fill="#1a2027" font-size="10" font-family="Geist Mono">Queue.health()</text>
+<rect x="200" y="128" width="736" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="128" width="736" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="568" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one SQL statement</text>
+<text x="568" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">one consistent view · capturedAt</text>
+<text x="24" y="200" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Every count, depth, and watermark of the snapshot is from the same instant.</text>
+</svg>
