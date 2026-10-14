@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 388" width="960" height="388" role="img" aria-labelledby="redrive-copy-light-title redrive-copy-light-desc">
+<title id="redrive-copy-light-title">Redrive copies the work into a new task and keeps the failed task as evidence</title>
+<desc id="redrive-copy-light-desc">The operator redrives charge-4711 with the request ID r-77. Workhorse creates charge-9020, ready on attempt 1, and records the link in the same transaction. charge-4711 stays failed, with its error. The new task copies the queue, type, payload, tags, maximum attempts, retry policy, and execution timeout. It does not copy checkpoints, waits, the attempt count, the cancellation state, the old error, or the deadline.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="388" fill="#f9fafb"/>
+<path d="M 344,84 H 594" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="423" y="64" width="92" height="12" rx="2" fill="#f9fafb"/>
+<text x="469" y="73" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">REDRIVE · r-77</text>
+<rect x="24" y="56" width="320" height="56" rx="6" fill="#f9fafb"/>
+<rect x="24" y="56" width="320" height="56" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="184" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge-4711</text>
+<text x="184" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">failed · stays as evidence</text>
+<rect x="596" y="56" width="340" height="56" rx="6" fill="#f9fafb"/>
+<rect x="596" y="56" width="340" height="56" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="766" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge-9020</text>
+<text x="766" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">ready · attempt 1 · no deadline</text>
+<text x="24" y="148" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">copied: the work</text>
+<rect x="24" y="160" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="24" y="160" width="440" height="30" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="179" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">queue · type · payload</text>
+<rect x="24" y="196" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="24" y="196" width="440" height="30" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="215" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">tags</text>
+<rect x="24" y="232" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="24" y="232" width="440" height="30" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="251" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">maximum attempts</text>
+<rect x="24" y="268" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="24" y="268" width="440" height="30" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="287" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">retry policy</text>
+<rect x="24" y="304" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="24" y="304" width="440" height="30" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="323" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">execution timeout</text>
+<text x="496" y="148" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">not copied: the failed run</text>
+<rect x="496" y="160" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="496" y="160" width="440" height="30" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="716" y="179" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">checkpoints · waits</text>
+<rect x="496" y="196" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="496" y="196" width="440" height="30" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="716" y="215" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">attempt count</text>
+<rect x="496" y="232" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="496" y="232" width="440" height="30" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="716" y="251" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">cancellation state</text>
+<rect x="496" y="268" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="496" y="268" width="440" height="30" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="716" y="287" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">old error</text>
+<rect x="496" y="304" width="440" height="30" rx="6" fill="#f9fafb"/>
+<rect x="496" y="304" width="440" height="30" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="716" y="323" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">deadline</text>
+<text x="24" y="372" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Redrive does not restart the failed task. A past deadline would fail the new task at once.</text>
+</svg>

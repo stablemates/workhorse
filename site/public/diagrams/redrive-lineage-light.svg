@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 244" width="960" height="244" role="img" aria-labelledby="redrive-lineage-light-title redrive-lineage-light-desc">
+<title id="redrive-lineage-light-title">Each redrive adds a link, so the lineage leads back to the first failure</title>
+<desc id="redrive-lineage-light-desc">charge-4711 failed, and a redrive created charge-9020. charge-9020 failed too, and a second redrive created charge-9311. Each link is a task_redrive row. From any task in the chain, Admin.getRedriveLineage returns the chain from the first failure to the newest redrive.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="244" fill="#f9fafb"/>
+<path d="M 272,92 H 354" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="274" y="72" width="80" height="12" rx="2" fill="#f9fafb"/>
+<text x="314" y="81" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">task_redrive</text>
+<path d="M 604,92 H 686" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="606" y="72" width="80" height="12" rx="2" fill="#f9fafb"/>
+<text x="646" y="81" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">task_redrive</text>
+<rect x="24" y="64" width="248" height="56" rx="6" fill="#f9fafb"/>
+<rect x="24" y="64" width="248" height="56" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="148" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge-4711</text>
+<text x="148" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">failed · the first failure</text>
+<rect x="356" y="64" width="248" height="56" rx="6" fill="#f9fafb"/>
+<rect x="356" y="64" width="248" height="56" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="480" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge-9020</text>
+<text x="480" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">failed · redrive 1</text>
+<rect x="688" y="64" width="248" height="56" rx="6" fill="#f9fafb"/>
+<rect x="688" y="64" width="248" height="56" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="812" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">charge-9311</text>
+<text x="812" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">ready · redrive 2</text>
+<rect x="24" y="152" width="912" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="152" width="912" height="44" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="480" y="172" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Admin.getRedriveLineage(any task in the chain)</text>
+<text x="480" y="186" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">returns the chain from the first failure to the newest redrive</text>
+<text x="24" y="228" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Retention keeps charge-4711 while a newer task in its chain stays.</text>
+</svg>
