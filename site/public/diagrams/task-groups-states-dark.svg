@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 368" width="960" height="368" role="img" aria-labelledby="task-groups-states-dark-title task-groups-states-dark-desc">
+<title id="task-groups-states-dark-title">An open group cannot finish. After the seal, only a running member task can add</title>
+<desc id="task-groups-states-dark-desc">Queue.createTaskGroup creates an open group for imp-7. While it is open, the app adds pages of rows with Queue.addToTaskGroup, and a running member task can add with ctx.taskGroup.add. Queue.sealTaskGroup seals the group. After the seal, only a running member task can add. When the last member task is finished, Workhorse finishes the group and enqueues the callbacks.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="368" fill="#04080e"/>
+<path d="M 424,76 H 446" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 680,76 H 702" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="192" y="52" width="232" height="48" rx="6" fill="#04080e"/>
+<rect x="192" y="52" width="232" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="308" y="74" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">open</text>
+<text x="308" y="88" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Queue.createTaskGroup</text>
+<rect x="448" y="52" width="232" height="48" rx="6" fill="#04080e"/>
+<rect x="448" y="52" width="232" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="564" y="74" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sealed</text>
+<text x="564" y="88" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Queue.sealTaskGroup</text>
+<rect x="704" y="52" width="232" height="48" rx="6" fill="#04080e"/>
+<rect x="704" y="52" width="232" height="48" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="820" y="74" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">finished</text>
+<text x="820" y="88" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the last member is finished</text>
+<text x="24" y="156" fill="#f2f4f5" font-size="10" font-family="Geist Mono">the app adds</text>
+<text x="24" y="172" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="start">Queue.addToTaskGroup</text>
+<text x="24" y="220" fill="#f2f4f5" font-size="10" font-family="Geist Mono">a member adds</text>
+<text x="24" y="236" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="start">ctx.taskGroup.add</text>
+<text x="24" y="284" fill="#f2f4f5" font-size="10" font-family="Geist Mono">the group</text>
+<rect x="192" y="136" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="192" y="136" width="232" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="308" y="156" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">can add</text>
+<text x="308" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">in the app's transaction</text>
+<rect x="448" y="136" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="448" y="136" width="232" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="564" y="156" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">raises an error</text>
+<text x="564" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the seal</text>
+<rect x="704" y="136" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="704" y="136" width="232" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="820" y="156" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">raises an error</text>
+<text x="820" y="170" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the group is finished</text>
+<rect x="192" y="200" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="192" y="200" width="232" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="308" y="220" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">can add</text>
+<text x="308" y="234" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">while the member runs</text>
+<rect x="448" y="200" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="448" y="200" width="232" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="564" y="220" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">can add</text>
+<text x="564" y="234" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">while the member runs</text>
+<rect x="704" y="200" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="704" y="200" width="232" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="820" y="220" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no add</text>
+<text x="820" y="234" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no member task runs</text>
+<rect x="192" y="264" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="192" y="264" width="232" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="308" y="284" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cannot finish</text>
+<text x="308" y="298" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">it never expires</text>
+<rect x="448" y="264" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="448" y="264" width="232" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="564" y="284" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">waits</text>
+<text x="564" y="298" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">for each pending member</text>
+<rect x="704" y="264" width="232" height="44" rx="6" fill="#04080e"/>
+<rect x="704" y="264" width="232" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="820" y="284" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">callbacks enqueued</text>
+<text x="820" y="298" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">one time</text>
+<text x="24" y="352" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">If the app does not seal the group, the callbacks never run.</text>
+</svg>

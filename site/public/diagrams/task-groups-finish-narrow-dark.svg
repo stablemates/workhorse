@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 303" width="400" height="303" role="img" aria-labelledby="task-groups-finish-narrow-dark-title task-groups-finish-narrow-dark-desc">
+<title id="task-groups-finish-narrow-dark-title">The last finished member task finishes the group and enqueues its callback</title>
+<desc id="task-groups-finish-narrow-dark-desc">Queue.taskGroup creates the group for imp-7, enqueues 20,000 imports.row tasks, and seals the group in one transaction. Workers run the rows. 19,998 succeed, and 2 fail after their last retry. In the transaction of the last terminal row, Workhorse finishes the group with the result failed and enqueues the imports.report callback.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="303" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Queue.taskGroup</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">create · add 20,000 · seal</text>
+<path d="M 248,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">19,998 rows succeed</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">2 rows fail after the last retry</text>
+<path d="M 248,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">group finished</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">result: failed · pending: 0</text>
+<path d="M 248,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">onFinish</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">imports.report enqueued</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each member task counts when it becomes</text>
+<text x="24" y="271" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">terminal. A retry does not finish it.</text>
+</svg>
