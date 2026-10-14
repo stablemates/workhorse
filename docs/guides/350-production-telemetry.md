@@ -84,6 +84,13 @@ with a run time 10 minutes later. A worker in another process runs the task.
 4. The worker makes the stored context the parent of the handler span. The handler span joins the
    first trace.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/production-telemetry-trace-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/production-telemetry-trace-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/production-telemetry-trace-dark.png">
+  <img src="../../site/public/diagrams/production-telemetry-trace-light.png" width="960" alt="One trace connects the enqueue and the handler run in another process">
+</picture>
+
 In your backend, one trace shows the HTTP request, the enqueue, and the handler run. The handler ran
 10 minutes later in another process.
 

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 372" width="960" height="372" role="img" aria-labelledby="production-telemetry-trace-dark-title production-telemetry-trace-dark-desc">
+<title id="production-telemetry-trace-dark-title">One trace connects the enqueue and the handler run in another process</title>
+<desc id="production-telemetry-trace-dark-desc">At 0 min, a web request has an HTTP server span, and the TypeScript queue makes an enqueue span below it. PostgreSQL stores the trace context of the enqueue span next to the payload of the invoice.send task. At 10 min, a worker in another process claims the task. The claim returns the stored context, and the handler span joins the first trace. Workhorse does not store baggage.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="372" fill="#04080e"/>
+<text x="330" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 min</text>
+<text x="800" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">10 min</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<path d="M 400,160 V 194" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 640,218 H 720 V 270" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="670" y="238" width="100" height="12" rx="2" fill="#04080e"/>
+<text x="720" y="247" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">CLAIM RETURNS IT</text>
+<text x="24" y="88" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">web process</text>
+<text x="24" y="103" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the request</text>
+<rect x="200" y="72" width="260" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="260" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="330" y="96" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">HTTP server span</text>
+<rect x="240" y="120" width="220" height="40" rx="6" fill="#04080e"/>
+<rect x="240" y="120" width="220" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="350" y="138" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue span</text>
+<text x="350" y="152" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">TypeScript queue</text>
+<text x="24" y="212" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">PostgreSQL</text>
+<text x="24" y="227" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the task row</text>
+<rect x="200" y="196" width="440" height="44" rx="6" fill="#04080e"/>
+<rect x="200" y="196" width="440" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="420" y="216" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">trace context next to the payload</text>
+<text x="420" y="230" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the payload does not change</text>
+<text x="24" y="288" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">worker process</text>
+<text x="24" y="303" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">another process</text>
+<rect x="664" y="272" width="272" height="44" rx="6" fill="#04080e"/>
+<rect x="664" y="272" width="272" height="44" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="800" y="292" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handler span</text>
+<text x="800" y="306" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">parent: the stored context</text>
+<text x="24" y="356" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">One trace shows the request, the enqueue, and the handler run. Workhorse does not store baggage.</text>
+</svg>
