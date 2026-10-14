@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 288" width="960" height="288" role="img" aria-labelledby="enqueue-outcomes-light-title enqueue-outcomes-light-desc">
+<title id="enqueue-outcomes-light-title">One transaction keeps the account and its task together</title>
+<desc id="enqueue-outcomes-light-desc">The app server inserts the row for acc-7 and enqueues account.created. In one transaction with COMMIT, both become visible at the same time, and a worker sends the email. In one transaction with ROLLBACK, PostgreSQL discards both, and no worker sees the task. With two separate commits, the account commits, the process stops before the enqueue, and no task sends the email.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="288" fill="#f9fafb"/>
+<text x="317.3333333333333" y="36" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="middle">one transaction</text>
+<text x="317.3333333333333" y="51" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">COMMIT</text>
+<text x="568" y="36" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="middle">one transaction</text>
+<text x="568" y="51" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">ROLLBACK</text>
+<text x="818.6666666666666" y="36" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="middle">two separate commits</text>
+<text x="818.6666666666666" y="51" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">the process stops</text>
+<line x1="200" y1="60" x2="936" y2="60" stroke="rgba(26,32,39,0.14)"/>
+<text x="24" y="105" fill="#1a2027" font-size="10" font-family="Geist Mono">acc-7 row</text>
+<rect x="200" y="80" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="80" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="317.3333333333333" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">committed</text>
+<text x="317.3333333333333" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">visible with the task</text>
+<rect x="450.66666666666663" y="80" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="80" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="568" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">discarded</text>
+<text x="568" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">by the rollback</text>
+<rect x="701.3333333333333" y="80" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="80" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="818.6666666666666" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">committed</text>
+<text x="818.6666666666666" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the first commit</text>
+<text x="24" y="161" fill="#1a2027" font-size="10" font-family="Geist Mono">account.created</text>
+<rect x="200" y="136" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="136" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="317.3333333333333" y="154" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">committed</text>
+<text x="317.3333333333333" y="168" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">visible with the row</text>
+<rect x="450.66666666666663" y="136" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="136" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="568" y="154" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">discarded</text>
+<text x="568" y="168" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">together with the row</text>
+<rect x="701.3333333333333" y="136" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="136" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="818.6666666666666" y="154" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">never enqueued</text>
+<text x="818.6666666666666" y="168" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the process stopped</text>
+<text x="24" y="217" fill="#1a2027" font-size="10" font-family="Geist Mono">worker</text>
+<rect x="200" y="192" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="192" width="234.66666666666666" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="317.3333333333333" y="210" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">claims the task</text>
+<text x="317.3333333333333" y="224" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">sends the email</text>
+<rect x="450.66666666666663" y="192" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="192" width="234.66666666666666" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="568" y="210" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sees no task</text>
+<text x="568" y="224" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no account, no email</text>
+<rect x="701.3333333333333" y="192" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="192" width="234.66666666666666" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="818.6666666666666" y="210" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sees no task</text>
+<text x="818.6666666666666" y="224" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">acc-7 gets no email</text>
+<text x="24" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">In one transaction, PostgreSQL commits the row and the task together, or rolls back both.</text>
+</svg>
