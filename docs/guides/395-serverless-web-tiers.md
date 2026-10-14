@@ -30,6 +30,13 @@ for each order.
 4. Neither runtime gives the shop a continuous process that renews leases between requests. The
    shop runs the worker in a different place.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/serverless-runtimes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/serverless-runtimes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/serverless-runtimes-dark.png">
+  <img src="../../site/public/diagrams/serverless-runtimes-light.png" width="960" alt="A Node.js function can enqueue; only a continuous process can host a worker">
+</picture>
+
 The same rules apply on other platforms. A Node.js function on Vercel, AWS Lambda, or a Cloud Run
 service can enqueue in the same transaction as its data. A Cloudflare Workers isolate or a Vercel
 Edge function cannot use the published client. Only a runtime with a continuous process, such as a
@@ -126,6 +133,13 @@ worker pool.
 3. During a deployment, the platform sends a termination signal to the old instance.
 4. The old worker stops claims and lets active handlers finish within a bounded drain.
 5. The old worker exits.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/serverless-tiers-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/serverless-tiers-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/serverless-tiers-dark.png">
+  <img src="../../site/public/diagrams/serverless-tiers-light.png" width="960" alt="The web tier and the worker tier meet only in PostgreSQL">
+</picture>
 
 The web tier and the worker tier need access only to the same PostgreSQL database. Keep request
 handlers on the serverless platform. Run `workhorse worker` on compute that keeps a continuous
