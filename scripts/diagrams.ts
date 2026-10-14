@@ -20,6 +20,12 @@ import {
   humanWaitNarrow,
 } from "./human-decisions-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
+import {
+  priorityAdmission,
+  priorityAdmissionNarrow,
+  priorityOrder,
+  priorityOrderNarrow,
+} from "./priority-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import {
   retryAttempts,
@@ -69,4 +75,8 @@ export const diagrams = [
   humanWaitNarrow,
   humanEnds,
   humanEndsNarrow,
+  priorityOrder,
+  priorityOrderNarrow,
+  priorityAdmission,
+  priorityAdmissionNarrow,
 ];
