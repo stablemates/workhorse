@@ -82,6 +82,7 @@ import {
   groupStatesNarrow,
 } from "./task-groups-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
+import { workerSlots, workerSlotsNarrow } from "./workers-diagram.js";
 import { throttleWindow, throttleWindowNarrow } from "./throttle-diagram.js";
 import { enqueueOutcomes, enqueueOutcomesNarrow } from "./transactional-enqueue-diagram.js";
 
@@ -167,4 +168,6 @@ export const diagrams = [
   tenantModelsNarrow,
   tierWrites,
   tierWritesNarrow,
+  workerSlots,
+  workerSlotsNarrow,
 ];
