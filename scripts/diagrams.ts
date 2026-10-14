@@ -1,4 +1,5 @@
 import { cancellationStop, cancellationStopNarrow } from "./cancellation-diagram.js";
+import { childJoin, childJoinNarrow, childModes, childModesNarrow } from "./child-tasks-diagram.js";
 import {
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
@@ -79,4 +80,8 @@ export const diagrams = [
   priorityOrderNarrow,
   priorityAdmission,
   priorityAdmissionNarrow,
+  childJoin,
+  childJoinNarrow,
+  childModes,
+  childModesNarrow,
 ];
