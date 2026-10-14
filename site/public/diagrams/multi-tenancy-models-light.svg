@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="multi-tenancy-models-light-title multi-tenancy-models-light-desc">
+<title id="multi-tenancy-models-light-title">Shared tenancy keeps work fair. Isolated tenancy keeps tenants apart</title>
+<desc id="multi-tenancy-models-light-desc">With shared tenancy, acme and globex use one database and one worker fleet, and the app keeps the tenant identifier of each task consistent. With isolated tenancy, acme and globex each have a database with the Workhorse schema and their own worker fleet. No worker sees the tasks of both tenants, and PostgreSQL enforces the boundary.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="300" fill="#f9fafb"/>
+<path d="M 212,124 V 158" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 588,124 V 158" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 820,124 V 158" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="56" width="376" height="196" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="36" y="50" width="88" height="12" rx="2" fill="#f9fafb"/>
+<text x="80" y="59" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">SHARED TENANCY</text>
+<rect x="40" y="76" width="344" height="48" rx="6" fill="#f9fafb"/>
+<rect x="40" y="76" width="344" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="212" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one worker fleet</text>
+<text x="212" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">runs the tasks of acme and globex</text>
+<rect x="40" y="160" width="344" height="72" rx="6" fill="#f9fafb"/>
+<rect x="40" y="160" width="344" height="72" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="212" y="194" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one database</text>
+<text x="212" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">acme and globex in the same tables</text>
+<rect x="424" y="56" width="512" height="196" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="436" y="50" width="100" height="12" rx="2" fill="#f9fafb"/>
+<text x="486" y="59" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">ISOLATED TENANCY</text>
+<rect x="440" y="76" width="232" height="48" rx="6" fill="#f9fafb"/>
+<rect x="440" y="76" width="232" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="556" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker fleet acme</text>
+<text x="556" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">connects to acme only</text>
+<rect x="688" y="76" width="232" height="48" rx="6" fill="#f9fafb"/>
+<rect x="688" y="76" width="232" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="804" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker fleet globex</text>
+<text x="804" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">connects to globex only</text>
+<rect x="440" y="160" width="232" height="72" rx="6" fill="#f9fafb"/>
+<rect x="440" y="160" width="232" height="72" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="556" y="194" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">acme database</text>
+<text x="556" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">own schema and migrations</text>
+<rect x="688" y="160" width="232" height="72" rx="6" fill="#f9fafb"/>
+<rect x="688" y="160" width="232" height="72" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="804" y="194" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">globex database</text>
+<text x="804" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">own schema and migrations</text>
+<text x="24" y="284" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Shared: your app keeps the tenant consistent. Isolated: PostgreSQL enforces the boundary.</text>
+</svg>
