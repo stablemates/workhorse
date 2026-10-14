@@ -133,6 +133,13 @@ Each key has a time limit. `ttlMs` sets this limit.
 4. At 25 h, the client sends the request again. The key is no longer active, so Workhorse creates a
    new task.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/idempotency-lifetime-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/idempotency-lifetime-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/idempotency-lifetime-dark.png">
+  <img src="../../site/public/diagrams/idempotency-lifetime-light.png" width="960" alt="A key stays active for its time limit, also after the task completes">
+</picture>
+
 A repeated request does not make the time limit longer. Set `ttlMs` to the longest time in which a
 client can repeat a request. For example, use the redelivery period of your webhook provider.
 
@@ -164,6 +171,13 @@ later request with the same key must be the same.
 3. Workhorse compares the second request with the first request. The payloads are different.
 4. Workhorse raises a conflict error. The original task does not change, and Workhorse does not
    create a second task.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/idempotency-outcomes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/idempotency-outcomes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/idempotency-outcomes-dark.png">
+  <img src="../../site/public/diagrams/idempotency-outcomes-light.png" width="960" alt="One key gives one task. A changed request with the same key fails">
+</picture>
 
 The conflict error stops the full enqueue statement. If you enqueue in your own transaction, the
 transaction fails too. The error shows the existing task and the fields that are different.

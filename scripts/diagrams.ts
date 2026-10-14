@@ -21,6 +21,12 @@ import {
   humanWait,
   humanWaitNarrow,
 } from "./human-decisions-diagram.js";
+import {
+  idempotencyLifetime,
+  idempotencyLifetimeNarrow,
+  idempotencyOutcomes,
+  idempotencyOutcomesNarrow,
+} from "./idempotency-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import {
   priorityAdmission,
@@ -110,4 +116,8 @@ export const diagrams = [
   agentLoopNarrow,
   enqueueOutcomes,
   enqueueOutcomesNarrow,
+  idempotencyOutcomes,
+  idempotencyOutcomesNarrow,
+  idempotencyLifetime,
+  idempotencyLifetimeNarrow,
 ];
