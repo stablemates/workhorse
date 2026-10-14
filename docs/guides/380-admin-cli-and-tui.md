@@ -129,6 +129,13 @@ look the same: the task does not finish.
 3. `admin external-waits` lists each task that waits for a person or an external system.
 4. `order-88` is in the list, with a pending human decision named `approval`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/admin-cli-waits-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/admin-cli-waits-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/admin-cli-waits-dark.png">
+  <img src="../../site/public/diagrams/admin-cli-waits-light.png" width="960" alt="Three read-only commands tell why a task does not finish">
+</picture>
+
 `admin checkpoints` and `admin waits` show the records of one task. If you know the name of one
 record, give it with `--name`.
 
@@ -178,6 +185,13 @@ in production.
 3. The names are different, so the command changes nothing. It shows what it refused and why.
 4. The engineer corrects the URL and runs the command again with `--yes`. The names are the same,
    and the redrive occurs.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/admin-cli-guard-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/admin-cli-guard-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/admin-cli-guard-dark.png">
+  <img src="../../site/public/diagrams/admin-cli-guard-light.png" width="960" alt="A guarded command checks the database name, then asks for a confirmation">
+</picture>
 
 These guarded commands change a live system:
 
