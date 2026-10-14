@@ -2,6 +2,12 @@ import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import { cancellationStop, cancellationStopNarrow } from "./cancellation-diagram.js";
 import { childJoin, childJoinNarrow, childModes, childModesNarrow } from "./child-tasks-diagram.js";
 import {
+  debouncePreserve,
+  debouncePreserveNarrow,
+  debounceReset,
+  debounceResetNarrow,
+} from "./debounce-diagram.js";
+import {
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
   deliveryCrash,
@@ -120,4 +126,8 @@ export const diagrams = [
   idempotencyOutcomesNarrow,
   idempotencyLifetime,
   idempotencyLifetimeNarrow,
+  debounceReset,
+  debounceResetNarrow,
+  debouncePreserve,
+  debouncePreserveNarrow,
 ];

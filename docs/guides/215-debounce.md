@@ -19,6 +19,13 @@ for `doc-42`. Each request uses the key `doc-42` and a window of 2 s.
    to 4.5 s.
 4. Soon after 4.5 s, a worker indexes revision 3.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/debounce-reset-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/debounce-reset-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/debounce-reset-dark.png">
+  <img src="../../site/public/diagrams/debounce-reset-light.png" width="960" alt="With reset, each new revision moves the run time">
+</picture>
+
 Three requests make one task, and the task uses the latest revision. Each request gets the same
 `taskId`, so your app can follow the work with one ID.
 
@@ -90,6 +97,13 @@ never runs. Use `reset` if the work must run only after the requests stop.
 1. At 0 s, the user saves revision 1. Workhorse creates a task that runs at 2 s.
 2. At 1 s, the user saves revision 2. Workhorse replaces the payload. The run time stays at 2 s.
 3. Soon after 2 s, a worker indexes revision 2.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/debounce-preserve-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/debounce-preserve-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/debounce-preserve-dark.png">
+  <img src="../../site/public/diagrams/debounce-preserve-light.png" width="960" alt="With preserve, the first request sets the run time">
+</picture>
 
 With `preserve`, the first request sets the run time. Later requests replace only the payload. The
 task runs with the last revision that arrives before its run time. Use `preserve` if the work must
