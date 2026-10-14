@@ -146,6 +146,28 @@ describe("the Markdown twin transform", () => {
     );
   });
 
+  it("replaces a diagram with a Markdown image of its wide light variant", () => {
+    const source = [
+      "Before.",
+      "",
+      "<Diagram",
+      '  name="retry-attempts"',
+      '  alt="Five attempts"',
+      "/>",
+      "",
+      "After.",
+    ].join("\n");
+    expect(mdxToMarkdown(source, "retries")).toBe(
+      ["Before.", "", "![Five attempts](/diagrams/retry-attempts-light.png)", "", "After."].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("throws on a diagram with no alt text", () => {
+    expect(() => mdxToMarkdown('<Diagram name="retry-attempts" />', "retries")).toThrow(/no alt/);
+  });
+
   it("throws on an MDX component it does not know, naming the component and the page", () => {
     expect(() => mdxToMarkdown("<Callout>Read this.</Callout>", "retries")).toThrow(
       /"retries".*<Callout>/s,

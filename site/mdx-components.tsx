@@ -5,6 +5,7 @@ import { TypeTable } from "fumadocs-ui/components/type-table";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 
+import { Diagram } from "@/components/diagram";
 import { IntegrationCatalog } from "@/components/integration-catalog";
 import { ReleaseTable } from "@/components/release-table";
 
@@ -18,6 +19,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     ...defaultMdxComponents,
     Card,
     Cards,
+    Diagram,
     IntegrationCatalog,
     ReleaseTable,
     Step,

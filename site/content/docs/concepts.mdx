@@ -24,20 +24,7 @@ task one time, and the task succeeds.
    `task_outcome` row with the state `succeeded` and the result.
 4. The `task` row and the `task_outcome` row stay. Workhorse does not update them again.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/tasks-and-state-narrow-light.png" />
-  <img
-    src="/diagrams/tasks-and-state-light.png"
-    alt="One task after enqueue, after the claim, and after success"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/tasks-and-state-narrow-dark.png" />
-  <img
-    src="/diagrams/tasks-and-state-dark.png"
-    alt="One task after enqueue, after the claim, and after success"
-  />
-</picture>
+<Diagram name="tasks-and-state" alt="One task after enqueue, after the claim, and after success" />
 
 Each table has one purpose:
 
@@ -252,20 +239,10 @@ default lease of 30 s.
 5. Soon after, worker B claims the task. The handler asks the provider again, and the provider sends
    a second email.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/delivery-crash-narrow-light.png" />
-  <img
-    src="/diagrams/delivery-crash-light.png"
-    alt="A crash after the email and before the completion sends the email two times"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/delivery-crash-narrow-dark.png" />
-  <img
-    src="/diagrams/delivery-crash-dark.png"
-    alt="A crash after the email and before the completion sends the email two times"
-  />
-</picture>
+<Diagram
+  name="delivery-crash"
+  alt="A crash after the email and before the completion sends the email two times"
+/>
 
 No queue can prevent this problem. The mail provider and your database are two different systems.
 They cannot commit as one transaction. A queue that promises exactly-once delivery also needs a
@@ -340,20 +317,10 @@ the first two calls in checkpoints. The invoice renderer fails one time.
 4. Still in attempt 2, `renderInvoice` succeeds. Workhorse stores its result, and the handler calls
    `sendEmail`.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/delivery-checkpoints-narrow-light.png" />
-  <img
-    src="/diagrams/delivery-checkpoints-light.png"
-    alt="A checkpoint stores a result, and a later attempt reads it"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/delivery-checkpoints-narrow-dark.png" />
-  <img
-    src="/diagrams/delivery-checkpoints-dark.png"
-    alt="A checkpoint stores a result, and a later attempt reads it"
-  />
-</picture>
+<Diagram
+  name="delivery-checkpoints"
+  alt="A checkpoint stores a result, and a later attempt reads it"
+/>
 
 ```ts
 worker.handle("invoice.send", async (payload: { amount: number; email: string }, ctx) => {

@@ -132,20 +132,10 @@ email at the time in `payload.followUpAt`, here 16:00.
    result. The wait has ended, so `ctx.sleepUntil` returns at once. The handler sends the
    follow-up.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/durable-waits-narrow-light.png" />
-  <img
-    src="/diagrams/durable-waits-light.png"
-    alt="A durable wait frees the worker, and the handler runs again from its first line"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/durable-waits-narrow-dark.png" />
-  <img
-    src="/diagrams/durable-waits-dark.png"
-    alt="A durable wait frees the worker, and the handler runs again from its first line"
-  />
-</picture>
+<Diagram
+  name="durable-waits"
+  alt="A durable wait frees the worker, and the handler runs again from its first line"
+/>
 
 Thus, a durable wait releases the worker until its time comes. Each wait has a name. On a replay,
 the name tells Workhorse that the wait ended and that the handler can continue. Use `ctx.sleep` to
@@ -506,20 +496,10 @@ operator decision.
 4. An operator decides. An authenticated operator tool calls `Queue.completeHumanWait`.
 5. Workhorse calls the handler again, and each wait returns its stored value.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/external-waits-narrow-light.png" />
-  <img
-    src="/diagrams/external-waits-light.png"
-    alt="Each external wait releases the worker, and a value from the application or an operator makes the task ready again"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/external-waits-narrow-dark.png" />
-  <img
-    src="/diagrams/external-waits-dark.png"
-    alt="Each external wait releases the worker, and a value from the application or an operator makes the task ready again"
-  />
-</picture>
+<Diagram
+  name="external-waits"
+  alt="Each external wait releases the worker, and a value from the application or an operator makes the task ready again"
+/>
 
 Thus, each external wait releases the worker until a value arrives. Workhorse keeps each delivery,
 and each delivery is idempotent. A network retry cannot resume the task two times. Read
