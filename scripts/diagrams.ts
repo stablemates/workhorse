@@ -27,6 +27,12 @@ import {
 } from "./debounce-diagram.js";
 import { coldExportDay, coldExportDayNarrow } from "./cold-export-diagram.js";
 import {
+  poolerBudget,
+  poolerBudgetNarrow,
+  poolerPaths,
+  poolerPathsNarrow,
+} from "./connection-pooling-diagram.js";
+import {
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
   deliveryCrash,
@@ -236,4 +242,8 @@ export const diagrams = [
   adminGuardNarrow,
   integrationParts,
   integrationPartsNarrow,
+  poolerPaths,
+  poolerPathsNarrow,
+  poolerBudget,
+  poolerBudgetNarrow,
 ];
