@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 224" width="960" height="224" role="img" aria-labelledby="retention-window-dark-title retention-window-dark-desc">
+<title id="retention-window-dark-title">A window is a minimum: the event stays until the pass after it expires</title>
+<desc id="retention-window-dark-desc">The event window is 14 days, and the history pass runs each day at 03:00 UTC. A task writes an event on day 1 at 10:00. On day 15 at 03:00, the cutoff is the start of day 1, so the pass keeps the event. At 10:00 the event is 14 days old, and no routine deletes it yet. On day 16 at 03:00, the cutoff is the start of day 2, and the pass drops the day-1 partition.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="224" fill="#04080e"/>
+<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">event window</text>
+<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">14 days · pass at 03:00 UTC</text>
+<text x="286" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">day 1 · 10:00</text>
+<text x="474" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">day 15 · 03:00</text>
+<text x="662" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">day 15 · 10:00</text>
+<text x="850" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">day 16 · 03:00</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="97" fill="#f2f4f5" font-size="10" font-family="Geist Mono">event</text>
+<rect x="200" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="286" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">written</text>
+<text x="286" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">in the day-1 partition</text>
+<rect x="388" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="388" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="474" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">kept</text>
+<text x="474" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">not older than the cutoff</text>
+<rect x="576" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="576" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="662" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">14 days old</text>
+<text x="662" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no routine deletes it yet</text>
+<rect x="764" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="764" y="72" width="172" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="850" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">deleted</text>
+<text x="850" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">with the day-1 partition</text>
+<text x="24" y="153" fill="#f2f4f5" font-size="10" font-family="Geist Mono">history pass</text>
+<rect x="388" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="388" y="128" width="172" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="474" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cutoff: start of day 1</text>
+<text x="474" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">keeps day 1</text>
+<rect x="764" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="764" y="128" width="172" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="850" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cutoff: start of day 2</text>
+<text x="850" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">drops day 1</text>
+<text x="24" y="208" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The event stays for about 14 days and 17 hours. Workhorse always keeps data a little longer than its window.</text>
+</svg>
