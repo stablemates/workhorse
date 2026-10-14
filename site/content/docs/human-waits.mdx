@@ -21,6 +21,8 @@ gives the decision the name `account-review`. It stores the context that an oper
    calls `ctx.waitForHuman("account-review", …)` again, with the same context. Now the call returns
    the stored result at once, and the handler activates the account.
 
+<Diagram name="human-decisions-wait" alt="A human wait frees the worker until a person decides" />
+
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">
     ```ts
@@ -290,6 +292,11 @@ A human wait does not continue for all time. If nobody decides, the wait ends an
    other attempt, because a replay cannot continue without a result.
 4. At 1 day + 2 h, an operator tries to approve. Workhorse returns `stale` and does not change the
    failed task.
+
+<Diagram
+  name="human-decisions-ends"
+  alt="A result resumes a pending decision, and a time limit or a cancellation ends it"
+/>
 
 Thus, an unanswered decision ends at its time limit. If the handler gives no `timeoutMs`, Workhorse
 uses its longest supported wait. If the task [deadline](/docs/deadlines) is earlier, the deadline

@@ -20,6 +20,13 @@ gives the decision the name `account-review`. It stores the context that an oper
    calls `ctx.waitForHuman("account-review", …)` again, with the same context. Now the call returns
    the stored result at once, and the handler activates the account.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/human-decisions-wait-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/human-decisions-wait-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/human-decisions-wait-dark.png">
+  <img src="../../site/public/diagrams/human-decisions-wait-light.png" width="960" alt="A human wait frees the worker until a person decides">
+</picture>
+
 ```ts
 const review = await ctx.waitForHuman<{ accountId: string; prompt: string }, { approved: boolean }>(
   "account-review",
@@ -238,6 +245,13 @@ A human wait does not continue for all time. If nobody decides, the wait ends an
    other attempt, because a replay cannot continue without a result.
 4. At 1 day + 2 h, an operator tries to approve. Workhorse returns `stale` and does not change the
    failed task.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/human-decisions-ends-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/human-decisions-ends-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/human-decisions-ends-dark.png">
+  <img src="../../site/public/diagrams/human-decisions-ends-light.png" width="960" alt="A result resumes a pending decision, and a time limit or a cancellation ends it">
+</picture>
 
 Thus, an unanswered decision ends at its time limit. If the handler gives no `timeoutMs`, Workhorse
 uses its longest supported wait. If the task [deadline](140-deadlines-and-timeouts.md) is earlier,
