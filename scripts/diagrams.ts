@@ -19,6 +19,7 @@ import {
   debounceReset,
   debounceResetNarrow,
 } from "./debounce-diagram.js";
+import { coldExportDay, coldExportDayNarrow } from "./cold-export-diagram.js";
 import {
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
@@ -193,4 +194,6 @@ export const diagrams = [
   statisticsWindowNarrow,
   retentionWindow,
   retentionWindowNarrow,
+  coldExportDay,
+  coldExportDayNarrow,
 ];
