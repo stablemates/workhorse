@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="serverless-runtimes-dark-title serverless-runtimes-dark-desc">
+<title id="serverless-runtimes-dark-title">A Node.js function can enqueue; only a continuous process can host a worker</title>
+<desc id="serverless-runtimes-dark-desc">A Node.js function on Vercel, AWS Lambda, or a Cloud Run service can enqueue in the same transaction as its data, but it cannot host a worker, because it has no continuous process. An edge isolate, such as Vercel Edge or Cloudflare Workers, cannot use the published client. A continuous process, such as a Cloud Run worker pool, a virtual machine, or Kubernetes, can host a worker.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="280" fill="#04080e"/>
+<text x="468" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">enqueue · a producer</text>
+<text x="780" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">run a worker</text>
+<line x1="320" y1="52" x2="928" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="88" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Node.js function</text>
+<text x="24" y="103" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Vercel · Lambda · Cloud Run service</text>
+<rect x="320" y="72" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="320" y="72" width="296" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="468" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">can enqueue</text>
+<text x="468" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">in the same transaction</text>
+<rect x="632" y="72" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="632" y="72" width="296" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="780" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cannot host a worker</text>
+<text x="780" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no continuous process</text>
+<text x="24" y="144" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">edge isolate</text>
+<text x="24" y="159" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Vercel Edge · Cloudflare Workers</text>
+<rect x="320" y="128" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="320" y="128" width="296" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="468" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cannot enqueue</text>
+<text x="468" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no published client</text>
+<rect x="632" y="128" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="632" y="128" width="296" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="780" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">cannot host a worker</text>
+<text x="780" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no continuous process</text>
+<text x="24" y="200" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">continuous process</text>
+<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Cloud Run worker pool · VM</text>
+<rect x="320" y="184" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="320" y="184" width="296" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="468" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">can enqueue</text>
+<text x="468" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a Node.js process</text>
+<rect x="632" y="184" width="296" height="40" rx="6" fill="#04080e"/>
+<rect x="632" y="184" width="296" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="780" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">hosts the worker</text>
+<text x="780" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">renews leases · drains</text>
+<text x="24" y="264" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Check the process lifetime first. A runtime can reach PostgreSQL and still be unable to run a worker.</text>
+</svg>

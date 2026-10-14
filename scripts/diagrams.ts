@@ -98,6 +98,12 @@ import {
 } from "./retries-diagram.js";
 import { scheduleCatchup, scheduleCatchupNarrow } from "./schedules-diagram.js";
 import {
+  serverlessRuntimes,
+  serverlessRuntimesNarrow,
+  serverlessTiers,
+  serverlessTiersNarrow,
+} from "./serverless-diagram.js";
+import {
   signalsOnce,
   signalsOnceNarrow,
   signalsWait,
@@ -246,4 +252,8 @@ export const diagrams = [
   poolerPathsNarrow,
   poolerBudget,
   poolerBudgetNarrow,
+  serverlessRuntimes,
+  serverlessRuntimesNarrow,
+  serverlessTiers,
+  serverlessTiersNarrow,
 ];
