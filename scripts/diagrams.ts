@@ -14,6 +14,10 @@ import {
   policyKeysNarrow,
 } from "./concurrency-policies-diagram.js";
 import {
+  dashboardAuthorize,
+  dashboardAuthorizeNarrow,
+} from "./dashboard-authentication-diagram.js";
+import {
   debouncePreserve,
   debouncePreserveNarrow,
   debounceReset,
@@ -222,4 +226,6 @@ export const diagrams = [
   healthSnapshotNarrow,
   healthVerdict,
   healthVerdictNarrow,
+  dashboardAuthorize,
+  dashboardAuthorizeNarrow,
 ];

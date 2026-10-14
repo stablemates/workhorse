@@ -17,6 +17,13 @@ dashboard at `/workhorse`.
    schema.
 4. Dana cancels a task. The dashboard records `dana` as the operator who asked.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/dashboard-authorize-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/dashboard-authorize-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/dashboard-authorize-dark.png">
+  <img src="../../site/public/diagrams/dashboard-authorize-light.png" width="960" alt="The dashboard asks your application who the operator is before it serves anything">
+</picture>
+
 A principal is the identity that the `authorize` callback returns. If the callback refuses the
 request, the dashboard serves nothing. Each language has its own host. Use the host for the
 language of your application.
