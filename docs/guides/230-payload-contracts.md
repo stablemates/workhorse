@@ -101,6 +101,13 @@ More detail: [Data model: Contract definitions and policy](../architecture/data-
 4. The attempt fails. Workhorse does not record the task as complete.
 5. The [retry](110-retries.md) rules apply, so a worker can run the task again later.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/contracts-checks-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/contracts-checks-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/contracts-checks-dark.png">
+  <img src="../../site/public/diagrams/contracts-checks-light.png" width="960" alt="Workhorse checks the payload before it saves a task, and the result before it completes it">
+</picture>
+
 Thus, a bad result does not become a complete task.
 
 ## Change the rules

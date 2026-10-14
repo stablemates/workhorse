@@ -160,6 +160,11 @@ More detail: [Data model: Contract definitions and policy](https://github.com/st
 4. The attempt fails. Workhorse does not record the task as complete.
 5. The [retry](/docs/retries) rules apply, so a worker can run the task again later.
 
+<Diagram
+  name="contracts-checks"
+  alt="Workhorse checks the payload before it saves a task, and the result before it completes it"
+/>
+
 Thus, a bad result does not become a complete task.
 
 ## Change the rules
