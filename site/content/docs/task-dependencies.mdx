@@ -151,6 +151,11 @@ both `release.publish` and `release.index` as prerequisites.
 4. No edge is unresolved now, so Workhorse makes the announcement ready and appends
    `dependency_released`.
 
+<Diagram
+  name="task-dependencies-release"
+  alt="A dependent becomes ready when its last edge releases"
+/>
+
 Workhorse keeps a counter of the unresolved edges of each blocked dependent. When an edge resolves,
 Workhorse decreases the counter in the same transaction. When the counter is zero, the dependent
 leaves `blocked`. Thus, a wide fan-in costs the same for each prerequisite as a single edge.
@@ -205,6 +210,11 @@ index build fails.
 3. No edge is unresolved now. The announcement is rejected, so Workhorse reads its rejecting edges.
 4. The `release.index` edge has the policy `fail`, so Workhorse fails the announcement. The
    announcement never runs.
+
+<Diagram
+  name="task-dependencies-fail"
+  alt="A failed prerequisite with the policy fail fails the dependent"
+/>
 
 Each policy accepts `release`, `cancel`, or `fail`. `release` satisfies the edge. After all edges
 resolve, `fail` has precedence over `cancel`, and `cancel` has precedence over `release`. Thus, the
