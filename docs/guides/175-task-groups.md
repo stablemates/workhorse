@@ -26,6 +26,13 @@ the queue `imports`. After the last row, the app must send one report.
    the result `failed`, and it enqueues the `imports.report` task.
 5. A worker runs `imports.report`. Its handler reads the counts of the group and sends the report.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-finish-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-groups-finish-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-finish-dark.png">
+  <img src="../../site/public/diagrams/task-groups-finish-light.png" width="960" alt="The last finished member task finishes the group and enqueues its callback">
+</picture>
+
 ```ts
 const rows = file.rows.map((row) => ({
   type: "imports.row",
@@ -119,6 +126,13 @@ transactions, and then it seals the group.
 3. Workers run the first row tasks while later pages arrive. The group stays `open`.
 4. After the last page, the app calls `Queue.sealTaskGroup`. The group is `sealed`.
 5. When the last member task is finished, Workhorse finishes the group and enqueues the callbacks.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-states-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-groups-states-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-states-dark.png">
+  <img src="../../site/public/diagrams/task-groups-states-light.png" width="960" alt="An open group cannot finish. After the seal, only a running member task can add">
+</picture>
 
 Thus, an open group cannot finish, even when all of its current member tasks are finished. An open
 group never expires. If the app does not seal the group, the callbacks never run.

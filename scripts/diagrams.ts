@@ -46,6 +46,12 @@ import {
   dependenciesRelease,
   dependenciesReleaseNarrow,
 } from "./task-dependencies-diagram.js";
+import {
+  groupFinish,
+  groupFinishNarrow,
+  groupStates,
+  groupStatesNarrow,
+} from "./task-groups-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
 
 /** Every diagram that `pnpm diagrams:generate` writes to `site/public/diagrams/`. */
@@ -94,4 +100,8 @@ export const diagrams = [
   dependenciesReleaseNarrow,
   dependenciesFail,
   dependenciesFailNarrow,
+  groupFinish,
+  groupFinishNarrow,
+  groupStates,
+  groupStatesNarrow,
 ];
