@@ -27,6 +27,13 @@ handler for `email.send`, with a batch size of 20 and a linger of 50 ms.
 5. At about 50 ms, the linger ends. The worker calls the handler with the seven tasks. A second
    provider request sends them.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/batch-handlers-timing-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/batch-handlers-timing-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/batch-handlers-timing-dark.png">
+  <img src="../../site/public/diagrams/batch-handlers-timing-light.png" width="960" alt="A full batch runs at once, and a partial batch runs after the linger">
+</picture>
+
 Thus, 27 tasks need two provider requests, not 27.
 
 A batch is the set of tasks that the worker gives to one handler call. The linger is the maximum
@@ -118,6 +125,13 @@ other 19.
 3. Workhorse completes the 19 successful tasks. Each completion uses the fence token of its own
    task.
 4. The failed task follows its own retry policy and attempt budget.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/batch-handlers-outcomes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/batch-handlers-outcomes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/batch-handlers-outcomes-dark.png">
+  <img src="../../site/public/diagrams/batch-handlers-outcomes-light.png" width="960" alt="Each outcome of a batch applies to its own task">
+</picture>
 
 If the handler throws an error or returns a list that is not valid, Workhorse fails all 20
 tasks. Each task still uses its own fence token and retry budget.
