@@ -23,6 +23,13 @@ an outage. The task has an attempt budget of 5 and an exponential retry policy. 
 4. At about 240 s, attempt 4 fails, and attempt 5 waits 240 s.
 5. At about 480 s, attempt 5 fails. No attempts are left, so Workhorse writes a failed outcome.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/retry-attempts-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/retry-attempts-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/retry-attempts-dark.png">
+  <img src="../../site/public/diagrams/retry-attempts-light.png" width="960" alt="Five attempts of one task: three errors, a worker stop, and the last failure, with longer waits between them">
+</picture>
+
 Thus, each failure uses one attempt. A thrown error and an expired lease both count as a failure.
 The waits become longer because each failure shows that the provider needs more time.
 
@@ -62,6 +69,13 @@ More detail: [Data model: Priority and attempts](../architecture/data-model.md#p
 2. At 30 s, the provider gets 1,000 requests at the same time and fails again.
 3. With a decorrelated-jitter policy, each task selects a different delay in a range.
 4. The retries arrive across the range, so the provider gets fewer requests at one time.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/retry-spread-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/retry-spread-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/retry-spread-dark.png">
+  <img src="../../site/public/diagrams/retry-spread-light.png" width="960" alt="With the exponential policy, 1,000 tasks retry together; with decorrelated jitter, their retries spread over time">
+</picture>
 
 Thus, a random spread keeps tasks that failed together from all retrying at the same time.
 

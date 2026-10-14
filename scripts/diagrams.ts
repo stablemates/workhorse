@@ -7,6 +7,12 @@ import {
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
+import {
+  retryAttempts,
+  retryAttemptsNarrow,
+  retrySpread,
+  retrySpreadNarrow,
+} from "./retries-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
 
 /** Every diagram that `pnpm diagrams:generate` writes to `site/public/diagrams/`. */
@@ -23,4 +29,8 @@ export const diagrams = [
   deliveryCrashNarrow,
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
+  retryAttempts,
+  retryAttemptsNarrow,
+  retrySpread,
+  retrySpreadNarrow,
 ];
