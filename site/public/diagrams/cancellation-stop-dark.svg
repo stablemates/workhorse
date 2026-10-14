@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 332" width="960" height="332" role="img" aria-labelledby="cancellation-stop-dark-title cancellation-stop-dark-desc">
+<title id="cancellation-stop-dark-title">Workhorse asks a running handler to stop, and the handler decides when it stops</title>
+<desc id="cancellation-stop-dark-desc">Worker A claims the order.upload task at 0 s, and its heartbeat at 10 s moves the lease to 40 s. At 12 s, an operator cancels the task, and Workhorse records the request. The heartbeat at 20 s returns cancel_requested and does not move the lease. If the handler obeys the signal, it stops and the worker confirms the cancellation. If the handler ignores the signal, the lease expires at 40 s and recovery cancels the task.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="332" fill="#04080e"/>
+<text x="200" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
+<text x="347.2" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">10 s</text>
+<text x="376.64" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">12 s</text>
+<text x="494.4" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20 s</text>
+<text x="641.6" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">30 s</text>
+<text x="788.8" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">40 s</text>
+<text x="936" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">50 s</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<rect x="376.64" y="72" width="559.36" height="216" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
+<rect x="388.64" y="66" width="140" height="12" rx="2" fill="#04080e"/>
+<text x="458.64" y="75" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">CANCEL REQUESTED AT 12 S</text>
+<text x="24" y="112" fill="#f2f4f5" font-size="10" font-family="Geist" font-weight="600" text-anchor="start">the handler obeys</text>
+<rect x="200" y="96" width="290.4" height="36" rx="6" fill="#04080e"/>
+<rect x="200" y="96" width="290.4" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="345.2" y="112" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
+<text x="345.2" y="126" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">attempt 1</text>
+<rect x="498.4" y="96" width="120" height="36" rx="6" fill="#04080e"/>
+<rect x="498.4" y="96" width="120" height="36" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="558.4" y="112" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<text x="558.4" y="126" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the worker confirms</text>
+<text x="24" y="154" fill="#ced1d4" font-size="9" font-family="Geist Mono">heartbeat</text>
+<rect x="343.2" y="146" width="8" height="8" rx="2" fill="#04080e"/>
+<rect x="343.2" y="146" width="8" height="8" rx="2" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="331.2" y="168" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">LEASE UNTIL 40 S</text>
+<rect x="490.4" y="146" width="8" height="8" rx="2" fill="#04080e"/>
+<rect x="490.4" y="146" width="8" height="8" rx="2" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="494.4" y="168" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">CANCEL_REQUESTED</text>
+<text x="24" y="212" fill="#f2f4f5" font-size="10" font-family="Geist" font-weight="600" text-anchor="start">the handler ignores</text>
+<rect x="200" y="196" width="584.8" height="36" rx="6" fill="#04080e"/>
+<rect x="200" y="196" width="584.8" height="36" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="492.4" y="212" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs the handler</text>
+<text x="492.4" y="226" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the signal is aborted at 20 s</text>
+<rect x="792.8" y="196" width="120" height="36" rx="6" fill="#04080e"/>
+<rect x="792.8" y="196" width="120" height="36" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="852.8" y="212" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<text x="852.8" y="226" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the lease expires</text>
+<text x="24" y="254" fill="#ced1d4" font-size="9" font-family="Geist Mono">heartbeat</text>
+<rect x="343.2" y="246" width="8" height="8" rx="2" fill="#04080e"/>
+<rect x="343.2" y="246" width="8" height="8" rx="2" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="331.2" y="268" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">LEASE UNTIL 40 S</text>
+<rect x="490.4" y="246" width="8" height="8" rx="2" fill="#04080e"/>
+<rect x="490.4" y="246" width="8" height="8" rx="2" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="494.4" y="268" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">CANCEL_REQUESTED</text>
+<rect x="637.6" y="246" width="8" height="8" rx="2" fill="#04080e"/>
+<rect x="637.6" y="246" width="8" height="8" rx="2" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="641.6" y="268" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">CANCEL_REQUESTED</text>
+<text x="24" y="316" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">After the request, a heartbeat does not move the lease. The handler decides when it stops.</text>
+</svg>
