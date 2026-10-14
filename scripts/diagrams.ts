@@ -6,6 +6,7 @@ import {
   deliveryCrashNarrow,
 } from "./delivery-guarantees-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
+import { externalWaits, externalWaitsNarrow } from "./external-waits-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import {
@@ -36,4 +37,6 @@ export const diagrams = [
   retrySpreadNarrow,
   cancellationStop,
   cancellationStopNarrow,
+  externalWaits,
+  externalWaitsNarrow,
 ];
