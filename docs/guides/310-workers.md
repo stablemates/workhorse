@@ -76,6 +76,13 @@ keeps its slots full with as few claims as possible.
    second claim, so the worker sends a claim to `email` for two tasks.
 4. During all of these steps, one heartbeat timer renews all leases of the worker in one batch.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/workers-slots-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/workers-slots-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/workers-slots-dark.png">
+  <img src="../../site/public/diagrams/workers-slots-light.png" width="960" alt="A worker fills its free slots with as few claims as possible">
+</picture>
+
 Thus, a busy worker does not wait for one claim to return before it sends the next claim. It sends
 another claim when enough slots are free. This keeps the slots full without one round trip for each
 task.
