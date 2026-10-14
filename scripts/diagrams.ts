@@ -46,6 +46,12 @@ import {
   priorityOrder,
   priorityOrderNarrow,
 } from "./priority-diagram.js";
+import {
+  tenantModels,
+  tenantModelsNarrow,
+  tenantOptions,
+  tenantOptionsNarrow,
+} from "./multi-tenancy-diagram.js";
 import { contractChecks, contractChecksNarrow } from "./payload-contracts-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import { rateBucket, rateBucketNarrow, rateKeys, rateKeysNarrow } from "./rate-limits-diagram.js";
@@ -154,4 +160,8 @@ export const diagrams = [
   rateBucketNarrow,
   rateKeys,
   rateKeysNarrow,
+  tenantOptions,
+  tenantOptionsNarrow,
+  tenantModels,
+  tenantModelsNarrow,
 ];

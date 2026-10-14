@@ -28,6 +28,13 @@ lets it run a maximum of 8 tasks across all queues.
 4. At 09:05, an operator filters the dashboard task list by the tag `tenant:acme`. The list shows
    only the work of `acme`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/multi-tenancy-options-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/multi-tenancy-options-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/multi-tenancy-options-dark.png">
+  <img src="../../site/public/diagrams/multi-tenancy-options-light.png" width="960" alt="One tenant identifier goes into three enqueue options">
+</picture>
+
 In a shared database, the tenant is not a column. Your app writes the same tenant identifier into
 three enqueue options. Workhorse already enforces each of these options:
 
@@ -112,6 +119,13 @@ another customer. Thus, `acme` and `globex` each get a database with the Workhor
    worker connects to one database. Thus, no worker sees the tasks of both tenants.
 3. At each deployment, you run `workhorse schema migrate` two times, one time for each database.
    Each database upgrades independently.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/multi-tenancy-models-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/multi-tenancy-models-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/multi-tenancy-models-dark.png">
+  <img src="../../site/public/diagrams/multi-tenancy-models-light.png" width="960" alt="Shared tenancy keeps work fair. Isolated tenancy keeps tenants apart">
+</picture>
 
 The databases are separate. Thus, the tasks, queues, schedules, policies, budgets, retention, and
 dashboard of each tenant are separate. The schema does not need to know about tenants.

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 247" width="400" height="247" role="img" aria-labelledby="multi-tenancy-options-narrow-dark-title multi-tenancy-options-narrow-dark-desc">
+<title id="multi-tenancy-options-narrow-dark-title">One tenant identifier goes into three enqueue options</title>
+<desc id="multi-tenancy-options-narrow-dark-desc">The app enqueues report.generate on the queue reports for the tenant acme. It writes acme into concurrencyKey, budget, and a tenant:acme tag. The concurrency policy of reports lets acme run 4 tasks at the same time. The budget acme lets acme run 8 tasks across all queues. The tag lets an operator filter the task list. Workhorse does not check that the three agree.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="247" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">key</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">concurrencyKey: acme</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">4 active for acme in reports</text>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">budget</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">budget: acme</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">8 active across all queues</text>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">tag</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">tags: tenant:acme</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the operator filters by tenant</text>
+<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Your app keeps the three consistent.</text>
+<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Workhorse does not check that they agree.</text>
+</svg>
