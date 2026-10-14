@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 272" width="960" height="272" role="img" aria-labelledby="concurrency-budget-light-title concurrency-budget-light-desc">
+<title id="concurrency-budget-light-title">A budget limits the active tasks of several queues together</title>
+<desc id="concurrency-budget-light-desc">The queues billing and crm call one vendor API, and the budget vendor-api allows four active tasks. At 1 s, billing runs three invoice.sync tasks. crm has two ready contact.sync tasks, and its own policy has room. Workhorse admits one, because the budget has room for one. The other task stays ready until an invoice.sync task completes at 3 s.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="272" fill="#f9fafb"/>
+<path d="M 456,84 H 560 V 122 H 598" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 456,180 H 560 V 142 H 598" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="48" width="432" height="72" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="36" y="42" width="140" height="12" rx="2" fill="#f9fafb"/>
+<text x="106" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">QUEUE · billing · at 1 s</text>
+<rect x="40" y="64" width="128" height="40" rx="6" fill="#f9fafb"/>
+<rect x="40" y="64" width="128" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="104" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice.sync</text>
+<text x="104" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">active</text>
+<rect x="176" y="64" width="128" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="64" width="128" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="240" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice.sync</text>
+<text x="240" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">active</text>
+<rect x="312" y="64" width="128" height="40" rx="6" fill="#f9fafb"/>
+<rect x="312" y="64" width="128" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="376" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">invoice.sync</text>
+<text x="376" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">active</text>
+<rect x="24" y="144" width="432" height="72" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="36" y="138" width="188" height="12" rx="2" fill="#f9fafb"/>
+<text x="130" y="147" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">QUEUE · crm · its policy has room</text>
+<rect x="40" y="160" width="128" height="40" rx="6" fill="#f9fafb"/>
+<rect x="40" y="160" width="128" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="104" y="178" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">contact.sync</text>
+<text x="104" y="192" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">active</text>
+<rect x="176" y="160" width="128" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="160" width="128" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="240" y="178" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">contact.sync</text>
+<text x="240" y="192" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stays ready</text>
+<rect x="600" y="108" width="336" height="48" rx="6" fill="#f9fafb"/>
+<rect x="600" y="108" width="336" height="48" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="768" y="130" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">budget vendor-api</text>
+<text x="768" y="144" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">4 of 4 active · no room</text>
+<text x="768" y="180" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">at 3 s, an invoice.sync completes</text>
+<text x="768" y="194" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">and the waiting contact.sync starts</text>
+<text x="24" y="256" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A task must obey the policy of its queue and the budget that it names.</text>
+</svg>

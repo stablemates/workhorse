@@ -27,6 +27,13 @@ twenty active tasks, and three for each `concurrencyKey`.
 5. At 4 s, one `tenant-a` task completes. Its key now has room, so Workhorse admits the next
    `tenant-a` task.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/concurrency-keys-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/concurrency-keys-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/concurrency-keys-dark.png">
+  <img src="../../site/public/diagrams/concurrency-keys-light.png" width="960" alt="A full key keeps its tasks ready, although the queue has room">
+</picture>
+
 PostgreSQL decides each admission, not the workers. Thus, the policy holds, however many workers
 run.
 
@@ -170,6 +177,13 @@ the same time. Each queue has its own policy. The deployment also stores a budge
 3. Workhorse admits one `contact.sync` task. The other task stays ready.
 4. At 3 s, one `invoice.sync` task completes. Workhorse wakes the workers of `crm`, and the waiting
    task starts.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/concurrency-budget-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/concurrency-budget-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/concurrency-budget-dark.png">
+  <img src="../../site/public/diagrams/concurrency-budget-light.png" width="960" alt="A budget limits the active tasks of several queues together">
+</picture>
 
 Give the queues a budget. Do not merge them into one queue. Thus, each queue keeps its own priority
 order, pause control, and health row.

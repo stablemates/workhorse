@@ -28,6 +28,11 @@ twenty active tasks, and three for each `concurrencyKey`.
 5. At 4 s, one `tenant-a` task completes. Its key now has room, so Workhorse admits the next
    `tenant-a` task.
 
+<Diagram
+  name="concurrency-keys"
+  alt="A full key keeps its tasks ready, although the queue has room"
+/>
+
 PostgreSQL decides each admission, not the workers. Thus, the policy holds, however many workers
 run.
 
@@ -249,6 +254,11 @@ the same time. Each queue has its own policy. The deployment also stores a budge
 3. Workhorse admits one `contact.sync` task. The other task stays ready.
 4. At 3 s, one `invoice.sync` task completes. Workhorse wakes the workers of `crm`, and the waiting
    task starts.
+
+<Diagram
+  name="concurrency-budget"
+  alt="A budget limits the active tasks of several queues together"
+/>
 
 Give the queues a budget. Do not merge them into one queue. Thus, each queue keeps its own priority
 order, pause control, and health row.
