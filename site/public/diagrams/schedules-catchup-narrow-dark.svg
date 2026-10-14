@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 288" width="400" height="288" role="img" aria-labelledby="schedules-catchup-narrow-dark-title schedules-catchup-narrow-dark-desc">
+<title id="schedules-catchup-narrow-dark-title">After a gap, the catch-up policy decides which missed occurrences fire</title>
+<desc id="schedules-catchup-narrow-dark-desc">invoice-run is due each night at 02:00. Every worker that offers billing-production stops on Monday at 01:30 and starts again on Thursday at 09:00, so four occurrences are missed. With skip, none of them fires. With latest, one task fires, for Thursday at 02:00. With all, four tasks fire. Each policy fires Friday at 02:00 normally.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="288" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">gap</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">every worker stopped</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Mon to Thu · 4 occurrences missed</text>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">skip</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no catch-up task</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">next task: Fri 02:00</text>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">latest</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one task</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">for Thu 02:00</text>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">all</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">four tasks</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">one for each missed occurrence</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">By default, Workhorse skips missed</text>
+<text x="24" y="271" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">occurrences, so an outage makes no backlog.</text>
+</svg>

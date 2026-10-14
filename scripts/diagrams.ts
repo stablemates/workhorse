@@ -47,6 +47,7 @@ import {
   retrySpread,
   retrySpreadNarrow,
 } from "./retries-diagram.js";
+import { scheduleCatchup, scheduleCatchupNarrow } from "./schedules-diagram.js";
 import {
   signalsOnce,
   signalsOnceNarrow,
@@ -133,4 +134,6 @@ export const diagrams = [
   debouncePreserveNarrow,
   throttleWindow,
   throttleWindowNarrow,
+  scheduleCatchup,
+  scheduleCatchupNarrow,
 ];
