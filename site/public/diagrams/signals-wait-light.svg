@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 368" width="960" height="368" role="img" aria-labelledby="signals-wait-light-title signals-wait-light-desc">
+<title id="signals-wait-light-title">A signal wait frees the worker until the payload arrives</title>
+<desc id="signals-wait-light-desc">At 0 s, worker A runs the handler for ord-381, and the handler waits for the approval signal. No worker holds the task during the wait. At 3 h, the review service calls sendSignal, and Workhorse stores the payload and sets the task to ready. Worker B runs the handler from its first line. The wait returns the stored payload, and the handler publishes the order. Both runs are attempt 1.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="368" fill="#f9fafb"/>
+<text x="374" y="52" fill="#1a2027" font-size="10" font-family="Geist Mono" font-weight="400" text-anchor="middle">ctx.waitForSignal("approval")</text>
+<text x="754" y="52" fill="#1a2027" font-size="10" font-family="Geist Mono" font-weight="400" text-anchor="middle">publishOrder()</text>
+<line x1="192" y1="68" x2="936" y2="68" stroke="rgba(26,32,39,0.14)"/>
+<text x="24" y="98" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Run 1</text>
+<text x="24" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">worker A · 0 s</text>
+<text x="24" y="128" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">attempt 1 · fence 1</text>
+<rect x="192" y="84" width="364" height="48" rx="6" fill="#f9fafb"/>
+<rect x="192" y="84" width="364" height="48" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="374" y="106" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">waits</text>
+<text x="374" y="120" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">records the wait · frees the slot</text>
+<text x="754" y="111" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not reached</text>
+<rect x="192" y="148" width="744" height="40" rx="6" fill="#f9fafb"/>
+<rect x="192" y="148" width="744" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="564" y="172" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no worker holds the task · scheduled, no owner · a new deployment can replace worker A</text>
+<text x="24" y="164" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the wait</text>
+<text x="24" y="179" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">0 s to 3 h</text>
+<rect x="192" y="204" width="744" height="44" rx="6" fill="#f9fafb"/>
+<rect x="192" y="204" width="744" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="564" y="224" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the review service: sendSignal("approval", { approved: true })</text>
+<text x="564" y="238" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse stores the payload · the task becomes ready</text>
+<text x="24" y="222" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the signal</text>
+<text x="24" y="237" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">3 h</text>
+<text x="24" y="278" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">Run 2</text>
+<text x="24" y="293" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">worker B · after 3 h</text>
+<text x="24" y="308" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">attempt 1 · fence 2</text>
+<rect x="192" y="264" width="364" height="48" rx="6" fill="#f9fafb"/>
+<rect x="192" y="264" width="364" height="48" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="374" y="286" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">returns</text>
+<text x="374" y="300" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the stored payload at once</text>
+<rect x="572" y="264" width="364" height="48" rx="6" fill="#f9fafb"/>
+<rect x="572" y="264" width="364" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="754" y="286" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs</text>
+<text x="754" y="300" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">publishes ord-381 · task succeeds</text>
+<text x="24" y="352" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line of the handler. The wait does not use an attempt.</text>
+</svg>
