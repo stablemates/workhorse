@@ -84,6 +84,13 @@ More detail: [Data model: Dead-letter index](../architecture/data-model.md#dead-
    an event to each task.
 4. A worker claims `charge-9020` and charges the card.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/redrive-copy-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/redrive-copy-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/redrive-copy-dark.png">
+  <img src="../../site/public/diagrams/redrive-copy-light.png" width="960" alt="Redrive copies the work into a new task and keeps the failed task as evidence">
+</picture>
+
 ```ts
 const result = await admin.redrive(sourceTaskId, {
   actor: "ops@example.com",
@@ -151,6 +158,13 @@ Lineage is the chain of tasks that redrive creates from one failed task.
 1. `charge-9020` fails too.
 2. You redrive `charge-9020`, and Workhorse creates `charge-9311`.
 3. The chain is now `charge-4711`, then `charge-9020`, then `charge-9311`.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/redrive-lineage-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/redrive-lineage-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/redrive-lineage-dark.png">
+  <img src="../../site/public/diagrams/redrive-lineage-light.png" width="960" alt="Each redrive adds a link, so the lineage leads back to the first failure">
+</picture>
 
 From any task in the chain, `Admin.getRedriveLineage` returns the chain. It goes back to the first
 failure and forward to the newest redrive.

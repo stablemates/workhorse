@@ -63,6 +63,12 @@ import {
 import { contractChecks, contractChecksNarrow } from "./payload-contracts-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import { rateBucket, rateBucketNarrow, rateKeys, rateKeysNarrow } from "./rate-limits-diagram.js";
+import {
+  redriveCopy,
+  redriveCopyNarrow,
+  redriveLineage,
+  redriveLineageNarrow,
+} from "./redrive-diagram.js";
 import { retentionWindow, retentionWindowNarrow } from "./retention-diagram.js";
 import {
   retryAttempts,
@@ -196,4 +202,8 @@ export const diagrams = [
   retentionWindowNarrow,
   coldExportDay,
   coldExportDayNarrow,
+  redriveCopy,
+  redriveCopyNarrow,
+  redriveLineage,
+  redriveLineageNarrow,
 ];
