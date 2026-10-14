@@ -22,6 +22,13 @@ keeps summaries for each queue and task type. A summary row covers one minute, o
 Recent rows cover minutes, older rows cover hours, and the oldest rows cover days. Each row also
 holds the last error. Thus, the dashboard can show a probable cause without a read of the history.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/statistics-tiers-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/statistics-tiers-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/statistics-tiers-dark.png">
+  <img src="../../site/public/diagrams/statistics-tiers-light.png" width="960" alt="Workhorse counts from summary rows, so a count stays fast as the history grows">
+</picture>
+
 The summaries include full-tier and fast-tier queues. A fast-tier queue gets summaries also when its
 optional history is off.
 
@@ -85,6 +92,13 @@ summarized the history.
 2. At 10:05:02, the rollup summarizes 10:04. It moves the watermark to 10:05.
 3. At 10:05:40, Workhorse reads the summary rows before the watermark.
 4. Workhorse counts the part after 10:05 from the raw history.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/statistics-window-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/statistics-window-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/statistics-window-dark.png">
+  <img src="../../site/public/diagrams/statistics-window-light.png" width="960" alt="A window reads summary rows before the watermark and raw history after it">
+</picture>
 
 A window is correct as soon as a task runs. You do not wait for the rollup to see your own work. If
 the rollup is late, the raw part of the window is longer and the query is slower. The answer stays
