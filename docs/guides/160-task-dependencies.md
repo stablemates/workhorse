@@ -94,6 +94,13 @@ both `release.publish` and `release.index` as prerequisites.
 4. No edge is unresolved now, so Workhorse makes the announcement ready and appends
    `dependency_released`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-dependencies-release-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-dependencies-release-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-dependencies-release-dark.png">
+  <img src="../../site/public/diagrams/task-dependencies-release-light.png" width="960" alt="A dependent becomes ready when its last edge releases">
+</picture>
+
 ```ts
 const publishId = await queue.enqueue("release.publish", { release });
 const indexId = await queue.enqueue("release.index", { release });
@@ -166,6 +173,13 @@ index build fails.
 3. No edge is unresolved now. The announcement is rejected, so Workhorse reads its rejecting edges.
 4. The `release.index` edge has the policy `fail`, so Workhorse fails the announcement. The
    announcement never runs.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-dependencies-fail-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-dependencies-fail-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-dependencies-fail-dark.png">
+  <img src="../../site/public/diagrams/task-dependencies-fail-light.png" width="960" alt="A failed prerequisite with the policy fail fails the dependent">
+</picture>
 
 Each policy accepts `release`, `cancel`, or `fail`. `release` satisfies the edge. After all edges
 resolve, `fail` has precedence over `cancel`, and `cancel` has precedence over `release`. Thus, the
