@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 359" width="400" height="359" role="img" aria-labelledby="external-waits-narrow-dark-title external-waits-narrow-dark-desc">
+<title id="external-waits-narrow-dark-title">Each external wait releases the worker until a value arrives</title>
+<desc id="external-waits-narrow-dark-desc">The order handler waits for a signal, and no worker holds the task. The application calls sendSignal, and Workhorse stores the payload and sets the task to ready. A worker runs the handler from the first line. The signal wait returns the payload, and the handler waits for an operator. An operator tool calls completeHumanWait. A worker runs the handler again, and each wait returns its stored value.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="359" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">first run</text>
+<rect x="104" y="24" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="24" width="272" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="240" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handler: waitForSignal</text>
+<text x="240" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">releases the lease</text>
+<path d="M 240,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">webhook</text>
+<rect x="104" y="80" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="80" width="272" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="240" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">application: sendSignal</text>
+<text x="240" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">payload stored · task ready</text>
+<path d="M 240,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">second run</text>
+<rect x="104" y="136" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="136" width="272" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="240" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the signal wait returns</text>
+<text x="240" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">then waitForHuman</text>
+<path d="M 240,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">decision</text>
+<rect x="104" y="192" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="192" width="272" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="240" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">operator: completeHumanWait</text>
+<text x="240" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">decision stored · task ready</text>
+<path d="M 240,234 V 246" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="273" fill="#f2f4f5" font-size="9" font-family="Geist Mono">third run</text>
+<rect x="104" y="248" width="272" height="42" rx="6" fill="#04080e"/>
+<rect x="104" y="248" width="272" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="240" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">both waits return</text>
+<text x="240" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">their stored values</text>
+<text x="24" y="312" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line of the</text>
+<text x="24" y="327" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">handler. A repeated delivery does not</text>
+<text x="24" y="342" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">resume the task.</text>
+</svg>

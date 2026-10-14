@@ -506,6 +506,21 @@ operator decision.
 4. An operator decides. An authenticated operator tool calls `Queue.completeHumanWait`.
 5. Workhorse calls the handler again, and each wait returns its stored value.
 
+<picture className="dark:hidden">
+  <source media="(max-width: 600px)" srcSet="/diagrams/external-waits-narrow-light.png" />
+  <img
+    src="/diagrams/external-waits-light.png"
+    alt="Each external wait releases the worker, and a value from the application or an operator makes the task ready again"
+  />
+</picture>
+<picture className="hidden dark:block">
+  <source media="(max-width: 600px)" srcSet="/diagrams/external-waits-narrow-dark.png" />
+  <img
+    src="/diagrams/external-waits-dark.png"
+    alt="Each external wait releases the worker, and a value from the application or an operator makes the task ready again"
+  />
+</picture>
+
 Thus, each external wait releases the worker until a value arrives. Workhorse keeps each delivery,
 and each delivery is idempotent. A network retry cannot resume the task two times. Read
 [Signals](/docs/signals) and [Human waits](/docs/human-waits) for the timeout and authorization

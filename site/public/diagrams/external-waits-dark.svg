@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 396" width="960" height="396" role="img" aria-labelledby="external-waits-dark-title external-waits-dark-desc">
+<title id="external-waits-dark-title">Each external wait releases the worker until a value arrives</title>
+<desc id="external-waits-dark-desc">The order handler waits for a signal, and no worker holds the task. The application calls sendSignal, and Workhorse stores the payload and sets the task to ready. A worker runs the handler from the first line. The signal wait returns the payload, and the handler waits for an operator. An operator tool calls completeHumanWait. A worker runs the handler again, and each wait returns its stored value.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="396" fill="#04080e"/>
+<path d="M 416.5,224 V 116" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 710.5,300 V 116" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="269.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">first run</text>
+<text x="416.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">webhook</text>
+<text x="563.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">second run</text>
+<text x="710.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">decision</text>
+<text x="857.5" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">third run</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="96" fill="#f2f4f5" font-size="10" font-family="Geist Mono">task</text>
+<text x="24" y="172" fill="#f2f4f5" font-size="10" font-family="Geist Mono">handler</text>
+<text x="24" y="248" fill="#f2f4f5" font-size="10" font-family="Geist Mono">application</text>
+<text x="24" y="324" fill="#f2f4f5" font-size="10" font-family="Geist Mono">operator</text>
+<rect x="200" y="72" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="269.5" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<text x="269.5" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no owner</text>
+<rect x="347" y="72" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="347" y="72" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="416.5" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<text x="416.5" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">payload stored</text>
+<rect x="494" y="72" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="494" y="72" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="563.5" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<text x="563.5" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no owner</text>
+<rect x="641" y="72" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="641" y="72" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="710.5" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<text x="710.5" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">decision stored</text>
+<rect x="788" y="72" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="788" y="72" width="139" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="857.5" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<text x="857.5" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a worker runs it</text>
+<rect x="200" y="148" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="148" width="139" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="269.5" y="166" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">waitForSignal</text>
+<text x="269.5" y="180" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">releases the lease</text>
+<rect x="494" y="148" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="494" y="148" width="139" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="563.5" y="166" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">signal returns</text>
+<text x="563.5" y="180" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">then waitForHuman</text>
+<rect x="788" y="148" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="788" y="148" width="139" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="857.5" y="166" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">both waits return</text>
+<text x="857.5" y="180" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">their stored values</text>
+<rect x="347" y="224" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="347" y="224" width="139" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="416.5" y="242" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sendSignal</text>
+<text x="416.5" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after the webhook</text>
+<rect x="641" y="300" width="139" height="40" rx="6" fill="#04080e"/>
+<rect x="641" y="300" width="139" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="710.5" y="318" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">completeHumanWait</text>
+<text x="710.5" y="332" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">an operator decides</text>
+<text x="24" y="380" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line of the handler. A repeated delivery does not resume the task.</text>
+</svg>
