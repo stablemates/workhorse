@@ -40,6 +40,7 @@ import {
   priorityOrder,
   priorityOrderNarrow,
 } from "./priority-diagram.js";
+import { contractChecks, contractChecksNarrow } from "./payload-contracts-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import {
   retryAttempts,
@@ -136,4 +137,6 @@ export const diagrams = [
   throttleWindowNarrow,
   scheduleCatchup,
   scheduleCatchupNarrow,
+  contractChecks,
+  contractChecksNarrow,
 ];

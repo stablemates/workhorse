@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="contracts-checks-narrow-light-title contracts-checks-narrow-light-desc">
+<title id="contracts-checks-narrow-light-title">Workhorse checks the payload before it saves a task, and the result before it completes it</title>
+<desc id="contracts-checks-narrow-light-desc">The app enqueues mail.send. Workhorse checks the payload with the payload contract. If the check fails, the enqueue code gets TaskContractValidationError, and Workhorse saves no task. Otherwise, Workhorse saves the task with the version mail-current. A worker runs the handler, and Workhorse checks the result with mail-current. If the check fails, the attempt fails, and the retry rules apply. Otherwise, the task is complete.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="400" height="400" fill="#f9fafb"/>
+<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">app</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the app enqueues mail.send</text>
+<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse checks the payload</text>
+<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">fails</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TaskContractValidationError</text>
+<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no task is saved</text>
+<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">passes</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task saved</text>
+<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">keeps mail-current</text>
+<text x="24" y="217" fill="#1a2027" font-size="9" font-family="Geist Mono">worker</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="211" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the handler returns</text>
+<text x="244" y="225" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse checks the result</text>
+<text x="24" y="273" fill="#1a2027" font-size="9" font-family="Geist Mono">fails</text>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="267" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the attempt fails</text>
+<text x="244" y="281" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the retry rules apply</text>
+<text x="24" y="329" fill="#1a2027" font-size="9" font-family="Geist Mono">passes</text>
+<rect x="112" y="304" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="304" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="323" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task complete</text>
+<text x="244" y="337" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the result is stored</text>
+<text x="24" y="368" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The error occurs in the enqueue code, or</text>
+<text x="24" y="383" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">in the attempt that returned the result.</text>
+</svg>
