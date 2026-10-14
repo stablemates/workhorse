@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 224" width="960" height="224" role="img" aria-labelledby="debounce-preserve-light-title debounce-preserve-light-desc">
+<title id="debounce-preserve-light-title">With preserve, the first request sets the run time</title>
+<desc id="debounce-preserve-light-desc">Requests for doc-42 use a window of 2 s and schedule preserve. Revision 1 at 0 s creates a task that runs at 2 s. Revision 2 at 1 s replaces the payload, and the run time stays at 2 s. Soon after 2 s, a worker indexes revision 2.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="224" fill="#f9fafb"/>
+<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">doc-42</text>
+<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">schedule: "preserve"</text>
+<text x="240" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
+<text x="352" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">1 s</text>
+<text x="464" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">2 s</text>
+<text x="576" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">3 s</text>
+<text x="688" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">4 s</text>
+<text x="800" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">5 s</text>
+<line x1="240" y1="52" x2="800" y2="52" stroke="rgba(26,32,39,0.14)"/>
+<text x="24" y="88" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">revision 1</text>
+<text x="24" y="103" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">accepted</text>
+<rect x="240" y="72" width="224" height="40" rx="6" fill="#f9fafb"/>
+<rect x="240" y="72" width="224" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="352" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">run time 2 s</text>
+<text x="352" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">set by revision 1</text>
+<text x="24" y="144" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">revision 2</text>
+<text x="24" y="159" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">replaced</text>
+<rect x="352" y="128" width="112" height="40" rx="6" fill="#f9fafb"/>
+<rect x="352" y="128" width="112" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="408" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">stays 2 s</text>
+<text x="408" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">new payload</text>
+<rect x="472" y="128" width="132" height="40" rx="6" fill="#f9fafb"/>
+<rect x="472" y="128" width="132" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="538" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runs</text>
+<text x="538" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">indexes revision 2</text>
+<text x="24" y="208" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Later requests replace only the payload. The task runs by a known time.</text>
+</svg>
