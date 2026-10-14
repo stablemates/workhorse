@@ -28,6 +28,11 @@ handler for `email.send`, with a batch size of 20 and a linger of 50 ms.
 5. At about 50 ms, the linger ends. The worker calls the handler with the seven tasks. A second
    provider request sends them.
 
+<Diagram
+  name="batch-handlers-timing"
+  alt="A full batch runs at once, and a partial batch runs after the linger"
+/>
+
 Thus, 27 tasks need two provider requests, not 27.
 
 A batch is the set of tasks that the worker gives to one handler call. The linger is the maximum
@@ -198,6 +203,8 @@ other 19.
 3. Workhorse completes the 19 successful tasks. Each completion uses the fence token of its own
    task.
 4. The failed task follows its own retry policy and attempt budget.
+
+<Diagram name="batch-handlers-outcomes" alt="Each outcome of a batch applies to its own task" />
 
 If the handler throws an error or returns a list that is not valid, Workhorse fails all 20
 tasks. Each task still uses its own fence token and retry budget.

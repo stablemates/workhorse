@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 303" width="400" height="303" role="img" aria-labelledby="batch-handlers-timing-narrow-light-title batch-handlers-timing-narrow-light-desc">
+<title id="batch-handlers-timing-narrow-light-title">A full batch runs at once, and a partial batch runs after the linger</title>
+<desc id="batch-handlers-timing-narrow-light-desc">A worker with a batch handler for email.send claims 27 tasks. The handler takes a maximum of 20 tasks, with a linger of 50 ms. The first 20 tasks make a full batch, and the handler gets them at once. The other seven wait for the linger, and the handler gets them at about 50 ms. 27 tasks need two provider requests.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="400" height="303" fill="#f9fafb"/>
+<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">0 ms</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">27 tasks claimed</text>
+<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">each fills one slot</text>
+<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">0 ms</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">batch 1: 20 tasks</text>
+<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">full · provider request 1</text>
+<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">0–50 ms</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">batch 2: 7 tasks</text>
+<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the linger waits for more</text>
+<path d="M 248,178 V 190" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="217" fill="#1a2027" font-size="9" font-family="Geist Mono">50 ms</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="211" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">batch 2 runs</text>
+<text x="244" y="225" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">provider request 2</text>
+<text x="24" y="256" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">27 tasks need two provider requests,</text>
+<text x="24" y="271" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">not 27.</text>
+</svg>
