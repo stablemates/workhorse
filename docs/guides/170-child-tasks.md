@@ -23,6 +23,13 @@ charge runs as its own task on the `payments` queue, so a payments worker can do
 5. Worker B runs the handler again from the start. The `runChild` call has the same name and
    request, so it returns the stored receipt and creates no task.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/child-tasks-join-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/child-tasks-join-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/child-tasks-join-dark.png">
+  <img src="../../site/public/diagrams/child-tasks-join-light.png" width="960" alt="A parent gives up its worker until its child succeeds">
+</picture>
+
 ```ts
 worker.handle<{ id: string }>("orders.checkout", async (order, ctx) => {
   const charge = await ctx.runChild<{ orderId: string }, { receiptId: string }>(
@@ -192,6 +199,13 @@ call does not return a failed or canceled outcome to the handler.
 1. At 2 s, the `inventory` child succeeds.
 2. At 5 s, the `fraud` child fails.
 3. Workhorse fails the parent. The handler does not run again.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/child-tasks-modes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/child-tasks-modes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/child-tasks-modes-dark.png">
+  <img src="../../site/public/diagrams/child-tasks-modes-light.png" width="960" alt="The join mode decides what a failed child does to the parent">
+</picture>
 
 Thus, a failed child fails the parent, and a canceled child cancels the parent. If one child fails
 and another child is canceled, the failure has priority. If every child succeeds, the call returns

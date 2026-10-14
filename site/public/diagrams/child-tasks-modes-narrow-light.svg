@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 303" width="400" height="303" role="img" aria-labelledby="child-tasks-modes-narrow-light-title child-tasks-modes-narrow-light-desc">
+<title id="child-tasks-modes-narrow-light-title">The join mode decides what a failed child does to the parent</title>
+<desc id="child-tasks-modes-narrow-light-desc">The checkout handler for ord-9 starts the fraud and inventory children. At 2 s, inventory succeeds. At 5 s, fraud fails. With runChildren, Workhorse releases the parent, and the handler runs again and gets a failed outcome for fraud. With runChildrenAll, Workhorse fails the parent, and the handler does not run again.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="400" height="303" fill="#f9fafb"/>
+<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">2 s</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">inventory succeeds</text>
+<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the parent stays blocked</text>
+<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">5 s</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">fraud fails</text>
+<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">every child has ended</text>
+<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runChildren</text>
+<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the handler gets a failed outcome</text>
+<text x="24" y="217" fill="#1a2027" font-size="9" font-family="Geist Mono">or</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="244" y="211" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">runChildrenAll</text>
+<text x="244" y="225" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the parent fails · no second run</text>
+<text x="24" y="256" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">runChildren returns each outcome.</text>
+<text x="24" y="271" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">runChildrenAll fails the parent instead.</text>
+</svg>
