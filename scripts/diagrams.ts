@@ -15,6 +15,12 @@ import {
   retrySpread,
   retrySpreadNarrow,
 } from "./retries-diagram.js";
+import {
+  signalsOnce,
+  signalsOnceNarrow,
+  signalsWait,
+  signalsWaitNarrow,
+} from "./signals-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
 
 /** Every diagram that `pnpm diagrams:generate` writes to `site/public/diagrams/`. */
@@ -39,4 +45,8 @@ export const diagrams = [
   cancellationStopNarrow,
   externalWaits,
   externalWaitsNarrow,
+  signalsWait,
+  signalsWaitNarrow,
+  signalsOnce,
+  signalsOnceNarrow,
 ];

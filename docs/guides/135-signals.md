@@ -23,6 +23,13 @@ it. The handler waits for a signal named `approval`. The review service answers 
    calls `ctx.waitForSignal("approval")` again. Now the call returns the stored payload at once, and
    the handler publishes the order.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/signals-wait-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/signals-wait-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/signals-wait-dark.png">
+  <img src="../../site/public/diagrams/signals-wait-light.png" width="960" alt="A signal wait frees the worker until the payload arrives">
+</picture>
+
 ```ts
 const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");
 if (approval.approved) await publishOrder();
@@ -90,6 +97,13 @@ the actor `review-service`.
    `duplicate` with the stored payload. The task does not resume again.
 3. At 3 h + 1 min, a second reviewer sends `{ "approved": false }` with the key `review-78`.
    Workhorse returns `already_delivered` with the first payload.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/signals-once-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/signals-once-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/signals-once-dark.png">
+  <img src="../../site/public/diagrams/signals-once-light.png" width="960" alt="Workhorse accepts only the first delivery of a signal">
+</picture>
 
 Thus, the first accepted delivery resumes the task, and later deliveries do not change it. An
 idempotency key identifies one request. If the service sends `review-77` again with a different
