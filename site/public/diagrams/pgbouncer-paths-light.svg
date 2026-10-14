@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 336" width="960" height="336" role="img" aria-labelledby="pgbouncer-paths-light-title pgbouncer-paths-light-desc">
+<title id="pgbouncer-paths-light-title">Every queue operation works through the pooler; only the listener needs its own session</title>
+<desc id="pgbouncer-paths-light-desc">The app shop enqueues order.fulfill for order-42 in one transaction through PgBouncer in transaction mode. The worker w1 claims, sends heartbeats, and completes through the same pooler. Both work. The LISTEN workhorse_tasks of the listener gets no notification through transaction mode, so w1 claims at its next fallback poll. Through a direct or session-mode pool, the wake hint arrives.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="336" fill="#f9fafb"/>
+<text x="304" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">client</text>
+<text x="554" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">pool path</text>
+<text x="806" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">result</text>
+<line x1="176" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
+<path d="M 432,92 H 454" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 652,92 H 674" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="88" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">shop</text>
+<text x="24" y="103" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the app</text>
+<rect x="176" y="72" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="72" width="256" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="304" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue order.fulfill</text>
+<text x="304" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">with order-42 · one transaction</text>
+<rect x="456" y="72" width="196" height="40" rx="6" fill="#f9fafb"/>
+<rect x="456" y="72" width="196" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="554" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PgBouncer</text>
+<text x="554" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">transaction mode</text>
+<rect x="676" y="72" width="260" height="40" rx="6" fill="#f9fafb"/>
+<rect x="676" y="72" width="260" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="806" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">works</text>
+<text x="806" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">commits together</text>
+<path d="M 432,148 H 454" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 652,148 H 674" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="144" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">w1</text>
+<text x="24" y="159" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the worker</text>
+<rect x="176" y="128" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="128" width="256" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="304" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">claim · heartbeat · complete</text>
+<text x="304" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">self-contained statements</text>
+<rect x="456" y="128" width="196" height="40" rx="6" fill="#f9fafb"/>
+<rect x="456" y="128" width="196" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="554" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PgBouncer</text>
+<text x="554" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">transaction mode</text>
+<rect x="676" y="128" width="260" height="40" rx="6" fill="#f9fafb"/>
+<rect x="676" y="128" width="260" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="806" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">works</text>
+<text x="806" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">on any server session</text>
+<path d="M 432,204 H 454" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 652,204 H 674" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="200" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">w1</text>
+<text x="24" y="215" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the listener</text>
+<rect x="176" y="184" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="184" width="256" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="304" y="202" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">LISTEN workhorse_tasks</text>
+<text x="304" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">session state</text>
+<rect x="456" y="184" width="196" height="40" rx="6" fill="#f9fafb"/>
+<rect x="456" y="184" width="196" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="554" y="202" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PgBouncer</text>
+<text x="554" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">transaction mode</text>
+<rect x="676" y="184" width="260" height="40" rx="6" fill="#f9fafb"/>
+<rect x="676" y="184" width="260" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="806" y="202" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no wake hint</text>
+<text x="806" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">next fallback poll</text>
+<path d="M 432,260 H 454" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 652,260 H 674" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="256" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">w1</text>
+<text x="24" y="271" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the listener</text>
+<rect x="176" y="240" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="176" y="240" width="256" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="304" y="258" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">LISTEN workhorse_tasks</text>
+<text x="304" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">session state</text>
+<rect x="456" y="240" width="196" height="40" rx="6" fill="#f9fafb"/>
+<rect x="456" y="240" width="196" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="554" y="258" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">direct pool</text>
+<text x="554" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">or session mode</text>
+<rect x="676" y="240" width="260" height="40" rx="6" fill="#f9fafb"/>
+<rect x="676" y="240" width="260" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="806" y="258" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">wake hint arrives</text>
+<text x="806" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the worker claims at once</text>
+<text x="24" y="320" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Without the wake hint, tasks still run, but they start at the next poll of the worker.</text>
+</svg>

@@ -88,6 +88,13 @@ the worker to claim at once, before its next poll. The pooler decides if the wak
 3. `w1` gets no notification and no error.
 4. At its next fallback poll, `w1` claims the task and runs it.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/pgbouncer-paths-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/pgbouncer-paths-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/pgbouncer-paths-dark.png">
+  <img src="../../site/public/diagrams/pgbouncer-paths-light.png" width="960" alt="Every queue operation works through the pooler; only the listener needs its own session">
+</picture>
+
 The task runs correctly, but it starts later than it can.
 
 PgBouncer in session mode delivers notifications as usual. PgCat holds a notification until the
@@ -186,6 +193,13 @@ from the pool. Handlers cannot use these reserved connections.
 - **Rust.** The workers hold four heartbeat connections in the pool. 16 connections remain. The
   four listener connections are outside the pool, so the server or the pooler must accept four
   more clients.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/pgbouncer-budget-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/pgbouncer-budget-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/pgbouncer-budget-dark.png">
+  <img src="../../site/public/diagrams/pgbouncer-budget-light.png" width="960" alt="Four workers on a pool of 20 keep some connections for themselves">
+</picture>
 
 <details>
 <summary>Reference: connections each language holds</summary>
