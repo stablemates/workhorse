@@ -82,6 +82,7 @@ import {
   healthVerdict,
   healthVerdictNarrow,
 } from "./queue-health-diagram.js";
+import { quickstartCrash, quickstartCrashNarrow } from "./quickstart-diagram.js";
 import { rateBucket, rateBucketNarrow, rateKeys, rateKeysNarrow } from "./rate-limits-diagram.js";
 import {
   redriveCopy,
@@ -256,4 +257,6 @@ export const diagrams = [
   serverlessRuntimesNarrow,
   serverlessTiers,
   serverlessTiersNarrow,
+  quickstartCrash,
+  quickstartCrashNarrow,
 ];
