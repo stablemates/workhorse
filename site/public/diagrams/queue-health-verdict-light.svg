@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 232" width="960" height="232" role="img" aria-labelledby="queue-health-verdict-light-title queue-health-verdict-light-desc">
+<title id="queue-health-verdict-light-title">The verdict collects one reason for each budget that the queue exceeds</title>
+<desc id="queue-health-verdict-light-desc">A bad deployment stops all workers of billing. Scheduled tasks become due, and no worker tick moves them to ready. When the oldest due task waits longer than its budget, the verdict becomes critical with the reason stalled-promotion. When the leases of the running tasks expire with no recovery, the verdict adds expired-leases. Each reason has a code, the observed value, and the budget.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="232" fill="#f9fafb"/>
+<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">billing</text>
+<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the workers stop</text>
+<text x="317.3333333333333" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">before</text>
+<text x="568" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">due tasks wait</text>
+<text x="818.6666666666666" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">leases expire</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(26,32,39,0.14)"/>
+<text x="24" y="97" fill="#1a2027" font-size="10" font-family="Geist Mono">event</text>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="317.3333333333333" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">workers run</text>
+<text x="317.3333333333333" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">each tick moves due tasks</text>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="568" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no worker tick</text>
+<text x="568" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the oldest due task waits</text>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="818.6666666666666" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no recovery</text>
+<text x="818.6666666666666" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">running leases expire</text>
+<text x="24" y="153" fill="#1a2027" font-size="10" font-family="Geist Mono">verdict</text>
+<rect x="200" y="128" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="317.3333333333333" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">healthy</text>
+<text x="317.3333333333333" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">no budget exceeded</text>
+<rect x="450.66666666666663" y="128" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="450.66666666666663" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="568" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">critical</text>
+<text x="568" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stalled-promotion</text>
+<rect x="701.3333333333333" y="128" width="234.66666666666666" height="40" rx="6" fill="#f9fafb"/>
+<rect x="701.3333333333333" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="818.6666666666666" y="146" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">critical</text>
+<text x="818.6666666666666" y="160" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stalled-promotion · expired-leases</text>
+<text x="24" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each reason has a stable code, the observed value, and the budget that the value exceeds.</text>
+</svg>
