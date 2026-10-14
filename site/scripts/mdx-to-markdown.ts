@@ -15,19 +15,25 @@
  * indentation. A fenced block indented by four spaces is an indented code block
  * wrapped in a fence, and a reader counting backticks sees the wrong thing.
  *
- * The transform knows `Tabs` and `Tab` and nothing else. Any other MDX
- * component throws, naming the component and the page, because a silent pass
- * through would put a bare JSX tag in front of an agent.
+ * A `<Diagram>` shows a generated diagram with a full-size view. The twin
+ * replaces it with a Markdown image of the wide light variant.
+ *
+ * The transform knows `Tabs`, `Tab`, and `Diagram` and nothing else. Any other
+ * MDX component throws, naming the component and the page, because a silent
+ * pass through would put a bare JSX tag in front of an agent.
  */
 
 /** MDX components this transform can expand. Anything else is a build failure. */
-const knownComponents: ReadonlySet<string> = new Set(["Tabs", "Tab"]);
+const knownComponents: ReadonlySet<string> = new Set(["Tabs", "Tab", "Diagram"]);
 
 const fenceEdge = /^\s*(?:```|~~~)/;
 const tabsOpen = /^\s*<Tabs\b([^>]*)>\s*$/;
 const tabsClose = /^\s*<\/Tabs>\s*$/;
 const tabOpen = /^\s*<Tab\b([^>]*)>\s*$/;
 const tabClose = /^\s*<\/Tab>\s*$/;
+const diagramOpen = /^\s*<Diagram\b/;
+const nameAttribute = /\bname="([^"]*)"/;
+const altAttribute = /\balt="([^"]*)"/;
 const itemsAttribute = /items=\{\[(.*?)]}/;
 const valueAttribute = /value="([^"]*)"/;
 const inlineCode = /`[^`]*`/g;
@@ -70,9 +76,19 @@ function unknownComponent(line: string, page: string): void {
   }
 }
 
+/** Turns the source of one `<Diagram name="…" alt="…" />` into a Markdown image. */
+function diagramImage(source: string, page: string): string {
+  const name = nameAttribute.exec(source)?.[1];
+  const alt = altAttribute.exec(source)?.[1];
+  if (!name || alt === undefined) {
+    throw new Error(`The docs page "${page}" has a <Diagram> with no name or no alt`);
+  }
+  return `![${alt}](/diagrams/${name}-light.png)`;
+}
+
 /**
  * Expands `body`, an MDX page with its frontmatter already removed, into
- * Markdown. Throws on any MDX component other than `Tabs` and `Tab`, naming the
+ * Markdown. Throws on any MDX component other than `Tabs`, `Tab`, and `Diagram`, naming the
  * component and `page`.
  */
 export function mdxToMarkdown(body: string, page: string): string {
@@ -82,6 +98,8 @@ export function mdxToMarkdown(body: string, page: string): string {
   let expanded: string[] | undefined;
   let tab: OpenTab | undefined;
   let inFence = false;
+  // The source lines of a `<Diagram>` tag that spans several lines.
+  let diagram: string[] | undefined;
   // A `</Tabs>` line already ends its block with a blank line, so the blank line
   // that followed the tag in the source would double it.
   let skipBlankLine = false;
@@ -107,6 +125,14 @@ export function mdxToMarkdown(body: string, page: string): string {
     }
     if (inFence) {
       sink().push(line);
+      continue;
+    }
+
+    if (diagram || diagramOpen.test(line)) {
+      diagram = [...(diagram ?? []), line];
+      if (!line.includes("/>")) continue;
+      sink().push(diagramImage(diagram.join(" "), page));
+      diagram = undefined;
       continue;
     }
 
@@ -154,6 +180,7 @@ export function mdxToMarkdown(body: string, page: string): string {
   }
 
   if (expanded) throw new Error(`The docs page "${page}" leaves a <Tabs> unclosed`);
+  if (diagram) throw new Error(`The docs page "${page}" leaves a <Diagram> unclosed`);
   if (inFence) throw new Error(`The docs page "${page}" leaves a code fence unclosed`);
 
   return output.join("\n");

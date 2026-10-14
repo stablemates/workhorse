@@ -258,20 +258,10 @@ can cause the same result. The fence token stops the late write of that worker.
 4. The row now holds fence token 57, so PostgreSQL refuses the write. Worker A cannot change the
    attempt that replaced its attempt.
 
-<picture className="dark:hidden">
-  <source media="(max-width: 600px)" srcSet="/diagrams/leases-and-fences-narrow-light.png" />
-  <img
-    src="/diagrams/leases-and-fences-light.png"
-    alt="A lease gives a task one owner, and a fence token refuses a late write"
-  />
-</picture>
-<picture className="hidden dark:block">
-  <source media="(max-width: 600px)" srcSet="/diagrams/leases-and-fences-narrow-dark.png" />
-  <img
-    src="/diagrams/leases-and-fences-dark.png"
-    alt="A lease gives a task one owner, and a fence token refuses a late write"
-  />
-</picture>
+<Diagram
+  name="leases-and-fences"
+  alt="A lease gives a task one owner, and a fence token refuses a late write"
+/>
 
 Thus, each write that changes a task carries the worker ID and the fence token of the claim. Each
 SQL function compares both values with the row before it writes. If they do not match, the function
