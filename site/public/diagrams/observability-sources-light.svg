@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 348" width="960" height="348" role="img" aria-labelledby="observability-sources-light-title observability-sources-light-desc">
+<title id="observability-sources-light-title">Each worker records its own metrics, and one service records the database gauges</title>
+<desc id="observability-sources-light-desc">Each worker replica records counters and durations for its own work, such as claims and handler outcomes, with the queue, task type, and outcome as attributes. One long-lived service runs WorkhorseMetricsObserver. It reads the shared state in PostgreSQL and records gauges, such as queue depth and the age of ready work. An observer in each replica would export one copy of each gauge per replica.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="348" fill="#f9fafb"/>
+<path d="M 344,180 H 370" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<path d="M 520,112 V 150" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 670,84 H 718" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 184,264 V 292 H 828 V 254" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="458" y="284" width="124" height="12" rx="2" fill="#f9fafb"/>
+<text x="520" y="293" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">COUNTERS · DURATIONS</text>
+<rect x="670" y="64" width="48" height="12" rx="2" fill="#f9fafb"/>
+<text x="694" y="73" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">GAUGES</text>
+<rect x="24" y="48" width="320" height="216" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="36" y="42" width="120" height="12" rx="2" fill="#f9fafb"/>
+<text x="96" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">WORKER REPLICAS · 10</text>
+<rect x="40" y="68" width="288" height="48" rx="6" fill="#f9fafb"/>
+<rect x="40" y="68" width="288" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="184" y="90" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker 1</text>
+<text x="184" y="104" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">its own claims and handlers</text>
+<rect x="40" y="128" width="288" height="48" rx="6" fill="#f9fafb"/>
+<rect x="40" y="128" width="288" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="184" y="150" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker 2</text>
+<text x="184" y="164" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">its own claims and handlers</text>
+<rect x="40" y="188" width="288" height="48" rx="6" fill="#f9fafb"/>
+<rect x="40" y="188" width="288" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="184" y="210" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker 10</text>
+<text x="184" y="224" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">its own claims and handlers</text>
+<rect x="372" y="56" width="296" height="56" rx="6" fill="#f9fafb"/>
+<rect x="372" y="56" width="296" height="56" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="520" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">one service</text>
+<text x="520" y="96" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">WorkhorseMetricsObserver</text>
+<rect x="372" y="152" width="296" height="56" rx="6" fill="#f9fafb"/>
+<rect x="372" y="152" width="296" height="56" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="520" y="178" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PostgreSQL</text>
+<text x="520" y="192" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">queues · leases · workers</text>
+<rect x="720" y="56" width="216" height="196" rx="6" fill="#f9fafb"/>
+<rect x="720" y="56" width="216" height="196" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="828" y="152" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">monitoring backend</text>
+<text x="828" y="166" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">your OpenTelemetry SDK</text>
+<text x="24" y="332" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run one observer for a database. An observer in each of ten replicas exports ten copies of each gauge.</text>
+</svg>
