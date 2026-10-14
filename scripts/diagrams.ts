@@ -1,3 +1,4 @@
+import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import { cancellationStop, cancellationStopNarrow } from "./cancellation-diagram.js";
 import { childJoin, childJoinNarrow, childModes, childModesNarrow } from "./child-tasks-diagram.js";
 import {
@@ -104,4 +105,6 @@ export const diagrams = [
   groupFinishNarrow,
   groupStates,
   groupStatesNarrow,
+  agentLoop,
+  agentLoopNarrow,
 ];
