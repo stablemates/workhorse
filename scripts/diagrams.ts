@@ -48,6 +48,7 @@ import {
 } from "./priority-diagram.js";
 import { contractChecks, contractChecksNarrow } from "./payload-contracts-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
+import { rateBucket, rateBucketNarrow, rateKeys, rateKeysNarrow } from "./rate-limits-diagram.js";
 import {
   retryAttempts,
   retryAttemptsNarrow,
@@ -149,4 +150,8 @@ export const diagrams = [
   policyKeysNarrow,
   policyBudget,
   policyBudgetNarrow,
+  rateBucket,
+  rateBucketNarrow,
+  rateKeys,
+  rateKeysNarrow,
 ];

@@ -25,6 +25,13 @@ tokens to the bucket at the rate, and the burst sets the maximum number of token
 5. At about 40 s, the last of the 50 tasks starts. After the first ten, no more than one task
    started each second.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/rate-limits-bucket-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/rate-limits-bucket-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/rate-limits-bucket-dark.png">
+  <img src="../../site/public/diagrams/rate-limits-bucket-light.png" width="960" alt="The burst starts ten tasks at once, and the rate starts one each second">
+</picture>
+
 The bucket counts starts, not running tasks. A task that succeeds, fails, waits, or loses its lease
 gets no token back. A retry is a new start, so it uses a token too. Set the limit for attempts, not
 for tasks.
@@ -94,6 +101,13 @@ tasks each minute, with a burst of two.
    whole token.
 4. The `globex` bucket is full, and the queue bucket has a token, so the `globex` task starts.
 5. At 12 s, the `acme` bucket has one new token, so one more `acme` task starts.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/rate-limits-keys-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/rate-limits-keys-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/rate-limits-keys-dark.png">
+  <img src="../../site/public/diagrams/rate-limits-keys-light.png" width="960" alt="Each key has its own bucket, so one customer does not delay another">
+</picture>
 
 The tasks of `acme` wait for the tokens of `acme`, and they do not delay `globex`. A task without a
 key uses only the queue bucket.
