@@ -26,6 +26,13 @@ on 14 September.
 5. When the retention window of the day ends, retention can delete 14 September from PostgreSQL.
    The export store keeps the day.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/cold-export-day-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/cold-export-day-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/cold-export-day-dark.png">
+  <img src="../../site/public/diagrams/cold-export-day-light.png" width="960" alt="Cold export copies a finished day before retention deletes it">
+</picture>
+
 A segment is one day of one history table. The exporter writes each segment as one compressed file
 of JSON lines. The file has one line for each row of the table, with all columns. A row is an event,
 an attempt, or a fast-tier outcome. A manifest file
