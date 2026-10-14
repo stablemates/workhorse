@@ -110,6 +110,11 @@ history pass runs at 03:00 UTC.
 3. On day 16 at 03:00, the next pass runs. Its cutoff is the start of day 2. All events of day 1
    are older than the cutoff, so the pass deletes day 1.
 
+<Diagram
+  name="retention-window"
+  alt="A window is a minimum: the event stays until the pass after it expires"
+/>
+
 The event stays for approximately 14 days and 17 hours, not for exactly 14 days.
 
 A window is the minimum time that Workhorse keeps one kind of data. You set a window for each kind:
