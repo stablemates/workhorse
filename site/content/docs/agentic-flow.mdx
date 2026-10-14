@@ -100,6 +100,11 @@ in PostgreSQL. While the task waits, it uses no worker slot.
 4. A worker runs the handler again. `waitForSignal` returns the approval, and the handler completes
    the answer.
 
+<Diagram
+  name="agentic-flow-loop"
+  alt="The agent loop runs four times, but the model plans one time"
+/>
+
 In the two examples, the handler runs four times. The model makes the plan one time, and each tool
 runs one time.
 
