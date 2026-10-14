@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 344" width="400" height="344" role="img" aria-labelledby="human-decisions-wait-narrow-light-title human-decisions-wait-narrow-light-desc">
+<title id="human-decisions-wait-narrow-light-title">A human wait frees the worker until a person decides</title>
+<desc id="human-decisions-wait-narrow-light-desc">At 0 s, worker A runs the handler for acct-19, and the handler waits for the account-review decision. No worker holds the task during the wait, and the dashboard shows the decision to operators. At 40 min, an operator approves, and Workhorse stores the result and sets the task to ready. Worker B runs the handler from its first line. The wait returns the stored result, and the handler activates the account. Both runs are attempt 1.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="400" height="344" fill="#f9fafb"/>
+<text x="24" y="49" fill="#1a2027" font-size="9" font-family="Geist Mono">0 s</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="244" y="43" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker A: waitForHuman</text>
+<text x="244" y="57" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stores the context · frees the slot</text>
+<path d="M 248,66 V 78" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="105" fill="#1a2027" font-size="9" font-family="Geist Mono">0 s to 40 min</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="99" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no worker holds the task</text>
+<text x="244" y="113" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the dashboard shows the decision</text>
+<path d="M 248,122 V 134" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="161" fill="#1a2027" font-size="9" font-family="Geist Mono">40 min</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="244" y="155" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">an operator approves</text>
+<text x="244" y="169" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">result stored · task ready</text>
+<path d="M 248,178 V 190" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="217" fill="#1a2027" font-size="9" font-family="Geist Mono">after 40 min</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="244" y="211" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">worker B: the wait returns</text>
+<text x="244" y="225" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the stored result at once</text>
+<path d="M 248,234 V 246" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="#f9fafb"/>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="244" y="267" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">activateAccount runs</text>
+<text x="244" y="281" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">activates acct-19 · task succeeds</text>
+<text x="24" y="312" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each run starts at the first line of the</text>
+<text x="24" y="327" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">handler. The wait does not use an attempt.</text>
+</svg>

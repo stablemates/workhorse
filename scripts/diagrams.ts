@@ -13,6 +13,12 @@ import {
 } from "./deadlines-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { externalWaits, externalWaitsNarrow } from "./external-waits-diagram.js";
+import {
+  humanEnds,
+  humanEndsNarrow,
+  humanWait,
+  humanWaitNarrow,
+} from "./human-decisions-diagram.js";
 import { leasesAndFences, leasesAndFencesNarrow } from "./leases-and-fences-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
 import {
@@ -59,4 +65,8 @@ export const diagrams = [
   deadlineEndsNarrow,
   timeoutEnds,
   timeoutEndsNarrow,
+  humanWait,
+  humanWaitNarrow,
+  humanEnds,
+  humanEndsNarrow,
 ];
