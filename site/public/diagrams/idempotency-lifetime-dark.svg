@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 264" width="960" height="264" role="img" aria-labelledby="idempotency-lifetime-dark-title idempotency-lifetime-dark-desc">
+<title id="idempotency-lifetime-dark-title">A key stays active for its time limit, also after the task completes</title>
+<desc id="idempotency-lifetime-dark-desc">The key capture:7781 has the default time limit of one day. At 0 h, the first request creates the task. At 1 min, a worker completes it. At 3 h, a client repeats the request and gets the original task. At 25 h, the key is no longer active, and the same request creates a new task.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="264" fill="#04080e"/>
+<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">capture:7781</text>
+<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">ttlMs: 1 day</text>
+<text x="286" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 h</text>
+<text x="474" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">1 min</text>
+<text x="662" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">3 h</text>
+<text x="850" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">25 h</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="97" fill="#f2f4f5" font-size="10" font-family="Geist Mono">request</text>
+<rect x="200" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="286" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the first request</text>
+<text x="286" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">from the client</text>
+<rect x="576" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="576" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="662" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the same request</text>
+<text x="662" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the client repeats it</text>
+<rect x="764" y="72" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="764" y="72" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="850" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the same request</text>
+<text x="850" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the client repeats it</text>
+<text x="24" y="153" fill="#f2f4f5" font-size="10" font-family="Geist Mono">task</text>
+<rect x="200" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="286" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">created</text>
+<text x="286" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">accepted</text>
+<rect x="388" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="388" y="128" width="172" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="474" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">succeeded</text>
+<text x="474" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a worker completes it</text>
+<rect x="576" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="576" y="128" width="172" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="662" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the original task</text>
+<text x="662" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">replayed</text>
+<rect x="764" y="128" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="764" y="128" width="172" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="850" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a new task</text>
+<text x="850" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">accepted</text>
+<text x="24" y="209" fill="#f2f4f5" font-size="10" font-family="Geist Mono">key</text>
+<rect x="200" y="184" width="548" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="184" width="548" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="474" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<text x="474" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a repeat does not make the time limit longer</text>
+<rect x="764" y="184" width="172" height="40" rx="6" fill="#04080e"/>
+<rect x="764" y="184" width="172" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="850" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no longer active</text>
+<text x="850" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after 1 day</text>
+<text x="24" y="248" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Set ttlMs to the longest time in which a client can repeat a request.</text>
+</svg>

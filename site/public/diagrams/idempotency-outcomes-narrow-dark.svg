@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 247" width="400" height="247" role="img" aria-labelledby="idempotency-outcomes-narrow-dark-title idempotency-outcomes-narrow-dark-desc">
+<title id="idempotency-outcomes-narrow-dark-title">One key gives one task. A changed request with the same key fails</title>
+<desc id="idempotency-outcomes-narrow-dark-desc">The first request for capture:7781 binds the key and creates the invoice.capture task. The same request again finds the key and returns the same taskId. A request with the same key and a different payload raises a conflict error. The original task does not change, and Workhorse creates no second task.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="247" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">first</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">accepted</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">binds the key · a new taskId</text>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">again</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">replayed</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the same taskId</text>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">changed</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">conflict error</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no change · no second task</text>
+<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each later request with the same key</text>
+<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">must be the same as the first request.</text>
+</svg>
