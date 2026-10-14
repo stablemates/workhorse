@@ -126,6 +126,21 @@ worker uses the default lease and heartbeat interval, so it sends a heartbeat ea
 5. The worker confirms the cancellation. Workhorse writes the `canceled` outcome and closes the
    attempt as canceled.
 
+<picture className="dark:hidden">
+  <source media="(max-width: 600px)" srcSet="/diagrams/cancellation-stop-narrow-light.png" />
+  <img
+    src="/diagrams/cancellation-stop-light.png"
+    alt="If the handler obeys the signal, the task ends soon after 20 s; if it ignores the signal, recovery cancels the task at 40 s"
+  />
+</picture>
+<picture className="hidden dark:block">
+  <source media="(max-width: 600px)" srcSet="/diagrams/cancellation-stop-narrow-dark.png" />
+  <img
+    src="/diagrams/cancellation-stop-dark.png"
+    alt="If the handler obeys the signal, the task ends soon after 20 s; if it ignores the signal, recovery cancels the task at 40 s"
+  />
+</picture>
+
 Thus, Workhorse asks the handler to stop, and the handler decides when it stops.
 
 If the handler does not obey the signal, nothing stops the handler. Workhorse does not extend the

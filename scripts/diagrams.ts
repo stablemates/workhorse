@@ -1,3 +1,4 @@
+import { cancellationStop, cancellationStopNarrow } from "./cancellation-diagram.js";
 import {
   deliveryCheckpoints,
   deliveryCheckpointsNarrow,
@@ -33,4 +34,6 @@ export const diagrams = [
   retryAttemptsNarrow,
   retrySpread,
   retrySpreadNarrow,
+  cancellationStop,
+  cancellationStopNarrow,
 ];
