@@ -2,6 +2,12 @@ import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import { cancellationStop, cancellationStopNarrow } from "./cancellation-diagram.js";
 import { childJoin, childJoinNarrow, childModes, childModesNarrow } from "./child-tasks-diagram.js";
 import {
+  policyBudget,
+  policyBudgetNarrow,
+  policyKeys,
+  policyKeysNarrow,
+} from "./concurrency-policies-diagram.js";
+import {
   debouncePreserve,
   debouncePreserveNarrow,
   debounceReset,
@@ -139,4 +145,8 @@ export const diagrams = [
   scheduleCatchupNarrow,
   contractChecks,
   contractChecksNarrow,
+  policyKeys,
+  policyKeysNarrow,
+  policyBudget,
+  policyBudgetNarrow,
 ];

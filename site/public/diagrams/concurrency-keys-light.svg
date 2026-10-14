@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 288" width="960" height="288" role="img" aria-labelledby="concurrency-keys-light-title concurrency-keys-light-desc">
+<title id="concurrency-keys-light-title">A full key keeps its tasks ready, although the queue has room</title>
+<desc id="concurrency-keys-light-desc">The policy of the queue mail allows twenty active tasks and three for each key. Six tenant-a tasks, four tenant-b tasks, and two tasks without a key are ready. Workhorse admits three tenant-a tasks, three tenant-b tasks, and the two tasks without a key. The queue has room for twelve more, but each remaining task has a full key, so it stays ready.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="288" fill="#f9fafb"/>
+<text x="24" y="40" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">mail</text>
+<text x="24" y="55" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">maxActive 20 · maxActivePerKey 3</text>
+<text x="24" y="96" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">tenant-a</text>
+<text x="24" y="111" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">6 ready</text>
+<rect x="200" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="80" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="232" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="272" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="272" y="80" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="304" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="344" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="344" y="80" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="376" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="416" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="416" y="80" width="64" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="448" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<rect x="488" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="488" y="80" width="64" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="520" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<rect x="560" y="80" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="560" y="80" width="64" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="592" y="104" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<rect x="680" y="80" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="680" y="80" width="256" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="808" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">key full · 3 of 3</text>
+<text x="808" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">3 tasks stay ready</text>
+<text x="24" y="152" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">tenant-b</text>
+<text x="24" y="167" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">4 ready</text>
+<rect x="200" y="136" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="136" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="232" y="160" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="272" y="136" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="272" y="136" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="304" y="160" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="344" y="136" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="344" y="136" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="376" y="160" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="416" y="136" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="416" y="136" width="64" height="40" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="448" y="160" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<rect x="680" y="136" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="680" y="136" width="256" height="40" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="808" y="154" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">key full · 3 of 3</text>
+<text x="808" y="168" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">1 task stays ready</text>
+<text x="24" y="208" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">no key</text>
+<text x="24" y="223" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">2 ready</text>
+<rect x="200" y="192" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="200" y="192" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="232" y="216" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="272" y="192" width="64" height="40" rx="6" fill="#f9fafb"/>
+<rect x="272" y="192" width="64" height="40" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="304" y="216" fill="#1a2027" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<rect x="680" y="192" width="256" height="40" rx="6" fill="#f9fafb"/>
+<rect x="680" y="192" width="256" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="808" y="210" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">no key limit</text>
+<text x="808" y="224" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">uses queue capacity only</text>
+<text x="24" y="272" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">8 of 20 active. PostgreSQL decides each admission, so the limit holds for any number of workers.</text>
+</svg>
