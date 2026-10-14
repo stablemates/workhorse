@@ -87,6 +87,12 @@ import {
   groupStates,
   groupStatesNarrow,
 } from "./task-groups-diagram.js";
+import {
+  statisticsTiers,
+  statisticsTiersNarrow,
+  statisticsWindow,
+  statisticsWindowNarrow,
+} from "./statistics-diagram.js";
 import { tasksAndState, tasksAndStateNarrow } from "./tasks-and-state-diagram.js";
 import { workerSlots, workerSlotsNarrow } from "./workers-diagram.js";
 import { throttleWindow, throttleWindowNarrow } from "./throttle-diagram.js";
@@ -180,4 +186,8 @@ export const diagrams = [
   batchTimingNarrow,
   batchOutcomes,
   batchOutcomesNarrow,
+  statisticsTiers,
+  statisticsTiersNarrow,
+  statisticsWindow,
+  statisticsWindowNarrow,
 ];
