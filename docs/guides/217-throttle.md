@@ -22,6 +22,13 @@ window closes.
 5. At 12 min, a fourth change arrives. The window closed at 10 min, so Workhorse creates a new task
    with a new `taskId`. Its window ends at 22 min.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/throttle-window-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/throttle-window-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/throttle-window-dark.png">
+  <img src="../../site/public/diagrams/throttle-window-light.png" width="960" alt="Throttle accepts one task in each window">
+</picture>
+
 Four requests make two summaries, one in each window. Each `coalesced` result has the `taskId` of
 the task that opened the window.
 
