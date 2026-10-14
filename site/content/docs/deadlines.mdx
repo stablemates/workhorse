@@ -19,6 +19,8 @@ app enqueues the task at 18:00 with a deadline of 20:00 and an exponential retry
 4. Soon after 20:00, the maintenance of a worker finds the passed deadline. Workhorse ends the task
    as failed, and attempt 4 does not start.
 
+<Diagram name="deadlines-deadline" alt="A deadline ends the task, even if attempts are left" />
+
 Thus, a deadline ends the task even if the attempt budget has attempts left.
 
 To set a deadline, give `deadline` when you enqueue the task. The deadline is a time, not a
@@ -122,6 +124,11 @@ More detail: [Task lifecycle: Deadlines and execution timeouts](https://github.c
    [retry rules](/docs/retries) and schedules attempt 2.
 4. The worker aborts the signal of the handler.
 5. Attempt 2 starts with a full budget of 2 min.
+
+<Diagram
+  name="deadlines-timeout"
+  alt="An execution timeout ends one attempt, and the task continues"
+/>
 
 Thus, a timeout ends one attempt, and the task can continue with a new attempt.
 
