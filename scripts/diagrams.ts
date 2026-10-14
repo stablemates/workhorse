@@ -27,6 +27,7 @@ import {
 } from "./deadlines-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { externalWaits, externalWaitsNarrow } from "./external-waits-diagram.js";
+import { tierWrites, tierWritesNarrow } from "./fast-tier-diagram.js";
 import {
   humanEnds,
   humanEndsNarrow,
@@ -164,4 +165,6 @@ export const diagrams = [
   tenantOptionsNarrow,
   tenantModels,
   tenantModelsNarrow,
+  tierWrites,
+  tierWritesNarrow,
 ];

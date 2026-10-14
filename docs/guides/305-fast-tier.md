@@ -23,6 +23,13 @@ makes these writes:
 3. If the provider fails, the retry also changes the runtime row, adds an event, and writes an
    attempt row.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/fast-tier-writes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/fast-tier-writes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/fast-tier-writes-dark.png">
+  <img src="../../site/public/diagrams/fast-tier-writes-light.png" width="960" alt="The writes of one task on the full tier and on the fast tier">
+</picture>
+
 These records let a task use checkpoints, durable waits, signals, and child tasks. With them, a task
 can stop for days and continue on a different worker. The welcome email never stops, so these
 writes give it nothing.
