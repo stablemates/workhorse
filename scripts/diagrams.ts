@@ -1,4 +1,5 @@
 import { adminGuard, adminGuardNarrow, adminWaits, adminWaitsNarrow } from "./admin-cli-diagram.js";
+import { integrationParts, integrationPartsNarrow } from "./agent-integration-diagram.js";
 import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import {
   batchOutcomes,
@@ -233,4 +234,6 @@ export const diagrams = [
   adminWaitsNarrow,
   adminGuard,
   adminGuardNarrow,
+  integrationParts,
+  integrationPartsNarrow,
 ];
