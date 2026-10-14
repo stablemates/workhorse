@@ -20,6 +20,13 @@ default priority. All worker slots run earlier reminders.
 4. At 4 s, another slot becomes free. No urgent reminder is ready, so the worker gets the oldest
    ordinary reminder.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/priority-order-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/priority-order-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/priority-order-dark.png">
+  <img src="../../site/public/diagrams/priority-order-light.png" width="960" alt="An urgent ready task starts before older ordinary tasks">
+</picture>
+
 To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
 
 ```ts
@@ -146,6 +153,13 @@ tasks for one customer run at the same time. Two reminders for customer `cust-8`
 3. Workhorse skips the urgent reminder, and the worker gets the ordinary reminder for `cust-9`.
 4. At 20 s, one of the `cust-8` reminders completes. The next worker that asks for work gets the
    urgent reminder.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/priority-admission-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/priority-admission-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/priority-admission-dark.png">
+  <img src="../../site/public/diagrams/priority-admission-light.png" width="960" alt="Priority orders only the tasks that the admission rules let start">
+</picture>
 
 Priority sets the order of the tasks that the admission rules let start. If a rule holds back a
 task, the task stays ready and keeps its place.

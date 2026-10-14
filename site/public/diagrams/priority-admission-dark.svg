@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="priority-admission-dark-title priority-admission-dark-desc">
+<title id="priority-admission-dark-title">Priority orders only the tasks that the admission rules let start</title>
+<desc id="priority-admission-dark-desc">Queue billing lets two tasks for one customer run at the same time, and two reminders for cust-8 run. At 0 s, an urgent reminder for cust-8 and an ordinary reminder for cust-9 are ready. At 1 s, cust-8 has no free capacity, so Workhorse skips the urgent reminder, and the worker gets the reminder for cust-9. At 20 s, a cust-8 reminder completes, and the next worker gets the urgent reminder.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="280" fill="#04080e"/>
+<text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">billing</text>
+<text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">2 tasks per customer</text>
+<text x="317.3333333333333" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0 s</text>
+<text x="568" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">1 s</text>
+<text x="818.6666666666666" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">20 s</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="97" fill="#f2f4f5" font-size="10" font-family="Geist Mono">ready order</text>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="317.3333333333333" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">urgent cust-8</text>
+<text x="317.3333333333333" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">then ordinary cust-9</text>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="450.66666666666663" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="568" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">urgent cust-8</text>
+<text x="568" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stays ready · keeps its place</text>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="701.3333333333333" y="72" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="818.6666666666666" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">urgent cust-8</text>
+<text x="818.6666666666666" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">first in the order</text>
+<text x="24" y="153" fill="#f2f4f5" font-size="10" font-family="Geist Mono">cust-8</text>
+<rect x="200" y="128" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="317.3333333333333" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 reminders run</text>
+<text x="317.3333333333333" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no free capacity</text>
+<rect x="450.66666666666663" y="128" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="450.66666666666663" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="568" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 reminders run</text>
+<text x="568" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">Workhorse skips urgent cust-8</text>
+<rect x="701.3333333333333" y="128" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="701.3333333333333" y="128" width="234.66666666666666" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="818.6666666666666" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1 reminder completes</text>
+<text x="818.6666666666666" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">capacity is free</text>
+<text x="24" y="209" fill="#f2f4f5" font-size="10" font-family="Geist Mono">worker gets</text>
+<rect x="450.66666666666663" y="184" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="450.66666666666663" y="184" width="234.66666666666666" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="568" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ordinary cust-9</text>
+<text x="568" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the first task that can start</text>
+<rect x="701.3333333333333" y="184" width="234.66666666666666" height="40" rx="6" fill="#04080e"/>
+<rect x="701.3333333333333" y="184" width="234.66666666666666" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="818.6666666666666" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">urgent cust-8</text>
+<text x="818.6666666666666" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the next worker gets it</text>
+<text x="24" y="264" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">An admission rule can hold back an urgent task. The task stays ready and keeps its place.</text>
+</svg>
