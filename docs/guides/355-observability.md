@@ -84,6 +84,13 @@ records gauges. A gauge is a metric that shows a current value.
 3. Each observer exports the same queue depth.
 4. The dashboard shows ten copies of each gauge.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/observability-sources-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/observability-sources-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/observability-sources-dark.png">
+  <img src="../../site/public/diagrams/observability-sources-light.png" width="960" alt="Each worker records its own metrics, and one service records the database gauges">
+</picture>
+
 Do not start the observer in each worker replica. Run one observer in a long-lived service that has
 a PostgreSQL pool:
 

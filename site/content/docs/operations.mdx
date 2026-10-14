@@ -689,6 +689,11 @@ records gauges. A gauge is a metric that shows a current value.
 3. Each observer exports the same queue depth.
 4. The dashboard shows ten copies of each gauge.
 
+<Diagram
+  name="observability-sources"
+  alt="Each worker records its own metrics, and one service records the database gauges"
+/>
+
 Do not start the observer in each worker replica. Run one observer in a long-lived service that has
 a PostgreSQL pool. Create the observer over that pool with an `onError` callback. Call `start()`
 when the service starts, and call `stop()` when the service stops.

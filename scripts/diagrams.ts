@@ -60,6 +60,7 @@ import {
   tenantOptions,
   tenantOptionsNarrow,
 } from "./multi-tenancy-diagram.js";
+import { metricSources, metricSourcesNarrow } from "./observability-diagram.js";
 import { contractChecks, contractChecksNarrow } from "./payload-contracts-diagram.js";
 import { traceAcrossQueue, traceAcrossQueueNarrow } from "./production-telemetry-diagram.js";
 import { readmeOverview, readmeOverviewNarrow } from "./readme-overview-diagram.js";
@@ -209,4 +210,6 @@ export const diagrams = [
   redriveLineageNarrow,
   traceAcrossQueue,
   traceAcrossQueueNarrow,
+  metricSources,
+  metricSourcesNarrow,
 ];
