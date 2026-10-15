@@ -47,6 +47,11 @@ restricted tool list. By default, `TestModel` can call every registered tool.
 4. A new worker activation reads the decision and stores it.
 5. A new `Agent.run` call runs the tool from the stored history and returns the result.
 
+<Diagram
+  name="pydanticai-approval"
+  alt="No process waits for the reviewer: a new activation resumes the Agent"
+/>
+
 The initial Agent accepts `str` or `DeferredToolRequests` as its output. Its `credit` tool uses
 `requires_approval=True`. A deferred response goes back to the caller. No live process waits for
 the reviewer.

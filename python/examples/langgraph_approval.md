@@ -29,6 +29,13 @@ from Workhorse's schema migration.
 Its session lock serializes setup.
 Run setup before admitting tasks; do not grant schema creation to approval request handlers.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/langgraph-owners-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/langgraph-owners-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/langgraph-owners-dark.png">
+  <img src="../../site/public/diagrams/langgraph-owners-light.png" width="960" alt="Workhorse, LangGraph, and your application each own their own state">
+</picture>
+
 ## Application storage
 
 `langgraph_example.bridge` has these columns:

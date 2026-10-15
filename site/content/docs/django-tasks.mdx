@@ -136,6 +136,11 @@ errors.
 4. A later statement in the outer block fails, and Django rolls back the outer block.
 5. PostgreSQL removes the task. The task ID from step 2 now identifies no task.
 
+<Diagram
+  name="django-tasks-acceptance"
+  alt="A TaskResult shows acceptance; the outer block decides the commit"
+/>
+
 A `TaskResult` shows that Workhorse accepted the task in the current transaction. It does not show
 that the transaction committed.
 
