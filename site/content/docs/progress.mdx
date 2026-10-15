@@ -209,6 +209,11 @@ More detail: [Data model: Writes](https://github.com/stablemates/workhorse/blob/
 
 </details>
 
+<Diagram
+  name="progress-write"
+  alt="Each progress write passes four checks before it replaces the value"
+/>
+
 ## Use a checkpoint when the code needs the value
 
 Progress is for an operator to read. A checkpoint is a stored result that a later run of the
