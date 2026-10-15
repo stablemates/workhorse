@@ -51,6 +51,11 @@ wake hints do not arrive in either pool mode.
    sends one.
 5. The fallback poll of the worker finds the task and runs it.
 
+<Diagram
+  name="pgcat-wake-hint"
+  alt="PgCat holds the wake hint until the idle worker sends a query"
+/>
+
 The worker reports that it listens, but the fallback poll does all the dispatch. Polling is the
 mechanism that makes Workhorse correct, so all tasks still run. Only the wake-up is slower.
 

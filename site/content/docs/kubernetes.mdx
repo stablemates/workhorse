@@ -12,6 +12,11 @@ Your deployment system controls images, Secrets, ingress, authentication, and re
 The manifests on this page were applied to a k3s v1.34.1+k3s1 cluster on 2026-09-12. They use only
 standard `batch/v1`, `apps/v1`, and `v1` resources.
 
+<Diagram
+  name="kubernetes-workloads"
+  alt="The schema Job runs first; the dashboard stays behind an internal Service"
+/>
+
 ## Prepare one application image
 
 Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable application image. The
@@ -170,6 +175,8 @@ Make the Pod grace period longer than the Workhorse shutdown deadline. This mani
 period of 120 seconds and a deadline of 110 seconds. The Kubernetes default grace period is 30
 seconds. When the grace period ends, Kubernetes sends `SIGKILL`, so the default stops this drain
 too early. A `preStop` hook uses the same grace period, so this manifest has no hook.
+
+<Diagram name="kubernetes-drain" alt="A grace period of 120 s lets the drain of 110 s finish" />
 
 ## Keep the dashboard internal
 

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 288" width="400" height="288" role="img" aria-labelledby="planetscale-connections-narrow-dark-title planetscale-connections-narrow-dark-desc">
+<title id="planetscale-connections-narrow-dark-title">Which PlanetScale connection each Workhorse part uses</title>
+<desc id="planetscale-connections-narrow-dark-desc">The schema setup uses a direct primary connection on port 5432. The worker uses a direct primary connection pool on port 5432, so the LISTEN wake hints arrive. The application connects directly on port 5432, or through the transaction-mode PgBouncer on port 6432. Through PgBouncer, it must not depend on LISTEN or on session-level state.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="288" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">schema</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">direct primary · :5432</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">DDL works</text>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">worker</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">direct primary pool · :5432</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">wake hints arrive</text>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">app</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">direct · :5432</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">enqueue in your transaction</text>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">app</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PgBouncer · :6432</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no LISTEN · no session state</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each connection uses TLS with a</text>
+<text x="24" y="271" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">certificate check.</text>
+</svg>

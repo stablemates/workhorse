@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="960" height="360" role="img" aria-labelledby="pgcat-wake-hint-dark-title pgcat-wake-hint-dark-desc">
+<title id="pgcat-wake-hint-dark-title">PgCat holds the wake hint until the idle worker sends a query</title>
+<desc id="pgcat-wake-hint-dark-desc">The worker sends LISTEN workhorse_tasks through PgCat, and no error occurs. The worker waits and sends no query. A task is enqueued, and PostgreSQL sends a notification. PgCat buffers it until the next query of the worker. The fallback poll of the worker finds the task, and the buffered notification arrives only with the result of that poll.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="360" fill="#04080e"/>
+<text x="312" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">the worker</text>
+<text x="568" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">PgCat</text>
+<text x="824" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">PostgreSQL</text>
+<line x1="200" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="90" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">1 · listen</text>
+<text x="24" y="105" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">pool mode does not matter</text>
+<path d="M 424,96 H 454" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="200" y="72" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="200" y="72" width="224" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="312" y="94" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">LISTEN workhorse_tasks</text>
+<text x="312" y="108" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">through PgCat</text>
+<rect x="456" y="72" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="456" y="72" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="568" y="94" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">accepts it</text>
+<text x="568" y="108" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no error</text>
+<text x="24" y="154" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">2 · wait</text>
+<text x="24" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the queue is empty</text>
+<rect x="200" y="136" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="200" y="136" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="312" y="158" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">waits</text>
+<text x="312" y="172" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">sends no query</text>
+<text x="24" y="218" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">3 · enqueue</text>
+<text x="24" y="233" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">your application</text>
+<path d="M 712,224 H 682" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="456" y="200" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="456" y="200" width="224" height="48" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="568" y="222" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">buffers the hint</text>
+<text x="568" y="236" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">until the next query</text>
+<rect x="712" y="200" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="712" y="200" width="224" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="824" y="222" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">notification</text>
+<text x="824" y="236" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a task is enqueued</text>
+<text x="24" y="282" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">4 · poll</text>
+<text x="24" y="297" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the fallback poll</text>
+<path d="M 424,288 H 454" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="200" y="264" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="200" y="264" width="224" height="48" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="312" y="286" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">sends the poll query</text>
+<text x="312" y="300" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">and claims the task</text>
+<rect x="456" y="264" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="456" y="264" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="568" y="286" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">relays the hint</text>
+<text x="568" y="300" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">with the poll result</text>
+<text x="24" y="344" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Every task still runs. To keep wake hints, give the worker a direct pool or session-mode PgBouncer.</text>
+</svg>

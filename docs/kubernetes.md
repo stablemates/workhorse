@@ -10,6 +10,13 @@ Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable appli
 image must contain the Workhorse CLI and the compiled worker configuration at
 `/app/dist/workhorse.worker.js`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/kubernetes-workloads-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../site/public/diagrams/kubernetes-workloads-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../site/public/diagrams/kubernetes-workloads-dark.png">
+  <img src="../site/public/diagrams/kubernetes-workloads-light.png" width="960" alt="The schema Job runs first; the dashboard stays behind an internal Service">
+</picture>
+
 ## Supply secrets outside the manifests
 
 Create these Secrets with your secret manager or deployment system before applying the workloads:
@@ -163,6 +170,13 @@ The 120-second Pod grace exceeds the 110-second Workhorse deadline. Kubernetes d
 to 30 seconds and sends `SIGKILL` when it expires, so leaving the default would cut this drain short.
 A `preStop` hook uses the same grace budget; this example omits one so Workhorse receives the full
 window.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/kubernetes-drain-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../site/public/diagrams/kubernetes-drain-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../site/public/diagrams/kubernetes-drain-dark.png">
+  <img src="../site/public/diagrams/kubernetes-drain-light.png" width="960" alt="A grace period of 120 s lets the drain of 110 s finish">
+</picture>
 
 ## Deploy the dashboard behind your ingress
 
