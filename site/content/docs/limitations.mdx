@@ -62,6 +62,11 @@ operator clients. All of them use the shared SQL protocol. Schema installation a
 `workhorse` admin CLI, and the TUI are only in the TypeScript package. Thus, a deployment with many
 languages keeps that package available for these operations.
 
+<Diagram
+  name="limitations-language-parts"
+  alt="Each language runs the queue; only TypeScript changes the schema"
+/>
+
 This is a decision, not a missing feature. No component can migrate the schema when it starts,
 because no component runs as a single instance. The dashboard and each worker deploy on many nodes.
 If each component migrated itself, many migrations would run at the same time. Also, the migration
