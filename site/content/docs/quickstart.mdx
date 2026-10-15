@@ -350,6 +350,11 @@ SURVIVED=1 node crash-demo.ts  # finishes the task
    so `charging card…` does not print.
 5. The handler prints the label and finishes the task.
 
+<Diagram
+  name="quickstart-crash"
+  alt="The worker stops after the charge, and the next run does not charge again"
+/>
+
 The card is charged one time, also after the crash. This is the full model. After an interruption,
 a handler starts again from the top. The checkpoints that you name do not run again.
 
