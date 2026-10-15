@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 432" width="960" height="432" role="img" aria-labelledby="maintenance-cadence-light-title maintenance-cadence-light-desc">
+<title id="maintenance-cadence-light-title">Each worker runs the tick at one cadence and the maintenance routines at another</title>
+<desc id="maintenance-cadence-light-desc">Every worker calls tick_v1 every maintenanceIntervalMs, 1 s by default. Under the workhorse:tick advisory lock, tick_v1 promotes scheduled tasks to ready, then recovers expired leases. At the same cadence, and only with scheduleNamespaces set, the worker evaluates schedules. Every maintenanceRoutinePollMs, 60 s by default, it calls run_maintenance_v1, which runs rollup_stats_v1, prepare_history_partitions_v1, retain_history_v1, prune_terminal_storage_v1, and prune_worker_registry_v1 in this order.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="432" fill="#f9fafb"/>
+<rect x="24" y="48" width="152" height="336" rx="6" fill="#f9fafb"/>
+<rect x="24" y="48" width="152" height="336" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="100" y="220" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">every worker</text>
+<path d="M 176,108 H 230" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="232" y="56" width="704" height="104" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="244" y="50" width="396" height="12" rx="2" fill="#f9fafb"/>
+<text x="442" y="59" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">tick_v1 · every maintenanceIntervalMs, default 1 s · workhorse:tick lock</text>
+<path d="M 572,108 H 594" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="248" y="84" width="324" height="48" rx="6" fill="#f9fafb"/>
+<rect x="248" y="84" width="324" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="410" y="106" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">promote</text>
+<text x="410" y="120" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">scheduled to ready</text>
+<rect x="596" y="84" width="324" height="48" rx="6" fill="#f9fafb"/>
+<rect x="596" y="84" width="324" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="758" y="106" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">recover</text>
+<text x="758" y="120" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">expired leases</text>
+<path d="M 176,204 H 246" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<rect x="248" y="180" width="672" height="48" rx="6" fill="#f9fafb"/>
+<rect x="248" y="180" width="672" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="584" y="202" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schedule evaluation</text>
+<text x="584" y="216" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">same cadence · only with scheduleNamespaces set</text>
+<path d="M 176,316 H 230" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="232" y="252" width="704" height="132" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="244" y="246" width="360" height="12" rx="2" fill="#f9fafb"/>
+<text x="424" y="255" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">run_maintenance_v1 · every maintenanceRoutinePollMs, default 60 s</text>
+<rect x="248" y="276" width="216" height="44" rx="6" fill="#f9fafb"/>
+<rect x="248" y="276" width="216" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="356" y="296" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1</text>
+<text x="356" y="310" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">rollup_stats_v1</text>
+<rect x="476" y="276" width="216" height="44" rx="6" fill="#f9fafb"/>
+<rect x="476" y="276" width="216" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="584" y="296" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2</text>
+<text x="584" y="310" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">prepare_history_partitions_v1</text>
+<path d="M 464,298 H 474" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="704" y="276" width="216" height="44" rx="6" fill="#f9fafb"/>
+<rect x="704" y="276" width="216" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="812" y="296" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">3</text>
+<text x="812" y="310" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">retain_history_v1</text>
+<path d="M 692,298 H 702" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="248" y="332" width="216" height="44" rx="6" fill="#f9fafb"/>
+<rect x="248" y="332" width="216" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="356" y="352" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">4</text>
+<text x="356" y="366" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">prune_terminal_storage_v1</text>
+<rect x="476" y="332" width="216" height="44" rx="6" fill="#f9fafb"/>
+<rect x="476" y="332" width="216" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="584" y="352" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">5</text>
+<text x="584" y="366" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">prune_worker_registry_v1</text>
+<path d="M 464,354 H 474" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 812,320 V 326 H 356 V 330" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="416" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Between passes, a worker sends only the claim query.</text>
+</svg>

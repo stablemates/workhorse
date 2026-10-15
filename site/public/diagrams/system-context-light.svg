@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" width="960" height="680" role="img" aria-labelledby="system-context-light-title system-context-light-desc">
+<title id="system-context-light-title">Every component reaches the durable state through SQL functions in PostgreSQL</title>
+<desc id="system-context-light-desc">The application transaction calls enqueue_v1 or enqueue_batch_v1. The deployment syncs schedules. The TypeScript Worker calls claim_many_v1, heartbeat_many_v1, acknowledge_cancel_v1, complete_v1, fail_v1, register_worker_v1, tick_v1, fire_due_schedules_v2, and the split maintenance routines, and gets the payload, attempt, fence, and operator pause flag. The operator layer calls cancel_v1 with attribution, list_dead_letters_v1, redrive_v1, and redrive_many_v1. The dashboard reads the read model and worker_registry and calls Admin.setWorkerPaused with attribution. Health and scenarios read runtime, outcome, and statistics. A process supervisor sends SIGINT or SIGTERM to the dedicated worker process, and the handler runs external effects outside the SQL transaction.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="680" fill="#f9fafb"/>
+<path d="M 232,66 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="422" y="60" width="172" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="69" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">enqueue_v1 · enqueue_batch_v1</text>
+<path d="M 232,114 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="466" y="108" width="84" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="117" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">schedule sync</text>
+<path d="M 232,162 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="346" y="156" width="324" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="165" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">claim_many_v1 · heartbeat_many_v1 · acknowledge_cancel_v1</text>
+<path d="M 232,210 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="444" y="204" width="128" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="213" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">complete_v1 · fail_v1</text>
+<path d="M 232,258 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="330" y="252" width="356" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="261" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">register_worker_v1 · tick_v1 · fire_due_schedules_v2 · routines</text>
+<path d="M 232,306 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="330" y="300" width="356" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="309" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">cancel_v1 · list_dead_letters_v1 · redrive_v1 · redrive_many_v1</text>
+<path d="M 232,354 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="360" y="348" width="296" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="357" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">read model · worker_registry · Admin.setWorkerPaused</text>
+<path d="M 232,402 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="404" y="396" width="208" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="405" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">reads runtime · outcome · statistics</text>
+<rect x="24" y="48" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="48" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="64" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">application</text>
+<text x="128" y="78" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">a transaction</text>
+<rect x="24" y="96" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="96" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="118" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">deployment</text>
+<rect x="24" y="144" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="144" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="160" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TypeScript Worker</text>
+<text x="128" y="174" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">claim and lease</text>
+<rect x="24" y="192" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="192" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="208" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TypeScript Worker</text>
+<text x="128" y="222" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">settle</text>
+<rect x="24" y="240" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="240" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="256" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TypeScript Worker</text>
+<text x="128" y="270" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">maintain</text>
+<rect x="24" y="288" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="288" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="304" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">operator layer</text>
+<text x="128" y="318" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">with attribution</text>
+<rect x="24" y="336" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="336" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="352" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">dashboard</text>
+<text x="128" y="366" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">pause with attribution</text>
+<rect x="24" y="384" width="208" height="36" rx="6" fill="#f9fafb"/>
+<rect x="24" y="384" width="208" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="128" y="406" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">health and scenarios</text>
+<rect x="784" y="48" width="152" height="372" rx="6" fill="#f9fafb"/>
+<rect x="784" y="48" width="152" height="372" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="860" y="232" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">PostgreSQL</text>
+<text x="860" y="246" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the durable authority</text>
+<path d="M 860,420 V 478" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="786" y="432" width="148" height="12" rx="2" fill="#f9fafb"/>
+<text x="860" y="441" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">payload + attempt + fence</text>
+<rect x="802" y="450" width="116" height="12" rx="2" fill="#f9fafb"/>
+<text x="860" y="459" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">operator pause flag</text>
+<path d="M 232,506 H 782" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="458" y="500" width="100" height="12" rx="2" fill="#f9fafb"/>
+<text x="508" y="509" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">SIGINT / SIGTERM</text>
+<rect x="24" y="480" width="208" height="52" rx="6" fill="#f9fafb"/>
+<rect x="24" y="480" width="208" height="52" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="128" y="510" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">process supervisor</text>
+<rect x="784" y="480" width="152" height="52" rx="6" fill="#f9fafb"/>
+<rect x="784" y="480" width="152" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="860" y="504" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TypeScript Worker</text>
+<text x="860" y="518" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">dedicated process</text>
+<path d="M 860,532 V 586" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="768" y="552" width="184" height="12" rx="2" fill="#f9fafb"/>
+<text x="860" y="561" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">handler outside SQL transaction</text>
+<rect x="784" y="588" width="152" height="44" rx="6" fill="#f9fafb"/>
+<rect x="784" y="588" width="152" height="44" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="860" y="614" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">external effects</text>
+<text x="24" y="664" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A worker owns a task only while the active task_runtime row matches its worker ID and fence token and has not expired.</text>
+</svg>

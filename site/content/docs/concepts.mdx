@@ -112,11 +112,10 @@ attempt fails.
 4. The handler throws an error. Attempts remain, so the task becomes `scheduled` with a retry delay.
 5. After the delay, a worker runs the task again. The handler returns, and the task is `succeeded`.
 
-```
-blocked ──▶ scheduled ──▶ ready ──▶ active ──▶ succeeded
-   │                        ▲ ▲        │  └───▶ failed
-   └────────────────────────┘ └(retry)─┘  └───▶ canceled
-```
+<Diagram
+  name="task-lifecycle"
+  alt="A task is in one of seven states: four live and three finished"
+/>
 
 - `blocked`: the task waits for [prerequisite tasks](/docs/task-dependencies). When they finish,
   its dependency policy makes the task ready or finishes it.

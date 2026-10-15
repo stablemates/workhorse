@@ -6,26 +6,12 @@ health snapshot.
 
 ## Atomic lifecycle
 
-```mermaid
-stateDiagram-v2
-  [*] --> blocked: enqueue with live prerequisite
-  [*] --> ready: enqueue due
-  [*] --> scheduled: enqueue future
-  blocked --> ready: prerequisite succeeds after run_at
-  blocked --> scheduled: prerequisite succeeds before run_at
-  blocked --> canceled: cancel immediately
-  ready --> canceled: cancel immediately
-  scheduled --> canceled: cancel immediately
-  scheduled --> ready: promote
-  ready --> active: claim
-  active --> active: heartbeat / cancel request
-  active --> canceled: exact-fence acknowledgement or requested lease expiry
-  active --> scheduled: named durable wait, same attempt
-  active --> ready: fail/recover, selected or overridden zero delay
-  active --> scheduled: fail/recover, selected or overridden positive delay
-  active --> succeeded: complete
-  active --> failed: exhausted fail/recovery
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-states-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-states-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-states-dark.png">
+  <img src="../../site/public/diagrams/task-states-light.png" width="960" alt="Every lifecycle transition, grouped by the state that it leaves">
+</picture>
 
 ### Enqueue
 
@@ -273,23 +259,12 @@ before it clears the marker.
 In production, workers own maintenance. Workhorse splits maintenance by cadence and by failure
 domain.
 
-```mermaid
-flowchart TB
-  Worker[Every worker] -->|maintenanceIntervalMs,<br/>default 1 s| Tick
-  Worker -.->|same cadence, only with<br/>scheduleNamespaces set| Schedules[Schedule evaluation]
-  Worker -->|maintenanceRoutinePollMs,<br/>default 60 s| Routines
-  subgraph Tick[tick_v1 under the workhorse:tick advisory lock]
-    direction LR
-    Promote[promote: scheduled to ready] --> Recover[recover: expired leases]
-  end
-  subgraph Routines[run_maintenance_v1, in this order]
-    direction LR
-    Rollup[rollup_stats_v1] --> Partitions[prepare_history_partitions_v1]
-    Partitions --> Retain[retain_history_v1]
-    Retain --> Prune[prune_terminal_storage_v1]
-    Prune --> Registry[prune_worker_registry_v1]
-  end
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/maintenance-cadence-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/maintenance-cadence-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/maintenance-cadence-dark.png">
+  <img src="../../site/public/diagrams/maintenance-cadence-light.png" width="960" alt="Each worker runs the tick at one cadence and the maintenance routines at another">
+</picture>
 
 Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default
 1,000 ms). The same cadence drives in-process schedule evaluation. Under the transaction-scoped
@@ -517,16 +492,12 @@ decisions, child joins, and dependency gates keep separate meanings, although th
 The three suspensions below have the same structure. Each suspension clears ownership but does not
 close the logical attempt. Each wake path makes the same attempt claimable under a new fence.
 
-```mermaid
-flowchart LR
-  Active[active<br/>worker + fence N] -->|schedule_wait_v1<br/>future target| Timer[scheduled<br/>wait_name set, no owner]
-  Active -->|wait_for_signal_v1| Signal[scheduled, parked<br/>task_signal_wait pending]
-  Active -->|wait_for_human_v1| Human[scheduled, parked<br/>task_human_wait pending]
-  Timer -->|promote_v1 at run_at| Ready[ready<br/>same attempt]
-  Signal -->|send_signal_v1| Ready
-  Human -->|complete_human_wait_v1| Ready
-  Ready -->|claim, fence N+k| Resumed[active<br/>handler restarts from entry,<br/>named wait replays]
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/durable-suspensions-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/durable-suspensions-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/durable-suspensions-dark.png">
+  <img src="../../site/public/diagrams/durable-suspensions-light.png" width="960" alt="A suspension clears the owner but keeps the attempt; the wake makes it claimable">
+</picture>
 
 #### Scheduling a timer wait
 
@@ -1392,25 +1363,12 @@ Workhorse still rejects the stale write.
 
 The example retries without delay. A delayed retry waits for promotion first.
 
-```mermaid
-sequenceDiagram
-  participant A as Worker A
-  participant PG as PostgreSQL
-  participant B as Worker B
-  A->>PG: claim_many_v1
-  PG-->>A: task, attempt 1, fence 41
-  A->>PG: heartbeat_many_v1 (fence 41)
-  PG-->>A: accepted, expires_at extended
-  Note over A: A stalls past its lease
-  B->>PG: tick_v1 calls recover_expired_v1
-  Note over PG: lease_expired, attempt 2, ready
-  B->>PG: claim_many_v1
-  PG-->>B: task, attempt 2, fence 42
-  A->>PG: complete_v1 (fence 41)
-  PG-->>A: false, no generation matches
-  B->>PG: complete_v1 (fence 42)
-  PG-->>B: true, runtime deleted, outcome inserted
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/lease-recovery-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/lease-recovery-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/lease-recovery-dark.png">
+  <img src="../../site/public/diagrams/lease-recovery-light.png" width="960" alt="Recovery replaces the generation, so the late write of the old worker matches no row">
+</picture>
 
 #### Recovery telemetry
 

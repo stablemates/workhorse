@@ -5,12 +5,25 @@ import { migrateTaskType, migrateTaskTypeNarrow } from "./migrate-diagram.js";
 import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
+import { taskLifecycle, taskLifecycleNarrow } from "./task-lifecycle-diagram.js";
 import {
   schemaCompatibility,
   schemaCompatibilityNarrow,
   workerShutdown,
   workerShutdownNarrow,
 } from "./architecture-diagram.js";
+import {
+  durableSuspensions,
+  durableSuspensionsNarrow,
+  leaseRecovery,
+  leaseRecoveryNarrow,
+  maintenanceCadence,
+  maintenanceCadenceNarrow,
+  systemContext,
+  systemContextNarrow,
+  taskStates,
+  taskStatesNarrow,
+} from "./architecture-core-diagram.js";
 import {
   frameworksShape,
   frameworksShapeNarrow,
@@ -345,4 +358,16 @@ export const diagrams = [
   schemaCompatibilityNarrow,
   workerShutdown,
   workerShutdownNarrow,
+  systemContext,
+  systemContextNarrow,
+  taskStates,
+  taskStatesNarrow,
+  maintenanceCadence,
+  maintenanceCadenceNarrow,
+  durableSuspensions,
+  durableSuspensionsNarrow,
+  leaseRecovery,
+  leaseRecoveryNarrow,
+  taskLifecycle,
+  taskLifecycleNarrow,
 ];

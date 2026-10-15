@@ -18,25 +18,12 @@ work. Schema version 1 stores:
 
 ## System context
 
-```mermaid
-flowchart LR
-  App[Application transaction] -->|enqueue_batch_v1 / enqueue_v1| PG[(PostgreSQL)]
-  Deploy[Deployment] -->|schedule sync| PG
-  Supervisor[Process supervisor] -->|SIGINT / SIGTERM| WorkerProcess[Dedicated worker process]
-  WorkerProcess --> Worker[TypeScript Worker]
-  Worker[TypeScript Worker] -->|claim_many_v1 / heartbeat_many_v1 / acknowledge_cancel_v1| PG
-  Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
-  Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
-  Worker -->|fire_due_schedules_v2 / tick_v1 / split maintenance routines| PG
-  Worker -->|register_worker_v1| PG
-  PG -->|payload + attempt + fence| Worker
-  PG -->|operator pause flag| Worker
-  Worker -->|handler outside SQL transaction| Effects[External effects]
-  Worker -->|complete_v1 / fail_v1| PG
-  Dashboard -->|read model + worker_registry| PG
-  Dashboard -->|Admin.setWorkerPaused with attribution| PG
-  Health[Health and scenarios] -->|read runtime + outcome + statistics| PG
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/system-context-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/system-context-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/system-context-dark.png">
+  <img src="../../site/public/diagrams/system-context-light.png" width="960" alt="Every component reaches the durable state through SQL functions in PostgreSQL">
+</picture>
 
 PostgreSQL is the durable authority. A worker owns a task only while the active `task_runtime` row
 matches its worker ID and fence token and has not expired.
