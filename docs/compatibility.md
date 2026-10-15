@@ -688,6 +688,13 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   backends. Applications should embed a shipped backend rather than call those procedures as a
   public operator API.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/schema-compatibility-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../site/public/diagrams/schema-compatibility-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../site/public/diagrams/schema-compatibility-dark.png">
+  <img src="../site/public/diagrams/schema-compatibility-light.png" width="960" alt="schemaCompatibilityRefusal tests in this order; the first failed test decides">
+</picture>
+
 The TypeScript, Python, Go, and Rust clients and workers implement this protocol. Python runs the same
 canonical SQL fixtures and request mapping through Psycopg, plus transaction integration through
 Psycopg async and asyncpg. Its synchronous and asynchronous workers share one lifecycle core; the
