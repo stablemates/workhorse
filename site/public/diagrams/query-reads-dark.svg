@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 336" width="960" height="336" role="img" aria-labelledby="query-reads-dark-title query-reads-dark-desc">
+<title id="query-reads-dark-title">One read for each operator question</title>
+<desc id="query-reads-dark-desc">admin.getTask tells if a task exists and returns its TaskSnapshot, or null. admin.listTasks returns pages of tasks, newest first, with a cursor and without payloads by default. admin.getTaskTimeline merges events and closed attempts, and it can be empty after retention. queue.health() reads the queue in one SQL statement and gives healthy, degraded, or critical.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="336" fill="#04080e"/>
+<text x="416" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">read</text>
+<text x="776" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">result</text>
+<line x1="256" y1="52" x2="936" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<text x="24" y="88" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Does it exist?</text>
+<text x="24" y="103" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">one task</text>
+<path d="M 576,92 H 614" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="256" y="72" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="256" y="72" width="320" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="416" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">admin.getTask(taskId)</text>
+<text x="416" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the current state</text>
+<rect x="616" y="72" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="616" y="72" width="320" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="776" y="90" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">TaskSnapshot or null</text>
+<text x="776" y="104" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">null if unknown or deleted</text>
+<text x="24" y="144" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Which tasks?</text>
+<text x="24" y="159" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">queue, type, states, time</text>
+<path d="M 576,148 H 614" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="256" y="128" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="256" y="128" width="320" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="416" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">admin.listTasks(query)</text>
+<text x="416" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">newest first</text>
+<rect x="616" y="128" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="616" y="128" width="320" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="776" y="146" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a page and nextCursor</text>
+<text x="776" y="160" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no payloads by default</text>
+<text x="24" y="200" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">What happened?</text>
+<text x="24" y="215" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the history</text>
+<path d="M 576,204 H 614" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="256" y="184" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="256" y="184" width="320" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="416" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">admin.getTaskTimeline</text>
+<text x="416" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">events + closed attempts</text>
+<rect x="616" y="184" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="616" y="184" width="320" height="40" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="776" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">a page of entries</text>
+<text x="776" y="216" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">can be empty after retention</text>
+<text x="24" y="256" fill="#f2f4f5" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">Is it healthy?</text>
+<text x="24" y="271" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">the queue</text>
+<path d="M 576,260 H 614" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="256" y="240" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="256" y="240" width="320" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="416" y="258" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">queue.health()</text>
+<text x="416" y="272" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">one SQL statement</text>
+<rect x="616" y="240" width="320" height="40" rx="6" fill="#04080e"/>
+<rect x="616" y="240" width="320" height="40" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="776" y="258" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">healthy · degraded · critical</text>
+<text x="776" y="272" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">with a code for each reason</text>
+<text x="24" y="320" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">An empty timeline does not prove that a task does not exist. Use getTask for that question.</text>
+</svg>

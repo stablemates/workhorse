@@ -14,6 +14,8 @@ Create `Admin` with the same pool or executor that your app gives to `Queue`:
 const admin = new Admin(pool);
 ```
 
+<Diagram name="query-reads" alt="One read for each operator question" />
+
 ## Read the state of one task
 
 Use `admin.getTask(taskId)` if you know the ID of a task. The method returns a `TaskSnapshot` with
