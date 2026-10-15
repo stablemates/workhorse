@@ -6,6 +6,12 @@ import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import {
+  frameworksShape,
+  frameworksShapeNarrow,
+  integrationsCommon,
+  integrationsCommonNarrow,
+} from "./integrations-diagram.js";
+import {
   activeJobKinds,
   activeJobKindsNarrow,
   djangoTasksAcceptance,
@@ -325,4 +331,8 @@ export const diagrams = [
   activeJobKindsNarrow,
   djangoTasksAcceptance,
   djangoTasksAcceptanceNarrow,
+  integrationsCommon,
+  integrationsCommonNarrow,
+  frameworksShape,
+  frameworksShapeNarrow,
 ];

@@ -11,6 +11,11 @@ The first decision sets the shape of your deployment. The other two change only 
 A Rails application can also keep its job classes through the
 [Active Job adapter](/docs/active-job) of the Ruby gem.
 
+<Diagram
+  name="frameworks-shape"
+  alt="The web process enqueues and serves the dashboard; the worker runs alone"
+/>
+
 ## Run the worker in its own process
 
 A Workhorse worker is a continuous process. It holds a PostgreSQL pool, renews leases, and sends

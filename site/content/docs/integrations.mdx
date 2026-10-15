@@ -46,6 +46,8 @@ transaction object that your code already has.
 If you give Workhorse your open transaction, `enqueue` writes the task in that transaction. If the
 transaction rolls back, PostgreSQL removes the task too. Workhorse never opens a transaction for you.
 
+<Diagram name="integrations-common" alt="Each integration gives Workhorse your transaction" />
+
 Workers always run in their own process. No integration starts a worker in a web request.
 
 ## Next
