@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 348" width="960" height="348" role="img" aria-labelledby="frameworks-shape-light-title frameworks-shape-light-desc">
+<title id="frameworks-shape-light-title">The web process enqueues and serves the dashboard; the worker runs alone</title>
+<desc id="frameworks-shape-light-desc">In the web process, the request handler gets the Queue from the dependency injection of your framework and enqueues in the transaction that writes its data. The dashboard mounts in one of two shapes: host.handle(request) for a Fetch Request, or dashboardNodeMiddleware(host) for a Node req and res pair. The worker runs as its own continuous process. Both connect to PostgreSQL.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="348" fill="#f9fafb"/>
+<rect x="24" y="48" width="568" height="180" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="36" y="42" width="72" height="12" rx="2" fill="#f9fafb"/>
+<text x="72" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">WEB PROCESS</text>
+<rect x="616" y="48" width="320" height="180" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="628" y="42" width="88" height="12" rx="2" fill="#f9fafb"/>
+<text x="672" y="51" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">WORKER PROCESS</text>
+<path d="M 284,100 H 318" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 304,228 V 258" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 776,228 V 258" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="40" y="76" width="244" height="48" rx="6" fill="#f9fafb"/>
+<rect x="40" y="76" width="244" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="162" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">request handler</text>
+<text x="162" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">writes your data</text>
+<rect x="320" y="76" width="256" height="48" rx="6" fill="#f9fafb"/>
+<rect x="320" y="76" width="256" height="48" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="448" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Queue from your DI</text>
+<text x="448" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">enqueues in that transaction</text>
+<text x="40" y="150" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="start">the dashboard · one of two shapes</text>
+<rect x="40" y="160" width="260" height="52" rx="6" fill="#f9fafb"/>
+<rect x="40" y="160" width="260" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="170" y="184" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Fetch Request</text>
+<text x="170" y="198" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">host.handle(request)</text>
+<rect x="316" y="160" width="260" height="52" rx="6" fill="#f9fafb"/>
+<rect x="316" y="160" width="260" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="446" y="184" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">Node req / res</text>
+<text x="446" y="198" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">dashboardNodeMiddleware(host)</text>
+<rect x="632" y="76" width="288" height="48" rx="6" fill="#f9fafb"/>
+<rect x="632" y="76" width="288" height="48" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="776" y="98" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">workhorse worker</text>
+<text x="776" y="112" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">a continuous process</text>
+<rect x="632" y="140" width="288" height="72" rx="6" fill="#f9fafb"/>
+<rect x="632" y="140" width="288" height="72" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="776" y="174" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">its own pool</text>
+<text x="776" y="188" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">renews leases · drains on a signal</text>
+<rect x="24" y="260" width="912" height="40" rx="6" fill="#f9fafb"/>
+<rect x="24" y="260" width="912" height="40" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="480" y="284" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">PostgreSQL</text>
+<text x="24" y="332" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A web replica never starts a worker. Scale the web tier and the worker tier separately.</text>
+</svg>
