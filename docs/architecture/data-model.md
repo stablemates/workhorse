@@ -5,204 +5,14 @@ table, its columns, constraints, and indexes, and declarative schedules.
 
 ## Data model
 
-```mermaid
-erDiagram
-  task ||--o{ enqueue_idempotency : "owns retained enqueue keys"
-  task ||--o| task_runtime : "live lifecycle"
-  task ||--o| task_outcome : "terminal lifecycle"
-  task ||--|| task_query : "operator projection"
-  task ||--o{ task_redrive : "failed source"
-  task ||--o| task_redrive : "redrive target"
-  task ||--o{ task_checkpoint : "records restart boundaries"
-  task ||--o| task_progress : "reports latest progress"
-  task ||--o{ task_wait : "records timer boundaries"
-  task ||--o{ task_event : "emits"
-  task ||--o{ attempt_history : "closes attempts"
-  schedule_definition ||--o{ schedule_occurrence : "fires"
-  schedule_occurrence }o--o| task : "enqueues"
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/data-model-relations-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/data-model-relations-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/data-model-relations-dark.png">
+  <img src="../../site/public/diagrams/data-model-relations-light.png" width="960" alt="The task table and the tables that hang from it">
+</picture>
 
-  concurrency_policy {
-    text queue_name PK
-    text namespace
-    int max_active
-    int max_active_per_key
-    timestamptz updated_at
-  }
-
-  rate_limit_policy {
-    text queue_name PK
-    text namespace
-    int rate_limit
-    int rate_interval_ms
-    int rate_burst
-    int per_key_limit
-    int per_key_interval_ms
-    int per_key_burst
-    timestamptz updated_at
-  }
-
-  rate_limit_policy ||--o{ rate_limit_bucket : "owns token state"
-  rate_limit_bucket {
-    text queue_name PK,FK
-    text bucket_scope PK
-    text bucket_key PK
-    numeric tokens
-    timestamptz refilled_at
-  }
-
-  admission_shard {
-    text queue_name PK
-    smallint shard PK
-    numeric tokens
-    timestamptz refilled_at
-  }
-
-  task {
-    uuid id PK
-    text queue_name
-    text concurrency_key
-    text task_type
-    jsonb payload
-    text contract_version
-    int payload_max_bytes
-    int result_max_bytes
-    text[] payload_redact_keys
-    text[] result_redact_keys
-    jsonb trace_context
-    int max_attempts
-    jsonb retry_policy
-    timestamptz created_at
-  }
-  enqueue_idempotency {
-    text idempotency_scope PK
-    bytea idempotency_key_hash PK
-    jsonb request_fingerprint
-    uuid task_id FK
-    timestamptz expires_at
-    timestamptz created_at
-  }
-  task_runtime {
-    uuid task_id PK
-    text queue_name
-    text concurrency_key
-    text state
-    int current_attempt
-    bigint fence_token
-    timestamptz run_at
-    bigint sequence
-    text worker_id
-    timestamptz expires_at
-    text wait_name
-    timestamptz attempt_started_at
-    timestamptz cancel_requested_at
-    text cancel_requested_by
-    text cancel_reason
-    bigint previous_retry_delay_ms
-  }
-  task_outcome {
-    uuid task_id PK
-    text state
-    int current_attempt
-    bigint fence_token
-    jsonb result
-    jsonb error
-    timestamptz finished_at
-  }
-  task_query {
-    uuid task_id PK
-    text queue_name
-    text task_type
-    timestamptz created_at
-  }
-  task_redrive {
-    uuid source_task_id PK
-    bytea request_id_hash PK
-    uuid target_task_id UK
-    text requested_by
-    text reason
-    jsonb request_fingerprint
-    timestamptz requested_at
-  }
-  task_checkpoint {
-    uuid task_id PK
-    text checkpoint_name PK
-    jsonb checkpoint_value
-    int attempt
-    bigint fence_token
-    text worker_id
-    timestamptz created_at
-    text input_fingerprint
-  }
-  task_progress {
-    uuid task_id PK
-    jsonb progress_value
-    bigint revision
-    int attempt
-    bigint fence_token
-    text worker_id
-    timestamptz created_at
-    timestamptz updated_at
-  }
-  task_wait {
-    uuid task_id PK
-    text wait_name PK
-    text mode
-    bigint duration_ms
-    timestamptz requested_wake_at
-    timestamptz wake_at
-    int attempt
-    bigint fence_token
-    text worker_id
-    timestamptz created_at
-  }
-  task_event {
-    timestamptz occurred_at PK
-    uuid event_id PK
-    uuid task_id FK
-    int attempt
-    text event_type
-    jsonb details
-  }
-  attempt_history {
-    timestamptz occurred_at PK
-    uuid attempt_id PK
-    uuid task_id FK
-    int attempt
-    bigint fence_token
-    text worker_id
-    text outcome
-    timestamptz started_at
-    timestamptz claimed_at
-    timestamptz finished_at
-    jsonb error
-  }
-  schedule_definition {
-    text namespace PK
-    text schedule_name PK
-    text cron_expression
-    text queue_name
-    text concurrency_key
-    text task_type
-    jsonb payload
-    text contract_version
-    int payload_max_bytes
-    int result_max_bytes
-    text[] payload_redact_keys
-    text[] result_redact_keys
-    jsonb retry_policy
-    boolean configured_enabled
-    boolean paused
-    text paused_by
-    text paused_reason
-    timestamptz paused_at
-  }
-  schedule_occurrence {
-    text namespace PK
-    text schedule_name PK
-    timestamptz occurrence_at PK
-    uuid task_id UK
-  }
-```
+The section of each table ends with its column types.
 
 For every accepted task, exactly one of `task_runtime` and `task_outcome` must exist after a
 committed transition. SQL functions preserve this lifecycle exclusivity atomically. A task on a
@@ -443,6 +253,27 @@ At completion:
 Reads never invoke schemas, so historical payloads remain inspectable after application validation
 changes.
 
+#### Column types
+
+The columns of `task`, with their PostgreSQL types and keys:
+
+| Column                | Type          | Key         |
+| --------------------- | ------------- | ----------- |
+| `id`                  | `uuid`        | Primary key |
+| `queue_name`          | `text`        |             |
+| `concurrency_key`     | `text`        |             |
+| `task_type`           | `text`        |             |
+| `payload`             | `jsonb`       |             |
+| `contract_version`    | `text`        |             |
+| `payload_max_bytes`   | `int`         |             |
+| `result_max_bytes`    | `int`         |             |
+| `payload_redact_keys` | `text[]`      |             |
+| `result_redact_keys`  | `text[]`      |             |
+| `trace_context`       | `jsonb`       |             |
+| `max_attempts`        | `int`         |             |
+| `retry_policy`        | `jsonb`       |             |
+| `created_at`          | `timestamptz` |             |
+
 ### `enqueue_idempotency`
 
 This table stores scoped enqueue ownership. PostgreSQL owns it. This ownership is separate from
@@ -509,6 +340,19 @@ A new request can replace expired ownership. Housekeeping prunes expired binding
 terminal task identity. `purge_queue_internal_v1` deletes the bindings of the `blocked`, `ready`,
 and `scheduled` tasks it deletes, and of purged ready fast-tier tasks. A task that the purge cancels
 keeps its binding, as after a cancel ([Queue purge](#queue-purge)).
+
+#### Column types
+
+The columns of `enqueue_idempotency`, with their PostgreSQL types and keys:
+
+| Column                 | Type          | Key         |
+| ---------------------- | ------------- | ----------- |
+| `idempotency_scope`    | `text`        | Primary key |
+| `idempotency_key_hash` | `bytea`       | Primary key |
+| `request_fingerprint`  | `jsonb`       |             |
+| `task_id`              | `uuid`        | Foreign key |
+| `expires_at`           | `timestamptz` |             |
+| `created_at`           | `timestamptz` |             |
 
 ### `task_dependency`
 
@@ -1477,6 +1321,29 @@ way. Three partial indexes cover only rows that name a budget:
 
 Rows without a budget never enter them.
 
+#### Column types
+
+The columns of `task_runtime`, with their PostgreSQL types and keys:
+
+| Column                    | Type          | Key         |
+| ------------------------- | ------------- | ----------- |
+| `task_id`                 | `uuid`        | Primary key |
+| `queue_name`              | `text`        |             |
+| `concurrency_key`         | `text`        |             |
+| `state`                   | `text`        |             |
+| `current_attempt`         | `int`         |             |
+| `fence_token`             | `bigint`      |             |
+| `run_at`                  | `timestamptz` |             |
+| `sequence`                | `bigint`      |             |
+| `worker_id`               | `text`        |             |
+| `expires_at`              | `timestamptz` |             |
+| `wait_name`               | `text`        |             |
+| `attempt_started_at`      | `timestamptz` |             |
+| `cancel_requested_at`     | `timestamptz` |             |
+| `cancel_requested_by`     | `text`        |             |
+| `cancel_reason`           | `text`        |             |
+| `previous_retry_delay_ms` | `bigint`      |             |
+
 ### `task_outcome`
 
 This table stores the semantically immutable terminal state. Completion, terminal failure, or
@@ -1516,6 +1383,20 @@ it.
 listing reads both indexes. Since migration 0061 (schema version 60), a dead-letter page
 therefore reads only failed outcomes in both tiers.
 
+#### Column types
+
+The columns of `task_outcome`, with their PostgreSQL types and keys:
+
+| Column            | Type          | Key         |
+| ----------------- | ------------- | ----------- |
+| `task_id`         | `uuid`        | Primary key |
+| `state`           | `text`        |             |
+| `current_attempt` | `int`         |             |
+| `fence_token`     | `bigint`      |             |
+| `result`          | `jsonb`       |             |
+| `error`           | `jsonb`       |             |
+| `finished_at`     | `timestamptz` |             |
+
 ### `task_query`
 
 This table is a bounded projection for operator routing. Workhorse creates it with each task.
@@ -1548,6 +1429,17 @@ By default, the listing omits the payload. If a caller requests it, PostgreSQL a
 top-level redaction before checking the response byte ceiling. It returns explicit omission status.
 These controls bound disclosure and returned size for selected rows. They do not bound accepted
 payload size or requested detoasting work.
+
+#### Column types
+
+The columns of `task_query`, with their PostgreSQL types and keys:
+
+| Column       | Type          | Key         |
+| ------------ | ------------- | ----------- |
+| `task_id`    | `uuid`        | Primary key |
+| `queue_name` | `text`        |             |
+| `task_type`  | `text`        |             |
+| `created_at` | `timestamptz` |             |
 
 ### `task_redrive`
 
@@ -1601,6 +1493,20 @@ retention windows.
 
 `Admin.getRedriveLineage` traverses the retained connected graph with an explicit bound and
 truncation flag. The bound is 1 through 1,000 records and defaults to 1,000.
+
+#### Column types
+
+The columns of `task_redrive`, with their PostgreSQL types and keys:
+
+| Column                | Type          | Key         |
+| --------------------- | ------------- | ----------- |
+| `source_task_id`      | `uuid`        | Primary key |
+| `request_id_hash`     | `bytea`       | Primary key |
+| `target_task_id`      | `uuid`        | Unique      |
+| `requested_by`        | `text`        |             |
+| `reason`              | `text`        |             |
+| `request_fingerprint` | `jsonb`       |             |
+| `requested_at`        | `timestamptz` |             |
 
 ### `task_checkpoint`
 
@@ -1782,6 +1688,21 @@ name while it retained a retryable task, the code of that checkpoint could run a
 cascade only when Workhorse deletes the stable parent task identity. Therefore, a future
 task-retention policy must account for checkpoint storage.
 
+#### Column types
+
+The columns of `task_checkpoint`, with their PostgreSQL types and keys:
+
+| Column              | Type          | Key         |
+| ------------------- | ------------- | ----------- |
+| `task_id`           | `uuid`        | Primary key |
+| `checkpoint_name`   | `text`        | Primary key |
+| `checkpoint_value`  | `jsonb`       |             |
+| `attempt`           | `int`         |             |
+| `fence_token`       | `bigint`      |             |
+| `worker_id`         | `text`        |             |
+| `created_at`        | `timestamptz` |             |
+| `input_fingerprint` | `text`        |             |
+
 ### `task_progress`
 
 This table is one mutable projection of the latest value for operational progress. Workhorse keeps
@@ -1819,6 +1740,21 @@ it separate from immutable payload, checkpoint, and outcome fields.
 - The latest projection survives retry and terminal materialization. It cascades only with the
   stable parent identity.
 
+#### Column types
+
+The columns of `task_progress`, with their PostgreSQL types and keys:
+
+| Column           | Type          | Key         |
+| ---------------- | ------------- | ----------- |
+| `task_id`        | `uuid`        | Primary key |
+| `progress_value` | `jsonb`       |             |
+| `revision`       | `bigint`      |             |
+| `attempt`        | `int`         |             |
+| `fence_token`    | `bigint`      |             |
+| `worker_id`      | `text`        |             |
+| `created_at`     | `timestamptz` |             |
+| `updated_at`     | `timestamptz` |             |
+
 ### `task_wait`
 
 This table stores insert-once named timer boundaries for a stable task identity.
@@ -1842,6 +1778,23 @@ itself be idempotent or checkpointed.
 - A duration can be at most 365 days.
 - One task can hold at most 1,000 timer names.
 - Waits cascade only with the stable parent task identity.
+
+#### Column types
+
+The columns of `task_wait`, with their PostgreSQL types and keys:
+
+| Column              | Type          | Key         |
+| ------------------- | ------------- | ----------- |
+| `task_id`           | `uuid`        | Primary key |
+| `wait_name`         | `text`        | Primary key |
+| `mode`              | `text`        |             |
+| `duration_ms`       | `bigint`      |             |
+| `requested_wake_at` | `timestamptz` |             |
+| `wake_at`           | `timestamptz` |             |
+| `attempt`           | `int`         |             |
+| `fence_token`       | `bigint`      |             |
+| `worker_id`         | `text`        |             |
+| `created_at`        | `timestamptz` |             |
 
 ### `task_signal_wait`
 
@@ -2217,6 +2170,18 @@ dispatch budget, not mutual exclusion.
 A handler can still overlap a replacement after its stale lease expires. Fence validation prevents
 the stale generation from committing a lifecycle result.
 
+#### Column types
+
+The columns of `concurrency_policy`, with their PostgreSQL types and keys:
+
+| Column               | Type          | Key         |
+| -------------------- | ------------- | ----------- |
+| `queue_name`         | `text`        | Primary key |
+| `namespace`          | `text`        |             |
+| `max_active`         | `int`         |             |
+| `max_active_per_key` | `int`         |             |
+| `updated_at`         | `timestamptz` |             |
+
 ### `rate_limit_policy` and `rate_limit_bucket`
 
 One `rate_limit_policy` row per queue defines a PostgreSQL-owned token bucket. Each rate column
@@ -2337,6 +2302,34 @@ OpenTelemetry exports configured starts per second, available queue tokens, thro
 and next-eligibility delay. Queue name is the only policy dimension. Since schema version 43, the
 available queue tokens are the refilled tokens of the queue's admission shards, summed.
 
+#### `rate_limit_policy` column types
+
+The columns of `rate_limit_policy`, with their PostgreSQL types and keys:
+
+| Column                | Type          | Key         |
+| --------------------- | ------------- | ----------- |
+| `queue_name`          | `text`        | Primary key |
+| `namespace`           | `text`        |             |
+| `rate_limit`          | `int`         |             |
+| `rate_interval_ms`    | `int`         |             |
+| `rate_burst`          | `int`         |             |
+| `per_key_limit`       | `int`         |             |
+| `per_key_interval_ms` | `int`         |             |
+| `per_key_burst`       | `int`         |             |
+| `updated_at`          | `timestamptz` |             |
+
+#### `rate_limit_bucket` column types
+
+The columns of `rate_limit_bucket`, with their PostgreSQL types and keys:
+
+| Column         | Type          | Key                      |
+| -------------- | ------------- | ------------------------ |
+| `queue_name`   | `text`        | Primary key, foreign key |
+| `bucket_scope` | `text`        | Primary key              |
+| `bucket_key`   | `text`        | Primary key              |
+| `tokens`       | `numeric`     |                          |
+| `refilled_at`  | `timestamptz` |                          |
+
 ### `admission_shard`
 
 Admission shards let claims of one governed queue admit concurrently.
@@ -2414,6 +2407,17 @@ queue-wide rule, and the next rebalance replaces them.
 A claim holds its shard locks until it commits. A claim that holds a shard waits for no other shard,
 so claims cannot deadlock on shards. The one exception is a claim that rebalances. It holds every
 shard, and it took them in order.
+
+#### Column types
+
+The columns of `admission_shard`, with their PostgreSQL types and keys:
+
+| Column        | Type          | Key         |
+| ------------- | ------------- | ----------- |
+| `queue_name`  | `text`        | Primary key |
+| `shard`       | `smallint`    | Primary key |
+| `tokens`      | `numeric`     |             |
+| `refilled_at` | `timestamptz` |             |
 
 ### `budget` and `budget_bucket`
 
@@ -2776,6 +2780,37 @@ An exact replay returns that count without deleting newer tasks. A material repl
 
 Direct application SQL that deletes package-owned `task` rows is unsupported, because it can bypass
 these guards.
+
+#### `task_event` column types
+
+The columns of `task_event`, with their PostgreSQL types and keys:
+
+| Column        | Type          | Key         |
+| ------------- | ------------- | ----------- |
+| `occurred_at` | `timestamptz` | Primary key |
+| `event_id`    | `uuid`        | Primary key |
+| `task_id`     | `uuid`        | Foreign key |
+| `attempt`     | `int`         |             |
+| `event_type`  | `text`        |             |
+| `details`     | `jsonb`       |             |
+
+#### `attempt_history` column types
+
+The columns of `attempt_history`, with their PostgreSQL types and keys:
+
+| Column        | Type          | Key         |
+| ------------- | ------------- | ----------- |
+| `occurred_at` | `timestamptz` | Primary key |
+| `attempt_id`  | `uuid`        | Primary key |
+| `task_id`     | `uuid`        | Foreign key |
+| `attempt`     | `int`         |             |
+| `fence_token` | `bigint`      |             |
+| `worker_id`   | `text`        |             |
+| `outcome`     | `text`        |             |
+| `started_at`  | `timestamptz` |             |
+| `claimed_at`  | `timestamptz` |             |
+| `finished_at` | `timestamptz` |             |
+| `error`       | `jsonb`       |             |
 
 ### `task_stat_bucket`, `task_stat_bucket_hour`, `task_stat_bucket_day`, and `task_stat_state`
 
@@ -3407,6 +3442,31 @@ revision, never arbitrary SQL.
   Occurrence history and a pause then remain attributable when a deployment later re-adds the
   definition.
 
+##### Column types
+
+The columns of `schedule_definition`, with their PostgreSQL types and keys:
+
+| Column                | Type          | Key         |
+| --------------------- | ------------- | ----------- |
+| `namespace`           | `text`        | Primary key |
+| `schedule_name`       | `text`        | Primary key |
+| `cron_expression`     | `text`        |             |
+| `queue_name`          | `text`        |             |
+| `concurrency_key`     | `text`        |             |
+| `task_type`           | `text`        |             |
+| `payload`             | `jsonb`       |             |
+| `contract_version`    | `text`        |             |
+| `payload_max_bytes`   | `int`         |             |
+| `result_max_bytes`    | `int`         |             |
+| `payload_redact_keys` | `text[]`      |             |
+| `result_redact_keys`  | `text[]`      |             |
+| `retry_policy`        | `jsonb`       |             |
+| `configured_enabled`  | `boolean`     |             |
+| `paused`              | `boolean`     |             |
+| `paused_by`           | `text`        |             |
+| `paused_reason`       | `text`        |             |
+| `paused_at`           | `timestamptz` |             |
+
 #### Catch-up position
 
 `catchup_policy` is `skip`, `latest`, or `all` and defaults to `skip`.
@@ -3438,6 +3498,17 @@ second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in
 
 A repeated fire for the same second returns null. Only the call that creates the task reports a
 fire.
+
+##### Column types
+
+The columns of `schedule_occurrence`, with their PostgreSQL types and keys:
+
+| Column          | Type          | Key         |
+| --------------- | ------------- | ----------- |
+| `namespace`     | `text`        | Primary key |
+| `schedule_name` | `text`        | Primary key |
+| `occurrence_at` | `timestamptz` | Primary key |
+| `task_id`       | `uuid`        | Unique      |
 
 #### Cron evaluation
 

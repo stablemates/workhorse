@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 608" width="960" height="608" role="img" aria-labelledby="data-model-relations-light-title data-model-relations-light-desc">
+<title id="data-model-relations-light-title">The task table and the tables that hang from it</title>
+<desc id="data-model-relations-light-desc">task owns retained enqueue_idempotency keys, at most one live task_runtime row, at most one terminal task_outcome row, exactly one task_query projection, task_redrive edges as the failed source and at most one as the redrive target, task_checkpoint restart boundaries, at most one task_progress row, task_wait timer boundaries, the task_event rows it emits, and the attempt_history rows of its closed attempts. schedule_definition fires schedule_occurrence rows, and each occurrence enqueues at most one task. rate_limit_policy owns rate_limit_bucket token state. concurrency_policy and admission_shard are queue tables without a relation.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="608" fill="#f9fafb"/>
+<path d="M 360,70 H 298" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="48" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="48" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="160" y="68" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">enqueue_idempotency</text>
+<text x="160" y="82" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n · retained enqueue keys</text>
+<path d="M 360,130 H 298" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="108" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="108" width="272" height="44" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="160" y="128" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_runtime</text>
+<text x="160" y="142" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..1 · live lifecycle</text>
+<path d="M 360,190 H 298" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="168" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="168" width="272" height="44" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="160" y="188" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_outcome</text>
+<text x="160" y="202" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..1 · terminal lifecycle</text>
+<path d="M 360,250 H 298" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="228" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="228" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="160" y="248" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_query</text>
+<text x="160" y="262" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">exactly 1 · operator projection</text>
+<path d="M 360,310 H 298" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="24" y="288" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="288" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="160" y="308" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_redrive</text>
+<text x="160" y="322" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n failed source · 0..1 target</text>
+<path d="M 600,70 H 662" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="664" y="48" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="664" y="48" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="800" y="68" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_checkpoint</text>
+<text x="800" y="82" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n · restart boundaries</text>
+<path d="M 600,130 H 662" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="664" y="108" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="664" y="108" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="800" y="128" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_progress</text>
+<text x="800" y="142" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..1 · latest progress</text>
+<path d="M 600,190 H 662" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="664" y="168" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="664" y="168" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="800" y="188" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_wait</text>
+<text x="800" y="202" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n · timer boundaries</text>
+<path d="M 600,250 H 662" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="664" y="228" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="664" y="228" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="800" y="248" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">task_event</text>
+<text x="800" y="262" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n · emits</text>
+<path d="M 600,310 H 662" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="664" y="288" width="272" height="44" rx="6" fill="#f9fafb"/>
+<rect x="664" y="288" width="272" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="800" y="308" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">attempt_history</text>
+<text x="800" y="322" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">0..n · closes attempts</text>
+<rect x="360" y="48" width="240" height="284" rx="6" fill="#f9fafb"/>
+<rect x="360" y="48" width="240" height="284" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="480" y="188" fill="#1a2027" font-size="13" font-weight="600" font-family="Geist" text-anchor="middle">task</text>
+<text x="480" y="202" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stable identity</text>
+<rect x="24" y="384" width="240" height="44" rx="6" fill="#f9fafb"/>
+<rect x="24" y="384" width="240" height="44" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="144" y="404" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schedule_definition</text>
+<text x="144" y="418" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">one row for each schedule</text>
+<path d="M 264,406 H 358" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="278" y="400" width="68" height="12" rx="2" fill="#f9fafb"/>
+<text x="312" y="409" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">fires 0..n</text>
+<rect x="360" y="384" width="240" height="44" rx="6" fill="#f9fafb"/>
+<rect x="360" y="384" width="240" height="44" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="480" y="404" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schedule_occurrence</text>
+<text x="480" y="418" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">one row for each second</text>
+<path d="M 480,384 V 334" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="424" y="346" width="112" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="355" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">enqueues 0..1 task</text>
+<rect x="16" y="468" width="928" height="92" rx="8" fill="rgba(26,32,39,0.02)" stroke="rgba(26,32,39,0.12)" stroke-width="0.8"/>
+<rect x="28" y="462" width="196" height="12" rx="2" fill="#f9fafb"/>
+<text x="126" y="471" fill="#6d7277" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">QUEUE TABLES · keyed by queue_name</text>
+<rect x="32" y="496" width="200" height="44" rx="6" fill="#f9fafb"/>
+<rect x="32" y="496" width="200" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="132" y="516" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">concurrency_policy</text>
+<text x="132" y="530" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">dispatch budget</text>
+<rect x="256" y="496" width="184" height="44" rx="6" fill="#f9fafb"/>
+<rect x="256" y="496" width="184" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="348" y="516" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">rate_limit_policy</text>
+<text x="348" y="530" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">token bucket rules</text>
+<path d="M 440,518 H 518" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="448" y="512" width="64" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="521" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">owns 0..n</text>
+<rect x="520" y="496" width="184" height="44" rx="6" fill="#f9fafb"/>
+<rect x="520" y="496" width="184" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="612" y="516" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">rate_limit_bucket</text>
+<text x="612" y="530" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">token state</text>
+<rect x="728" y="496" width="200" height="44" rx="6" fill="#f9fafb"/>
+<rect x="728" y="496" width="200" height="44" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="828" y="516" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">admission_shard</text>
+<text x="828" y="530" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">shares for concurrent claims</text>
+<text x="24" y="592" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">After a committed transition, exactly one of task_runtime and task_outcome exists for each task.</text>
+</svg>
