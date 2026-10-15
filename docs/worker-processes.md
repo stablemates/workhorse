@@ -144,24 +144,12 @@ configured grace expires. A `preStop` hook consumes the same budget; an overrun 
 one-off two-second extension. Force deletion, node failure, and some eviction or node-shutdown paths
 can still shorten or bypass the normal graceful path.
 
-```mermaid
-stateDiagram-v2
-  [*] --> starting
-  starting --> exited_failure: configuration or probe failure
-  starting --> running: every run loop started, readiness true
-  starting --> draining: first signal, after startup completes
-  running --> draining: first SIGTERM or SIGINT
-  running --> failing: fatal worker-loop failure
-  failing --> exited_failure: siblings settle or deadline missed
-  draining --> exited_ok: handlers settle, resources close cleanly
-  draining --> exited_failure: run loop or close rejects, or deadline missed
-  draining --> exit_130: second SIGINT
-  draining --> exit_143: second SIGTERM
-  exited_ok --> [*]: code 0
-  exited_failure --> [*]: code 1
-  exit_130 --> [*]
-  exit_143 --> [*]
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/worker-process-states-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../site/public/diagrams/worker-process-states-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../site/public/diagrams/worker-process-states-dark.png">
+  <img src="../site/public/diagrams/worker-process-states-light.png" width="960" alt="Every state of a worker process, and how the process leaves it">
+</picture>
 
 While `draining`, readiness is false and the worker starts no new claim pass. A pass already in
 progress may still send its remaining claim queries. The worker keeps heartbeating each active

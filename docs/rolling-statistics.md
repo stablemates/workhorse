@@ -34,6 +34,13 @@ Instead a maintenance pass aggregates raw history for minutes that have already 
 
 ### Statistics tiers
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/statistics-tiers-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../site/public/diagrams/statistics-tiers-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../site/public/diagrams/statistics-tiers-dark.png">
+  <img src="../site/public/diagrams/statistics-tiers-light.png" width="960" alt="Workhorse counts from summary rows, so a count stays fast as the history grows">
+</picture>
+
 One row per closed minute per `(queue_name, task_type)`. Primary key `(bucket_start, queue_name, task_type)`; the leading key column makes every window a range scan without an extra index.
 
 | Column                                                                                              | Grain   | Meaning                                                         |

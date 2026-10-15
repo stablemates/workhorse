@@ -5,6 +5,12 @@ import { migrateTaskType, migrateTaskTypeNarrow } from "./migrate-diagram.js";
 import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
+import {
+  schemaExpandContract,
+  schemaExpandContractNarrow,
+  workerProcessStates,
+  workerProcessStatesNarrow,
+} from "./reference-docs-diagram.js";
 import { dataModelRelations, dataModelRelationsNarrow } from "./data-model-diagram.js";
 import { taskLifecycle, taskLifecycleNarrow } from "./task-lifecycle-diagram.js";
 import {
@@ -373,4 +379,8 @@ export const diagrams = [
   taskLifecycleNarrow,
   dataModelRelations,
   dataModelRelationsNarrow,
+  schemaExpandContract,
+  schemaExpandContractNarrow,
+  workerProcessStates,
+  workerProcessStatesNarrow,
 ];
