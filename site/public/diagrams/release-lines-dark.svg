@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 272" width="960" height="272" role="img" aria-labelledby="release-lines-dark-title release-lines-dark-desc">
+<title id="release-lines-dark-title">The location of the defect decides which lines get a new release</title>
+<desc id="release-lines-dark-desc">If the defect is in the SQL schema or in the protocol that the SDKs share, the npm packages, Python, Go, Rust, and Ruby lines each get the fix in one release train. If the defect is in one SDK, for example Python, only that line gets a new release. Each fix ships only on the highest published minor release of the current major.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="272" fill="#04080e"/>
+<text x="318" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">npm packages</text>
+<text x="454" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Python</text>
+<text x="590" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Go</text>
+<text x="726" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Rust</text>
+<text x="862" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Ruby</text>
+<line x1="256" y1="52" x2="924" y2="52" stroke="rgba(242,244,245,0.14)"/>
+<rect x="248" y="64" width="684" height="80" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
+<rect x="260" y="58" width="172" height="12" rx="2" fill="#04080e"/>
+<text x="346" y="67" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">ONE RELEASE TRAIN · ONE COMMIT</text>
+<text x="24" y="108" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">schema or protocol</text>
+<text x="24" y="123" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">shared by the SDKs</text>
+<rect x="256" y="88" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="256" y="88" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="318" y="114" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<rect x="392" y="88" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="392" y="88" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="454" y="114" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<rect x="528" y="88" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="528" y="88" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="590" y="114" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<rect x="664" y="88" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="664" y="88" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="726" y="114" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<rect x="800" y="88" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="800" y="88" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="862" y="114" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<text x="24" y="196" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">one SDK</text>
+<text x="24" y="211" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">for example Python</text>
+<text x="318" y="202" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no change</text>
+<rect x="392" y="176" width="124" height="44" rx="6" fill="#04080e"/>
+<rect x="392" y="176" width="124" height="44" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="454" y="202" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">new release</text>
+<text x="590" y="202" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no change</text>
+<text x="726" y="202" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no change</text>
+<text x="862" y="202" fill="#95999d" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">no change</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A fix ships only on the highest minor release of the current major. Workhorse has no backports.</text>
+</svg>
