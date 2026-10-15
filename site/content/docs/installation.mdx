@@ -228,6 +228,8 @@ them:
 2. Run `schema status --json`.
 3. If the command exits with a value that is not zero, stop the deployment.
 
+<Diagram name="installation-order" alt="Migrate, check the status, then start the new release" />
+
 ```bash
 npm exec --no -- workhorse schema migrate
 npm exec --no -- workhorse schema status --json
