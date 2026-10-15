@@ -137,6 +137,13 @@ reorder authorization behind procedure execution:
    cross-origin POSTs and assumes cookie-authenticated deployments stay same-origin.
 5. **Input validation**, then the procedure.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/dashboard-request-order-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/dashboard-request-order-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/dashboard-request-order-dark.png">
+  <img src="../../site/public/diagrams/dashboard-request-order-light.png" width="960" alt="Each owned request passes four checks before its procedure runs">
+</picture>
+
 Mutations additionally require the backend to be writable: a read-only backend answers
 `FORBIDDEN` for every `mutation: true` procedure. Audit attribution (`audit.actor`) is
 server-assigned from the authenticated principal; the client-supplied value is ignored.

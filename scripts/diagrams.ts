@@ -6,6 +6,12 @@ import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import {
+  dashboardRequestOrder,
+  dashboardRequestOrderNarrow,
+  demoSchemaStep,
+  demoSchemaStepNarrow,
+} from "./contract-demo-diagram.js";
+import {
   schemaExpandContract,
   schemaExpandContractNarrow,
   workerProcessStates,
@@ -383,4 +389,8 @@ export const diagrams = [
   schemaExpandContractNarrow,
   workerProcessStates,
   workerProcessStatesNarrow,
+  dashboardRequestOrder,
+  dashboardRequestOrderNarrow,
+  demoSchemaStep,
+  demoSchemaStepNarrow,
 ];
