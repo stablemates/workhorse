@@ -400,6 +400,13 @@ stands in for the documented `workhorse schema status --json` verification, beca
 databases and a second schema the CLI does not know about. A refusal exits non-zero, which must fail
 the deploy before the container swap.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/demo-schema-step-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/demo-schema-step-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/demo-schema-step-dark.png">
+  <img src="../../site/public/diagrams/demo-schema-step-light.png" width="960" alt="The demo prepares its schema from the new image before any container starts">
+</picture>
+
 Nothing prepares a schema at startup. The container entry point starts processes only, and the
 server asserts compatibility and refuses to open `/up` when the step did not run. That is
 deliberate: a component that migrated itself would be as many concurrent migrators as the deployment

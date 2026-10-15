@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 359" width="400" height="359" role="img" aria-labelledby="dashboard-request-order-narrow-dark-title dashboard-request-order-narrow-dark-desc">
+<title id="dashboard-request-order-narrow-dark-title">Each owned request passes four checks before its procedure runs</title>
+<desc id="dashboard-request-order-narrow-dark-desc">The host check refuses another request host with 421. Authorization answers 401 for an unauthenticated request and 403 for an unauthorized one. An incompatible schema answers 503. A mutation without a same-origin Origin header answers 403. Then the backend validates the input and runs the procedure. A read-only backend answers FORBIDDEN for every mutation.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="359" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">1</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">host check</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">another host: 421</text>
+<path d="M 248,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">2</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">authorization</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">401 or 403</text>
+<path d="M 248,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">3</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schema compatibility</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">incompatible: 503</text>
+<path d="M 248,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">4</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">same origin</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a mutation without it: 403</text>
+<path d="M 248,234 V 246" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="273" fill="#f2f4f5" font-size="9" font-family="Geist Mono">5</text>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="248" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">input validation</text>
+<text x="244" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">then the procedure</text>
+<text x="24" y="312" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A backend must not reorder these</text>
+<text x="24" y="327" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">checks.</text>
+</svg>

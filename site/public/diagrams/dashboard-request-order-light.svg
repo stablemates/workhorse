@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 272" width="960" height="272" role="img" aria-labelledby="dashboard-request-order-light-title dashboard-request-order-light-desc">
+<title id="dashboard-request-order-light-title">Each owned request passes four checks before its procedure runs</title>
+<desc id="dashboard-request-order-light-desc">The host check refuses another request host with 421. Authorization answers 401 for an unauthenticated request and 403 for an unauthorized one. An incompatible schema answers 503. A mutation without a same-origin Origin header answers 403. Then the backend validates the input and runs the procedure. A read-only backend answers FORBIDDEN for every mutation.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="272" fill="#f9fafb"/>
+<path d="M 188,74 H 210" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 106,100 V 174" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<path d="M 376,74 H 398" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 294,100 V 174" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<path d="M 564,74 H 586" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 482,100 V 174" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<path d="M 752,74 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 670,100 V 174" fill="none" stroke="#4e5359" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-light)"/>
+<rect x="24" y="48" width="164" height="52" rx="6" fill="#f9fafb"/>
+<rect x="24" y="48" width="164" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="106" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">host check</text>
+<text x="106" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">configured host names</text>
+<rect x="72" y="138" width="68" height="12" rx="2" fill="#f9fafb"/>
+<text x="106" y="147" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">OTHER HOST</text>
+<rect x="24" y="176" width="164" height="48" rx="6" fill="#f9fafb"/>
+<rect x="24" y="176" width="164" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="106" y="198" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">421</text>
+<text x="106" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">Misdirected Request</text>
+<rect x="212" y="48" width="164" height="52" rx="6" fill="#f9fafb"/>
+<rect x="212" y="48" width="164" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="294" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">authorization</text>
+<text x="294" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the host application</text>
+<rect x="268" y="138" width="52" height="12" rx="2" fill="#f9fafb"/>
+<text x="294" y="147" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">REFUSED</text>
+<rect x="212" y="176" width="164" height="48" rx="6" fill="#f9fafb"/>
+<rect x="212" y="176" width="164" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="294" y="198" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">401 or 403</text>
+<text x="294" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">the request is refused</text>
+<rect x="400" y="48" width="164" height="52" rx="6" fill="#f9fafb"/>
+<rect x="400" y="48" width="164" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="482" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schema</text>
+<text x="482" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">compatible installation</text>
+<rect x="442" y="138" width="80" height="12" rx="2" fill="#f9fafb"/>
+<text x="482" y="147" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">INCOMPATIBLE</text>
+<rect x="400" y="176" width="164" height="48" rx="6" fill="#f9fafb"/>
+<rect x="400" y="176" width="164" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="482" y="198" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">503</text>
+<text x="482" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">an error message</text>
+<rect x="588" y="48" width="164" height="52" rx="6" fill="#f9fafb"/>
+<rect x="588" y="48" width="164" height="52" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="670" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">same origin</text>
+<text x="670" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">mutation only</text>
+<rect x="642" y="138" width="56" height="12" rx="2" fill="#f9fafb"/>
+<text x="670" y="147" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">NO MATCH</text>
+<rect x="588" y="176" width="164" height="48" rx="6" fill="#f9fafb"/>
+<rect x="588" y="176" width="164" height="48" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="670" y="198" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">403</text>
+<text x="670" y="212" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">same-origin required</text>
+<rect x="776" y="48" width="160" height="52" rx="6" fill="#f9fafb"/>
+<rect x="776" y="48" width="160" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="856" y="72" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">input validation</text>
+<text x="856" y="86" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">then the procedure</text>
+<text x="24" y="256" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A read-only backend answers FORBIDDEN for every mutation. The server assigns audit.actor.</text>
+</svg>
