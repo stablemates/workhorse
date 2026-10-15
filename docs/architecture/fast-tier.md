@@ -22,23 +22,12 @@ After a committed transition, exactly one of `fast_task_runtime` and `fast_task_
 every accepted fast-tier task. Neither `task_runtime` nor `task_outcome` exists for that task. Both
 tiers share the stable `task` identity row.
 
-```mermaid
-flowchart LR
-  Task[(task<br/>stable identity, both tiers)]
-  subgraph Full[Full tier]
-    direction TB
-    FR[(task_runtime)] -->|close| FO[(task_outcome)]
-    FR -.->|every claim, completion, retry| FE[(task_event)]
-    FR -.->|every attempt closure| FH[(attempt_history)]
-  end
-  subgraph Fast[Fast tier]
-    direction TB
-    QR[(fast_task_runtime)] -->|close| QO[(fast_task_outcome)]
-    QR -.->|only with record_attempts<br/>or record_claims| QH[(attempt_history or<br/>claimed task_event)]
-  end
-  Task --> FR
-  Task --> QR
-```
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/fast-tier-writes-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/fast-tier-writes-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/fast-tier-writes-dark.png">
+  <img src="../../site/public/diagrams/fast-tier-writes-light.png" width="960" alt="The writes of one task on the full tier and on the fast tier">
+</picture>
 
 ### Tier and history settings
 

@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 780" width="960" height="780" role="img" aria-labelledby="task-states-light-title task-states-light-desc">
+<title id="task-states-light-title">Every lifecycle transition, grouped by the state that it leaves</title>
+<desc id="task-states-light-desc">Enqueue creates a blocked task with a live prerequisite, a ready task when it is due, or a scheduled task in the future. A blocked task becomes ready or scheduled when its prerequisite succeeds after or before run_at. Blocked, scheduled, and ready tasks can be canceled immediately. Promote moves scheduled to ready, and a claim moves ready to active. An active task stays active on a heartbeat or a cancel request. It becomes canceled on an exact-fence acknowledgement or a requested lease expiry, scheduled on a named durable wait in the same attempt, ready or scheduled on fail or recover with a zero or positive delay, succeeded on complete, and failed on an exhausted fail or recovery.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="780" fill="#f9fafb"/>
+<text x="104" y="40" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">from</text>
+<text x="500" y="40" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">trigger</text>
+<text x="856" y="40" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">to</text>
+<line x1="24" y1="48" x2="936" y2="48" stroke="rgba(26,32,39,0.14)"/>
+<path d="M 184,78 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="408" y="72" width="144" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="81" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">with a live prerequisite</text>
+<rect x="776" y="64" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="64" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="82" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">blocked</text>
+<path d="M 184,114 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="464" y="108" width="32" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="117" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">due</text>
+<rect x="776" y="100" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="100" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="118" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<path d="M 184,150 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="438" y="144" width="84" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="153" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">in the future</text>
+<rect x="776" y="136" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="136" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="154" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<rect x="24" y="64" width="160" height="100" rx="6" fill="#f9fafb"/>
+<rect x="24" y="64" width="160" height="100" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="104" y="118" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">enqueue</text>
+<path d="M 184,202 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="380" y="196" width="200" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="205" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">prerequisite succeeds after run_at</text>
+<rect x="776" y="188" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="188" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="206" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<path d="M 184,238 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="378" y="232" width="204" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="241" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">prerequisite succeeds before run_at</text>
+<rect x="776" y="224" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="224" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="242" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<path d="M 184,274 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="424" y="268" width="112" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="277" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">cancel immediately</text>
+<rect x="776" y="260" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="260" width="160" height="28" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="856" y="278" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<rect x="24" y="188" width="160" height="100" rx="6" fill="#f9fafb"/>
+<rect x="24" y="188" width="160" height="100" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="104" y="242" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">blocked</text>
+<path d="M 184,326 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="454" y="320" width="52" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="329" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">promote</text>
+<rect x="776" y="312" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="312" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="330" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<path d="M 184,362 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="424" y="356" width="112" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="365" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">cancel immediately</text>
+<rect x="776" y="348" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="348" width="160" height="28" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="856" y="366" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<rect x="24" y="312" width="160" height="64" rx="6" fill="#f9fafb"/>
+<rect x="24" y="312" width="160" height="64" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="104" y="348" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<path d="M 184,414 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="460" y="408" width="40" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="417" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">claim</text>
+<rect x="776" y="400" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="400" width="160" height="28" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="856" y="418" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<path d="M 184,450 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="424" y="444" width="112" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="453" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">cancel immediately</text>
+<rect x="776" y="436" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="436" width="160" height="28" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="856" y="454" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<rect x="24" y="400" width="160" height="64" rx="6" fill="#f9fafb"/>
+<rect x="24" y="400" width="160" height="64" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="104" y="436" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<path d="M 184,502 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="402" y="496" width="156" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="505" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">heartbeat / cancel request</text>
+<rect x="776" y="488" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="488" width="160" height="28" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="856" y="506" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<path d="M 184,538 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="328" y="532" width="304" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="541" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">exact-fence acknowledgement or requested lease expiry</text>
+<rect x="776" y="524" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="524" width="160" height="28" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="856" y="542" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">canceled</text>
+<path d="M 184,574 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="386" y="568" width="188" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="577" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">named durable wait, same attempt</text>
+<rect x="776" y="560" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="560" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="578" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<path d="M 184,610 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="346" y="604" width="268" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="613" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">fail/recover, selected or overridden zero delay</text>
+<rect x="776" y="596" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="596" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="614" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<path d="M 184,646 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="334" y="640" width="292" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="649" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">fail/recover, selected or overridden positive delay</text>
+<rect x="776" y="632" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="632" width="160" height="28" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="856" y="650" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<path d="M 184,682 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="452" y="676" width="56" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="685" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">complete</text>
+<rect x="776" y="668" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="668" width="160" height="28" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="856" y="686" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">succeeded</text>
+<path d="M 184,718 H 774" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="410" y="712" width="140" height="12" rx="2" fill="#f9fafb"/>
+<text x="480" y="721" fill="#6d7277" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">exhausted fail/recovery</text>
+<rect x="776" y="704" width="160" height="28" rx="6" fill="#f9fafb"/>
+<rect x="776" y="704" width="160" height="28" rx="6" fill="rgba(26,32,39,0.03)" stroke="rgba(26,32,39,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="856" y="722" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">failed</text>
+<rect x="24" y="488" width="160" height="244" rx="6" fill="#f9fafb"/>
+<rect x="24" y="488" width="160" height="244" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="104" y="614" fill="#1a2027" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<text x="24" y="764" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A task in blocked, scheduled, ready, or active has one task_runtime row.</text>
+</svg>

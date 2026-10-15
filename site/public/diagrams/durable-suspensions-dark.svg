@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="durable-suspensions-dark-title durable-suspensions-dark-desc">
+<title id="durable-suspensions-dark-title">A suspension clears the owner but keeps the attempt; the wake makes it claimable</title>
+<desc id="durable-suspensions-dark-desc">An active task with worker and fence N calls schedule_wait_v1 with a future target, wait_for_signal_v1, or wait_for_human_v1. The task becomes scheduled with wait_name set and no owner, or scheduled and parked with a pending task_signal_wait or task_human_wait. promote_v1 at run_at, send_signal_v1, or complete_human_wait_v1 makes it ready in the same attempt. A claim with fence N+k makes it active, and the handler restarts from entry, where the named wait replays.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="400" fill="#04080e"/>
+<text x="88" y="40" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">active</text>
+<text x="280" y="40" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">suspend</text>
+<text x="528" y="40" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">scheduled, no owner</text>
+<text x="720" y="40" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">wake</text>
+<text x="868" y="40" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">ready</text>
+<line x1="24" y1="48" x2="936" y2="48" stroke="rgba(242,244,245,0.14)"/>
+<rect x="24" y="64" width="128" height="196" rx="6" fill="#04080e"/>
+<rect x="24" y="64" width="128" height="196" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="88" y="160" fill="#f2f4f5" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<text x="88" y="174" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">fence N</text>
+<path d="M 152,88 H 174" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="176" y="64" width="208" height="48" rx="6" fill="#04080e"/>
+<rect x="176" y="64" width="208" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="280" y="86" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">schedule_wait_v1</text>
+<text x="280" y="100" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">a future target</text>
+<path d="M 384,88 H 414" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="416" y="64" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="416" y="64" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="528" y="86" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<text x="528" y="100" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">wait_name set, no owner</text>
+<path d="M 640,88 H 798" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="658" y="82" width="124" height="12" rx="2" fill="#04080e"/>
+<text x="720" y="91" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">promote_v1 at run_at</text>
+<path d="M 152,164 H 174" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="176" y="140" width="208" height="48" rx="6" fill="#04080e"/>
+<rect x="176" y="140" width="208" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="280" y="162" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">wait_for_signal_v1</text>
+<text x="280" y="176" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">parked</text>
+<path d="M 384,164 H 414" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="416" y="140" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="416" y="140" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="528" y="162" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<text x="528" y="176" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">task_signal_wait pending</text>
+<path d="M 640,164 H 798" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="674" y="158" width="92" height="12" rx="2" fill="#04080e"/>
+<text x="720" y="167" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">send_signal_v1</text>
+<path d="M 152,240 H 174" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="176" y="216" width="208" height="48" rx="6" fill="#04080e"/>
+<rect x="176" y="216" width="208" height="48" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="280" y="238" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">wait_for_human_v1</text>
+<text x="280" y="252" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">parked</text>
+<path d="M 384,240 H 414" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="416" y="216" width="224" height="48" rx="6" fill="#04080e"/>
+<rect x="416" y="216" width="224" height="48" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="528" y="238" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">scheduled</text>
+<text x="528" y="252" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">task_human_wait pending</text>
+<path d="M 640,240 H 798" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="654" y="234" width="132" height="12" rx="2" fill="#04080e"/>
+<text x="720" y="243" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">complete_human_wait_v1</text>
+<rect x="800" y="64" width="136" height="196" rx="6" fill="#04080e"/>
+<rect x="800" y="64" width="136" height="196" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="868" y="160" fill="#f2f4f5" font-size="12" font-weight="600" font-family="Geist" text-anchor="middle">ready</text>
+<text x="868" y="174" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">same attempt</text>
+<path d="M 868,260 V 298" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<rect x="818" y="272" width="100" height="12" rx="2" fill="#04080e"/>
+<text x="868" y="281" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">claim, fence N+k</text>
+<rect x="560" y="300" width="376" height="52" rx="6" fill="#04080e"/>
+<rect x="560" y="300" width="376" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="748" y="324" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">active</text>
+<text x="748" y="338" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">handler restarts from entry · named wait replays</text>
+<text x="24" y="384" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Each suspension clears ownership but does not close the logical attempt.</text>
+</svg>
