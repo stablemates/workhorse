@@ -2,6 +2,7 @@ import { adminGuard, adminGuardNarrow, adminWaits, adminWaitsNarrow } from "./ad
 import { integrationParts, integrationPartsNarrow } from "./agent-integration-diagram.js";
 import { installationOrder, installationOrderNarrow } from "./installation-diagram.js";
 import { migrateTaskType, migrateTaskTypeNarrow } from "./migrate-diagram.js";
+import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import {
   batchOutcomes,
@@ -265,4 +266,6 @@ export const diagrams = [
   installationOrderNarrow,
   migrateTaskType,
   migrateTaskTypeNarrow,
+  progressWrite,
+  progressWriteNarrow,
 ];
