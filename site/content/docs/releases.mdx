@@ -33,6 +33,11 @@ The location of the defect decides which lines get a new release:
   controlled release window.
 - If the defect is in one SDK, only that line gets a new release. The other lines do not change.
 
+<Diagram
+  name="release-lines"
+  alt="The location of the defect decides which lines get a new release"
+/>
+
 This policy works because each upgrade is an ordinary rolling deployment. A minor release only adds,
 and a major release also only adds. The one destructive action is the contract step, which you run
 when you decide. Thus, a fix costs a package update and a `workhorse schema migrate` that only adds.
