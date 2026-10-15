@@ -3,6 +3,8 @@
 The Go client, worker runtime, and dashboard handler for the Workhorse durable task queue for
 PostgreSQL.
 
+![One protocol for your workers and your dashboard](https://workhorse.run/diagrams/readme-overview-light.png)
+
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to
 > recreate your database: migrations are ordered, and inside a major line a migration only adds, so

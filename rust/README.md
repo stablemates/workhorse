@@ -3,6 +3,13 @@
 The Rust queue client, operator client, and worker runtime for the Workhorse durable task queue for
 PostgreSQL.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="https://workhorse.run/diagrams/readme-overview-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="https://workhorse.run/diagrams/readme-overview-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="https://workhorse.run/diagrams/readme-overview-dark.png">
+  <img src="https://workhorse.run/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
+</picture>
+
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the
 > [changelog](https://github.com/stablemates/workhorse/blob/main/rust/CHANGELOG.md) before you
