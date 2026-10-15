@@ -22,6 +22,8 @@ The recipe uses two processes: an HTTP receiver and a worker. Each event goes th
 4. The worker reads the inbox row. In one transaction, it records the invoice in a ledger and adds
    one credit to the customer.
 
+<Diagram name="stripe-invoice-paid" alt="One Stripe event becomes one credit, also after a retry" />
+
 Neither process calls the Stripe API, and neither process changes your Stripe account.
 
 The sample grants one `paid_invoice_credits` credit for each invoice. This shows a transactional
