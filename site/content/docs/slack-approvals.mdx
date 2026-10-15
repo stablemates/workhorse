@@ -24,6 +24,8 @@ Each process does one job. A decision goes through these steps:
 4. The decision worker reads that durable inbox. It calls `completeHumanWait` with the stored key
    and actor.
 
+<Diagram name="slack-approval" alt="Each Slack approval process does one job" />
+
 The receiver never starts a worker, posts a Slack message, or waits for the business action to
 complete.
 

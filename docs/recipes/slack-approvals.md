@@ -17,6 +17,13 @@ This is an application recipe, not a Slack backend, framework package, or a guar
 | `receiver`        | Verify the raw signed request and commit a decision before acknowledging | Signing secret   |
 | `decision-worker` | Read the durable inbox and call `completeHumanWait`                      | None             |
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/slack-approval-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/slack-approval-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/slack-approval-dark.png">
+  <img src="../../site/public/diagrams/slack-approval-light.png" width="960" alt="Each Slack approval process does one job">
+</picture>
+
 Each long-lived mode owns a PostgreSQL pool. The receiver never starts a Workhorse worker or calls Slack.
 The notifier and decision worker run independently of the receiver's request lifecycle.
 

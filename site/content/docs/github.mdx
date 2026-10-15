@@ -24,6 +24,8 @@ The recipe uses a receiver process and a worker process. Each delivery goes thro
 4. The receiver replies `202` only after the transaction commits.
 5. The worker adds the configured label if the issue does not have it. Then it records the change.
 
+<Diagram name="github-triage" alt="One GitHub delivery becomes one label task" />
+
 ## Configure one GitHub App for one repository
 
 1. Install a GitHub App on the one repository that this receiver permits.

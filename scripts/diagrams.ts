@@ -5,6 +5,14 @@ import { migrateTaskType, migrateTaskTypeNarrow } from "./migrate-diagram.js";
 import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
+import {
+  githubTriage,
+  githubTriageNarrow,
+  slackApproval,
+  slackApprovalNarrow,
+  stripeInvoicePaid,
+  stripeInvoicePaidNarrow,
+} from "./webhook-recipes-diagram.js";
 import { releaseLines, releaseLinesNarrow } from "./releases-diagram.js";
 import {
   kubernetesDrain,
@@ -293,4 +301,10 @@ export const diagrams = [
   pgcatWakeHintNarrow,
   planetscaleConnections,
   planetscaleConnectionsNarrow,
+  stripeInvoicePaid,
+  stripeInvoicePaidNarrow,
+  githubTriage,
+  githubTriageNarrow,
+  slackApproval,
+  slackApprovalNarrow,
 ];
