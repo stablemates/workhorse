@@ -84,6 +84,11 @@ Do these steps for each task type. Start with a task type that is idempotent and
 A rolling deploy runs old and new producer code at the same time. During that period, each request
 goes to one system only. Both workers run, so the tasks in both queues continue to run.
 
+<Diagram
+  name="migrate-task-type"
+  alt="Move one task type: both workers run until the old queue is empty"
+/>
+
 ## Empty the old system
 
 An old queue can hold work that is not in its list of waiting jobs. Before you remove the old
