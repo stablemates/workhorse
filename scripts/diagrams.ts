@@ -4,6 +4,7 @@ import { installationOrder, installationOrderNarrow } from "./installation-diagr
 import { migrateTaskType, migrateTaskTypeNarrow } from "./migrate-diagram.js";
 import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
+import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import {
   batchOutcomes,
@@ -271,4 +272,6 @@ export const diagrams = [
   progressWriteNarrow,
   queryReads,
   queryReadsNarrow,
+  languageParts,
+  languagePartsNarrow,
 ];
