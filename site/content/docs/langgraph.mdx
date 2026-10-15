@@ -49,6 +49,11 @@ Each system owns a different part of the state:
 | LangGraph `PostgresSaver` | Graph state, replay, and the actual `Interrupt.id`                                   |
 | Your application          | Graph-driver coordination, receipt storage, reviewer authorization, tool idempotency |
 
+<Diagram
+  name="langgraph-owners"
+  alt="Workhorse, LangGraph, and your application each own their own state"
+/>
+
 The thread ID is `workhorse:{task_id}`, and it does not change. The bridge is the application code
 between Workhorse and the graph. It keeps the interrupt identity, the original approval context, the
 decision, and the resume identity.

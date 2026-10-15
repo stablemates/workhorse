@@ -6,6 +6,16 @@ import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import {
+  activeJobKinds,
+  activeJobKindsNarrow,
+  djangoTasksAcceptance,
+  djangoTasksAcceptanceNarrow,
+  langgraphOwners,
+  langgraphOwnersNarrow,
+  pydanticaiApproval,
+  pydanticaiApprovalNarrow,
+} from "./framework-recipes-diagram.js";
+import {
   githubTriage,
   githubTriageNarrow,
   slackApproval,
@@ -307,4 +317,12 @@ export const diagrams = [
   githubTriageNarrow,
   slackApproval,
   slackApprovalNarrow,
+  langgraphOwners,
+  langgraphOwnersNarrow,
+  pydanticaiApproval,
+  pydanticaiApprovalNarrow,
+  activeJobKinds,
+  activeJobKindsNarrow,
+  djangoTasksAcceptance,
+  djangoTasksAcceptanceNarrow,
 ];
