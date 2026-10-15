@@ -6,6 +6,12 @@ import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import {
+  schemaCompatibility,
+  schemaCompatibilityNarrow,
+  workerShutdown,
+  workerShutdownNarrow,
+} from "./architecture-diagram.js";
+import {
   frameworksShape,
   frameworksShapeNarrow,
   integrationsCommon,
@@ -335,4 +341,8 @@ export const diagrams = [
   integrationsCommonNarrow,
   frameworksShape,
   frameworksShapeNarrow,
+  schemaCompatibility,
+  schemaCompatibilityNarrow,
+  workerShutdown,
+  workerShutdownNarrow,
 ];

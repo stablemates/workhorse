@@ -34,6 +34,13 @@ membership row without a `task_outcome` row.
 The result in `task_group.result` is `succeeded` when every member task succeeded, and `failed`
 otherwise. An empty group finishes with the result `succeeded`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-states-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/task-groups-states-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/task-groups-states-dark.png">
+  <img src="../../site/public/diagrams/task-groups-states-light.png" width="960" alt="An open group cannot finish. After the seal, only a running member task can add">
+</picture>
+
 ## Order of group changes
 
 Five changes can change the members or the state of a group: an add, a seal, a cancel, a member
