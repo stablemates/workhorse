@@ -6,6 +6,14 @@ import { progressWrite, progressWriteNarrow } from "./progress-diagram.js";
 import { queryReads, queryReadsNarrow } from "./queries-diagram.js";
 import { languageParts, languagePartsNarrow } from "./limitations-diagram.js";
 import { releaseLines, releaseLinesNarrow } from "./releases-diagram.js";
+import {
+  kubernetesDrain,
+  kubernetesDrainNarrow,
+  kubernetesWorkloads,
+  kubernetesWorkloadsNarrow,
+} from "./kubernetes-diagram.js";
+import { pgcatWakeHint, pgcatWakeHintNarrow } from "./pgcat-diagram.js";
+import { planetscaleConnections, planetscaleConnectionsNarrow } from "./planetscale-diagram.js";
 import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import {
   batchOutcomes,
@@ -277,4 +285,12 @@ export const diagrams = [
   languagePartsNarrow,
   releaseLines,
   releaseLinesNarrow,
+  kubernetesWorkloads,
+  kubernetesWorkloadsNarrow,
+  kubernetesDrain,
+  kubernetesDrainNarrow,
+  pgcatWakeHint,
+  pgcatWakeHintNarrow,
+  planetscaleConnections,
+  planetscaleConnectionsNarrow,
 ];
