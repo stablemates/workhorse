@@ -105,6 +105,13 @@ timer delay is longer than that maximum, Node runs the timer every millisecond.
 Applications must run at most one observer per database. Every observer sees the same global
 PostgreSQL state.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/observability-sources-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/observability-sources-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/observability-sources-dark.png">
+  <img src="../../site/public/diagrams/observability-sources-light.png" width="960" alt="Each worker records its own metrics, and one service records the database gauges">
+</picture>
+
 The timer calls `onError` and does not await it. A reporter can be synchronous or return a promise.
 If the reporter throws or its promise rejects, the observer writes that failure to `console.error`.
 The failure never becomes an unhandled rejection. A direct `collect()` call rejects to its caller

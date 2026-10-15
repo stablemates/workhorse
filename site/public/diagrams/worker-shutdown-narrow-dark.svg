@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 303" width="400" height="303" role="img" aria-labelledby="worker-shutdown-narrow-dark-title worker-shutdown-narrow-dark-desc">
+<title id="worker-shutdown-narrow-dark-title">A worker process drains after the first signal and exits early only on a failure</title>
+<desc id="worker-shutdown-narrow-dark-desc">The first SIGINT or SIGTERM sets readiness to false and calls stop() on every Worker. The workers send no more claims. Active handlers continue, and their heartbeat batch continues. The adapter resources close after every run loop finishes. A second signal exits with the conventional signal code. A missed deadline, shutdownTimeoutMs with 25,000 ms by default, exits with code 1.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="400" height="303" fill="#04080e"/>
+<text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">signal</text>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="43" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">SIGINT or SIGTERM</text>
+<text x="244" y="57" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the first signal</text>
+<path d="M 248,66 V 78" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="105" fill="#f2f4f5" font-size="9" font-family="Geist Mono">stop</text>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="80" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="99" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">readiness false</text>
+<text x="244" y="113" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">stop() on every Worker</text>
+<path d="M 248,122 V 134" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="161" fill="#f2f4f5" font-size="9" font-family="Geist Mono">drain</text>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="136" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">handlers drain</text>
+<text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">heartbeats · no claims</text>
+<path d="M 248,178 V 190" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">close</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">adapter closes</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after every run loop</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A second signal: the signal exit code.</text>
+<text x="24" y="271" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A missed deadline: exit code 1.</text>
+</svg>

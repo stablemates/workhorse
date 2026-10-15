@@ -460,6 +460,13 @@ applies the tests in the order that `protocol/v1/compatibility.json` sets. It re
 what a different client gets. The `code` strings are the same as Go's `CompatibilityCode` and
 Python's `CompatibilityCode`.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/schema-compatibility-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/schema-compatibility-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/schema-compatibility-dark.png">
+  <img src="../../site/public/diagrams/schema-compatibility-light.png" width="960" alt="schemaCompatibilityRefusal tests in this order; the first failed test decides">
+</picture>
+
 `assertSchemaCompatible` reads the state with `readCompatibilityState`. It throws
 `SchemaCompatibilityError` (exported from `typescript/core/src/errors.ts`). The error holds that
 `code`, the `installedVersion` that it read, and the `expectedVersion` that this build was compiled

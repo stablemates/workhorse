@@ -97,6 +97,13 @@ from 1 through 3,600,000, and its default is 25,000 ms.
 Hard termination leaves active leases to ordinary fenced expiry recovery. If the process fails, an
 external supervisor can restart it.
 
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/worker-shutdown-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/worker-shutdown-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/worker-shutdown-dark.png">
+  <img src="../../site/public/diagrams/worker-shutdown-light.png" width="960" alt="A worker process drains after the first signal and exits early only on a failure">
+</picture>
+
 ### Probe listener
 
 The optional probe-only listener reports liveness while the process runs or drains. It reports
