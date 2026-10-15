@@ -1,5 +1,6 @@
 import { adminGuard, adminGuardNarrow, adminWaits, adminWaitsNarrow } from "./admin-cli-diagram.js";
 import { integrationParts, integrationPartsNarrow } from "./agent-integration-diagram.js";
+import { installationOrder, installationOrderNarrow } from "./installation-diagram.js";
 import { agentLoop, agentLoopNarrow } from "./agentic-flow-diagram.js";
 import {
   batchOutcomes,
@@ -259,4 +260,6 @@ export const diagrams = [
   serverlessTiersNarrow,
   quickstartCrash,
   quickstartCrashNarrow,
+  installationOrder,
+  installationOrderNarrow,
 ];

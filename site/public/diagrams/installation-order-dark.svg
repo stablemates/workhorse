@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 304" width="960" height="304" role="img" aria-labelledby="installation-order-dark-title installation-order-dark-desc">
+<title id="installation-order-dark-title">Migrate, check the status, then start the new release</title>
+<desc id="installation-order-dark-desc">A deployment step runs workhorse schema migrate with the tool at the version of the application. Then it runs workhorse schema status --json. If the command exits with 1, the deployment stops. If it exits with 0, the new release starts, and each of its processes checks the schema without a change. Processes of the earlier release find the state ahead and continue.</desc>
+<defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
+<rect width="960" height="304" fill="#04080e"/>
+<rect x="16" y="48" width="468" height="132" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
+<rect x="28" y="42" width="92" height="12" rx="2" fill="#04080e"/>
+<text x="74" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">DEPLOYMENT STEP</text>
+<rect x="488" y="48" width="456" height="132" rx="8" fill="rgba(242,244,245,0.02)" stroke="rgba(242,244,245,0.12)" stroke-width="0.8"/>
+<rect x="500" y="42" width="180" height="12" rx="2" fill="#04080e"/>
+<text x="590" y="51" fill="#95999d" font-size="7" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.14em">EACH PROCESS OF THE NEW RELEASE</text>
+<path d="M 228,102 H 258" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 464,102 H 494" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 700,102 H 730" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
+<path d="M 362,128 V 204" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
+<rect x="24" y="76" width="204" height="52" rx="6" fill="#04080e"/>
+<rect x="24" y="76" width="204" height="52" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="126" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">1 · schema migrate</text>
+<text x="126" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">the tool at the app version</text>
+<rect x="260" y="76" width="204" height="52" rx="6" fill="#04080e"/>
+<rect x="260" y="76" width="204" height="52" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="362" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">2 · schema status --json</text>
+<text x="362" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">exit 0 or exit 1</text>
+<rect x="496" y="76" width="204" height="52" rx="6" fill="#04080e"/>
+<rect x="496" y="76" width="204" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="598" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">3 · start the new release</text>
+<text x="598" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">after exit 0</text>
+<rect x="732" y="76" width="204" height="52" rx="6" fill="#04080e"/>
+<rect x="732" y="76" width="204" height="52" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="834" y="100" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">startup check</text>
+<text x="834" y="114" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">reads the version · no change</text>
+<rect x="338" y="150" width="48" height="12" rx="2" fill="#04080e"/>
+<text x="362" y="159" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">EXIT 1</text>
+<rect x="24" y="206" width="440" height="44" rx="6" fill="#04080e"/>
+<rect x="24" y="206" width="440" height="44" rx="6" fill="rgba(242,244,245,0.03)" stroke="rgba(242,244,245,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="244" y="226" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">the deployment stops</text>
+<text x="244" y="240" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">write schema.refusal to the log</text>
+<rect x="496" y="206" width="440" height="44" rx="6" fill="#04080e"/>
+<rect x="496" y="206" width="440" height="44" rx="6" fill="rgba(242,244,245,0.05)" stroke="#ced1d4" stroke-width="1"/>
+<text x="716" y="226" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">earlier release · state ahead</text>
+<text x="716" y="240" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">its processes continue</text>
+<text x="24" y="288" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A runtime process checks the schema. It does not install it, so it needs no permission to create objects.</text>
+</svg>
