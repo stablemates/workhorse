@@ -1,0 +1,140 @@
+---
+title: "Workhorse compared with Celery"
+description: "Celery vs Workhorse: a Python task queue on a message broker, and a PostgreSQL task queue. Compare their features, find when Celery is the better choice, and move a task to Workhorse."
+---
+
+Celery is a Python task queue. A client sends each task as a message through a broker, such as
+RabbitMQ or Redis, to the worker processes. Workhorse is a durable task queue that keeps its work
+in PostgreSQL. Workhorse delivers each task at least once. This page compares the two products, row
+by row, and tells you when Celery is the better choice.
+
+## Compare Workhorse and Celery
+
+The two products share many features. These include delays, cron schedules, priorities, retries
+with backoff, task dependencies, time limits, task results, a dashboard, and OpenTelemetry. They
+differ in five areas:
+
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Celery can send a task after a Django transaction commits. Thus, if the process
+  stops after the commit and before the send, the data has no task.
+- **Recovery from a stopped worker.** By default, a Celery worker acknowledges a task before it runs
+  the task. If the worker stops, the broker does not deliver the task again. With `acks_late`, the
+  broker delivers the task again. A killed worker process also needs `task_reject_on_worker_lost`. A
+  Workhorse worker holds a lease on the task. If the lease expires, another worker gets the task.
+- **Limits across all workers.** Workhorse stores its concurrency and rate limits in the database,
+  so the limits apply to all workers together. A Celery rate limit applies to each worker instance.
+- **Checkpoints inside a task.** A Workhorse handler stores the result of each checkpoint. When
+  the task runs again, the handler skips each checkpoint that completed. It can also wait for a
+  timer or a signal without a worker slot. In Celery, a retry runs the whole task again.
+- **Languages.** Celery workers are in Python. Community clients exist for other languages.
+  Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="celery" />
+
+## When Celery is the better choice
+
+Celery is the better choice in these cases:
+
+- You already run RabbitMQ or Redis, and your application has no PostgreSQL database.
+- Your application does not need the task and its data to commit together.
+- Your tasks are short, and a retry that runs the whole task again is acceptable.
+- Your code already uses Celery chains, groups, and chords, and a move costs more than it gives.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- A limit must apply to all workers together, for example the rate limit of an external API.
+- A task has work that is slow or costly to repeat, or it waits for a timer or a person.
+- Workers in more than one language must use the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Celery
+
+Move one task type at a time. Keep the Celery workers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts. The
+[Django recipe](/docs/django) explains how a task commits with your Django data.
+
+**Example.** A Django application sends a `welcome-email` task when it creates a user. The task has
+three attempts with exponential backoff.
+
+1. In Celery, `delay_on_commit()` sends the task after the transaction commits.
+2. In Workhorse, `enqueue_in_atomic()` adds the task inside the transaction, so the user and the
+   task commit together.
+3. `max_retries=2` in Celery gives two retries, so three attempts. In Workhorse, `max_attempts=3`
+   gives the same three attempts.
+
+Before the move, with Celery:
+
+```python
+from smtplib import SMTPException
+
+from celery import shared_task
+from django.db import transaction
+
+
+@shared_task(
+    autoretry_for=(SMTPException,),
+    max_retries=2,
+    retry_backoff=5,
+    retry_backoff_max=300,
+    retry_jitter=False,
+)
+def welcome_email(user_id):
+    send_welcome_email(user_id)
+
+
+with transaction.atomic():
+    user = User.objects.create(email=email)
+    welcome_email.delay_on_commit(user.pk)
+```
+
+After the move, with Workhorse:
+
+```python
+from django.db import transaction
+from workhorse import EnqueueOptions, HandlerContext, Json, Worker
+from workhorse.django import enqueue_in_atomic
+
+alias = "default"
+with transaction.atomic(using=alias):
+    user = User.objects.using(alias).create(email=email)
+    enqueue_in_atomic(
+        "welcome-email",
+        {"user_id": user.pk},
+        using=alias,
+        options=EnqueueOptions(
+            max_attempts=3,
+            retry_policy={
+                "type": "exponential",
+                "initialDelayMs": 5_000,
+                "multiplier": 2,
+                "maxDelayMs": 300_000,
+            },
+        ),
+    )
+
+
+def welcome_email(payload: Json, context: HandlerContext) -> Json:
+    send_welcome_email(payload["user_id"])
+    return None
+
+
+worker = Worker(pool).handle("welcome-email", welcome_email)
+worker.run()
+```
+
+`pool` is a Psycopg connection pool for the same database. Celery gives each delay in seconds, and
+Workhorse gives each delay in milliseconds. `autoretry_for` retries only the listed exceptions.
+Workhorse retries a task after an exception from your handler code, until the task has no attempts
+left. Celery adds a random part to each delay by default, so this example sets `retry_jitter=False`.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Django](/docs/django) commits a business write and its task together.
