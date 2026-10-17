@@ -54,8 +54,21 @@ interface CompetitorCellBase {
   readonly note?: string;
 }
 
-interface CompetitorStatusCell extends CompetitorCellBase {
+/**
+ * A paid edition, a paid license, or a managed service that reaches a higher
+ * status than the free edition. The license note of the product names it, and
+ * the source and evidence of the cell support it.
+ */
+interface PaidEdition {
+  readonly edition: string;
   readonly status: CompetitorStatus;
+}
+
+interface CompetitorStatusCell extends CompetitorCellBase {
+  /** The status of the free edition. */
+  readonly status: CompetitorStatus;
+  /** Set only when a paid edition reaches a higher status than `status`. */
+  readonly paid?: PaidEdition;
 }
 
 interface CompetitorTextCell extends CompetitorCellBase {
@@ -174,9 +187,15 @@ export function productGroups(product: ComparisonProduct): readonly ProductGroup
   }));
 }
 
-/** The word or value a cell shows. */
+/**
+ * The word or value a cell shows. A cell with a paid edition shows both
+ * statuses, for example "Partial; Supported with Example Pro".
+ */
 export function cellText(cell: WorkhorseCell | CompetitorCell): string {
-  return "status" in cell ? cell.status : cell.value;
+  if (!("status" in cell)) return cell.value;
+  return "paid" in cell && cell.paid
+    ? `${cell.status}; ${cell.paid.status} with ${cell.paid.edition}`
+    : cell.status;
 }
 
 /** The ISO date as a reader spells it, for example "17 October 2026". */

@@ -19,6 +19,10 @@ import {
  * table of one product page. No page types a fact by hand, so a page and the
  * hub cannot disagree, and the quarterly check edits one file.
  *
+ * A competitor cell states the free edition. If a paid edition reaches a higher
+ * status, `cellText` adds it, for example "Partial; Supported with Example Pro",
+ * so both tables show the two statuses.
+ *
  * `site/scripts/mdx-to-markdown.ts` replaces the tag with the same tables as
  * Markdown for the agent twin.
  */

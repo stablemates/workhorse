@@ -29,8 +29,14 @@ Each table has one row for each product and one row for Workhorse. Each cell lin
 version in the first column. The last column gives the date of the last check. A product name is a
 link when the product has its own page.
 
-The six columns show the facts that most often decide the choice. A product page has about 20 rows
+The columns show the facts that most often decide the choice. A product page has about 20 rows
 and tells you when the other product is the better choice.
+
+A cell describes the free edition of the product. If a paid edition or a managed service has more,
+the cell also names it and its status, for example "Partial; Supported with Sidekiq Enterprise".
+The note of each limit cell states its scope: one process, one queue, or each key. A limit cell
+says "Supported" only when the product limits a queue and each key across all workers. A limit for
+one process only is "Not supported". A limiter that the task code must call is "Partial".
 
 <ComparisonTable />
 

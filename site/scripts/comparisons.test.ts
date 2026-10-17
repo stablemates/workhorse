@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { comparisons } from "../lib/comparisons.js";
+import { cellText, comparisons, hubMarkdown, productMarkdown } from "../lib/comparisons.js";
 
 /**
  * The schema of `site/comparisons.json` (ADR 0104). Every fact on a comparison
@@ -18,6 +18,15 @@ const docsDir = resolve(repositoryRoot, "site/content/docs");
 
 const workhorseStatuses = new Set(["Supported", "Partial", "Planned", "Not supported", "Absent"]);
 const competitorStatuses = new Set(["Supported", "Partial", "Not supported"]);
+/** The order of the competitor statuses, so a paid edition can only state a higher one. */
+const statusRank: Readonly<Record<string, number>> = {
+  "Not supported": 0,
+  Partial: 1,
+  Supported: 2,
+};
+
+/** The rows whose note must state the scope of the limit: one process, one queue, or each key. */
+const limitRows = new Set(["concurrency-limits", "rate-limits"]);
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -62,6 +71,9 @@ function competitorCellErrors(
     if (cell.status !== "Supported" && !cell.note) {
       errors.push(`${where}: a ${String(cell.status)} cell needs a note that says what is missing`);
     }
+    errors.push(...paidEditionErrors(cell, where));
+  } else if (cell.paid !== undefined) {
+    errors.push(`${where}: a text cell cannot name a paid edition`);
   } else if (typeof cell.value !== "string" || cell.value.trim() === "") {
     errors.push(`${where}: a text cell needs a value`);
   }
@@ -73,6 +85,28 @@ function competitorCellErrors(
   }
   if (typeof cell.evidence !== "string" || cell.evidence.trim() === "") {
     errors.push(`${where}: the cell has no evidence from its source`);
+  }
+  return errors;
+}
+
+/**
+ * The problems with the paid edition of a status cell. The status of the cell
+ * describes the free edition. A paid edition is named only when it reaches a
+ * higher status, and the note names it so the reader sees what it adds.
+ */
+function paidEditionErrors(cell: Cell, where: string): string[] {
+  if (cell.paid === undefined) return [];
+  const paid = cell.paid as Record<string, unknown>;
+  const errors: string[] = [];
+  if (typeof paid.edition !== "string" || paid.edition.trim() === "") {
+    errors.push(`${where}: the paid edition has no name`);
+  } else if (typeof cell.note !== "string" || !cell.note.includes(paid.edition)) {
+    errors.push(`${where}: the note does not name the paid edition ${paid.edition}`);
+  }
+  if (typeof paid.status !== "string" || !competitorStatuses.has(paid.status)) {
+    errors.push(`${where}: paid status ${JSON.stringify(paid.status)} is not a competitor status`);
+  } else if ((statusRank[paid.status] ?? 0) <= (statusRank[String(cell.status)] ?? 2)) {
+    errors.push(`${where}: the paid edition is not higher than ${String(cell.status)}`);
   }
   return errors;
 }
@@ -196,6 +230,114 @@ describe("the comparison data", () => {
     expect(
       competitorCellErrors({ ...complete, status: "Partial" }, "status", "1.2.3", "cell"),
     ).toEqual(["cell: a Partial cell needs a note that says what is missing"]);
+  });
+
+  it("rejects a paid edition that is not named, not higher, or on a text cell", () => {
+    const free = {
+      status: "Partial",
+      note: "The limiter is in Example Enterprise, a paid edition.",
+      source: "https://github.com/owner/repo/blob/v1.2.3/README.md#L1",
+      version: "1.2.3",
+      evidence: "Limiter.concurrent",
+    };
+    const paid = { edition: "Example Enterprise", status: "Supported" };
+    expect(competitorCellErrors({ ...free, paid }, "status", "1.2.3", "cell")).toEqual([]);
+    expect(
+      competitorCellErrors(
+        { ...free, paid: { ...paid, status: "Partial" } },
+        "status",
+        "1.2.3",
+        "cell",
+      ),
+    ).toEqual(["cell: the paid edition is not higher than Partial"]);
+    expect(
+      competitorCellErrors(
+        { ...free, paid: { ...paid, status: "Paid" } },
+        "status",
+        "1.2.3",
+        "cell",
+      ),
+    ).toEqual(['cell: paid status "Paid" is not a competitor status']);
+    expect(
+      competitorCellErrors(
+        { ...free, paid: { ...paid, edition: "Example Pro" } },
+        "status",
+        "1.2.3",
+        "cell",
+      ),
+    ).toEqual(["cell: the note does not name the paid edition Example Pro"]);
+    expect(
+      competitorCellErrors({ ...free, paid: { ...paid, edition: "" } }, "status", "1.2.3", "cell"),
+    ).toEqual(["cell: the paid edition has no name"]);
+    const { status: _status, note: _note, ...text } = free;
+    expect(competitorCellErrors({ ...text, value: "MIT", paid }, "text", "1.2.3", "cell")).toEqual([
+      "cell: a text cell cannot name a paid edition",
+    ]);
+  });
+
+  it("shows the free status and the paid status in the tables and the Markdown", () => {
+    const withPaid = comparisons.products.flatMap((product) =>
+      Object.entries(product.cells)
+        .filter(([, cell]) => "paid" in cell && cell.paid)
+        .map(([row, cell]) => ({ product, row, cell })),
+    );
+    expect(withPaid.length).toBeGreaterThan(0);
+    const hub = hubMarkdown("https://example.com");
+    const errors: string[] = [];
+    for (const { product, row, cell } of withPaid) {
+      if (!("status" in cell) || !cell.paid) continue;
+      const text = `${cell.status}; ${cell.paid.status} with ${cell.paid.edition}`;
+      const where = `${product.slug}.${row}`;
+      if (cellText(cell) !== text) errors.push(`${where}: the cell shows "${cellText(cell)}"`);
+      const markdown =
+        product.page === "published" ? productMarkdown(product, "https://example.com") : "";
+      if (product.page === "published" && !markdown.includes(`| ${text}. `)) {
+        errors.push(`${where}: the product Markdown does not show "${text}"`);
+      }
+      const hubRow = comparisons.rows.find((entry) => entry.id === row)?.hub === true;
+      if (hubRow && !hub.includes(`| ${text}. `)) {
+        errors.push(`${where}: the hub Markdown does not show "${text}"`);
+      }
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it("states a scope in every limit cell and names each paid edition in the license note", async () => {
+    const errors: string[] = [];
+    for (const product of comparisons.products) {
+      for (const row of limitRows) {
+        const cell = product.cells[row];
+        if (cell && !cell.note) errors.push(`${product.slug}.${row}: the note states no scope`);
+      }
+      const license = product.cells.license;
+      const note = license?.note ?? "";
+      if (note === "") errors.push(`${product.slug}.license: no note names a paid edition`);
+      const editions = new Set(
+        [...Object.values(product.cells), ...(product.rows ?? []).map((row) => row.cell)].flatMap(
+          (cell) => ("paid" in cell && cell.paid ? [cell.paid.edition] : []),
+        ),
+      );
+      if (editions.size > 0 && note.includes("No paid edition")) {
+        errors.push(`${product.slug}.license: says "No paid edition", but a cell names one`);
+      }
+      for (const edition of editions) {
+        if (!note.includes(edition)) {
+          errors.push(`${product.slug}.license: the note does not name ${edition}`);
+        }
+      }
+    }
+    const workhorse = comparisons.rows.find((row) => row.id === "license")?.workhorse;
+    if (!workhorse || !("value" in workhorse) || workhorse.note !== "No paid edition.") {
+      errors.push('workhorse.license: the note is not "No paid edition."');
+    } else {
+      const about = await readFile(resolve(repositoryRoot, workhorse.source), "utf8");
+      if (!about.includes("There is no paid tier today.")) {
+        errors.push(
+          `workhorse.license: ${workhorse.source} does not say that there is no paid tier`,
+        );
+      }
+    }
+    expect(errors).toEqual([]);
   });
 
   it("gives every product a complete, sourced, and pinned set of cells", () => {

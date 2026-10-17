@@ -5,7 +5,7 @@
 - **Amends:** [ADR 0052](0052-publish-long-form-content-on-the-site.md) (comparisons are docs pages,
   not posts)
 - **Related:** [ADR 0051](0051-lead-with-durable-job-queue.md)
-- **Issue:** SM-1362, SM-1363
+- **Issue:** SM-1362, SM-1363, SM-1415
 
 ## Context
 
@@ -70,6 +70,24 @@ result.
 9. **Upkeep.** Each published page has a recurring quarterly check issue in Linear. The check
    confirms every cell against the newest release, then changes the version and the date. No test
    checks the date.
+10. **Free and paid editions.** A competitor cell states the free edition of the product. If a paid
+    edition, a paid license, or a managed service of the product reaches a higher status, the cell
+    also names it in a `paid` field with its status. The tables and the Markdown export show both,
+    for example "Partial; Supported with Sidekiq Enterprise". The note of the cell names the paid
+    edition, and the cell source supports it. The license note of each product names each paid
+    edition or managed service, or says "No paid edition". The schema test fails when a paid status
+    is not higher than the free status, or when a note does not name the edition.
+11. **Status rules for the limit rows.** The rows "Concurrency limits" and "Rate limits" use four
+    rules. Each limit cell note states its scope: one process, one queue, or each key.
+    - A limit that applies to one process only is "Not supported", because the row compares limits
+      across all workers.
+    - "Supported" needs a limit for a queue and a limit for each key, both across all workers. A
+      product with only one of the two scopes is "Partial". A constant key is not a queue limit.
+    - A limiter that the job code calls itself is "Partial", also when it works across all workers.
+      The task starts first, and then it fails or reschedules.
+    - Rule 10 applies to all rows: a cell states the free edition. Thus, a cell is "Not supported"
+      when only a paid edition has the feature, and the `paid` field gives the status of that
+      edition.
 
 ## Considered options
 
