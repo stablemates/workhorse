@@ -1,0 +1,115 @@
+---
+title: "Workhorse compared with BullMQ"
+description: "BullMQ vs Workhorse: a Redis task queue with an optional PostgreSQL backend, and a PostgreSQL task queue. Compare their features, find when BullMQ is the better choice, and move a job to Workhorse."
+---
+
+BullMQ is a task queue that keeps its work in Redis by default. It also has an optional PostgreSQL
+backend. Workhorse is a task queue that keeps its work in PostgreSQL only. This page compares the two
+products, row by row, and tells you when BullMQ is the better choice.
+
+## Compare Workhorse and BullMQ
+
+The two products share many features. These include delays, cron schedules, priorities,
+deduplication by key, parent and child tasks, and retries with backoff. Both also have queue-wide
+concurrency and rate limits, queue pause, and OpenTelemetry. They differ in four areas:
+
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. BullMQ does not take the application's transaction, also on its PostgreSQL backend.
+  Thus, a BullMQ job is added before or after the data commits.
+- **Steps inside a task.** A Workhorse handler stores the result of each named step and skips the
+  completed steps when the task runs again. BullMQ documents a pattern where the handler keeps its
+  current step in the job data.
+- **Languages.** BullMQ has workers in TypeScript, Python, Elixir, Rust, and .NET, and a producer
+  for PHP. Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+- **Dashboard.** Workhorse includes its dashboard in its packages. The official BullMQ dashboard,
+  Taskforce.sh, is a separate hosted service.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="bullmq" />
+
+## When BullMQ is the better choice
+
+BullMQ is the better choice in these cases:
+
+- You already run Redis, and your application has no PostgreSQL database.
+- Your workers are in Elixir or .NET, or your producers are in PHP.
+- You want groups that run jobs in round-robin order, with limits for each group, and BullMQ Pro is
+  acceptable.
+- Your application does not need the task and its data to commit together.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- A task has steps that are slow or costly to repeat.
+- Your workers are in Go or Ruby.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from BullMQ
+
+Move one queue at a time. Keep the BullMQ workers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** An application adds an `order-confirm` job after it saves an order. The job has three
+attempts with exponential backoff.
+
+1. In BullMQ, the application saves the order, then calls `queue.add()`. If the process stops
+   between the two calls, the order has no job.
+2. In Workhorse, the application calls `enqueue()` inside the transaction that saves the order.
+3. `attempts: 3` in BullMQ and `maxAttempts: 3` in Workhorse both give three attempts.
+
+Before the move, with BullMQ:
+
+```ts
+await saveOrder(order);
+await orders.add(
+  "order-confirm",
+  { orderId: order.id },
+  { attempts: 3, backoff: { type: "exponential", delay: 1_000 } },
+);
+
+const worker = new Worker("orders", async (job) => {
+  await confirmOrder(job.data.orderId);
+});
+```
+
+After the move, with Workhorse:
+
+```ts
+await db.transaction(async (tx) => {
+  await saveOrder(order, tx);
+  await workhorse.forTransaction(tx).enqueue(
+    "order-confirm",
+    { orderId: order.id },
+    {
+      queue: "orders",
+      maxAttempts: 3,
+      retryPolicy: {
+        type: "exponential",
+        initialDelayMs: 1_000,
+        multiplier: 2,
+        maxDelayMs: 60_000,
+      },
+    },
+  );
+});
+
+const worker = new Worker(queue, { queue: "orders" }).handle(
+  "order-confirm",
+  async (payload: { orderId: string }) => {
+    await confirmOrder(payload.orderId);
+  },
+);
+```
+
+This example uses Drizzle. A Workhorse exponential policy needs a maximum delay. The exponential
+backoff of BullMQ has no maximum.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Enqueue a task](/docs/enqueue) explains enqueue inside your transaction.

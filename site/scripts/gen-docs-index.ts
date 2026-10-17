@@ -1,5 +1,10 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 
+import {
+  comparisons,
+  isPublished as isPublishedComparison,
+  productUrl,
+} from "../lib/comparisons.js";
 import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
 import {
@@ -28,6 +33,10 @@ import { loadSitePages } from "./site-pages.js";
  * `---Integrations---`, which `integrations.json` owns. This script turns the
  * separators into collapsible folders with no URL of their own, so the page
  * files stay flat and every `/docs/<slug>` URL keeps working.
+ *
+ * The one folder of page files is `content/docs/compare/`, which
+ * `comparisons.json` owns in the same way under `---Compare---` (ADR 0104). Its
+ * pages are served at `/docs/compare` and `/docs/compare/<product>`.
  */
 
 interface Group {
@@ -49,6 +58,7 @@ interface Group {
  */
 const sidebarLabels: Readonly<Record<string, string>> = {
   integrations: "Overview",
+  compare: "Overview",
   migrate: "From another task queue",
   enqueue: "Enqueue a task",
   contracts: "Validate payloads",
@@ -247,6 +257,7 @@ const groupIcons: Readonly<Record<string, string>> = {
   "Executing work": "play",
   Operating: "activity",
   Integrations: "plug",
+  Compare: "compare",
   "Migrate to Workhorse": "migrate",
   Reference: "code",
 };
@@ -266,6 +277,19 @@ const catalogSubgroups: readonly Group[] = catalog.categories.map((category) => 
     .map((entry) => entry.slug),
 }));
 
+/**
+ * The sidebar group the comparison data owns. The hub sits first, then each
+ * published product page in data order, so adding a page is one MDX file and
+ * one entry in `comparisons.json`.
+ */
+const compareGroup = "Compare";
+const compareDir = "compare";
+const publishedComparisons = comparisons.products.filter(isPublishedComparison);
+const comparePages = [
+  compareDir,
+  ...publishedComparisons.map((product) => productUrl(product).replace(/^\/docs\//, "")),
+];
+
 const structure: Group[] = [];
 for (const entry of docsMeta.pages) {
   const separator = /^---(.+)---$/.exec(entry);
@@ -278,7 +302,9 @@ for (const entry of docsMeta.pages) {
       defaultOpen: structure.length === 0,
       ...(separator[1] === catalogGroup
         ? { pages: ["integrations"], groups: catalogSubgroups }
-        : { pages: [] }),
+        : separator[1] === compareGroup
+          ? { pages: [...comparePages] }
+          : { pages: [] }),
     });
     continue;
   }
@@ -291,19 +317,71 @@ for (const entry of docsMeta.pages) {
         "Add the page to the catalog instead.",
     );
   }
+  if (group.title === compareGroup) {
+    throw new Error(
+      `meta.json lists "${entry}" under ${compareGroup}, which site/comparisons.json owns. ` +
+        "Add the product to the comparison data instead.",
+    );
+  }
   group.pages.push(entry);
 }
 
 if (!structure.some((group) => group.title === catalogGroup)) {
   throw new Error(`meta.json has no ---${catalogGroup}--- separator for the catalog to fill`);
 }
+if (!structure.some((group) => group.title === compareGroup)) {
+  throw new Error(`meta.json has no ---${compareGroup}--- separator for the comparisons to fill`);
+}
 
 const entries = await readdir(contentDir, { withFileTypes: true });
-// Sorted, because `readdir` returns directory order, which differs between file systems.
-const slugs = entries
+const compareEntries = await readdir(new URL(`${compareDir}/`, contentDir), {
+  withFileTypes: true,
+});
+const unexpectedFolders = entries.filter(
+  (entry) => entry.isDirectory() && entry.name !== compareDir,
+);
+if (unexpectedFolders.length > 0) {
+  throw new Error(
+    `content/docs holds the folder "${unexpectedFolders[0]?.name}". Page files stay flat, ` +
+      `except under ${compareDir}/, which site/comparisons.json owns.`,
+  );
+}
+
+/**
+ * The slug of a page is its path under `content/docs` without `.mdx`, except
+ * that `compare/index.mdx` is the slug `compare`, because the hub is served at
+ * `/docs/compare`. The page record keeps the real file path.
+ */
+const comparisonSlugs = compareEntries
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
   .map((entry) => entry.name.replace(/\.mdx$/, ""))
-  .toSorted();
+  .map((name) => (name === "index" ? compareDir : `${compareDir}/${name}`));
+const pagePath = (slug: string) =>
+  slug === compareDir ? `${compareDir}/index.mdx` : `${slug}.mdx`;
+
+if (!comparisonSlugs.includes(compareDir)) {
+  throw new Error(`content/docs/${compareDir}/index.mdx, the comparison hub, is missing`);
+}
+for (const product of comparisons.products) {
+  const slug = `${compareDir}/${product.slug}`;
+  if (isPublishedComparison(product) && !comparisonSlugs.includes(slug)) {
+    throw new Error(`The published comparison "${product.slug}" has no page at ${slug}.mdx`);
+  }
+  if (!isPublishedComparison(product) && comparisonSlugs.includes(slug)) {
+    throw new Error(
+      `The planned comparison "${product.slug}" already has a page. ` +
+        'Set its page to "published" so the sidebar and the hub link it.',
+    );
+  }
+}
+
+// Sorted, because `readdir` returns directory order, which differs between file systems.
+const slugs = [
+  ...entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
+    .map((entry) => entry.name.replace(/\.mdx$/, "")),
+  ...comparisonSlugs,
+].toSorted();
 
 /**
  * The catalog as Markdown, for the twin and for `llms-full.txt`.
@@ -382,7 +460,7 @@ const markdownDocuments = new Map<string, string>();
 // most hashed assets on every build (SM-856).
 const pageRecords = await Promise.all(
   slugs.map(async (slug) => {
-    const source = await readFile(new URL(`${slug}.mdx`, contentDir), "utf8");
+    const source = await readFile(new URL(pagePath(slug), contentDir), "utf8");
     const title = frontmatterValue(source, "title") ?? slug;
     const description = frontmatterValue(source, "description");
     if (!description) {
@@ -403,7 +481,7 @@ const pageRecords = await Promise.all(
     const page: PageRecord = {
       slug,
       url: slug === "index" ? "/docs" : `/docs/${slug}`,
-      path: `${slug}.mdx`,
+      path: pagePath(slug),
       title,
       description,
     };
@@ -595,8 +673,12 @@ await Promise.all(
     ].join("\n");
     // `index` is served at `/docs`, so its twin is `/docs.md`, not
     // `/docs/index.md`. Every other page keeps its slug.
-    const target = page.slug === "index" ? "../public/docs.md" : `../public/docs/${page.slug}.md`;
-    await writeFile(new URL(target, import.meta.url), `${frontmatter}\n${document}`);
+    const target = new URL(
+      page.slug === "index" ? "../public/docs.md" : `../public/docs/${page.slug}.md`,
+      import.meta.url,
+    );
+    await mkdir(new URL("./", target), { recursive: true });
+    await writeFile(target, `${frontmatter}\n${document}`);
   }),
 );
 
@@ -718,18 +800,24 @@ const llmsFullSection = (group: Group, depth = 2): string => {
  * The full file's lead is its own, not a copy of the router's. An agent holding
  * this file has already fetched everything, so routing it is a no-op; what it
  * still needs is where the index lives and how to install.
+ *
+ * The Compare group stays out of the full file (ADR 0104). An agent that
+ * integrates Workhorse does not need the product matrices, and each comparison
+ * page would add its tables to every download. `llms.txt` still lists the
+ * comparison pages, and each one keeps its Markdown twin.
  */
+const llmsFullGroups = structure.filter((group) => group.title !== compareGroup);
 const llmsFull = `# ${siteConfig.name}
 
 > ${siteConfig.description}
 
-This file is every documentation page in one download. For the page index and the Markdown URLs,
-read [llms.txt](${base}/llms.txt).
+This file is every documentation page in one download, except the product comparisons under
+${compareGroup}. For the page index and the Markdown URLs, read [llms.txt](${base}/llms.txt).
 
 Install with the commands under ${installation.title} below. They name no version, and the runtime
 compatibility check confirms the schema before a process starts.
 
-${structure.map((group) => llmsFullSection(group)).join("\n")}`;
+${llmsFullGroups.map((group) => llmsFullSection(group)).join("\n")}`;
 
 const llmsFullKilobytes = Math.round(Buffer.byteLength(llmsFull, "utf8") / 1000);
 
@@ -747,7 +835,8 @@ TypeScript, Python, Go, Rust, and Ruby — where the HTML page shows one.
 Install with the commands on [${installation.title}](${base}${installation.url}.md). They name no
 version, and the runtime compatibility check confirms the schema before a process starts.
 
-[llms-full.txt](${base}/llms-full.txt) is every page below in one file, about ${llmsFullKilobytes} KB.
+[llms-full.txt](${base}/llms-full.txt) is every page below in one file, except the ${compareGroup}
+pages, about ${llmsFullKilobytes} KB.
 
 ${renderWhenToUse(site, { entryPoint, installation, limitations })}
 ${structure.map((group) => llmsSection(group)).join("\n")}

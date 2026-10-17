@@ -100,6 +100,31 @@ voice, one instruction per step, and the condition first.
 - Put test evidence last. Name the tier, the test command, and what the tests
   cover. Leave exact tested versions to the catalog when it resolves them.
 
+## The comparison pages
+
+`comparisons.json` holds every fact of the "Compare" group (ADR 0104). The
+sidebar, the hub at `/docs/compare`, each product page, and the Markdown twins
+read it. To add a product page, do these steps:
+
+1. In the product entry, set `page` to `"published"`.
+2. Remove `issue` from the entry.
+3. Add a cell for every core row. A page can add up to three rows of its own in
+   `rows`.
+4. Write `content/docs/compare/<slug>.mdx` with
+   `<ComparisonTable product="<slug>" />`.
+
+The hub matrix and the sidebar read the data file, so a new page needs no other
+change.
+
+- `content/docs/meta.json` keeps the `---Compare---` separator but may not list a
+  page under it. `scripts/gen-docs-index.ts` fills the group from the data file.
+- Each competitor cell has a value, a source URL at a release tag, the product
+  version, and evidence from the source. Each Workhorse status names the row of
+  `docs/features.md` or `docs/parity.md` that it restates.
+- `scripts/comparisons.test.ts` checks the data and the page sections.
+  `../scripts/comparison-names.test.ts` fails on a product name outside the
+  permitted paths.
+
 ## The blog
 
 `content/blog/` is the home for long-form content (ADR 0052). A post is one
