@@ -47,6 +47,11 @@ result.
    documentation or source code. A GitHub source names a release tag or a commit, not a branch. All
    cells of one product use the version of that product, and the page shows that version and the
    date of the last check.
+
+   One exception applies. If the OpenTelemetry project publishes an instrumentation package for a
+   product, the OpenTelemetry cell of that product can cite the package. The note of the cell must
+   name the OpenTelemetry project as the publisher. No other third-party source is permitted.
+
 6. **The Workhorse column.** Each Workhorse status uses the status words of `docs/features.md` and
    `docs/parity.md`, and names the row that it restates. The schema test fails when the two
    disagree.

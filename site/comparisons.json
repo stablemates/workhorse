@@ -1439,8 +1439,7 @@
       "name": "Celery",
       "aliases": ["celery"],
       "category": "broker-queue",
-      "page": "planned",
-      "issue": "SM-1366",
+      "page": "published",
       "version": "5.6.3",
       "checked": "2026-10-17",
       "repository": "https://github.com/celery/celery",
@@ -1453,12 +1452,89 @@
           "version": "5.6.3",
           "evidence": "\"The task is not sent to the broker when you call the method, only when the Django transaction finishes.\" (delay_on_commit)"
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "countdown or eta sets the earliest start. The worker keeps a delayed task in memory, so the docs advise delays of minutes, not days.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/calling.rst#L228-L272",
+          "version": "5.6.3",
+          "evidence": "\"The ETA (estimated time of arrival) lets you set a specific date and time that is the earliest time at which your task will be executed.\" Warning: \"Tasks with `eta` or `countdown` are immediately fetched by the worker ... reside in the worker's memory\"; \"using `eta` and `countdown` **is not recommended** for scheduling tasks for a distant future.\""
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "celery beat sends the tasks. Only one beat process can run for a schedule.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/periodic-tasks.rst#L13-L22",
+          "version": "5.6.3",
+          "evidence": "\":program:`celery beat` is a scheduler; It kicks off tasks at regular intervals\"; \"You have to ensure only a single scheduler is running for a schedule at a time, otherwise you'd end up with duplicate tasks.\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "The broker applies the priority. RabbitMQ needs x-max-priority on the queue, and Redis needs a transport option.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/calling.rst#L853-L857",
+          "version": "5.6.3",
+          "evidence": "\"priority: A number between `0` and `255`, where `255` is the highest priority. Supported by: RabbitMQ, Redis (priority reversed, 0 is highest).\" docs/userguide/routing.rst#L215-L272 gives the queue and transport settings."
+        },
+        "enqueue-deduplication": {
+          "status": "Not supported",
+          "note": "No key refuses a new task. worker_deduplicate_successful_tasks only skips a redelivered message whose ID already succeeded.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/configuration.rst#L3208-L3222",
+          "version": "5.6.3",
+          "evidence": "\"Deduplication occurs only with tasks that have the same identifier, enabled late acknowledgment, were redelivered by the message broker and their state is ``SUCCESS`` in the result backend.\" docs/tutorials/task-cookbook.rst#L12-L28 uses an application cache lock instead."
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "Chains run tasks in sequence. A chord runs a callback after a group finishes and needs a result backend.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/canvas.rst#L879-L894",
+          "version": "5.6.3",
+          "evidence": "\"A chord is a task that only executes after all of the tasks in a group have finished executing.\" \"Tasks used within a chord must *not* ignore their results.\" Chains: canvas.rst#L497-L503 \"the linked task is called when the task returns successfully\"."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "autoretry_for retries the listed exceptions. retry_backoff gives exponential delays with jitter, to at most 600 s by default.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L720-L790",
+          "version": "5.6.3",
+          "evidence": "\"Just specify the :attr:`~Task.retry_backoff` argument\"; \"this exponential backoff will also introduce random jitter ... It will also cap the maximum backoff delay to 10 minutes.\" Task.max_retries: \"By default, this option is set to ``3``.\""
+        },
+        "crash-recovery": {
+          "status": "Partial",
+          "note": "By default the worker acknowledges a task before it runs it, so a crash loses the task. Redelivery needs acks_late and task_reject_on_worker_lost.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L20-L47",
+          "version": "5.6.3",
+          "evidence": "\"the default behavior is to acknowledge the message in advance, just before it's executed, so that a task invocation that already started is never executed again.\" \"If your task is idempotent you can set the :attr:`~Task.acks_late` option\". \"the worker will acknowledge the message if the child process executing the task is terminated ... even when :attr:`~Task.acks_late` is enabled\"; \"If you really want a task to be redelivered in these scenarios you should consider enabling the :setting:`task_reject_on_worker_lost` setting.\""
+        },
+        "cancellation": {
+          "status": "Partial",
+          "note": "revoke skips a task that has not started. A running AbortableTask can check for an abort, but only with a database result backend.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/workers.rst#L501-L545",
+          "version": "5.6.3",
+          "evidence": "\"When a worker receives a revoke request it will skip executing the task, but it won't terminate an already executing task unless the `terminate` option is set.\" \"The terminate option is a last resort for administrators ... you must never call this programmatically.\" https://github.com/celery/celery/blob/v5.6.3/celery/contrib/abortable.py#L10-L18 and #L74-L79: \"Consumers (workers) should periodically check (and honor!) the :meth:`is_aborted` method\"; \"this class will only work with the database backends.\""
+        },
+        "concurrency-limits": {
+          "status": "Not supported",
+          "note": "--concurrency sets the pool size of one worker. No setting limits a queue or a task type across all workers.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/workers.rst#L393-L400",
+          "version": "5.6.3",
+          "evidence": "\"The number of worker processes/threads can be changed using the :option:`--concurrency <celery worker --concurrency>` argument and defaults to the number of CPUs available on the machine.\" The userguide has no limit across workers."
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "note": "rate_limit applies to each worker instance. The docs suggest one queue with restricted workers for a global limit.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L996-L1019",
+          "version": "5.6.3",
+          "evidence": "\"Note that this is a *per worker instance* rate limit, and not a global rate limit. To enforce a global rate limit (e.g., for an API with a maximum number of requests per second), you must restrict to a given queue.\""
+        },
         "checkpoints": {
           "status": "Not supported",
           "note": "A retry runs the whole task again. Chains and chords are not checkpoints.",
           "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L579-L584",
           "version": "5.6.3",
           "evidence": "\"Task.retry() can be used to re-execute the task\" ... \"it'll send a new message, using the same task-id\". tasks.rst#L21-L23 asks for idempotent tasks. Chains and chords link separate tasks."
+        },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running task cannot suspend. retry with a countdown runs the whole task again later. A chord callback waits before it starts.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L576-L584",
+          "version": "5.6.3",
+          "evidence": "\"When you call ``retry`` it'll send a new message, using the same task-id\". The userguide has no API to suspend a running task or to wait for an external signal."
         },
         "dashboard": {
           "status": "Supported",
@@ -1467,6 +1543,27 @@
           "version": "5.6.3",
           "evidence": "\"Flower is a real-time web based monitor and administration tool for Celery.\" ... \"Being the recommended monitor for Celery\". Flower lives at github.com/mher/flower, outside the celery organization."
         },
+        "dead-letters": {
+          "status": "Partial",
+          "note": "With acks_late, Reject(requeue=False) can send a message to a RabbitMQ dead letter exchange. Celery has no command to run failed tasks again.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L1404-L1417",
+          "version": "5.6.3",
+          "evidence": "\"Rejecting a message has the same effect as acking it, but some brokers may implement additional functionality that can be used. For example RabbitMQ supports the concept of `Dead Letter Exchanges`_\". The result backend keeps the FAILURE state; the userguide has no redrive command."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "cancel_consumer tells running workers to stop consuming a queue. A worker that starts later with that queue consumes it.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/workers.rst#L952-L982",
+          "version": "5.6.3",
+          "evidence": "\"You can cancel a consumer by queue name using the :control:`cancel_consumer` control command.\" $ celery -A proj control cancel_consumer foo. workers.rst#L893-L895: \"tell the worker to start and stop consuming from a queue at run-time\"."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The OpenTelemetry project publishes the instrumentation package, not the Celery project. The package supports Celery 4 and 5.",
+          "source": "https://github.com/open-telemetry/opentelemetry-python-contrib/blob/a22d03307b27d958ca9dc340a3514ae1898f63e7/instrumentation/opentelemetry-instrumentation-celery/src/opentelemetry/instrumentation/celery/package.py#L5",
+          "version": "5.6.3",
+          "evidence": "opentelemetry-python-contrib v0.66b1: _instruments = (\"celery >= 4.0, < 6.0\",); __init__.py: \"Instrument `celery`_ to trace Celery applications.\" CeleryInstrumentor().instrument(). The Celery 5.6.3 docs do not mention OpenTelemetry."
+        },
         "worker-languages": {
           "value": "Python",
           "note": "The other listed clients are separate community projects.",
@@ -1474,12 +1571,19 @@
           "version": "5.6.3",
           "evidence": "\"Celery is written in Python, but the protocol can be implemented in any language. In addition to Python there's node-celery for Node.js, a PHP client, gocelery, gopher-celery for Go, and rusty-celery for Rust.\""
         },
-        "infrastructure": {
-          "value": "A message broker (RabbitMQ or Redis)",
-          "note": "Other transports are experimental. A result backend is optional.",
-          "source": "https://github.com/celery/celery/blob/v5.6.3/README.rst#L145-L148",
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Community clients exist for Node.js, PHP, Go, and Rust. The Celery project does not maintain them.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/README.rst#L107-L109",
           "version": "5.6.3",
-          "evidence": "\"Celery is usually used with a message broker to send and receive messages. The RabbitMQ, Redis transports are feature complete, but there's also experimental support for a myriad of other solutions\""
+          "evidence": "\"Celery is written in Python, but the protocol can be implemented in any language. In addition to Python there's node-celery for Node.js, a PHP client, gocelery, gopher-celery for Go, and rusty-celery for Rust.\""
+        },
+        "infrastructure": {
+          "value": "A message broker (RabbitMQ, Redis, or Amazon SQS)",
+          "note": "Other transports are experimental. A result backend is optional.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/getting-started/backends-and-brokers/index.rst#L28-L44",
+          "version": "5.6.3",
+          "evidence": "Broker Overview table: \"*RabbitMQ* | Stable\", \"*Redis* | Stable\", \"*Amazon SQS* | Stable\", \"*Zookeeper* | Experimental\", \"*Kafka* | Experimental\", \"*GC PubSub* | Experimental\". README.rst#L145-L148: \"Celery is usually used with a message broker to send and receive messages.\""
         },
         "license": {
           "value": "BSD-3-Clause",
@@ -1488,7 +1592,53 @@
           "version": "5.6.3",
           "evidence": "setup.py: license='BSD-3-Clause'. LICENSE: \"Celery is licensed under The BSD License (3 Clause, also known as the new BSD license).\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "time-limits",
+          "group": "executing",
+          "label": "Time limit for each attempt",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Per-attempt execution timeouts"
+            },
+            "page": "/docs/deadlines",
+            "note": "An absolute deadline for the whole task is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A soft limit raises an exception in the task. A hard limit stops the task. The gevent pool has no soft limit and cannot stop a blocking task.",
+            "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/workers.rst#L697-L747",
+            "version": "5.6.3",
+            "evidence": "\":pool support: *prefork/gevent (see note below)*\". \"The time limit (`--time-limit`) is the maximum number of seconds a task may run before the process executing it is terminated and replaced by a new process. You can also enable a soft time limit (`--soft-time-limit`), this raises an exception the task can catch to clean up before the hard time limit kills it\". The gevent pool uses a gevent Timeout instead (celery/concurrency/gevent.py#L34-L39). workers.rst#L746-L747: \"The gevent pool does not implement soft time limits. Additionally, it will not enforce the hard time limit if the task is blocking.\""
+          }
+        },
+        {
+          "id": "task-results",
+          "group": "operating",
+          "label": "Store and read the task result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Terminal result inspection"
+            },
+            "page": "/docs/queries",
+            "note": "The result is in the same PostgreSQL database."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A result backend, such as Redis or a SQL database, stores states and return values. It is a separate setting.",
+            "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L1144-L1150",
+            "version": "5.6.3",
+            "evidence": "\"If you want to keep track of tasks or need the return values, then Celery must store or send the states somewhere so that they can be retrieved later. There are several built-in result backends to choose from: SQLAlchemy/Django ORM, Memcached, RabbitMQ/QPid (``rpc``), and Redis\""
+          }
+        }
+      ]
     },
     {
       "slug": "sidekiq",
