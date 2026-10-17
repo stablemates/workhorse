@@ -1,0 +1,119 @@
+---
+title: "Workhorse compared with Solid Queue"
+description: "Solid Queue vs Workhorse: two task queues that keep work in a SQL database. Compare their features, find when Solid Queue is the better choice, and move a Rails job to Workhorse."
+---
+
+Workhorse is a durable task queue for PostgreSQL. Solid Queue is an Active Job backend for Rails
+that keeps its work in a SQL database. Neither product needs a broker. The Ruby gem of Workhorse
+also has an Active Job adapter. Thus a Rails application can run the same job classes on either
+product. This page compares the two products, row by row, and tells you when Solid Queue is the
+better choice.
+
+## Compare Workhorse and Solid Queue
+
+The two products share the base of a database queue. Both have delays, cron schedules, priorities,
+and retries. Both have concurrency limits by key, queue pause, and failed jobs that you can run
+again. Both have groups of jobs with callbacks, and a free dashboard. They differ in five areas:
+
+- **Steps inside a task.** A Workhorse handler stores the result of each named step when the step
+  completes. It can also wait for a timer or a signal without a worker slot. Solid Queue uses Active
+  Job Continuations. A continuation saves its progress at some points: before an isolated step,
+  when the worker stops, and when a step raises an error. It has no signal wait.
+- **A stopped worker process.** If a Workhorse worker stops, its lease expires and Workhorse runs
+  the task again. If a Solid Queue worker process dies, Solid Queue marks its jobs as failed. It
+  does not retry them, because the job can be the cause of the stop.
+- **Limits and telemetry.** Workhorse has rate limits across all workers and cancellation of a
+  running task. Solid Queue has neither. Workhorse sends OpenTelemetry traces and metrics. For
+  Solid Queue, a gem from the OpenTelemetry project sends Active Job traces, but no metrics.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
+  protocol. Solid Queue runs Active Job jobs in Ruby.
+- **Databases.** Solid Queue runs on MySQL, MariaDB, PostgreSQL, and SQLite. Workhorse runs on
+  PostgreSQL only.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="solid-queue" />
+
+## When Solid Queue is the better choice
+
+Solid Queue is the better choice in these cases:
+
+- Your application is a Rails application, and Active Job gives all the features that your jobs
+  need.
+- Your application uses MySQL, MariaDB, or SQLite.
+- You want a job of a stopped worker process to fail, so that an operator examines it first.
+- You use Mission Control – Jobs to examine queues and jobs, and to retry failed jobs.
+
+Workhorse is the better choice in these cases:
+
+- A task has steps that are slow or costly to repeat, or it waits for a timer, a signal, or a
+  person.
+- A running task must get a cancel request, or a queue needs a rate limit. The handler gets
+  the request and must stop itself.
+- More than one language must enqueue tasks or run workers on the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Solid Queue
+
+Move one job class at a time. The [Active Job adapter](/docs/active-job) runs your job classes on
+Workhorse, so the callers do not change. Keep `bin/jobs` running until the Solid Queue queues are
+empty. The [migration guide](/docs/migrate) gives the full procedure.
+
+**Example.** A Rails application sends a receipt for each order. A maximum of three receipt jobs
+for one account can run at the same time.
+
+1. In Solid Queue, `limits_concurrency` sets the limit on the job class. Its key is the account of
+   the order.
+2. In Workhorse, the job class sets a concurrency key with `workhorse_options`.
+3. A concurrency policy for the `mail` queue sets three active tasks for each key. PostgreSQL keeps
+   the policy, so every worker obeys it.
+
+Before the move, with Solid Queue:
+
+```ruby
+class SendReceiptJob < ApplicationJob
+  self.queue_adapter = :solid_queue
+  queue_as :mail
+  limits_concurrency to: 3, key: ->(order) { order.account }
+
+  def perform(order)
+    ReceiptMailer.with(order: order).receipt.deliver_now
+  end
+end
+```
+
+After the move, with Workhorse:
+
+```ruby
+class SendReceiptJob < ApplicationJob
+  self.queue_adapter = :stablemates_workhorse
+  queue_as :mail
+  workhorse_options concurrency_key: ->(job) { "account-#{job.arguments.first.account_id}" }
+
+  def perform(order)
+    ReceiptMailer.with(order: order).receipt.deliver_now
+  end
+end
+
+# Once for each deploy, with the queue client of the application.
+queue.sync_concurrency_policies("workers", [
+  Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "mail", max_active: 20, max_active_per_key: 3)
+], prune: false)
+```
+
+`ApplicationJob` must include `Stablemates::Workhorse::ActiveJob::Options` before a job can call
+`workhorse_options`. A Solid Queue limit applies to a job class, and a Workhorse policy applies to
+a queue. Thus, put the jobs that share a limit in one queue. Solid Queue runs a lower priority
+number first, and Workhorse runs a higher number first. Thus, examine each `priority` when you move
+a job.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Run Rails jobs on Workhorse](/docs/active-job) gives the adapter, the worker script, and the
+  retry rules.
+- [Concurrency policies](/docs/concurrency-policies) explains the limits for a queue and for each
+  key.
