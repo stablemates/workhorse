@@ -1,0 +1,190 @@
+---
+title: "Workhorse compared with DBOS"
+description: "DBOS vs Workhorse: a workflow library and a task queue, both on PostgreSQL. Compare their features, find when DBOS is the better choice, and move a workflow to Workhorse."
+---
+
+DBOS and Workhorse are in different categories. DBOS Transact is a workflow library. You mark
+functions in your program as workflows and steps. DBOS stores the input of each workflow and the
+output of each step in its system database. After a failure, DBOS calls the workflow again, and
+each completed step returns its stored output.
+
+Workhorse is a durable task queue in your PostgreSQL database. A handler can store the result of
+each named checkpoint and wait for a timer or a signal. Workhorse has no workflow runtime. Both
+products are libraries in your application. This page compares the two products, row by row, and
+tells you when DBOS is the better choice.
+
+## Compare Workhorse and DBOS
+
+The two products share many features. These include delays, cron schedules, priorities, retries,
+cooperative cancellation, concurrency and rate limits, child work, and OpenTelemetry spans. They
+differ in six areas:
+
+- **The model of a step.** DBOS workflow code must be deterministic. A recovered workflow must call
+  the same steps in the same order. A Workhorse handler finds each stored result by the name of its
+  checkpoint, so the handler does not have to be deterministic.
+- **Retries.** A DBOS step has its own retry settings, and retries are off by default. A Workhorse
+  task has one retry policy, and a retry runs the handler again from its entry.
+- **Recovery across processes.** A DBOS process recovers the workflows of its executor ID when
+  that process starts again. For automatic recovery on another process, DBOS says that its
+  Conductor service is required. Self-hosted Conductor needs a paid license for more than one
+  executor. In Workhorse, the lease of a stopped worker expires, and any other worker can claim the
+  task.
+- **Waits.** A DBOS workflow can
+  [sleep](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/workflow-tutorial.md#L151-L156)
+  or wait for a message, and the wait continues after a restart. The workflow stays `PENDING`, so on
+  a queue it
+  [counts toward the concurrency limit](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L160-L163).
+  A Workhorse wait releases the worker until its time comes.
+- **Enqueue in a transaction.** The DBOS client can enqueue in a transaction on the DBOS system
+  database. Your application tables must be in that database. With Workhorse, a task and your data
+  commit in one transaction in your application database.
+- **Languages.** DBOS has libraries for Python, TypeScript, Go, and Java. Workhorse has workers in
+  TypeScript, Python, Go, Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="dbos" />
+
+## When DBOS is the better choice
+
+DBOS is the better choice in these cases:
+
+- You want to write a workflow as ordinary functions with decorators. DBOS
+  [records the output of each step](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/architecture.md#L62-L80)
+  for each call, and you do not give the call a name. In Workhorse, you wrap each operation in a
+  named checkpoint, and the names must stay stable.
+- Your workflows run for a long time and change while they run. DBOS
+  [tags each workflow with the application version](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/upgrading-workflows.md#L95-L112)
+  that started it, and recovery runs only the workflows of the current version. `DBOS.patch` marks
+  a changed branch. Workhorse has no code version on a task. It detects only some changes, such as a
+  changed checkpoint input.
+- An operator must run a failed workflow again from a chosen step. DBOS can
+  [fork or rewind a workflow](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/workflow-management.md#L74-L97),
+  and the earlier steps keep their stored outputs. Workhorse redrive creates a new task from a dead
+  letter. The new task copies no checkpoints, so the operation of each checkpoint runs again.
+- A message can arrive before the workflow waits for it. DBOS
+  [stores each message](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/workflow-communication.md#L76-L78),
+  and a later `DBOS.recv` reads it. Workhorse refuses a signal before the handler waits for it, and
+  the sender must try again.
+- Each step needs its own retry settings or its own time limit. A DBOS step has its own maximum
+  attempts, interval, and backoff rate. An async DBOS step can also have a
+  [timeout for each attempt](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/step-tutorial.md#L107-L122).
+  In Workhorse, the task has one retry policy and one execution timeout for all its checkpoints.
+- Your services use Java. DBOS has a library for Java, and Workhorse has no SDK for Java.
+- You want to develop without a PostgreSQL server. DBOS
+  [uses SQLite by default](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/database-connection.md#L10-L12)
+  for its system database. Workhorse needs PostgreSQL.
+- You want a service that manages recovery, retention, and alerts for you.
+  [DBOS Conductor](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L139-L142)
+  does this. It is a separate service with its own license. Workhorse has a free dashboard, and you
+  operate the PostgreSQL database.
+
+Workhorse is the better choice in these cases:
+
+- A task must commit in the same transaction as your data, and your data is not in the DBOS system
+  database.
+- You run many worker processes, and another worker must recover the work of a stopped worker
+  without a separate service.
+- A long wait must not hold a place in a process or count toward a concurrency limit.
+- Your workers use Ruby or Rust.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent: a second run must give the same result as the first run. A DBOS step has the same rule.
+The
+[DBOS architecture](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/architecture.md#L82-L86)
+says that steps should be idempotent.
+
+## Move from DBOS
+
+Move one workflow type at a time. Let the running DBOS workflows of that type finish in DBOS. Start
+new work in Workhorse. The [migration guide](/docs/migrate) gives the full procedure and the
+equivalent parts of a workflow platform.
+
+Some words have a different meaning in the two products:
+
+| DBOS                        | Workhorse                           | Difference                                                                                           |
+| --------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Workflow                    | Task with a handler                 | A Workhorse handler finds stored results by name. It does not have to be deterministic.              |
+| Step                        | `context.checkpoint`                | A checkpoint has a name and no retry settings of its own. The task retry policy applies.             |
+| `DBOS.send` and `DBOS.recv` | `send_signal` and `wait_for_signal` | Workhorse refuses a signal before the handler waits. A wait that ends at its timeout fails the task. |
+| Deduplication ID            | `idempotency` on `enqueue`          | Workhorse keeps the key for a time-to-live, 24 hours by default, also after the task ends.           |
+
+**Example.** An order workflow charges a card, waits for an approval message, and then ships the
+order.
+
+1. In DBOS, the workflow calls two steps, and `DBOS.recv` waits for the approval.
+2. In Workhorse, the handler wraps each call in a named checkpoint.
+3. The handler calls `context.wait_for_signal("approval")`. The task releases its worker until the
+   signal arrives.
+4. When the signal arrives, a worker runs the handler again. The `charge` checkpoint returns its
+   stored result, and the card is not charged again.
+
+Before the move, with DBOS:
+
+```python
+from dbos import DBOS, SetEnqueueOptions
+
+@DBOS.step(retries_allowed=True, max_attempts=3)
+def charge_step(order_id: str) -> dict:
+    return charge_card(order_id)
+
+@DBOS.step()
+def ship_step(order_id: str, charge_id: str) -> None:
+    ship_order(order_id, charge_id)
+
+@DBOS.workflow()
+def process_order(order_id: str) -> None:
+    charge = charge_step(order_id)
+    decision = DBOS.recv("approval", timeout_seconds=86_400)
+    if decision is not None and decision["approved"]:
+        ship_step(order_id, charge["id"])
+
+# The application enqueues the workflow and later sends the message.
+DBOS.register_queue("orders")
+with SetEnqueueOptions(deduplication_id=f"order-{order_id}"):
+    handle = DBOS.enqueue_workflow("orders", process_order, order_id)
+DBOS.send(handle.workflow_id, {"approved": True}, topic="approval")
+```
+
+After the move, with Workhorse:
+
+```python
+from workhorse import EnqueueOptions, Idempotency, Queue, Worker
+
+def process_order(payload, context):
+    order_id = payload["orderId"]
+    charge = context.checkpoint("charge", lambda: charge_card(order_id))
+    decision = context.wait_for_signal("approval", timeout_ms=86_400_000)
+    if decision["approved"]:
+        context.checkpoint("ship", lambda: ship_order(order_id, charge["id"]))
+    return None
+
+worker = Worker(pool, queue="orders").handle("order.process", process_order)
+
+# The application enqueues the task and later sends the signal.
+queue = Queue(connection)
+task_id = queue.enqueue(
+    "order.process",
+    {"orderId": order_id},
+    EnqueueOptions(queue="orders", idempotency=Idempotency(key=f"order-{order_id}")),
+)
+queue.send_signal(
+    task_id,
+    "approval",
+    {"approved": True},
+    idempotency_key=f"approval-{order_id}",
+    requested_by="review-service",
+)
+```
+
+`charge_card` and `ship_order` must return JSON, because Workhorse stores each checkpoint result as
+JSON. In DBOS, `DBOS.recv` returns `None` at its timeout. In Workhorse, a wait that ends at its
+timeout fails the task. If the status in the result of `send_signal` is `not_waiting`, the handler
+has not called `wait_for_signal` yet. Send the signal again later.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
