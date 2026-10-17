@@ -588,7 +588,8 @@ Each method keeps the parameters of its Ruby counterpart, with Java spelling and
 Ruby keyword with a default becomes an overload without that parameter, or a builder option with
 the same default. `TaskGroupCallbacks` holds the three optional callbacks of `create_task_group`,
 each a nullable `EnqueueRequest`. `TaskGroupBuilder` collects the requests of the block, as
-Ruby's does. `health` returns a record whose fields are the keys of Ruby's snapshot `Hash`.
+Ruby's does. `health` returns a `QueueHealth` record that holds Ruby's snapshot `Hash` as one map.
+The amendment at the end of this record supersedes an earlier form of this sentence.
 
 Each result type keeps every field of its Ruby counterpart, with Java spelling. For example,
 `EnqueueResult.reason` keeps the protocol's reason for a `non_replaceable` debounce outcome, and it
@@ -1333,3 +1334,19 @@ independently, like the others. The three JVM artifacts always share one version
   column would repeat the first.
 - **A column named `Java/Kotlin`.** It puts two names in one header for one artifact family. `JVM`
   is the name SM-1381 already uses.
+
+## Amendment: `QueueHealth` holds the snapshot as one map (2026-10-17)
+
+The Queue surface section first said that `health` returns a record whose fields are the keys of
+Ruby's snapshot `Hash`. This amendment supersedes that sentence.
+
+`Queue.health` returns `public record QueueHealth(Map<String, @Nullable Object> snapshot)`. The map
+holds the snapshot that `queue_health_v1` returns, with the keys as Ruby returns them.
+
+The snapshot has about 60 top-level keys, and a schema migration can add a key. A record component
+for each key would make each new key a change to the canonical constructor and to the accessors.
+Under Gate 2 of ADR 0056, that is a breaking change of the Java API. A new snapshot key must not
+break the governed surface. A map lets a key appear without a change to the Java API.
+
+Python and Go already type the snapshot as an open map: `python/src/workhorse/types.py:12` and
+`go/queue.go:188`. The maintainer chose this form during SM-1385.
