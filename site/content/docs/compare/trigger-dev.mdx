@@ -1,0 +1,174 @@
+---
+title: "Workhorse compared with Trigger.dev"
+description: "Trigger.dev vs Workhorse: a workflow platform that builds and runs your TypeScript tasks, and a task queue in PostgreSQL. Compare their features, find when Trigger.dev is the better choice, and move a task to Workhorse."
+---
+
+Trigger.dev and Workhorse are in different categories. Trigger.dev is a workflow platform for
+TypeScript tasks. It builds your task code and deploys it. Each run executes in
+[an isolated environment](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L147). You host the platform and its services yourself, or you use
+[Trigger.dev Cloud](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L22-L24).
+
+Workhorse is a durable task queue in your PostgreSQL database. Your application enqueues a task,
+and your own worker processes run it. A handler can store the result of each checkpoint and wait
+for a timer or a signal. Workhorse has no server and no machines of its own. This page compares the
+two products, row by row, and tells you when Trigger.dev is the better choice.
+
+## Compare Workhorse and Trigger.dev
+
+The two products share many features. These include delays, cron schedules, priorities,
+idempotency keys, and retries with backoff. They also include cancellation, concurrency limits for
+each key, queue pause, replay of a failed run, child work, and a dashboard. They differ in five areas:
+
+- **Who runs the code.** Trigger.dev deploys your tasks, and its
+  [runners execute each run](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L32-L35). On Trigger.dev Cloud,
+  [auto-scaling](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L43-L47) adds worker machines. Workhorse runs in worker processes that you
+  deploy and scale.
+- **The model of a wait.** On Trigger.dev Cloud, a waiting run stores a checkpoint of its whole
+  process and resumes from that checkpoint. Its local variables stay. A
+  [timer wait shorter than 60 seconds](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L151) does not make a checkpoint. A Workhorse handler starts
+  again from its entry, and each named checkpoint returns its stored result. Its local variables
+  start again on each run. A self-hosted Trigger.dev instance has no
+  [checkpoints](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L43-L47), which give non-blocking waits.
+- **Services.** A self-hosted Trigger.dev instance needs the webapp, PostgreSQL, Redis, ClickHouse,
+  and other services. Its workers need a
+  [supervisor](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/hosting/docker/worker/docker-compose.yml#L11). Workhorse needs only PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Your backend triggers a Trigger.dev run with a call to the Trigger.dev API, so the
+  trigger is not part of your database transaction.
+- **Languages.** Trigger.dev tasks are TypeScript or JavaScript. Any language can trigger a task
+  through the HTTP API. Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature. A
+Trigger.dev cell that depends on Trigger.dev Cloud says so in its note.
+
+<ComparisonTable product="trigger-dev" />
+
+## When Trigger.dev is the better choice
+
+Trigger.dev is the better choice in these cases:
+
+- You do not want to deploy and scale worker processes. The Trigger.dev CLI
+  [compiles and deploys your tasks](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/snippets/cli-commands-deploy.mdx#L32-L37),
+  and Trigger.dev Cloud
+  [scales the machines for you](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L43-L47).
+  With Workhorse, you run the workers and your PostgreSQL database.
+- Your tasks need much CPU or memory, or need system packages. Each Trigger.dev task can choose its
+  [machine size](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/machines.mdx#L1-L20).
+  A build extension can add
+  [browsers, Python scripts, and FFmpeg](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/README.md#L47)
+  to the deployed task. A Workhorse handler gets the resources of the worker process that runs it.
+- A long task waits in the middle of its code, and you want its local state to stay. On Trigger.dev
+  Cloud, the run resumes from a
+  [snapshot of its process](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L151-L162).
+  A Workhorse handler runs again from its entry. Store each result that a later run needs in a
+  checkpoint.
+- You deploy often while runs are in progress. A Trigger.dev run is
+  [locked to the version that started it](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/versioning.mdx#L23-L27),
+  so a new deploy does not change it. Workhorse gives two patterns in application code: a version
+  checkpoint, or one queue for each version.
+- Your frontend shows the progress of a run or streams the output of a model. Trigger.dev Realtime
+  and its React hooks
+  [subscribe to runs and receive their streams](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/realtime/react-hooks/triggering.mdx#L18-L22).
+- You want an alert when a run fails or a deploy fails. Trigger.dev sends
+  [alerts for these events](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/troubleshooting-alerts.mdx#L6-L10).
+- You want to test each git branch in its own environment. A Trigger.dev
+  [preview branch](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/deployment/preview-branches.mdx#L1-L8)
+  has its own runs, schedules, and Realtime.
+- All your task code is TypeScript, and you want one SDK and one dashboard for tasks, schedules,
+  logs, and traces.
+
+Workhorse is the better choice in these cases:
+
+- Your application uses PostgreSQL, and you do not want to run more services.
+- A task must commit in the same transaction as your data.
+- More than one language must run workers on the same queue.
+- You host the system yourself, and a waiting task must release its worker.
+- You need rate limits that apply across all workers.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent: a second run must give the same result as the first run. A Trigger.dev task has the
+same rule. Its
+[idempotency keys](https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/idempotency.mdx#L6-L8)
+deduplicate a trigger, not the code inside the task.
+
+## Move from Trigger.dev
+
+Move one task type at a time. Let the Trigger.dev runs of that task finish in Trigger.dev. Start new
+work in Workhorse. The [migration guide](/docs/migrate) gives the full procedure and the equivalent
+parts of a workflow platform.
+
+Some words have a different meaning in the two products:
+
+| Trigger.dev     | Workhorse                        | Difference                                                                                                         |
+| --------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Task            | Task type and its handler        | A Trigger.dev task is a definition. A Workhorse task is one unit of work.                                          |
+| Run             | Task                             | Both keep one identity through their attempts.                                                                     |
+| Checkpoint      | `ctx.sleep`, `ctx.waitForSignal` | A Trigger.dev checkpoint is a snapshot of a waiting process. A Workhorse checkpoint stores the result of its code. |
+| Replay          | Redrive                          | A Trigger.dev replay copies a run to the latest version. Workhorse redrives a dead-letter task.                    |
+| Idempotency key | `idempotency` on `enqueue`       | Workhorse keeps the key for a time-to-live, 24 hours by default.                                                   |
+
+**Example.** An application sends a `welcome-email` task after it creates a user. The task has
+three attempts with exponential backoff.
+
+1. In Trigger.dev, the backend commits the user, then triggers the task with an idempotency key.
+2. In Workhorse, the backend enqueues the task in the transaction that creates the user.
+3. If the backend stops after the commit and before the trigger, Trigger.dev gets no run. In
+   Workhorse, the task commits with the user, or neither commits.
+
+Before the move, the Trigger.dev task file:
+
+```ts
+// trigger/welcome-email.ts
+import { task } from "@trigger.dev/sdk";
+
+export const welcomeEmail = task({
+  id: "welcome-email",
+  retry: { maxAttempts: 3, factor: 2, minTimeoutInMs: 5_000, maxTimeoutInMs: 300_000 },
+  run: async (payload: { userId: string }) => {
+    await sendWelcomeEmail(payload.userId);
+  },
+});
+```
+
+The backend triggers the task after the commit:
+
+```ts
+import { tasks } from "@trigger.dev/sdk";
+import type { welcomeEmail } from "~/trigger/welcome-email";
+
+const user = await db.transaction((tx) => createUser(tx, input));
+await tasks.trigger<typeof welcomeEmail>(
+  "welcome-email",
+  { userId: user.id },
+  { idempotencyKey: `welcome-${user.id}` },
+);
+```
+
+After the move, with Workhorse:
+
+```ts
+await queue.enqueue(
+  "welcome-email",
+  { userId: user.id },
+  {
+    maxAttempts: 3,
+    retryPolicy: { type: "exponential", initialDelayMs: 5_000, multiplier: 2, maxDelayMs: 300_000 },
+    idempotency: { key: `welcome-${user.id}`, scope: "welcome-email" },
+  },
+  client,
+);
+
+const worker = new Worker(queue).handle("welcome-email", async (payload: { userId: string }) => {
+  await sendWelcomeEmail(payload.userId);
+});
+```
+
+`client` is the PostgreSQL client of the transaction that creates the user. You deploy and run the
+worker process yourself.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler reuses stored checkpoint results.
