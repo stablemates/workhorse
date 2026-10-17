@@ -1477,8 +1477,7 @@
       "name": "DBOS",
       "aliases": ["dbos"],
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1371",
+      "page": "published",
       "version": "3.3.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/dbos-inc/dbos-transact-py",
@@ -1487,9 +1486,79 @@
         "transactional-enqueue": {
           "status": "Supported",
           "note": "The Python client enqueues in a transaction on the DBOS system database. Application tables must be in that database.",
-          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/dbos/_client.py#L347-L358",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/dbos/_client.py#L347-L359",
           "version": "3.3.0",
           "evidence": "DBOSClient.enqueue_in_transaction: \"Enqueue a workflow within a caller-owned synchronous SQLAlchemy transaction. The caller must commit or roll back the transaction. ... conn_or_session must target the DBOS system database.\""
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "A delay in seconds on a queued workflow. The delay can change while the workflow waits.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L396-L427",
+          "version": "3.3.0",
+          "evidence": "You can delay an enqueued workflow by a specified number of seconds using SetEnqueueOptions. The workflow is initially placed in DELAYED status and does not execute. After the delay expires, it transitions to ENQUEUED status ... You can also dynamically update the delay of a DELAYED workflow using DBOS.set_workflow_delay"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Cron schedules in the database. A schedule can pause and resume at runtime.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/scheduled-workflows.md#L6-L31",
+          "version": "3.3.0",
+          "evidence": "You can schedule DBOS workflows to run on a cron schedule. Schedules are stored in the database and can be created, paused, resumed, and deleted at runtime. Each time a schedule fires, its workflow is executed by exactly one worker process."
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "From 1 to 2,147,483,647. A low number dequeues first, and a workflow without a priority dequeues before all others.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L370-L377",
+          "version": "3.3.0",
+          "evidence": "Priority values can range from 1 to 2,147,483,647, where a low number indicates a higher priority. ... Workflows without assigned priorities have the highest priority and are dequeued before workflows with assigned priorities."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "A deduplication ID holds only while its workflow is enqueued, delayed, or running. Partitioned queues do not support it.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L317-L325",
+          "version": "3.3.0",
+          "evidence": "Deduplication is not supported on partitioned queues. ... If a workflow with a deduplication ID is currently enqueued, delayed, or actively executing (status ENQUEUED, DELAYED, or PENDING), subsequent workflow enqueue attempt with the same deduplication ID in the same queue will raise a DBOSQueueDeduplicatedError exception."
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "A workflow waits for other workflows through their handles, in its own code.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L47-L64",
+          "version": "3.3.0",
+          "evidence": "Enqueue each task so all tasks are processed concurrently. ... Wait for each task to complete and retrieve its result. ... DBOS.wait_first, which waits for any one of a list of workflow handles to complete"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Each step has its own retries, which are off by default.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/step-tutorial.md#L33-L57",
+          "version": "3.3.0",
+          "evidence": "You can optionally configure a step to automatically retry any exception a set number of times with exponential backoff. ... retries_allowed: bool = False, interval_seconds: float = 1.0, max_attempts: int = 3, backoff_rate: float = 2.0"
+        },
+        "crash-recovery": {
+          "status": "Partial",
+          "note": "A process recovers the workflows of its executor ID when that process starts again. For automatic recovery on another process, DBOS says that Conductor is required. Self-hosted Conductor needs a paid license for more than one executor.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L139-L148",
+          "version": "3.3.0",
+          "evidence": "Conductor is required for correct workflow recovery in applications that use more than one process. ... if you are self-hosting Conductor with a free license, you may connect at most one executor per application to Conductor ... To connect multiple executors, upgrade to a paid license."
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "The workflow stops at the start of its next step. A preemptible async step stops at once.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/workflow-management.md#L58-L65",
+          "version": "3.3.0",
+          "evidence": "If the workflow is currently executing, cancelling it preempts its execution (interrupting it at the beginning of its next step). If the workflow is enqueued, cancelling removes it from the queue. To cancel an executing async step immediately ... mark the step as preemptible."
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "For a queue, across all processes or on each process.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L140-L166",
+          "version": "3.3.0",
+          "evidence": "Worker concurrency sets the maximum number of workflows from a queue that can run concurrently on a single DBOS process. ... Global concurrency limits the total number of workflows from a queue that can run concurrently across all DBOS processes in your application."
+        },
+        "rate-limits": {
+          "status": "Supported",
+          "note": "For a queue.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L188-L198",
+          "version": "3.3.0",
+          "evidence": "You can set rate limits for a queue, limiting the number of functions that it can start in a given period. Rate limits are global across all DBOS processes using this queue."
         },
         "checkpoints": {
           "status": "Supported",
@@ -1498,12 +1567,40 @@
           "version": "3.3.0",
           "evidence": "README: \"DBOS workflows make your program durable by checkpointing its state in Postgres. If your program ever fails, when it restarts all your workflows will automatically resume from the last completed step.\""
         },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "DBOS.sleep records the wake time and then sleeps in the process of the workflow. The workflow keeps its place while it waits.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/dbos/_dbos.py#L1814-L1826",
+          "version": "3.3.0",
+          "evidence": "def sleep(cls, seconds: float) -> None: \"Sleep for the specified time (in seconds). ... the DBOS sleep methods are durable and completed sleeps will be skipped during recovery.\" ... duration = record_sleep(_get_dbos_instance(), cur_ctx, seconds) time.sleep(duration)"
+        },
         "dashboard": {
           "status": "Partial",
           "note": "Conductor serves the dashboard. Its free license connects one executor for each application. More executors need a paid license.",
           "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L147-L148",
           "version": "3.3.0",
           "evidence": "if you are self-hosting Conductor with a free license, you may connect at most one executor per application to Conductor ... To connect multiple executors, upgrade to a paid license."
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A workflow that exceeds its maximum recovery attempts stops with its own status. Resume runs it again from its last completed step. Fork and rewind run it again from a chosen step.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/workflow-management.md#L67-L97",
+          "version": "3.3.0",
+          "evidence": "You can use this to resume workflows that are cancelled or that have exceeded their maximum recovery attempts. ... You can start a new execution of a workflow by forking it from a specific step. ... You can re-execute a workflow from a specific step, keeping its workflow ID, by rewinding it."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "A queue has no pause method. A worker concurrency of 0 stops dequeue, and the DBOS tests call this the pause-dequeue idiom.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/tests/test_queue.py#L3497-L3520",
+          "version": "3.3.0",
+          "evidence": "A zero worker limit (the pause-dequeue idiom) exhausts this worker's budget before either path runs. ... paused_queue = DBOS.register_queue(..., partition_concurrency=1, worker_concurrency=0, polling_interval_sec=0.25)"
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "A span for each workflow and step. It is optional.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/logging-and-tracing.md#L29-L43",
+          "version": "3.3.0",
+          "evidence": "DBOS automatically constructs OpenTelemetry spans for every workflow and step. ... OpenTelemetry support in DBOS is optional. To use it, install the DBOS OpenTelemetry dependencies: pip install dbos[otel]"
         },
         "worker-languages": {
           "value": "Python, TypeScript, Go, Java",
@@ -1512,21 +1609,92 @@
           "version": "3.3.0",
           "evidence": "<LargeTabItem value=\"python\" label=\"Python\"> ... value=\"typescript\" label=\"TypeScript\"> ... value=\"golang\" label=\"Go\"> ... value=\"java\" label=\"Java\">"
         },
+        "enqueue-languages": {
+          "value": "SQL",
+          "note": "A PostgreSQL function enqueues a workflow from a trigger or a stored procedure.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L121-L138",
+          "version": "3.3.0",
+          "evidence": "You can also enqueue a workflow from a Postgres trigger or stored procedure. The DBOS System Database includes an enqueue_workflow method for this scenario."
+        },
         "infrastructure": {
           "value": "PostgreSQL",
-          "note": "No other service. SQLite also works for the system database. Conductor is an optional paid service.",
-          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/README.md#L19-L24",
+          "note": "SQLite can also hold the system database, and it is the default. DBOS recommends PostgreSQL for production.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/database-connection.md#L6-L15",
           "version": "3.3.0",
-          "evidence": "README: \"DBOS provides lightweight durable workflows built on top of Postgres.\" \"DBOS is entirely contained in this open-source library, there's no additional infrastructure for you to configure or manage.\""
+          "evidence": "You can use either a SQLite or Postgres database. ... By default, DBOS uses SQLite. ... it can't be used in a distributed setting where an application runs on multiple servers. Therefore, for production, we recommend using Postgres."
         },
         "license": {
           "value": "MIT",
-          "note": "DBOS Conductor and DBOS Cloud are paid and proprietary. Conductor needs the dbos-enterprise package.",
           "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/LICENSE#L1-L3",
           "version": "3.3.0",
           "evidence": "LICENSE: \"MIT License / Copyright (c) 2024 DBOS, Inc.\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Workflow code must be deterministic. Recovery calls the workflow again, and each completed step returns its stored output.",
+            "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/architecture.md#L74-L84",
+            "version": "3.3.0",
+            "evidence": "DBOS restarts each interrupted workflow by calling it with its checkpointed inputs. As the workflow re-executes, it checks before each step if that step's output is checkpointed in Postgres. ... The workflow function must be deterministic"
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A workflow starts or enqueues child workflows and waits for their results through handles.",
+            "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L51-L60",
+            "version": "3.3.0",
+            "evidence": "def process_tasks(tasks): ... handle = DBOS.enqueue_workflow(\"example_queue\", process_task, task) ... # Wait for each task to complete and retrieve its result. return [handle.get_result() for handle in task_handles]"
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "Patching and versioning",
+            "note": "Each workflow records its application version, and recovery runs only the workflows of the current version. DBOS.patch marks a changed branch.",
+            "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/upgrading-workflows.md#L11-L112",
+            "version": "3.3.0",
+            "evidence": "DBOS supports two strategies for safely upgrading workflow code: patching and versioning. ... All workflows are tagged with the application version on which they started. ... When DBOS tries to recover workflows, it only recovers workflows whose version matches the current application version."
+          }
+        }
+      ]
     },
     {
       "slug": "restate",
