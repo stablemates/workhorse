@@ -18,8 +18,9 @@ a set of failed tasks that an operator can run again. They differ in five areas:
   transaction. Sidekiq can push a job to Redis after the Active Record transaction commits. The
   commit and the push are two steps. Thus, if the process stops between them, the data has no job.
 - **Editions.** Sidekiq keeps some features in its paid editions. Batches, crash recovery, and
-  queue pause need Sidekiq Pro. Recurring schedules, unique jobs, and limits across all workers
-  need Sidekiq Enterprise. Workhorse has these features in its Apache-2.0 packages.
+  queue pause need Sidekiq Pro. Recurring schedules, job deduplication, and limiters across all workers
+  need Sidekiq Enterprise. The job code calls each limiter itself. Workhorse has these features in
+  its Apache-2.0 packages, and it applies its limits before a task starts.
 - **Priorities.** Sidekiq gives priority to a queue, not to a job. A Workhorse task has its own
   priority inside its queue.
 - **Progress inside a task.** A Workhorse handler can save checkpoints. A checkpoint is the stored
@@ -28,8 +29,8 @@ a set of failed tasks that an operator can run again. They differ in five areas:
 - **Languages.** Sidekiq runs jobs in Ruby only. Workhorse has workers in TypeScript, Python, Go,
   Rust, and Ruby.
 
-A cell that names Sidekiq Pro or Sidekiq Enterprise describes a paid edition. Each cell links its
-source. A Workhorse cell links the page that explains the feature.
+A Sidekiq cell describes the open source edition. If Sidekiq Pro or Sidekiq Enterprise has more,
+the cell also names that edition and its status. Each cell links its source. A Workhorse cell links the page that explains the feature.
 
 <ComparisonTable product="sidekiq" />
 

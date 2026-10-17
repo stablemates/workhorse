@@ -11,7 +11,7 @@ products, row by row, and tells you when BullMQ is the better choice.
 
 The two products share many features. These include delays, cron schedules, priorities,
 deduplication by key, parent and child tasks, and retries with backoff. Both also have queue-wide
-concurrency and rate limits, queue pause, and OpenTelemetry. They differ in four areas:
+concurrency and rate limits, queue pause, and OpenTelemetry. They differ in five areas:
 
 - **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
   transaction. BullMQ does not take the application's transaction, also on its PostgreSQL backend.
@@ -21,6 +21,9 @@ concurrency and rate limits, queue pause, and OpenTelemetry. They differ in four
   current step in the job data.
 - **Languages.** BullMQ has workers in TypeScript, Python, Elixir, Rust, and .NET, and a producer
   for PHP. Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+- **Limits for each key.** Workhorse limits concurrency and rate for a queue and for each key. A
+  free BullMQ limit applies to a whole queue. A limit for each group key needs BullMQ Pro, a paid
+  edition.
 - **Dashboard.** Workhorse includes its dashboard in its packages. The official BullMQ dashboard,
   Taskforce.sh, is a separate hosted service.
 

@@ -111,6 +111,22 @@
       }
     },
     {
+      "id": "debounce-throttle",
+      "group": "producing",
+      "label": "Debounce and throttle by key",
+      "kind": "status",
+      "hub": true,
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Keyed debounce"
+        },
+        "page": "/docs/debounce",
+        "note": "Keyed throttle is also supported."
+      }
+    },
+    {
       "id": "task-dependencies",
       "group": "producing",
       "label": "Start a task after other tasks finish",
@@ -171,8 +187,9 @@
     {
       "id": "concurrency-limits",
       "group": "executing",
-      "label": "Concurrency limits across all workers",
+      "label": "Concurrency limits for a queue and for each key, across all workers",
       "kind": "status",
+      "hub": true,
       "workhorse": {
         "status": "Supported",
         "feature": {
@@ -186,8 +203,9 @@
     {
       "id": "rate-limits",
       "group": "executing",
-      "label": "Rate limits across all workers",
+      "label": "Rate limits for a queue and for each key, across all workers",
       "kind": "status",
+      "hub": true,
       "workhorse": {
         "status": "Supported",
         "feature": {
@@ -331,7 +349,8 @@
       "hub": true,
       "workhorse": {
         "value": "Apache-2.0",
-        "source": "LICENSE"
+        "source": "site/content/pages/about.mdx",
+        "note": "No paid edition."
       }
     }
   ],
@@ -380,6 +399,13 @@
           "version": "12.38.0",
           "evidence": "short: Only allows 1 job to be queued ... Can be extended with singletonKey | exclusive: Only allows 1 job to be queued or active. Can be extended with singletonKey"
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "Throttle refuses a second job in a time slot. Debounce moves it to the next slot.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L222-L246",
+          "version": "12.38.0",
+          "evidence": "sendThrottled(name, data, options, seconds, key) ... sendDebounced(): Like sendThrottled(), but instead of rejecting if a job is already sent in the current interval, it will try to add the job to the next interval"
+        },
         "task-dependencies": {
           "status": "Supported",
           "note": "flow() creates jobs with dependsOn refs. A failed parent leaves the child blocked.",
@@ -408,8 +434,8 @@
           "evidence": "cancel(name, id, options): Cancels a pending or active job. (workers.md L270: signal \"Aborted ... when a heartbeat finds this job no longer active under this worker's claim\")"
         },
         "concurrency-limits": {
-          "status": "Supported",
-          "note": "groupConcurrency limits each group across all nodes. The docs say that a race can briefly exceed it.",
+          "status": "Partial",
+          "note": "groupConcurrency limits each group key across all nodes. No setting limits a whole queue above one job. The docs say that a race can briefly exceed the limit.",
           "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/workers.md#L185-L205",
           "version": "12.38.0",
           "evidence": "groupConcurrency ... Limits how many jobs from the same group can be processed simultaneously globally across all nodes. ... there may be brief moments where the limit is slightly exceeded"
@@ -494,28 +520,6 @@
       },
       "rows": [
         {
-          "id": "debounce-throttle",
-          "group": "producing",
-          "label": "Debounce and throttle by key",
-          "kind": "status",
-          "workhorse": {
-            "status": "Supported",
-            "feature": {
-              "doc": "docs/features.md",
-              "row": "Keyed debounce"
-            },
-            "page": "/docs/debounce",
-            "note": "Keyed throttle is also supported."
-          },
-          "cell": {
-            "status": "Supported",
-            "note": "Throttle refuses a second job in a time slot. Debounce moves it to the next slot.",
-            "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L222-L246",
-            "version": "12.38.0",
-            "evidence": "sendThrottled(name, data, options, seconds, key) ... sendDebounced(): Like sendThrottled(), but instead of rejecting if a job is already sent in the current interval, it will try to add the job to the next interval"
-          }
-        },
-        {
           "id": "transactional-worker",
           "group": "executing",
           "label": "Commit handler writes with the task result",
@@ -598,6 +602,13 @@
           "version": "0.18.0",
           "evidence": "unsafe_dedupe - if an existing job is found, even if it is locked or permanently failed, then it won't be updated. This is very dangerous ... (replace (default) - overwrites the unlocked job with the new values)"
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "A job_key in replace mode debounces. In preserve_run_at mode it throttles.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#L45-L58",
+          "version": "0.18.0",
+          "evidence": "replace (default) - ... primarily useful for rescheduling, updating, or debouncing ... preserve_run_at - ... primarily useful for throttling (executing at most once over a given time period)"
+        },
         "task-dependencies": {
           "status": "Not supported",
           "note": "A task can add the next job itself.",
@@ -635,7 +646,7 @@
         },
         "rate-limits": {
           "status": "Partial",
-          "note": "No built-in limit. forbiddenFlags lets the application skip jobs to build one.",
+          "note": "No built-in limit for a queue or a key. forbiddenFlags lets the application skip jobs to build one.",
           "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/forbidden-flags.md#L26-L36",
           "version": "0.18.0",
           "evidence": "graphile-worker will invoke it each time a worker looks for a job to run, and will skip over any job that has any flag returned by your function. ... For an example of how this can be used to achieve rate-limiting logic, see the graphile-worker-rate-limiter project (forbidden-flags.md L6-L9: jobs with any of the given flags should not be executed)"
@@ -713,28 +724,6 @@
       },
       "rows": [
         {
-          "id": "debounce-throttle",
-          "group": "producing",
-          "label": "Debounce and throttle by key",
-          "kind": "status",
-          "workhorse": {
-            "status": "Supported",
-            "feature": {
-              "doc": "docs/features.md",
-              "row": "Keyed debounce"
-            },
-            "page": "/docs/debounce",
-            "note": "Keyed throttle is also supported."
-          },
-          "cell": {
-            "status": "Supported",
-            "note": "A job_key in replace mode debounces. In preserve_run_at mode it throttles.",
-            "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#L45-L58",
-            "version": "0.18.0",
-            "evidence": "replace (default) - ... primarily useful for rescheduling, updating, or debouncing ... preserve_run_at - ... primarily useful for throttling (executing at most once over a given time period)"
-          }
-        },
-        {
           "id": "batch-delivery",
           "group": "executing",
           "label": "Process many items in one handler call",
@@ -803,8 +792,19 @@
           "version": "0.49.0",
           "evidence": "UniqueOpts contains parameters for uniqueness for a job. ... Uniqueness relies on a hash of the job kind and any unique properties along with a database unique constraint."
         },
-        "task-dependencies": {
+        "debounce-throttle": {
           "status": "Partial",
+          "note": "UniqueOpts with ByPeriod refuses a second job for each key in the period. No option gives debounce.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/insert_opts.go#L161-L174",
+          "version": "0.49.0",
+          "evidence": "ByPeriod ... a job is only inserted if there isn't an existing job that will run between then and the next multiple of the period. The UniqueOpts fields (insert_opts.go#L102-L227) are ByArgs, ByPeriod, ByQueue, ByState, and ExcludeKind."
+        },
+        "task-dependencies": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "River Pro",
+            "status": "Supported"
+          },
           "note": "Workflows with dependencies are in River Pro, the paid edition. The free library has none.",
           "source": "https://github.com/riverqueue/riverui/blob/v0.21.0/riverproui/internal/prohandler/pro_handler_api_endpoints.go#L889-L899",
           "version": "0.49.0",
@@ -832,15 +832,19 @@
           "evidence": "If the job is currently running, it is not immediately cancelled, but is instead marked for cancellation. The client running the job will also be notified to cancel the running job's context. ... it is important for workers to respect context cancellation"
         },
         "concurrency-limits": {
-          "status": "Partial",
-          "note": "MaxWorkers limits each client process. Global limits and limits for each key are in River Pro.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "River Pro",
+            "status": "Supported"
+          },
+          "note": "MaxWorkers limits each client process only. River Pro, a paid package, adds global limits and limits for each key.",
           "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L698-L708",
           "version": "0.49.0",
           "evidence": "This is the maximum number of workers within this particular client instance, but note that it doesn't control the total number of workers across parallel processes. River Pro: https://github.com/riverqueue/riverui/blob/v0.21.0/riverproui/internal/uitype/ui_api_types.go#L5-L13 defines ConcurrencyConfig with GlobalLimit, LocalLimit, and Partition.ByArgs."
         },
         "rate-limits": {
           "status": "Not supported",
-          "note": "QueueConfig has worker counts and fetch intervals only. No limit on start rate.",
+          "note": "QueueConfig has worker counts and fetch intervals only. No limit on start rate for a queue or a key.",
           "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L678-L708",
           "version": "0.49.0",
           "evidence": "type QueueConfig struct { FetchCooldown ...; FetchPollInterval ...; MaxWorkers int } (Looked at Config, QueueConfig, and InsertOpts: no option limits how many jobs start in a time period.)"
@@ -854,7 +858,11 @@
         },
         "durable-waits": {
           "status": "Partial",
-          "note": "JobSnooze frees the worker until a later time. Signal waits are in River Pro workflows.",
+          "paid": {
+            "edition": "River Pro",
+            "status": "Supported"
+          },
+          "note": "JobSnooze frees the worker until a later time. River Pro, the paid edition, adds workflow signals and timers.",
           "source": "https://github.com/riverqueue/river/blob/v0.49.0/error.go#L30-L43",
           "version": "0.49.0",
           "evidence": "JobSnooze can be returned from a Worker's Work method to cause the job to be tried again after the specified duration. This will not increment the job's Attempt count. River Pro: https://github.com/riverqueue/riverui/blob/v0.21.0/CHANGELOG.md#L67 \"the all new workflow engine in River Pro v0.24.0, including signals, timers\""
@@ -1004,6 +1012,13 @@
           "version": "1.7.0",
           "evidence": "Alternatively, jobs can be configured to be discarded instead of blocked. This means that if a job with certain arguments has already been enqueued, other jobs with the same characteristics (in the same concurrency class) won't be enqueued. ... `:discard`: the job is discarded."
         },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "limits_concurrency with on_conflict: :discard drops a job while another job with the same key runs. This has no time period, and no option gives debounce.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L534-L542",
+          "version": "1.7.0",
+          "evidence": "`:discard`: the job is discarded. ... This means that the `duration` is not really about the job that's enqueued or being run, it's about the jobs that are blocked waiting"
+        },
         "task-dependencies": {
           "status": "Partial",
           "note": "A batch starts a callback job when all its jobs finish. No API makes a job wait for jobs outside its batch.",
@@ -1033,15 +1048,15 @@
           "evidence": "def discard; raise UndiscardableError, \"Can't discard a job in progress\"; end"
         },
         "concurrency-limits": {
-          "status": "Supported",
-          "note": "limits_concurrency limits the jobs of one key across all workers. After the duration, another job can take the limit.",
+          "status": "Partial",
+          "note": "limits_concurrency limits each key across all workers. No setting limits a whole queue. After the duration, another job can take the limit.",
           "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L520-L538",
           "version": "1.7.0",
           "evidence": "Solid Queue extends Active Job with concurrency controls, that allows you to limit how many jobs of a certain type or with certain arguments can run at the same time. ... we'll ensure that, at most, the number of jobs (indicated as `to`) that yield the same `key` will be performed concurrently, and this guarantee will last for `duration`"
         },
         "rate-limits": {
           "status": "Not supported",
-          "note": "No rate limit. The README suggests a queue with fewer workers for throttling.",
+          "note": "No rate limit for a queue or a key. The README suggests a queue with fewer workers for throttling.",
           "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L610",
           "version": "1.7.0",
           "evidence": "For throttling purposes, where you plan to have `limit` significantly larger than 1, we encourage relying on a limited number of workers per queue instead."
@@ -1197,6 +1212,35 @@
           "version": "2.24.2",
           "evidence": "\"Transactional Control — Enqueue a job along with other database changes, ensuring that everything is committed or rolled back atomically.\" lib/oban.ex#L724-L737 shows Oban.insert in an Ecto.Multi."
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "A deduplication period refuses a duplicate job for each key. A duplicate of a scheduled job can replace its scheduled_at, which gives debounce.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/unique_jobs.md#L10-L35",
+          "version": "2.24.2",
+          "evidence": "`:period` — The number of seconds until a job is no longer considered duplicate ... `:scheduled` - Only `scheduled` jobs (useful for \"debouncing\"). unique_jobs.md#L135-L165: replace: [scheduled: [:scheduled_at]]"
+        },
+        "concurrency-limits": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Oban Pro",
+            "status": "Supported"
+          },
+          "note": "The free limit applies to each queue on one node. Oban Pro, a paid package, adds a global limit for each queue.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/defining_queues.md#L89-L95",
+          "version": "2.24.2",
+          "evidence": "Queue limits are **local** (per-node), not global (per-cluster). ... If you require a global limit, you must restrict the number of nodes running a particular queue or consider Oban Pro's [Smart Engine][smart]. README.md#L135-L136: \"**Smart Engine** — Enables global concurrency, global rate limiting, queue partitioning, and auto insert batching\""
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Oban Pro",
+            "status": "Supported"
+          },
+          "note": "The free Basic engine has no rate limit for a queue or a key. Oban Pro, a paid package, adds global rate limits.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/engine.ex#L15-L19",
+          "version": "2.24.2",
+          "evidence": "The Basic engine lacks advanced functionality such as global limits, rate limits, and unique bulk insert. README.md#L135-L136: \"Enables global concurrency, global rate limiting, queue partitioning\""
+        },
         "checkpoints": {
           "status": "Not supported",
           "note": "A retry runs the whole job again. Workflows in the paid Oban Pro link separate jobs, not steps of one job.",
@@ -1252,6 +1296,27 @@
           "version": "4.22.1",
           "evidence": "\"The ActiveRecord parent class inherited by GoodJob::Job (default: ActiveRecord::Base).\" configuration.rb#L43-L44: DEFAULT_ENQUEUE_AFTER_TRANSACTION_COMMIT = false"
         },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "enqueue_throttle throttles each label in a time period. No option gives debounce.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L565-L597",
+          "version": "4.22.1",
+          "evidence": "The concurrency rule options are total_limit, enqueue_limit, perform_limit, enqueue_throttle, perform_throttle, and key. # Maximum number of jobs with this label to be enqueued within the time period, looking backwards from now. Must be [count, period]. README.md#L689: \"Throttles count enqueued jobs or executions within their time window, including finished ones.\""
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "perform_limit and total_limit apply to each label across all processes. No setting limits a whole queue.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L565-L597",
+          "version": "4.22.1",
+          "evidence": "# Maximum number of jobs with this label to be concurrently performed (excludes enqueued jobs). Can be an Integer or Lambda/Proc. perform_limit: 1,"
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "perform_throttle and enqueue_throttle limit the jobs of each label in a time period, across all processes. No setting limits a whole queue.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L591-L596",
+          "version": "4.22.1",
+          "evidence": "# Maximum number of jobs with this label to be performed within the time period, looking backwards from now. Must be [count, period]. perform_throttle: [100, 1.hour],"
+        },
         "checkpoints": {
           "status": "Supported",
           "note": "Uses Rails Active Job Continuations. GoodJob supports interrupting and resuming them.",
@@ -1306,6 +1371,27 @@
           "version": "3.10.0",
           "evidence": "\"This lets you insert the job within the same transaction as your own database operations\" ... \"pass your connection to configure(connection=...). The job INSERT will execute on your connection, inside your transaction.\""
         },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "A queueing_lock refuses a second waiting job for each key, with no time period. The docs suggest a delay to throttle a task.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/queueing_locks.md#L37-L41",
+          "version": "3.10.0",
+          "evidence": "`queueing_lock` allows a single job in `todo` status. ... You might also want to [schedule](./schedule.md) jobs for such task in the near future, which can be effective to throttle the task."
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "A lock lets one job for each lock string run at a time across all workers. The limit is always one.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/tasks.py#L204-L211",
+          "version": "3.10.0",
+          "evidence": "lock : No two jobs with the same lock string can run simultaneously"
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "note": "The job options have no rate limit for a queue or a key.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/tasks.py#L204-L228",
+          "version": "3.10.0",
+          "evidence": "configure() parameters: lock, queueing_lock, task_kwargs, schedule_at, schedule_in, queue, priority. None of them limits a start rate."
+        },
         "checkpoints": {
           "status": "Not supported",
           "note": "A retry runs the whole task function again.",
@@ -1358,6 +1444,35 @@
           "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.SqlServer/SqlServerStorage.cs#L327-L348",
           "version": "1.8.25",
           "evidence": "UseTransaction: `#if FEATURE_TRANSACTIONSCOPE if (IsRunningOnWindows() && !_options.DisableTransactionScope) { using (var transaction = CreateTransaction(...)) ... connection.EnlistTransaction(Transaction.Current);` else `connection.BeginTransaction(...)`. The csproj sets the flag only for net451."
+        },
+        "debounce-throttle": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Hangfire Ace",
+            "status": "Partial"
+          },
+          "note": "The open source job client has no key for a duplicate, a debounce, or a throttle. Hangfire Ace, a paid package, can throttle each key with a window counter.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/IBackgroundJobClient.cs#L94",
+          "version": "1.8.25",
+          "evidence": "string Create([NotNull] Job job, [NotNull] IState state); Hangfire Ace: https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/throttling.rst#L388-L414 \"Dynamic window counter allows us to create sliding window counters dynamically depending on background job arguments.\""
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "DisableConcurrentExecution runs one job for each method or resource key across all servers. Hangfire Ace, a paid package, adds named semaphores with a higher limit, but no semaphore for each key.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/DisableConcurrentExecutionAttribute.cs#L46-L81",
+          "version": "1.8.25",
+          "evidence": "var distributedLock = context.Connection.AcquireDistributedLock(resource, timeout); Hangfire Ace: https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/throttling.rst#L19-L24 \"Semaphores – limit how many background jobs are allowed to run concurrently.\""
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Hangfire Ace",
+            "status": "Partial"
+          },
+          "note": "The open source packages have no rate limit for a queue or a key. Hangfire Ace, a paid package, adds window counters for a named resource or for each key, but no queue limit.",
+          "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/throttling.rst#L4-L30",
+          "version": "1.8.25",
+          "evidence": "Hangfire.Throttling package is a part of Hangfire.Ace extensibility set and available on the private NuGet feed. ... Fixed Window Counters – limit how many job executions are allowed within a given fixed time interval. ... Dynamic Window Counters – allow to create window counters dynamically depending on job arguments."
         },
         "checkpoints": {
           "status": "Not supported",
@@ -1440,6 +1555,13 @@
           "version": "6.3.16",
           "evidence": "\"While this job is not moved to completed or failed state, next jobs added with same **deduplication id** will be ignored\""
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "A TTL ignores duplicates for a period. Debounce replaces the delayed job with the newest one.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/deduplication.md#L22-L43",
+          "version": "6.3.16",
+          "evidence": "\"In the Throttle Mode, deduplication works by assigning a delay (Time to Live, TTL)...\"; \"Debounce Mode can be achieved by delaying a job upon creation while providing a matching TTL as well as having extend and replace options set as true.\""
+        },
         "task-dependencies": {
           "status": "Supported",
           "note": "FlowProducer adds trees of parent and child jobs, also across queues.",
@@ -1469,18 +1591,26 @@
           "evidence": "\"it can receive an optional `AbortSignal` as the third parameter in the processor function\"; worker.cancelJob('job-id-123'). src/classes/worker.ts#L566 cancels via the local lockManager; Queue and Job have no cancel method."
         },
         "concurrency-limits": {
-          "status": "Supported",
-          "note": "The limit applies per queue. A limit per group key needs BullMQ Pro groups.",
+          "status": "Partial",
+          "paid": {
+            "edition": "BullMQ Pro",
+            "status": "Supported"
+          },
+          "note": "The free limit applies to a whole queue across all workers, not to each key. BullMQ Pro groups add a limit for each group key.",
           "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/queues/global-concurrency.md#L3-L18",
           "version": "6.3.16",
-          "evidence": "\"The global concurrency factor is a queue option that determines how many jobs are allowed to be processed in parallel across all your worker instances.\" await queue.setGlobalConcurrency(4);"
+          "evidence": "\"The global concurrency factor is a queue option that determines how many jobs are allowed to be processed in parallel across all your worker instances.\" await queue.setGlobalConcurrency(4); BullMQ Pro: docs/gitbook/bullmq-pro/groups/concurrency.md#L5-L21: \"it will never process more than 3 jobs per group at any given time.\""
         },
         "rate-limits": {
-          "status": "Supported",
-          "note": "Limits apply per queue. Rate limits per group key need BullMQ Pro groups.",
+          "status": "Partial",
+          "paid": {
+            "edition": "BullMQ Pro",
+            "status": "Supported"
+          },
+          "note": "The free limiter applies to a whole queue across all workers, not to each key. BullMQ Pro groups add a rate limit for each group key.",
           "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/rate-limiting.md#L3-L27",
           "version": "6.3.16",
-          "evidence": "\"The rate limiter is global, so if you have for example 10 workers for one queue with the above settings, still only 10 jobs will be processed by second.\""
+          "evidence": "\"The rate limiter is global, so if you have for example 10 workers for one queue with the above settings, still only 10 jobs will be processed by second.\" L32-L36: \"From BullMQ 3.0 and onwards, group keys support is removed\". BullMQ Pro: docs/gitbook/bullmq-pro/groups/rate-limiting.md#L3-L27: \"when the jobs for a given group exceed the maximum amount of jobs per unit of time, that particular group gets rate limited.\""
         },
         "checkpoints": {
           "status": "Partial",
@@ -1497,8 +1627,12 @@
           "evidence": "\"This can be handled using the `moveToDelayed` method... throwing a special error (`DelayedError`...)\"; \"This can be handled using the `moveToWaitingChildren` method\". Read docs/gitbook/guide: no API to wait for an external signal."
         },
         "dashboard": {
-          "status": "Supported",
-          "note": "Taskforce.sh, a separate hosted service from the BullMQ authors. The project publishes no dashboard in the repository.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Taskforce.sh",
+            "status": "Supported"
+          },
+          "note": "The project publishes no dashboard in the repository. Taskforce.sh, a separate hosted service from the BullMQ authors, is the official dashboard.",
           "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/README.md#L54-L65",
           "version": "6.3.16",
           "evidence": "# Official FrontEnd ... Supercharge your queues with a professional front end: Get a complete overview of all your queues. Inspect jobs, search, retry, or promote delayed jobs. Metrics and statistics. ... Sign up at Taskforce.sh"
@@ -1546,35 +1680,13 @@
         },
         "license": {
           "value": "MIT",
-          "note": "BullMQ Pro is a paid commercial edition with groups, batches, and observables.",
+          "note": "BullMQ Pro is a paid commercial edition with groups, batches, and observables. Taskforce.sh is a separate hosted dashboard service.",
           "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/LICENSE#L1-L3",
           "version": "6.3.16",
-          "evidence": "\"MIT License  Copyright (c) 2018 BullForce Labs AB and contributors.\"; package.json \"license\": \"MIT\"."
+          "evidence": "\"MIT License  Copyright (c) 2018 BullForce Labs AB and contributors.\"; package.json \"license\": \"MIT\". README.md#L54-L65: \"# Official FrontEnd ... Sign up at [Taskforce.sh](https://taskforce.sh)\"."
         }
       },
       "rows": [
-        {
-          "id": "debounce-throttle",
-          "group": "producing",
-          "label": "Debounce and throttle by key",
-          "kind": "status",
-          "workhorse": {
-            "status": "Supported",
-            "feature": {
-              "doc": "docs/features.md",
-              "row": "Keyed debounce"
-            },
-            "page": "/docs/debounce",
-            "note": "Keyed throttle is also supported."
-          },
-          "cell": {
-            "status": "Supported",
-            "note": "A TTL ignores duplicates for a period. Debounce replaces the delayed job with the newest one.",
-            "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/deduplication.md#L22-L43",
-            "version": "6.3.16",
-            "evidence": "\"In the Throttle Mode, deduplication works by assigning a delay (Time to Live, TTL)...\"; \"Debounce Mode can be achieved by delaying a job upon creation while providing a matching TTL as well as having extend and replace options set as true.\""
-          }
-        },
         {
           "id": "group-fairness",
           "group": "executing",
@@ -1590,8 +1702,12 @@
             "note": "Concurrency and rate limits for each key are free."
           },
           "cell": {
-            "status": "Partial",
-            "note": "Groups are in BullMQ Pro, the paid edition. Groups run jobs in round-robin order, with limits for each group.",
+            "status": "Not supported",
+            "paid": {
+              "edition": "BullMQ Pro",
+              "status": "Supported"
+            },
+            "note": "The free edition has none. Groups are in BullMQ Pro, the paid edition. Groups run jobs in round-robin order, with limits for each group.",
             "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/bullmq-pro/groups/README.md#L3-L11",
             "version": "6.3.16",
             "evidence": "\"Groups allows you to use a single queue while distributing the jobs among groups... jobs will be processed in a \\\"round-robin\\\" fashion among all the users.\" bullmq-pro/groups/concurrency.md: max concurrency per group."
@@ -1644,6 +1760,13 @@
           "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/configuration.rst#L3208-L3222",
           "version": "5.6.3",
           "evidence": "\"Deduplication occurs only with tasks that have the same identifier, enabled late acknowledgment, were redelivered by the message broker and their state is ``SUCCESS`` in the result backend.\" docs/tutorials/task-cookbook.rst#L12-L28 uses an application cache lock instead."
+        },
+        "debounce-throttle": {
+          "status": "Not supported",
+          "note": "The apply_async options have no debounce, throttle, or deduplication key. A custom task_id does not refuse a duplicate.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/celery/app/task.py#L465-L581",
+          "version": "5.6.3",
+          "evidence": "apply_async Arguments: countdown, eta, expires, shadow, connection, retry, retry_policy, time_limit, soft_time_limit, queue, exchange, routing_key, priority, serializer, compression, link, link_error, producer, add_to_parent, ignore_result, publisher, headers, task_id (\"Be careful to avoid collisions when overriding task ids.\")"
         },
         "task-dependencies": {
           "status": "Supported",
@@ -1831,7 +1954,11 @@
           "evidence": "\"+interval+ must be a timestamp, numeric or something that acts numeric\"; def perform_in(interval, *args) at(interval).perform_async(*args) end; alias_method :perform_at, :perform_in"
         },
         "recurring-schedules": {
-          "status": "Partial",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Enterprise",
+            "status": "Supported"
+          },
           "note": "Periodic jobs with cron syntax are in Sidekiq Enterprise, a paid edition. The open source edition has none.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L154-L160",
           "version": "8.1.7",
@@ -1845,15 +1972,34 @@
           "evidence": "\"Creating the Redis#brpop command takes into account any configured queue weights. By default Redis#brpop returns data from the first queue that has pending elements.\" queues_cmd returns the queues in strict order or shuffled by weight. Client options (lib/sidekiq/client.rb#L77-L85) have no priority key."
         },
         "enqueue-deduplication": {
-          "status": "Partial",
-          "note": "Unique jobs are in Sidekiq Enterprise, a paid edition. A unique lock refuses a duplicate job.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Enterprise",
+            "status": "Supported"
+          },
+          "note": "The open source edition has none. In Sidekiq Enterprise, a paid edition, a lock refuses a duplicate job.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L186-L193",
           "version": "8.1.7",
           "evidence": "7.0.4: \"Unique middleware now prints the JID holding the lock if there is a duplicate [#5736]\" and \"Unique locks set with older versions (<7.0.4) will not work with newer versions.\" Ent-Changes.md#L523: \"Fix `unique_for: false`\"."
         },
+        "debounce-throttle": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Enterprise",
+            "status": "Partial"
+          },
+          "note": "The open source job options have no debounce or throttle. In Sidekiq Enterprise, a paid edition, a lock refuses a duplicate job for a period. No edition gives debounce.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job.rb#L59-L71",
+          "version": "8.1.7",
+          "evidence": "# Allows customization for this type of Job. # Legal options: # queue ... # retry ... # backtrace. Sidekiq Enterprise: https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L384-L390 \"Implement new `unique_until: 'start'` policy option\"; Ent-Changes.md#L523: \"Fix `unique_for: false`\"."
+        },
         "task-dependencies": {
-          "status": "Partial",
-          "note": "Sidekiq Pro, a paid edition, has batches. A callback job starts when all jobs of a batch finish. A job cannot wait for one other job.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Pro",
+            "status": "Partial"
+          },
+          "note": "The open source edition has none. Sidekiq Pro, a paid edition, has batches. A callback job starts when all jobs of a batch finish. A job cannot wait for one other job.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/docs/Pro-2.0-Upgrade.md#L21-L45",
           "version": "8.1.7",
           "evidence": "\"Batches can now be nested within the `jobs` method.\" \"Parent batch callbacks are not processed until all child batch callbacks have run successfully.\" Batch callbacks: batch.on(:success, MyCallback, ...) (Pro-Changes.md#L66-L72)."
@@ -1866,7 +2012,11 @@
           "evidence": "\"The default number of retries is 25 which works out to about 3 weeks\"; sidekiq_options retry: 10, retry_queue: 'low'. job_retry.rb#L238: delay = (count**4) + 15, which sidekiq_retry_in can replace."
         },
         "crash-recovery": {
-          "status": "Partial",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Pro",
+            "status": "Supported"
+          },
           "note": "The open source fetch removes a job from Redis when it starts. If the process crashes, its running jobs are lost. Sidekiq Pro super_fetch recovers them.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L512-L516",
           "version": "8.1.7",
@@ -1880,15 +2030,23 @@
           "evidence": "\"Iterable jobs can be cancelled via `Sidekiq::Client#cancel!`\"; c.cancel!(jid) # => true. lib/sidekiq/job/iterable.rb#L52-L54: \"Cancellation is asynchronous and is checked at the start of iteration and every 5 seconds thereafter\". iterable.rb#L209-L216: the check runs inside enumerator.each when mono_now - state_flushed_at >= STATE_FLUSH_INTERVAL (5 seconds)."
         },
         "concurrency-limits": {
-          "status": "Partial",
-          "note": "The concurrent limiter is in Sidekiq Enterprise, a paid edition. In the open source edition, the limit is threads in each process.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Enterprise",
+            "status": "Partial"
+          },
+          "note": "The open source edition limits threads in each process only. Sidekiq Enterprise, a paid edition, has a concurrent limiter for each name, but the job code calls it.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L291-L296",
           "version": "8.1.7",
           "evidence": "\"Rate limiters may now customize their reschedule count\"; Sidekiq::Limiter.concurrent(\"somename\", 5, reschedule: 0). Open source concurrency is a thread count for each process (docs/capsule.md)."
         },
         "rate-limits": {
-          "status": "Partial",
-          "note": "Rate limiters are in Sidekiq Enterprise, a paid edition. The job calls within_limit around the limited code.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Enterprise",
+            "status": "Partial"
+          },
+          "note": "The open source edition has no rate limit. Sidekiq Enterprise, a paid edition, has rate limiters for each name, but the job calls within_limit around the limited code.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L280-L290",
           "version": "8.1.7",
           "evidence": "\"Add new **leaky bucket** rate limiter\"; leaker = Sidekiq::Limiter.leaky(\"shopify\", 60, :minute); leaker.within_limit do ... end. Bucket and window limiters: docs/Ent-2.0-Upgrade.md#L15-L17, Ent-Changes.md#L503."
@@ -1922,8 +2080,12 @@
           "evidence": "\"The set of dead jobs within Sidekiq. Dead jobs have failed all of their retries and are helding in this set pending some sort of manual fix. They will be removed after 6 months (dead_timeout) if not.\" lib/sidekiq/config.rb#L35-L36: dead_max_jobs: 10_000. SortedEntry#retry (api.rb#L644) runs a job again."
         },
         "queue-pause": {
-          "status": "Partial",
-          "note": "Queue pause is in Sidekiq Pro, a paid edition.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Sidekiq Pro",
+            "status": "Supported"
+          },
+          "note": "The open source edition has none. Queue pause is in Sidekiq Pro, a paid edition.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L887-L897",
           "version": "8.1.7",
           "evidence": "\"Add ability to pause reliable queues via API.\" q.pause!; q.paused? # => true; q.unpause!. Open source Sidekiq::Queue#paused? returns false (lib/sidekiq/api.rb#L314-L317)."
@@ -1979,8 +2141,12 @@
             "note": "onFinish, and onSuccess or onFailure."
           },
           "cell": {
-            "status": "Partial",
-            "note": "Batches are in Sidekiq Pro, a paid edition. A batch runs success and complete callbacks.",
+            "status": "Not supported",
+            "paid": {
+              "edition": "Sidekiq Pro",
+              "status": "Supported"
+            },
+            "note": "The open source edition has none. Batches are in Sidekiq Pro, a paid edition. A batch runs success and complete callbacks.",
             "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L215-L219",
             "version": "8.1.7",
             "evidence": "\"Add `complete_at`, `success_at` and `death_at` timestamps to `S::Batch::Status`, which track when that batch callback was triggered.\" Pro-Changes.md#L872: \"Use `Batch#on(:complete)` instead of `Batch#notify`.\" Pro-Changes.md#L66-L72: \"Warn if passing a single value as options in `batch.on(event, target, options)`.\" batch.on(:success, MyCallback, \"document_id\" => 1234). Pro-Changes.md#L1178: 0.5 \"Batches\". docs/Pro-4.0-Upgrade.md#L7-L9: \"Batches now \\\"die\\\" if any of their jobs die.\""
@@ -2025,6 +2191,27 @@
           "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L396-L401",
           "version": "2.2.1",
           "evidence": "\"Dramatiq abstracts over the notion of a message broker and currently supports both RabbitMQ and Redis out of the box.\" Searched docs/source for 'transaction': no matches."
+        },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "A BucketRateLimiter with a limit of one throttles each key, but the actor code calls it. No option gives debounce.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/rate_limits/bucket.py#L25-L55",
+          "version": "2.2.1",
+          "evidence": "Up to 1 operation every minute: >>> BucketRateLimiter(backend, \"some-key\", limit=1, bucket=60_000) ... key(str): The key to rate limit on. The middleware list (docs/source/reference.rst#L90-L119) has no debounce."
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "ConcurrentRateLimiter limits each key across all workers that share its backend. The actor code calls acquire itself, and a refused message retries.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/cookbook.rst#L350-L377",
+          "version": "2.2.1",
+          "evidence": "You can use Dramatiq's |RateLimiters| to constrain actor concurrency. ... DISTRIBUTED_MUTEX = ConcurrentRateLimiter(backend, \"distributed-mutex\", limit=1) ... with DISTRIBUTED_MUTEX.acquire(): ... one of them will be retried with exponential backoff."
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "WindowRateLimiter and BucketRateLimiter limit each key across all workers that share the backend. The actor code calls acquire itself.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/rate_limits/window.py#L25-L42",
+          "version": "2.2.1",
+          "evidence": "A rate limiter that ensures that only `limit` operations may happen over some sliding window. ... key(str): The key to rate limit on. limit(int): The maximum number of operations per window per key."
         },
         "checkpoints": {
           "status": "Not supported",
@@ -2079,6 +2266,27 @@
           "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L11",
           "version": "0.26.0",
           "evidence": "README: \"It's backed by Redis\". The client writes tasks to Redis (asynq.NewClient(asynq.RedisClientOpt{...})), so a task cannot join an application database transaction."
+        },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "The Unique option refuses a duplicate task until the task succeeds or its TTL ends. The match uses task type, payload, and queue. Group aggregation waits a grace period for each group key, and a new task extends it. The application writes the function that merges the tasks.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L156-L169",
+          "version": "0.26.0",
+          "evidence": "client.go#L156-L169: \"Task enqueued with this option is guaranteed to be unique within the given ttl. Once the task gets processed successfully or once the TTL has expired, another task with the same uniqueness may be enqueued. ... Uniqueness of a task is based on the following properties: - Task Type - Task Payload - Queue Name\". server.go#L219-L243: \"If an incoming task is received within this period, the server will wait for another period of the same length, up to GroupMaxDelay if specified.\" \"GroupAggregator specifies the aggregation function used to aggregate multiple tasks in a group into one task.\""
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "Config.Concurrency limits one server process. The x/rate Semaphore limits each key across all servers, but the handler calls Acquire itself.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/x/rate/semaphore.go#L15-L42",
+          "version": "0.26.0",
+          "evidence": "// Semaphore is a distributed counting semaphore which can be used to set maxTokens across multiple asynq servers. server.go#L96-L102: \"Maximum number of concurrent processing of tasks.\""
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "note": "No option limits how many tasks start in a time period, for a queue or a key. The x/rate package has only a concurrency semaphore.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/x/rate/semaphore.go#L1-L2",
+          "version": "0.26.0",
+          "evidence": "// Package rate contains rate limiting strategies for asynq.Handler(s). The package files are semaphore.go, semaphore_test.go, and example_test.go, and the only type is Semaphore (L37-L38)."
         },
         "checkpoints": {
           "status": "Not supported",
@@ -2157,10 +2365,17 @@
         },
         "enqueue-deduplication": {
           "status": "Supported",
-          "note": "The Workflow Id is unique in a Namespace. Reuse and conflict policies decide what a second start does.",
+          "note": "Two open runs cannot have the same Workflow Id in a Namespace. Reuse and conflict policies decide what a second start does.",
           "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-execution/workflowid-runid.mdx#L89-L93",
           "version": "1.32.1",
           "evidence": "The Temporal Platform guarantees uniqueness of the Workflow Id within a Namespace based on the Workflow Id Reuse Policy. ... A Workflow Id Conflict Policy can be used to decide how to resolve a Workflow Id conflict with a Running Workflow."
+        },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "No built-in option. The docs give a debounced timer pattern that the application builds with Signals.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/design-patterns/updatable-timer.mdx#L14-L28",
+          "version": "1.32.1",
+          "evidence": "The Updatable / Debounced Timer pattern implements a sleep operation that can be interrupted and dynamically adjusted via Signals."
         },
         "task-dependencies": {
           "status": "Supported",
@@ -2191,8 +2406,8 @@
           "evidence": "Activity Cancellations are delivered to the Activity when it Heartbeats. ... An Activity that doesn't Heartbeat can't receive a Cancellation."
         },
         "concurrency-limits": {
-          "status": "Partial",
-          "note": "Each Worker sets its own task slots. These options do not affect other Workers.",
+          "status": "Not supported",
+          "note": "Each Worker sets its own task slots for one process. These options do not affect other Workers.",
           "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/worker-performance/configuration.mdx#L14-L19",
           "version": "1.32.1",
           "evidence": "Options are specific to individual Workers and do not affect other members of your fleet. ... The maxConcurrentWorkflowTaskExecutionSize and maxConcurrentActivityExecutionSize options define the number of total available Workflow Task and Activity Task slots for a Worker."
@@ -2269,9 +2484,10 @@
         },
         "license": {
           "value": "MIT",
+          "note": "Temporal Cloud is the managed service.",
           "source": "https://github.com/temporalio/temporal/blob/v1.32.1/LICENSE#L1-L5",
           "version": "1.32.1",
-          "evidence": "LICENSE: \"The MIT License / Copyright (c) 2025 Temporal Technologies Inc. ... Copyright (c) 2020 Uber Technologies, Inc.\""
+          "evidence": "LICENSE: \"The MIT License / Copyright (c) 2025 Temporal Technologies Inc. ... Copyright (c) 2020 Uber Technologies, Inc.\" docs/architecture/README.md#L61: \"Users can host and operate the Temporal server and its database themselves, or use [Temporal Cloud](https://temporal.io/cloud).\""
         }
       },
       "rows": [
@@ -2386,6 +2602,13 @@
           "version": "1.46.0",
           "evidence": "\"Event IDs will only be used to prevent duplicate execution for a 24 hour period.\" (L84); at the function level: \"Each unique expression will only trigger one function execution per 24 hour period.\" (L111). Server: pkg/consts/consts.go L138-L140 \"FunctionIdempotencyPeriod = 24 * time.Hour\"."
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "debounce runs the function once for each key after a period, with the last event. throttle limits the runs of each key in a period.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L650-L676",
+          "version": "1.46.0",
+          "evidence": "If any new events are received that match the same debounce `key`, the function is rescheduled for another `period` delay, and the triggering event is replaced with the latest event received. SDK_SPEC.md#L733-L760: throttle \"queues them and executes at the specified rate\"; key \"An optional key Expression to partition throttle groups.\""
+        },
         "task-dependencies": {
           "status": "Partial",
           "note": "No declared dependency between runs. A function can invoke other functions as steps and use their results.",
@@ -2457,8 +2680,12 @@
           "evidence": "GraphQL mutations of the self-hosted API: \"cancelRun(runID: ULID!)\" and \"rerun(runID: ULID!, fromStep: RerunFromStepInput, ...)\"; RerunFromStepInput { stepID, input }. README L149: the database \"Persists ... Function run results.\""
         },
         "queue-pause": {
-          "status": "Partial",
-          "note": "Inngest Cloud pauses one function. The self-hosted dashboard has no pause control. Events that arrive during a pause do not run on resume. A replay can run them while the run history keeps them.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Inngest Cloud",
+            "status": "Partial"
+          },
+          "note": "The self-hosted dashboard has no pause control. Inngest Cloud pauses one function. Events that arrive during a pause do not run on resume. A replay can run them while the run history keeps them.",
           "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/platform-and-operations/pause-and-resume-functions.mdx#L8-L15",
           "version": "1.46.0",
           "evidence": "\"Pause a function during maintenance so new events do not start its runs. Inngest still receives and stores those events, but skips the paused function.\" \"Events received during the pause do not run automatically. If they must be processed, create a Replay ... The available history depends on your plan's retention.\" (Looked at ui/apps/dev-server-ui and pkg/coreapi/gql.mutations.graphql at v1.46.0: no pause action.)"
@@ -2610,6 +2837,13 @@
           "version": "3.3.0",
           "evidence": "Deduplication is not supported on partitioned queues. ... If a workflow with a deduplication ID is currently enqueued, delayed, or actively executing (status ENQUEUED, DELAYED, or PENDING), subsequent workflow enqueue attempt with the same deduplication ID in the same queue will raise a DBOSQueueDeduplicatedError exception."
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "A Debouncer delays a workflow for each key and runs it with the last inputs. A partition rate limit of one in a period throttles each key.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/reference/contexts.md#L1871-L1890",
+          "version": "3.3.0",
+          "evidence": "When the workflow eventually executes, it uses the **last** set of inputs passed into `debounce`. ... `debounce_key`: A key used to group workflow executions that will be debounced together. queue-tutorial.md#L246-L258: \"`partition_limiter` | Maximum workflows that may be started from any one partition in a given period.\""
+        },
         "task-dependencies": {
           "status": "Supported",
           "note": "A workflow waits for other workflows through their handles, in its own code.",
@@ -2626,7 +2860,11 @@
         },
         "crash-recovery": {
           "status": "Partial",
-          "note": "A process recovers the workflows of its executor ID when that process starts again. For automatic recovery on another process, DBOS says that Conductor is required. Self-hosted Conductor needs a paid license for more than one executor.",
+          "paid": {
+            "edition": "a paid Conductor license",
+            "status": "Supported"
+          },
+          "note": "A process recovers the workflows of its executor ID when that process starts again. For automatic recovery on another process, DBOS says that Conductor is required. More than one executor needs a paid Conductor license.",
           "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L139-L148",
           "version": "3.3.0",
           "evidence": "Conductor is required for correct workflow recovery in applications that use more than one process. ... if you are self-hosting Conductor with a free license, you may connect at most one executor per application to Conductor ... To connect multiple executors, upgrade to a paid license."
@@ -2640,17 +2878,17 @@
         },
         "concurrency-limits": {
           "status": "Supported",
-          "note": "For a queue, across all processes or on each process.",
-          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L140-L166",
+          "note": "For a queue across all processes, or for each partition key of a partitioned queue.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L246-L258",
           "version": "3.3.0",
-          "evidence": "Worker concurrency sets the maximum number of workflows from a queue that can run concurrently on a single DBOS process. ... Global concurrency limits the total number of workflows from a queue that can run concurrently across all DBOS processes in your application."
+          "evidence": "`partition_concurrency` | Maximum workflows from any one partition running at once across all processes. queue-tutorial.md#L155-L158: \"Global concurrency limits the total number of workflows from a queue that can run concurrently across all DBOS processes\". L287-L290: \"A partitioned queue enforces its per-partition limits **and** its queue-wide limits\""
         },
         "rate-limits": {
           "status": "Supported",
-          "note": "For a queue.",
-          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L188-L198",
+          "note": "For a queue across all processes, or for each partition key of a partitioned queue.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/queue-tutorial.md#L246-L258",
           "version": "3.3.0",
-          "evidence": "You can set rate limits for a queue, limiting the number of functions that it can start in a given period. Rate limits are global across all DBOS processes using this queue."
+          "evidence": "`partition_limiter` | Maximum workflows that may be started from any one partition in a given period. queue-tutorial.md#L188-L191: \"Rate limits are global across all DBOS processes using this queue.\""
         },
         "checkpoints": {
           "status": "Supported",
@@ -2668,7 +2906,11 @@
         },
         "dashboard": {
           "status": "Partial",
-          "note": "Conductor serves the dashboard. Its free license connects one executor for each application. More executors need a paid license.",
+          "paid": {
+            "edition": "a paid Conductor license",
+            "status": "Supported"
+          },
+          "note": "Conductor serves the dashboard. Its free license connects one executor for each application. More executors need a paid Conductor license.",
           "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L147-L148",
           "version": "3.3.0",
           "evidence": "if you are self-hosting Conductor with a free license, you may connect at most one executor per application to Conductor ... To connect multiple executors, upgrade to a paid license."
@@ -2717,9 +2959,10 @@
         },
         "license": {
           "value": "MIT",
+          "note": "Self-hosted DBOS Conductor needs a license key, and more than one executor needs a paid Conductor license. DBOS Cloud is the managed service.",
           "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/LICENSE#L1-L3",
           "version": "3.3.0",
-          "evidence": "LICENSE: \"MIT License / Copyright (c) 2024 DBOS, Inc.\""
+          "evidence": "LICENSE: \"MIT License / Copyright (c) 2024 DBOS, Inc.\" dbos-docs@5c118aacd4b07a8988c63041cf3e61482299403a docs/conductor/self-hosting/hosting-conductor.md#L6-L8: \"Self-hosted Conductor is released under a [proprietary license](https://www.dbos.dev/conductor-license) and requires a [license key](#licensing).\" docs/faq.md#L147-L148: \"To connect multiple executors, upgrade to a paid license.\" docs/conductor/reference/dbos-cloud/deploying-to-cloud.md#L8-L13: \"DBOS Cloud is a serverless platform\""
         }
       },
       "rows": [
@@ -2834,6 +3077,13 @@
           "version": "1.8.0",
           "evidence": "\"If you re-invoke the service with the same idempotency key within 24 hours, Restate sends back the same response and doesn't re-execute the request to the service.\" L44: \"A workflow can be submitted only once.\""
         },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "An idempotency key returns the first response for a retention period, by default 24 hours. Throttling is planned. No option gives debounce.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/flow-control.mdx#L19-L25",
+          "version": "1.8.0",
+          "evidence": "Planned follow-ups include throttling and rate limits, invocation priorities, and finite queue (backlog) limits. docs/services/invocation/http.mdx#L100-L111: \"If you re-invoke the service with the same idempotency key within 24 hours, Restate sends back the same response and doesn't re-execute the request to the service.\""
+        },
         "task-dependencies": {
           "status": "Supported",
           "note": "A handler calls other handlers, waits for their results, and then starts the next step.",
@@ -2940,10 +3190,10 @@
         },
         "license": {
           "value": "BUSL-1.1",
-          "note": "Source-available. Each release becomes Apache-2.0 after four years.",
+          "note": "Source-available. Each release becomes Apache-2.0 after four years. Restate Cloud and Restate BYOC are managed services with published pricing.",
           "source": "https://github.com/restatedev/restate/blob/v1.8.0/LICENSE#L1-L40",
           "version": "1.8.0",
-          "evidence": "LICENSE: \"Business Source License 1.1\"; Additional Use Grant forbids a \"Public Restate Platform Service\"; \"Change Date: 4 years after release\"; \"Change License: Apache License, Version 2.0\"."
+          "evidence": "LICENSE: \"Business Source License 1.1\"; Additional Use Grant forbids a \"Public Restate Platform Service\"; \"Change Date: 4 years after release\"; \"Change License: Apache License, Version 2.0\". docs-restate@5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7 docs/hosting/overview.mdx#L19-L29: \"| **Operated by** | Restate | Restate | You |\" and \"| **Pricing** | [See pricing](https://restate.dev/pricing) |\"."
         }
       },
       "rows": [
@@ -3057,6 +3307,13 @@
           "version": "4.7.4",
           "evidence": "\"If you trigger a task with the same idempotencyKey twice, the second request does not create a new run. It returns the original run's handle\". L319: \"By default idempotency keys are stored for 30 days.\""
         },
+        "debounce-throttle": {
+          "status": "Supported",
+          "note": "The debounce option moves a delayed run later for each key. An idempotency key with a TTL gives one run for each key in a period.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L853-L891",
+          "version": "4.7.4",
+          "evidence": "When a run with the same debounce key already exists in the delayed state, subsequent triggers \"push\" the existing run's execution time later rather than creating new runs. docs/idempotency.mdx#L309-L315: \"During this window, any subsequent triggers with the same idempotency key will return the original task run instead of creating a new one.\""
+        },
         "task-dependencies": {
           "status": "Supported",
           "note": "A parent run waits for child runs with batchTriggerAndWait(), then starts the next task.",
@@ -3093,11 +3350,11 @@
           "evidence": "Use cases: \"Limit how many runs of a task execute at once\"; \"Share one limit across several tasks\"; \"Give each tenant its own separate concurrency\"; \"Cap a shared resource, like an external API, across tasks and tenants\"."
         },
         "rate-limits": {
-          "status": "Partial",
-          "note": "A concurrency limit caps the runs in progress, not the runs in a time period. The docs use it to protect an API that has rate limits.",
+          "status": "Not supported",
+          "note": "No rate limit for a task, a queue, or a key. The docs use a concurrency limit, which caps the runs in progress, to protect an API that has rate limits.",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/concurrency.mdx#L36-L53",
           "version": "4.7.4",
-          "evidence": "\"Set the concurrency option on a task to limit how many of its runs execute at once.\" \"This is useful if you need to control access to a shared resource, like a database or an API that has rate limits.\""
+          "evidence": "\"Set the concurrency option on a task to limit how many of its runs execute at once.\" \"This is useful if you need to control access to a shared resource, like a database or an API that has rate limits.\" docs/limits.mdx#L29-L37: the only rate limits are limits on the Trigger.dev API and on batch trigger calls, not on task runs."
         },
         "checkpoints": {
           "status": "Partial",
@@ -3107,8 +3364,12 @@
           "evidence": "\"Idempotency keys: Each subtask is assigned a unique idempotency key. Result caching: The output of each subtask is cached based on its idempotency key. Intelligent retries: If a failure occurs, only the failed subtask and subsequent tasks are retried.\" L373: \"When retried, it starts from the beginning, but leverages cached results for completed subtasks.\" idempotency.mdx L12: \"Without idempotency keys, each retry of the parent would trigger a new child task run.\""
         },
         "durable-waits": {
-          "status": "Supported",
-          "note": "On Trigger.dev Cloud only. Self-hosted instances have no checkpoints, which give non-blocking waits.",
+          "status": "Not supported",
+          "paid": {
+            "edition": "Trigger.dev Cloud",
+            "status": "Supported"
+          },
+          "note": "Self-hosted instances have no checkpoints, so a waiting run keeps its machine. Trigger.dev Cloud stores a checkpoint and releases the concurrency slot.",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L39-L47",
           "version": "4.7.4",
           "evidence": "\"some features are only available on Trigger.dev Cloud\": \"Checkpoints | Cloud ✅ | Self-hosted ❌ | Non-blocking waits, less resource usage\". snippets/paused-execution-free.mdx: \"the concurrency slot is only released once we've snapshotted the machine and shut it down. For wait.for and wait.until that happens 60 seconds into the wait\"."
@@ -3163,9 +3424,10 @@
         },
         "license": {
           "value": "Apache-2.0",
+          "note": "Trigger.dev Cloud is the managed service.",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/LICENSE#L1-L3",
           "version": "4.7.4",
-          "evidence": "LICENSE: \"Apache License Version 2.0, January 2004\"."
+          "evidence": "LICENSE: \"Apache License Version 2.0, January 2004\". docs/self-hosting/overview.mdx#L22: \"Trigger.dev Cloud is fully managed, scalable, and comes with dedicated support.\""
         }
       },
       "rows": [
@@ -3251,6 +3513,27 @@
           "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L13-L15",
           "version": "0.110.8",
           "evidence": "Self-hosting: the Engine exposes a \"gRPC API for core workflow orchestration and task scheduling\" and stores state in its own PostgreSQL. The run docs trigger tasks through SDK client calls; I found no transactional enqueue in the docs at the tag."
+        },
+        "debounce-throttle": {
+          "status": "Partial",
+          "note": "An idempotency key with a TTL runs one workflow for each key in the period and refuses the others. No option gives debounce.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/idempotency.mdx#L29-L50",
+          "version": "0.110.8",
+          "evidence": "Only one run for a given key will occur in the time window from when the first trigger comes in until the TTL expires."
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "For each key across all workers. The key is a CEL expression. A constant key gives one limit for a task, but no setting limits a whole queue.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/concurrency.mdx#L53-L59",
+          "version": "0.110.8",
+          "evidence": "Check if there are any available slots for the computed concurrency key based on the maximum number of concurrent runs allowed ... You can set a constant concurrency key as the expression, such as `'*'`, to enable this global concurrency control behavior."
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "For each key across all workers. A static limit is one named key that tasks share, but no setting limits a whole queue.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/rate-limits.mdx#L12-L21",
+          "version": "0.110.8",
+          "evidence": "prevent task runs from exceeding a certain number of requests per time window ... Dynamic Rate Limits: Allows for complex rate limiting scenarios, such as per-user limits ... Static Rate Limits: Allows for simple rate limiting for resources known prior to runtime"
         },
         "checkpoints": {
           "status": "Supported",
