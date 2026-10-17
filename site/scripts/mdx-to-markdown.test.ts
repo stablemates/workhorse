@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { comparisons } from "../lib/comparisons.js";
 import { mdxToMarkdown } from "./mdx-to-markdown.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -187,6 +188,40 @@ describe("the Markdown twin transform", () => {
 
   it("throws when a tabs block is left open", () => {
     expect(() => mdxToMarkdown('<Tabs items={["Go"]}>', "workers")).toThrow(/unclosed/);
+  });
+
+  it("replaces a product comparison table with Markdown tables that keep every source", () => {
+    const product = comparisons.products.find((entry) => entry.page === "published")!;
+    const markdown = mdxToMarkdown(
+      ["Before.", "", `<ComparisonTable product="${product.slug}" />`, "", "After."].join("\n"),
+      `compare/${product.slug}`,
+    );
+
+    expect(markdown).not.toContain("<ComparisonTable");
+    expect(markdown).toContain(`Last checked on `);
+    expect(markdown).toContain(`| Capability | Workhorse | ${product.name} ${product.version} |`);
+    for (const cell of Object.values(product.cells)) {
+      expect(markdown).toContain(`([source](${cell.source}))`);
+    }
+    for (const row of comparisons.rows) expect(markdown).toContain(`| ${row.label} |`);
+  });
+
+  it("replaces the hub comparison table with one Markdown table for each category", () => {
+    const markdown = mdxToMarkdown("<ComparisonTable />", "compare");
+
+    for (const category of comparisons.categories) {
+      expect(markdown).toContain(`### ${category.title}`);
+    }
+    for (const product of comparisons.products) {
+      expect(markdown).toMatch(new RegExp(`^\\| \\[?${product.name.replace(".", "\\.")}`, "m"));
+    }
+  });
+
+  it("throws on a comparison table that names an unknown product or spans lines", () => {
+    expect(() => mdxToMarkdown('<ComparisonTable product="nothing" />', "compare/x")).toThrow(
+      /no product "nothing"/,
+    );
+    expect(() => mdxToMarkdown("<ComparisonTable\n/>", "compare/x")).toThrow(/self-closing line/);
   });
 });
 

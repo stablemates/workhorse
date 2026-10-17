@@ -1,0 +1,105 @@
+---
+title: "Workhorse compared with pg-boss"
+description: "pg-boss vs Workhorse: two task queues that keep work in PostgreSQL. Compare their features, find when pg-boss is the better choice, and move a job to Workhorse."
+---
+
+pg-boss and Workhorse are task queues that keep their work in PostgreSQL. Each one lets you enqueue
+a task in the same transaction as your data, so neither needs a broker. This page compares the two
+products, row by row, and tells you when pg-boss is the better choice.
+
+## Compare Workhorse and pg-boss
+
+The two products share the base of a PostgreSQL queue: transactional enqueue, delays, cron
+schedules, priorities, retries, task dependencies, dead letters, and a free dashboard. They differ
+in four areas:
+
+- **Steps inside a task.** A Workhorse handler can store the result of each named step. When the
+  task runs again, the handler skips the steps that completed. It can also wait for a timer or a
+  signal without a worker slot. In pg-boss, a retry runs the whole handler again.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
+  protocol. pg-boss is one Node.js library. Other runtimes can call its HTTP proxy or write SQL.
+- **Databases.** pg-boss also runs on CockroachDB, Citus, and PGlite. Workhorse runs on PostgreSQL
+  only.
+- **Transactional handlers.** A pg-boss worker can commit the writes of a handler and the result of
+  the job in one transaction. A Workhorse `Worker` handler commits its own writes. Only the
+  low-level API can do this: a TypeScript `Queue` from `forTransaction` can call `complete` in your
+  transaction.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="pg-boss" />
+
+## When pg-boss is the better choice
+
+pg-boss is the better choice in these cases:
+
+- Your application runs only on Node.js or Bun, and one library in one language is sufficient.
+- You run CockroachDB or Citus, or you want an in-process PGlite queue for tests or a desktop
+  application.
+- Your worker handlers must commit their writes and the job result in one transaction.
+- Your jobs are short, and a retry that runs the whole handler again is acceptable.
+
+Workhorse is the better choice in these cases:
+
+- A task has steps that are slow or costly to repeat.
+- A task waits for a timer, a signal, or a person.
+- More than one language must run workers on the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from pg-boss
+
+Move one queue at a time. Keep the pg-boss workers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** An application sends a `welcome-email` job in the transaction that creates a user. The
+job has three attempts with exponential backoff.
+
+1. In pg-boss, the application passes its transaction to `send()` with the `db` option.
+2. In Workhorse, the application passes its transaction client as the last argument of `enqueue()`.
+3. `retryLimit: 2` in pg-boss gives two retries, so three attempts. In Workhorse, `maxAttempts: 3`
+   gives the same three attempts.
+
+Before the move, with pg-boss:
+
+```js
+await boss.send(
+  "welcome-email",
+  { userId },
+  { db: transaction, retryLimit: 2, retryDelay: 5, retryBackoff: true },
+);
+
+await boss.work("welcome-email", async ([job]) => {
+  await sendWelcomeEmail(job.data.userId);
+});
+```
+
+After the move, with Workhorse:
+
+```ts
+await queue.enqueue(
+  "welcome-email",
+  { userId },
+  {
+    maxAttempts: 3,
+    retryPolicy: { type: "exponential", initialDelayMs: 5_000, multiplier: 2, maxDelayMs: 300_000 },
+  },
+  client,
+);
+
+const worker = new Worker(queue).handle("welcome-email", async (payload: { userId: string }) => {
+  await sendWelcomeEmail(payload.userId);
+});
+```
+
+`client` is the PostgreSQL client of your open transaction. pg-boss gives `retryDelay` in seconds,
+and Workhorse gives each delay in milliseconds. A Workhorse exponential policy needs a maximum
+delay. pg-boss has no maximum by default and adds a random part to each delay.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.

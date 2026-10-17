@@ -148,10 +148,21 @@ run.
 
 ## Keep benchmark comparisons private
 
-Until a maintainer decides to publish benchmarks, never name a benchmark competitor in this
-repository. That covers code, documentation, decision records, commit messages, and pull request
-titles and bodies. Say "the baseline" instead. Comparative results live only in the private
-operations repository and in Linear.
+Benchmark results stay private until a maintainer decides to publish them. Comparative results
+live only in the private operations repository and in Linear. Never put a benchmark number or a
+performance claim about another product in this repository, a commit message, or a pull request.
+
+The name of a compared product can appear only in `site/comparisons.json` and in
+`site/content/docs/compare/**`. [ADR 0104](docs/decisions/0104-publish-sourced-product-comparisons-in-the-docs.md)
+records this rule and its exemptions: the decision records, `CHANGELOG.md` files,
+`site/content/docs/active-job.mdx`, and `site/content/docs/django.mdx`.
+`scripts/comparison-names.test.ts` reads the names from the data file and fails on a name in any
+other tracked file. Everywhere else, say "the baseline". A commit message or a pull request that
+changes a comparison page can name the products of that page.
+
+A comparison page states qualitative facts only. Each competitor cell has a source URL at a pinned
+version, and each Workhorse cell restates `docs/features.md` or `docs/parity.md`. The pages follow
+ADR 0051 and use no superlatives.
 
 Perf-lab and other research branches carry those names in their history. Never push them. Rebuild
 the finished change on a fresh branch from `main` before opening a pull request.

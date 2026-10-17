@@ -1,0 +1,48 @@
+---
+title: Compare Workhorse with other task queues and workflow platforms
+description: Compare Workhorse with PostgreSQL task queues, Redis task queues, and workflow platforms. Each fact links its source at a stated version.
+---
+
+Workhorse is a durable task queue for PostgreSQL. It makes three claims. You enqueue a task inside
+your own transaction. A handler that stops during a task continues after its completed checkpoints.
+Workers in five languages use one SQL protocol and one dashboard. This page helps you compare
+Workhorse with the products that you already know.
+
+## Find the category of your product
+
+The products on this page are in three categories. Each category solves a different problem, so
+start with the category of the product that you use now.
+
+- **Task queues that store work in a database.** The queue is a set of tables in a SQL database,
+  often the database of the application. Workhorse is in this category. Most products in it can
+  enqueue a task in the application's transaction.
+- **Task queues on Redis or a message broker.** The queue is in Redis or in a broker such as
+  RabbitMQ. The broker is a second service beside the application database. A task cannot commit
+  in the same transaction as the application data.
+- **Workflow platforms.** These platforms run multi-step workflows and record each completed step.
+  Most of them need their own server or a cloud service. Workhorse is a task queue, not a workflow
+  platform. It has checkpoints, durable waits, and child tasks, but no workflow runtime.
+
+## Compare the products
+
+Each table has one row for each product and one row for Workhorse. Each cell links its source at the
+version in the first column. The last column gives the date of the last check. A product name is a
+link when the product has its own page.
+
+The six columns show the facts that most often decide the choice. A product page has about 20 rows
+and tells you when the other product is the better choice.
+
+<ComparisonTable />
+
+## How this page stays correct
+
+Each fact comes from the documentation or the source code of the product, at the version in the
+table. The facts give no performance numbers. A person checks each product page every quarter
+against the newest release, then changes the version and the date. If you find a fact that is not
+correct, open an issue in the [Workhorse repository](https://github.com/stablemates/workhorse).
+
+## Next
+
+- [Migrate to Workhorse](/docs/migrate) gives the procedure to move work from another queue.
+- [Limitations](/docs/limitations) lists what Workhorse does not do.
+- [Concepts](/docs/concepts) explains tasks, workers, and leases.

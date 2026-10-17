@@ -1,0 +1,1696 @@
+{
+  "categories": [
+    {
+      "id": "database-queue",
+      "title": "Task queues that store work in a database",
+      "summary": "These libraries keep tasks in a SQL database, often the one the application already uses. Workhorse is in this category."
+    },
+    {
+      "id": "broker-queue",
+      "title": "Task queues on Redis or a message broker",
+      "summary": "These libraries keep tasks in Redis or in a message broker such as RabbitMQ. The broker is a second service beside the application database."
+    },
+    {
+      "id": "workflow-platform",
+      "title": "Workflow platforms",
+      "summary": "These platforms run multi-step workflows and record each completed step. Most of them need their own server or a cloud service. Workhorse is a task queue, not a workflow platform."
+    }
+  ],
+  "groups": [
+    {
+      "id": "producing",
+      "title": "Producing work"
+    },
+    {
+      "id": "executing",
+      "title": "Executing work"
+    },
+    {
+      "id": "operating",
+      "title": "Operating"
+    },
+    {
+      "id": "languages",
+      "title": "Languages"
+    },
+    {
+      "id": "product",
+      "title": "Product"
+    }
+  ],
+  "rows": [
+    {
+      "id": "transactional-enqueue",
+      "group": "producing",
+      "label": "Enqueue in the application's transaction",
+      "kind": "status",
+      "hub": true,
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Transactional application enqueue"
+        },
+        "page": "/docs/enqueue"
+      }
+    },
+    {
+      "id": "scheduled-enqueue",
+      "group": "producing",
+      "label": "Start a task later",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Immediate and delayed enqueue"
+        },
+        "page": "/docs/enqueue"
+      }
+    },
+    {
+      "id": "recurring-schedules",
+      "group": "producing",
+      "label": "Recurring schedules",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Declarative recurring tasks"
+        },
+        "page": "/docs/schedules"
+      }
+    },
+    {
+      "id": "priorities",
+      "group": "producing",
+      "label": "Priorities",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Strict-priority ordering"
+        },
+        "page": "/docs/priority"
+      }
+    },
+    {
+      "id": "enqueue-deduplication",
+      "group": "producing",
+      "label": "Refuse a duplicate task by key",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Enqueue idempotency"
+        },
+        "page": "/docs/idempotency"
+      }
+    },
+    {
+      "id": "task-dependencies",
+      "group": "producing",
+      "label": "Start a task after other tasks finish",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/parity.md",
+          "row": "Task dependencies with terminal policies"
+        },
+        "page": "/docs/task-dependencies"
+      }
+    },
+    {
+      "id": "retries",
+      "group": "executing",
+      "label": "Retries with backoff",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Built-in retry policies"
+        },
+        "page": "/docs/retries"
+      }
+    },
+    {
+      "id": "crash-recovery",
+      "group": "executing",
+      "label": "Recover a task from a stopped worker",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Expiry recovery"
+        },
+        "page": "/docs/workers",
+        "note": "A lease expires, and a fence token stops the old worker from writing."
+      }
+    },
+    {
+      "id": "cancellation",
+      "group": "executing",
+      "label": "Cancel a running task",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Active cancellation delivery"
+        },
+        "page": "/docs/cancellation",
+        "note": "The handler gets an abort signal. Cancellation is cooperative."
+      }
+    },
+    {
+      "id": "concurrency-limits",
+      "group": "executing",
+      "label": "Concurrency limits across all workers",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Fleet-wide concurrency policies"
+        },
+        "page": "/docs/concurrency-policies",
+        "note": "For a queue or for each key."
+      }
+    },
+    {
+      "id": "rate-limits",
+      "group": "executing",
+      "label": "Rate limits across all workers",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Fleet-wide rate-limit policies"
+        },
+        "page": "/docs/rate-limits",
+        "note": "For a queue or for each key."
+      }
+    },
+    {
+      "id": "checkpoints",
+      "group": "executing",
+      "label": "Skip completed steps when a task runs again",
+      "kind": "status",
+      "hub": true,
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Named checkpoint execution"
+        },
+        "page": "/docs/durable-execution",
+        "note": "Named checkpoints. The handler starts again from its entry and reuses each stored result."
+      }
+    },
+    {
+      "id": "durable-waits",
+      "group": "executing",
+      "label": "Wait for a timer or a signal without a worker slot",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/parity.md",
+          "row": "Signal and human-decision waits"
+        },
+        "page": "/docs/signals",
+        "note": "Timers, signals, and human decisions release the lease."
+      }
+    },
+    {
+      "id": "dashboard",
+      "group": "operating",
+      "label": "Operator dashboard",
+      "kind": "status",
+      "hub": true,
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "React operator dashboard"
+        },
+        "page": "/docs/dashboard",
+        "note": "Free. No single sign-on or role-based access control."
+      }
+    },
+    {
+      "id": "dead-letters",
+      "group": "operating",
+      "label": "Keep failed tasks and run them again",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Dead-letter views and redrive"
+        },
+        "page": "/docs/dead-letters"
+      }
+    },
+    {
+      "id": "queue-pause",
+      "group": "operating",
+      "label": "Pause and resume a queue",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "Queue pause/resume and purge"
+        },
+        "page": "/docs/operations"
+      }
+    },
+    {
+      "id": "opentelemetry",
+      "group": "operating",
+      "label": "OpenTelemetry",
+      "kind": "status",
+      "workhorse": {
+        "status": "Supported",
+        "feature": {
+          "doc": "docs/features.md",
+          "row": "OpenTelemetry tracing and metrics"
+        },
+        "page": "/docs/operations"
+      }
+    },
+    {
+      "id": "worker-languages",
+      "group": "languages",
+      "label": "Languages that run workers",
+      "kind": "text",
+      "hub": true,
+      "workhorse": {
+        "value": "TypeScript, Python, Go, Rust, Ruby",
+        "source": "docs/parity.md",
+        "page": "/docs/installation"
+      }
+    },
+    {
+      "id": "enqueue-languages",
+      "group": "languages",
+      "label": "Languages that only enqueue",
+      "kind": "text",
+      "workhorse": {
+        "value": "None",
+        "source": "docs/parity.md",
+        "note": "Every SDK runs workers."
+      }
+    },
+    {
+      "id": "infrastructure",
+      "group": "product",
+      "label": "Services beside the application",
+      "kind": "text",
+      "hub": true,
+      "workhorse": {
+        "value": "PostgreSQL",
+        "source": "docs/compatibility.md",
+        "page": "/docs/installation",
+        "note": "No broker and no server."
+      }
+    },
+    {
+      "id": "license",
+      "group": "product",
+      "label": "License",
+      "kind": "text",
+      "hub": true,
+      "workhorse": {
+        "value": "Apache-2.0",
+        "source": "LICENSE"
+      }
+    }
+  ],
+  "products": [
+    {
+      "slug": "pg-boss",
+      "name": "pg-boss",
+      "aliases": ["pgboss"],
+      "category": "database-queue",
+      "page": "published",
+      "version": "12.38.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/timgit/pg-boss",
+      "summary": "pg-boss is a job queue for Node.js built on PostgreSQL, with workers that claim jobs with SKIP LOCKED.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "Pass a db option to send(). Adapters exist for Knex, Kysely, Drizzle, and Prisma.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/introduction.md#L44",
+          "version": "12.38.0",
+          "evidence": "Jobs can be part of your own transactions. ... you can send one in the same transaction as the data change it belongs to: the job exists if, and only if, the change commits."
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L88-L95",
+          "version": "12.38.0",
+          "evidence": "Deferred jobs: startAfter int, string, or Date. int: seconds to delay starting the job; string: Start after an ISO 8601 date time string, or after a relative interval; Date: Start after a Date object"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Cron and RRULE schedules. Precision is one minute.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/scheduling.md#L1-L3",
+          "version": "12.38.0",
+          "evidence": "Jobs may be created automatically based on a cron expression or an RRULE. ... schedules are checked every 30 seconds ... A schedule therefore sends at most one job a minute"
+        },
+        "priorities": {
+          "status": "Supported",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L23-L25",
+          "version": "12.38.0",
+          "evidence": "priority, int: optional priority. Higher numbers have, um, higher priority. (fetch(): \"Jobs are always fetched in priority order.\")"
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "Queue policies and singletonKey refuse duplicates. send() then resolves null. upsert() merges by key.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/queues.md#L36-L43",
+          "version": "12.38.0",
+          "evidence": "short: Only allows 1 job to be queued ... Can be extended with singletonKey | exclusive: Only allows 1 job to be queued or active. Can be extended with singletonKey"
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "flow() creates jobs with dependsOn refs. A failed parent leaves the child blocked.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L382-L419",
+          "version": "12.38.0",
+          "evidence": "flow(jobs, options): Create a set of jobs and their dependencies atomically in one transaction. ... Dependent jobs are created in a blocked state and won't be eligible for fetching until all parent jobs have completed."
+        },
+        "retries": {
+          "status": "Supported",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L33-L47",
+          "version": "12.38.0",
+          "evidence": "retryLimit, int Default: 2 ... retryDelay, int Default: 0. Delay between retries ... retryBackoff, bool ... Enables exponential backoff retries ... retryDelayMax"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "Expiration retries a stuck job. An optional heartbeat detects a dead worker sooner.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/queues.md#L101-L123",
+          "version": "12.38.0",
+          "evidence": "heartbeatSeconds ... If no heartbeat is received within this interval, the monitor will fail/retry the job. ... Expiration (expireInSeconds) is the maximum time a job is allowed to remain active."
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "The handler gets job.signal on its next heartbeat. This needs heartbeatSeconds on the job.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L708-L710",
+          "version": "12.38.0",
+          "evidence": "cancel(name, id, options): Cancels a pending or active job. (workers.md L270: signal \"Aborted ... when a heartbeat finds this job no longer active under this worker's claim\")"
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "groupConcurrency limits each group across all nodes. The docs say that a race can briefly exceed it.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/workers.md#L185-L205",
+          "version": "12.38.0",
+          "evidence": "groupConcurrency ... Limits how many jobs from the same group can be processed simultaneously globally across all nodes. ... there may be brief moments where the limit is slightly exceeded"
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "Throttling limits job creation to one per time slot and key. No limit on start rate.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L159-L171",
+          "version": "12.38.0",
+          "evidence": "Throttling jobs to 'one per time slot'. This option is set on the send side of the API ... if you set the singletonSeconds to 60, then submit 2 jobs within the same minute, only the first job will be accepted"
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole handler again. Flows split work into separate jobs.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/introduction.md#L42",
+          "version": "12.38.0",
+          "evidence": "Jobs are delivered at least once. If a worker crashes ... the job is retried, so a handler can run more than once for the same job. Write handlers so that running one twice does no harm. (No step API in docs/api.)"
+        },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running job cannot suspend. A flow child or a startAfter job waits before it starts.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L419-L423",
+          "version": "12.38.0",
+          "evidence": "Dependent jobs are created in a blocked state and won't be eligible for fetching until all parent jobs have completed. (Looked at docs/api: no API suspends a running job for a timer or signal.)"
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free, MIT. A separate package, @pg-boss/dashboard, in packages/dashboard of the same repository.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/dashboard.md#L1-L16",
+          "version": "12.38.0",
+          "evidence": "A web-based dashboard is available in the @pg-boss/dashboard package for monitoring and managing jobs, queues and schedules. ... Job Actions: Create, cancel, retry, resume, or delete jobs directly from the UI"
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A dead letter queue keeps failed jobs, and redrive() creates them again.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L571-L580",
+          "version": "12.38.0",
+          "evidence": "redrive(name, options): Moves jobs out of a dead letter queue and re-creates them as fresh jobs on their original source queue. (retry(name, id) also retries a failed job.)"
+        },
+        "queue-pause": {
+          "status": "Not supported",
+          "note": "No queue pause. offWork() stops the workers of one process only.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/queues.md#L162-L170",
+          "version": "12.38.0",
+          "evidence": "updateQueue(name, options): Updates options on an existing queue ... (Looked at createQueue, updateQueue and the queue API: no pause option or method.) workers.md: \"Workers can be stopped via offWork()\""
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "Core ships traces and metrics. Trace context propagation is opt-in through propagateContext.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/opentelemetry.md#L1-L3",
+          "version": "12.38.0",
+          "evidence": "pg-boss creates OpenTelemetry spans and metrics following the messaging semantic conventions. It uses @opentelemetry/api, declared as a peer dependency"
+        },
+        "worker-languages": {
+          "value": "TypeScript, JavaScript",
+          "note": "One Node.js library. It also runs on Bun.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/README.md#L76-L78",
+          "version": "12.38.0",
+          "evidence": "Requirements: Node 22.12 or higher, or Bun; PostgreSQL 13 or higher"
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Other runtimes can call the HTTP proxy package or write SQL.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/proxy.md#L3",
+          "version": "12.38.0",
+          "evidence": "An HTTP proxy is available in the @pg-boss/proxy package, exposing pg-boss methods over a simple JSON API. It's useful for platform compatibility (calling pg-boss from non-Node runtimes or serverless functions)"
+        },
+        "infrastructure": {
+          "value": "PostgreSQL",
+          "note": "CockroachDB, Citus, and PGlite are other backends.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/README.md#L76-L78",
+          "version": "12.38.0",
+          "evidence": "Requirements: Node 22.12 or higher, or Bun; PostgreSQL 13 or higher"
+        },
+        "license": {
+          "value": "MIT",
+          "note": "No paid edition. The dashboard and proxy packages are also MIT.",
+          "source": "https://github.com/timgit/pg-boss/blob/12.38.0/LICENSE#L1",
+          "version": "12.38.0",
+          "evidence": "The MIT License (MIT) Copyright (c) 2016 Tim Jones"
+        }
+      },
+      "rows": [
+        {
+          "id": "debounce-throttle",
+          "group": "producing",
+          "label": "Debounce and throttle by key",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Keyed debounce"
+            },
+            "page": "/docs/debounce",
+            "note": "Keyed throttle is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Throttle refuses a second job in a time slot. Debounce moves it to the next slot.",
+            "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/jobs.md#L222-L246",
+            "version": "12.38.0",
+            "evidence": "sendThrottled(name, data, options, seconds, key) ... sendDebounced(): Like sendThrottled(), but instead of rejecting if a job is already sent in the current interval, it will try to add the job to the next interval"
+          }
+        },
+        {
+          "id": "transactional-worker",
+          "group": "executing",
+          "label": "Commit handler writes with the task result",
+          "kind": "text",
+          "workhorse": {
+            "value": "Low-level API only",
+            "source": "docs/architecture/lifecycle.md",
+            "note": "A Worker handler commits its own writes. A TypeScript Queue from forTransaction can call complete in your transaction."
+          },
+          "cell": {
+            "value": "Yes",
+            "note": "The transactional option opens one transaction for handler writes and completion.",
+            "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/api/workers.md#L54-L69",
+            "version": "12.38.0",
+            "evidence": "transactional, bool: Run the handler and the job's completion inside one database transaction. ... Everything written through tx commits with the job's completion"
+          }
+        },
+        {
+          "id": "database-backends",
+          "group": "product",
+          "label": "Databases other than PostgreSQL",
+          "kind": "text",
+          "workhorse": {
+            "value": "None",
+            "source": "docs/compatibility.md",
+            "note": "PostgreSQL only."
+          },
+          "cell": {
+            "value": "CockroachDB, Citus, PGlite",
+            "note": "The backend option selects CockroachDB, Citus, or in-process PGlite.",
+            "source": "https://github.com/timgit/pg-boss/blob/12.38.0/docs/database-backends.md#L3-L28",
+            "version": "12.38.0",
+            "evidence": "pg-boss runs on stock single-node PostgreSQL by default, but it also supports several PostgreSQL-compatible backends. Those are distributed SQL engines like CockroachDB and Citus, plus the embedded WASM build PGlite."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "graphile-worker",
+      "name": "Graphile Worker",
+      "aliases": ["graphile-worker"],
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1364",
+      "version": "0.18.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/graphile/worker",
+      "summary": "Graphile Worker is a job queue that uses PostgreSQL to store jobs and executes them on Node.js.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "add_job is a SQL function, so it runs in the caller's transaction.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md#L6-L10",
+          "version": "0.18.0",
+          "evidence": "\"You can schedule jobs directly in the database, e.g. from a trigger or function, or by calling SQL from your application code. You do this using the graphile_worker.add_job function\""
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole task again. The docs suggest smaller jobs instead.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L44-L50",
+          "version": "0.18.0",
+          "evidence": "Reviewed tasks.md and error-handling docs: no step API. \"Graphile Worker automatically retries the job if it fails, so it's often sensible to split a large job into multiple smaller jobs\""
+        },
+        "dashboard": {
+          "status": "Not supported",
+          "note": "No web UI ships. Admin functions help you build your own.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/admin-functions.md#L6-L9",
+          "version": "0.18.0",
+          "evidence": "\"When implementing an administrative UI you may need more control over the jobs. For this we have added a few administrative functions that can be called in SQL or through the JS API.\" No UI package in the docs."
+        },
+        "worker-languages": {
+          "value": "JavaScript, TypeScript",
+          "note": "Workers run on Node.js. An experimental loader runs executable files as tasks.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L151-L164",
+          "version": "0.18.0",
+          "evidence": "\"if Graphile Worker finds an executable file inside of the taskDirectory it will create a task executor for it\" (marked Experimental). Task executors are otherwise Node.js modules."
+        },
+        "infrastructure": {
+          "value": "PostgreSQL",
+          "note": "Workers run in Node.js processes beside the application.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/index.md#L6-L7",
+          "version": "0.18.0",
+          "evidence": "\"Graphile Worker is a job queue which uses PostgreSQL to store jobs, and executes them on Node.js.\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "Worker Pro is a paid proprietary preset for sponsors.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/package.json#L47",
+          "version": "0.18.0",
+          "evidence": "package.json: \"license\": \"MIT\". website/docs/pro/index.md#L6: \"Worker Pro (@graphile-pro/worker) is a proprietary (not open source) preset\""
+        }
+      }
+    },
+    {
+      "slug": "river",
+      "name": "River",
+      "aliases": ["riverqueue"],
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1365",
+      "version": "0.49.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/riverqueue/river",
+      "summary": "River is a job processing system for Go and Postgres that encourages using the same database for application data and the job queue.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "Client.InsertTx inserts a job in the application's transaction.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/doc.go#L7-L12",
+          "version": "0.49.0",
+          "evidence": "\"Jobs are guaranteed to be enqueued if their transaction commits, are removed if their transaction rolls back, and aren't visible for work _until_ commit.\""
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "ResumableStep skips completed steps on retry. ResumableStepCursor resumes a step from a saved cursor.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/resumable.go#L46-L57",
+          "version": "0.49.0",
+          "evidence": "\"ResumableStep runs a resumable step, skipping the step on a later retry if an earlier attempt already completed it successfully.\" CHANGELOG.md#L240 adds resumable jobs."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "River UI is a free separate package. A riverproui build adds River Pro views.",
+          "source": "https://github.com/riverqueue/riverui/blob/v0.21.0/docs/README.md#L3",
+          "version": "0.49.0",
+          "evidence": "\"River UI is a graphical user interface for the River job queue. It lets users view and manage jobs without having to resort to querying the database or the command line.\""
+        },
+        "worker-languages": {
+          "value": "Go, Ruby, Rust, TypeScript",
+          "note": "Go is the main SDK. The Ruby, Rust, and TypeScript SDKs are pre-1.0 and have their own tags.",
+          "source": "https://github.com/riverqueue/river/blob/js/v0.2.0/js/README.md#L3-L6",
+          "version": "0.49.0",
+          "evidence": "js/v0.2.0: \"shares River's database protocol with River for Go and Rust, so services in all three languages can insert and work the same jobs\". ruby/v0.13.0 docs: \"It inserts and works jobs\"."
+        },
+        "infrastructure": {
+          "value": "PostgreSQL or SQLite",
+          "note": "PostgreSQL is the main target. A SQLite driver ships in the same module.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/riverdriver/riversqlite/river_sqlite_driver.go#L1-L2",
+          "version": "0.49.0",
+          "evidence": "doc.go: \"robust high-performance job processing system for Go and Postgres\". river_sqlite_driver.go: \"Package riversqlite provides a River driver implementation for SQLite.\""
+        },
+        "license": {
+          "value": "MPL-2.0",
+          "note": "River Pro is a paid extension package.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/LICENSE#L1",
+          "version": "0.49.0",
+          "evidence": "LICENSE: \"Mozilla Public License Version 2.0\". riverqueue.com/pro: \"Extend River with durable workflows, concurrency limits, sequences, and more.\""
+        }
+      }
+    },
+    {
+      "slug": "solid-queue",
+      "name": "Solid Queue",
+      "aliases": ["solid_queue", "SolidQueue"],
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1368",
+      "version": "1.7.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/rails/solid_queue",
+      "summary": "Solid Queue is a database-based queuing backend for Active Job.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "Only when Solid Queue uses the app database. The default setup uses a separate one.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L831-L832",
+          "version": "1.7.0",
+          "evidence": "\"taking advantage of transactional integrity to ensure some action in your app is not committed unless your job is also committed and vice versa\" ... \"by default Solid Queue is configured in a different database as the main app.\""
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "Uses Rails Active Job Continuations. Solid Queue supports interrupting and resuming them.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/lib/active_job/queue_adapters/solid_queue_adapter.rb#L13-L20",
+          "version": "1.7.0",
+          "evidence": "Adapter comment: \"adapters can decide whether to checkpoint based on it. We rely solely on the worker shutdown flag\"; defines stopping?. Rails v8.1.4 continuation.rb#L18-L20: \"If a job is interrupted, previously completed steps will be skipped.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Mission Control – Jobs is a free separate gem from the Rails organization.",
+          "source": "https://github.com/rails/mission_control-jobs/blob/v1.3.1/README.md#L3",
+          "version": "1.7.0",
+          "evidence": "\"This gem provides a Rails-based frontend to Active Job adapters. It currently supports Resque and Solid Queue.\" ... \"inspect and retry or discard failed jobs.\""
+        },
+        "worker-languages": {
+          "value": "Ruby",
+          "note": "Jobs are Active Job classes in a Rails application.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L3",
+          "version": "1.7.0",
+          "evidence": "\"Solid Queue is a database-based queuing backend for Active Job\""
+        },
+        "infrastructure": {
+          "value": "MySQL, PostgreSQL, or SQLite",
+          "note": "The default setup uses a separate queue database.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L7",
+          "version": "1.7.0",
+          "evidence": "\"Solid Queue can be used with SQL databases such as MySQL, PostgreSQL, or SQLite\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "No paid edition.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/solid_queue.gemspec#L11",
+          "version": "1.7.0",
+          "evidence": "spec.license = \"MIT\""
+        }
+      }
+    },
+    {
+      "slug": "oban",
+      "name": "Oban",
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1374",
+      "version": "2.24.2",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/oban-bg/oban",
+      "summary": "Oban is job processing for Elixir, backed by PostgreSQL, MySQL, or SQLite3, that retains jobs in the database after they run.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "Oban.insert works inside an Ecto.Multi or Repo transaction.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L75-L76",
+          "version": "2.24.2",
+          "evidence": "\"Transactional Control — Enqueue a job along with other database changes, ensuring that everything is committed or rolled back atomically.\" lib/oban.ex#L724-L737 shows Oban.insert in an Ecto.Multi."
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole job again. Workflows in the paid Oban Pro link separate jobs, not steps of one job.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L141-L142",
+          "version": "2.24.2",
+          "evidence": "Workflows — Compose jobs with arbitrary dependencies for sequential, fan-out, and fan-in execution patterns. (Listed under Oban Pro, \"available as a licensed package\".)"
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Oban Web is a free separate package. It is open source since v2.11.",
+          "source": "https://github.com/oban-bg/oban_web/blob/v2.13.1/README.md#L16-L25",
+          "version": "2.24.2",
+          "evidence": "oban_web README: Apache 2 license badge; \"Oban Web is a view of Oban's inner workings that you host directly within your application.\" mix.exs#L49: licenses: [\"Apache-2.0\"]"
+        },
+        "worker-languages": {
+          "value": "Elixir, Python",
+          "note": "Python runs in the separate oban-py package, version 0.6.7, on PostgreSQL.",
+          "source": "https://github.com/oban-bg/oban-py/blob/v0.6.7/README.md#L10",
+          "version": "2.24.2",
+          "evidence": "oban-py v0.6.7: \"Oban is a sophisticated job orchestration framework for Python, backed by PostgreSQL.\" oban README.md#L10: \"Robust job processing in Elixir\""
+        },
+        "infrastructure": {
+          "value": "PostgreSQL, MySQL, or SQLite",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L157",
+          "version": "2.24.2",
+          "evidence": "\"Oban ships with engines for PostgreSQL, MySQL, and SQLite3.\" README.md#L171: \"PostgreSQL 14.0+, MySQL 8.4+, or SQLite3 3.37.0+\""
+        },
+        "license": {
+          "value": "Apache-2.0",
+          "note": "Oban Pro is a paid licensed package. Oban Web is free Apache-2.0.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/mix.exs#L183",
+          "version": "2.24.2",
+          "evidence": "mix.exs: licenses: [\"Apache-2.0\"]. README.md#L130-L133: \"An official set of extensions, plugins, and workers ... is available as a licensed package.\""
+        }
+      }
+    },
+    {
+      "slug": "goodjob",
+      "name": "GoodJob",
+      "aliases": ["good_job"],
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1375",
+      "version": "4.22.1",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/bensheldon/good_job",
+      "summary": "GoodJob is a multithreaded, Postgres-based Active Job backend for Ruby on Rails.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "Jobs use the app's Active Record connection by default, so enqueue joins its transaction.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/lib/good_job.rb#L73-L81",
+          "version": "4.22.1",
+          "evidence": "\"The ActiveRecord parent class inherited by GoodJob::Job (default: ActiveRecord::Base).\" configuration.rb#L43-L44: DEFAULT_ENQUEUE_AFTER_TRANSACTION_COMMIT = false"
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "Uses Rails Active Job Continuations. GoodJob supports interrupting and resuming them.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/CHANGELOG.md#L563",
+          "version": "4.22.1",
+          "evidence": "\"Add GoodJob::Adapter#stopping to support Active Job continuations feature\". Rails v8.1.4 continuation.rb#L18-L20: \"If a job is interrupted, previously completed steps will be skipped.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "The free dashboard is a Rails engine in the good_job gem.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L395-L399",
+          "version": "4.22.1",
+          "evidence": "README \"### Dashboard\" section with \"Dashboard UI\" screenshot. Line 14: \"a powerful Web Dashboard\"."
+        },
+        "worker-languages": {
+          "value": "Ruby",
+          "note": "Jobs are Active Job classes in a Rails application.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L7",
+          "version": "4.22.1",
+          "evidence": "\"GoodJob is a multithreaded, Postgres-based, Active Job backend for Ruby on Rails.\""
+        },
+        "infrastructure": {
+          "value": "PostgreSQL",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L7",
+          "version": "4.22.1",
+          "evidence": "\"GoodJob is a multithreaded, Postgres-based, Active Job backend for Ruby on Rails.\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "No paid edition.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/good_job.gemspec#L11",
+          "version": "4.22.1",
+          "evidence": "spec.license = \"MIT\""
+        }
+      }
+    },
+    {
+      "slug": "procrastinate",
+      "name": "Procrastinate",
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1377",
+      "version": "3.10.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/procrastinate-org/procrastinate",
+      "summary": "Procrastinate is a Python distributed task processing library that uses PostgreSQL to store task definitions, manage locks and dispatch tasks.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "The application passes its own connection to configure(connection=...).",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/production/external_connection.md#L3-L13",
+          "version": "3.10.0",
+          "evidence": "\"This lets you insert the job within the same transaction as your own database operations\" ... \"pass your connection to configure(connection=...). The job INSERT will execute on your connection, inside your transaction.\""
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole task function again.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/retry.md#L1-L8",
+          "version": "3.10.0",
+          "evidence": "Reviewed the task, retry, and context how-to pages: no step or checkpoint API. Retry doc: \"You can define a retry strategy on a task and Procrastinate will enforce it.\""
+        },
+        "dashboard": {
+          "status": "Partial",
+          "note": "Free Django admin pages can retry, cancel, or abort jobs. No standalone web UI exists.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/contrib/django/admin.py#L140-L164",
+          "version": "3.10.0",
+          "evidence": "ProcrastinateJobAdmin defines retry, cancel and abort; \"actions = [retry, cancel, abort]\". docs/howto/production/monitoring.md#L61-L63: \"The administration web portal ... Not yet, maybe someday.\""
+        },
+        "worker-languages": {
+          "value": "Python",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/README.md#L15-L16",
+          "version": "3.10.0",
+          "evidence": "\"Procrastinate is an open-source Python 3.10+ distributed task processing library\""
+        },
+        "infrastructure": {
+          "value": "PostgreSQL",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/README.md#L15-L17",
+          "version": "3.10.0",
+          "evidence": "\"Procrastinate is an open-source Python 3.10+ distributed task processing library, leveraging PostgreSQL 13+ to store task definitions, manage locks and dispatch tasks.\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "No paid edition.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/pyproject.toml#L13",
+          "version": "3.10.0",
+          "evidence": "pyproject.toml: \"License :: OSI Approved :: MIT License\""
+        }
+      }
+    },
+    {
+      "slug": "hangfire",
+      "name": "Hangfire",
+      "category": "database-queue",
+      "page": "planned",
+      "issue": "SM-1380",
+      "version": "1.8.25",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/HangfireIO/Hangfire",
+      "summary": "Hangfire performs fire-and-forget, delayed and recurring background jobs in .NET applications, backed by persistent job storage.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Partial",
+          "note": "Only the net451 build on Windows joins an ambient TransactionScope. Other builds use their own transaction.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.SqlServer/SqlServerStorage.cs#L327-L348",
+          "version": "1.8.25",
+          "evidence": "UseTransaction: `#if FEATURE_TRANSACTIONSCOPE if (IsRunningOnWindows() && !_options.DisableTransactionScope) { using (var transaction = CreateTransaction(...)) ... connection.EnlistTransaction(Transaction.Current);` else `connection.BeginTransaction(...)`. The csproj sets the flag only for net451."
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A job is one method call. A retry runs the whole method again.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/AutomaticRetryAttribute.cs#L39-L42",
+          "version": "1.8.25",
+          "evidence": "AutomaticRetryAttribute: \"changing the candidate state from FailedState to the ScheduledState when another retry should be attempted\". A job is one method call (BackgroundJob.Enqueue(() => ...)); no step results are stored."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free. The dashboard is built into Hangfire.Core and runs inside the application.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L45-L52",
+          "version": "1.8.25",
+          "evidence": "README quick start: `app.UseHangfireServer(); app.UseHangfireDashboard();` and the image \"Hangfire Dashboard\". The dashboard is part of Hangfire.Core."
+        },
+        "worker-languages": {
+          "value": ".NET (C#)",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L14",
+          "version": "1.8.25",
+          "evidence": "README: \"Incredibly easy way to perform fire-and-forget, delayed and recurring jobs in .NET applications.\""
+        },
+        "infrastructure": {
+          "value": "A job storage database: SQL Server, or Redis with Hangfire Pro",
+          "note": "Redis storage is the paid Hangfire.Pro.Redis package. Community packages add other databases, such as PostgreSQL.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L14",
+          "version": "1.8.25",
+          "evidence": "README: \"No Windows Service / Task Scheduler required. Backed by Redis, SQL Server, SQL Azure and MSMQ.\" The repository ships src/Hangfire.SqlServer and src/Hangfire.SqlServer.Msmq only."
+        },
+        "license": {
+          "value": "LGPL-3.0-or-later",
+          "note": "A commercial license is also sold. Hangfire Pro and Hangfire Ace are paid packages.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/LICENSE.md#L6-L20",
+          "version": "1.8.25",
+          "evidence": "LICENSE.md: \"multi-licensed ... LGPL v3 License ... either version 3 of the License, or (at your option) any later version\" and \"Commercial License ... Subject to the purchase of a corresponding subscription\"."
+        }
+      }
+    },
+    {
+      "slug": "bullmq",
+      "name": "BullMQ",
+      "aliases": ["bullmq"],
+      "category": "broker-queue",
+      "page": "published",
+      "version": "6.3.16",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/taskforcesh/bullmq",
+      "summary": "BullMQ is a message queue and batch processing library for Node.js, Python, .NET, Elixir, Rust, and PHP, based on Redis or PostgreSQL.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The backend owns its connections. Queue.add does not take the application's transaction, also on PostgreSQL.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/src/interfaces/queue-backend.ts#L55-L59",
+          "version": "6.3.16",
+          "evidence": "\"The interface intentionally exposes **no connection or transaction type**: a concrete adapter owns its connection(s)... callers never thread a connection or transaction through an operation.\" Also read docs/gitbook/guide/postgresql.md: no option to pass an application transaction."
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "A job takes a delay in milliseconds. A start time is converted to a delay.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/delayed.md#L3-L17",
+          "version": "6.3.16",
+          "evidence": "\"In order to add delayed jobs to the queue, use the `delay` option with the amount of time (in milliseconds)\"; await myQueue.add('house', { color: 'white' }, { delay: 5000 });"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/job-schedulers/README.md#L9-L17",
+          "version": "6.3.16",
+          "evidence": "\"A Job Scheduler acts as a factory, producing jobs based on specified \\\"repeat\\\" settings... jobs produced at fixed intervals, according to cron expressions, or based on custom requirements.\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "Jobs without a priority run before prioritized jobs.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/prioritized.md#L3-L9",
+          "version": "6.3.16",
+          "evidence": "\"Jobs can also include a `priority` option... prioritized jobs use values from `1` to `2 097 151`, where a lower number is always a **higher** priority\""
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "A deduplication ID ignores a duplicate job; modes are simple, throttle, and debounce.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/deduplication.md#L3-L18",
+          "version": "6.3.16",
+          "evidence": "\"While this job is not moved to completed or failed state, next jobs added with same **deduplication id** will be ignored\""
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "FlowProducer adds trees of parent and child jobs, also across queues.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/flows/README.md#L3-L8",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ supports parent - child relationships between jobs... a parent job will not be moved to the wait status... until all its children jobs have been processed successfully.\""
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "The attempts option enables retries. Backoff is fixed, exponential, or custom.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/retrying-failing-jobs.md#L18-L28",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ supports retries of failed jobs using back-off functions. It is possible to use the **built-in** backoff functions or provide **custom** ones.\" Built-in: fixed and exponential."
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "A worker renews a job lock. If the lock expires, another worker takes the stalled job.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/workers/stalled-jobs.md#L5-L13",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ will place a lock on this job... A stalled job is moved back to the waiting status and will be processed again by another worker, or if it has reached its maximum number of stalls, it will be moved to the _failed_ set.\""
+        },
+        "cancellation": {
+          "status": "Partial",
+          "note": "The handler gets an AbortSignal. Only the Worker instance that runs the job can cancel it.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/workers/cancelling-jobs.md#L7-L31",
+          "version": "6.3.16",
+          "evidence": "\"it can receive an optional `AbortSignal` as the third parameter in the processor function\"; worker.cancelJob('job-id-123'). src/classes/worker.ts#L566 cancels via the local lockManager; Queue and Job have no cancel method."
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "The limit applies per queue. A limit per group key needs BullMQ Pro groups.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/queues/global-concurrency.md#L3-L18",
+          "version": "6.3.16",
+          "evidence": "\"The global concurrency factor is a queue option that determines how many jobs are allowed to be processed in parallel across all your worker instances.\" await queue.setGlobalConcurrency(4);"
+        },
+        "rate-limits": {
+          "status": "Supported",
+          "note": "Limits apply per queue. Rate limits per group key need BullMQ Pro groups.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/rate-limiting.md#L3-L27",
+          "version": "6.3.16",
+          "evidence": "\"The rate limiter is global, so if you have for example 10 workers for one queue with the above settings, still only 10 jobs will be processed by second.\""
+        },
+        "checkpoints": {
+          "status": "Partial",
+          "note": "A documented pattern keeps the current step in the job data. The handler writes it.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/patterns/process-step-jobs.md#L3-L35",
+          "version": "6.3.16",
+          "evidence": "\"break processor functions into small pieces that will be processed depending on the previous executed step\"; the handler calls await job.updateData({ step: Step.Second }) after each step."
+        },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "A job can wait for a timer or its child jobs without a worker slot. No external signal API.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/patterns/process-step-jobs.md#L177-L279",
+          "version": "6.3.16",
+          "evidence": "\"This can be handled using the `moveToDelayed` method... throwing a special error (`DelayedError`...)\"; \"This can be handled using the `moveToWaitingChildren` method\". Read docs/gitbook/guide: no API to wait for an external signal."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Taskforce.sh, a separate hosted service from the BullMQ authors. The project publishes no dashboard in the repository.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/README.md#L54-L65",
+          "version": "6.3.16",
+          "evidence": "# Official FrontEnd ... Supercharge your queues with a professional front end: Get a complete overview of all your queues. Inspect jobs, search, retry, or promote delayed jobs. Metrics and statistics. ... Sign up at Taskforce.sh"
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "Failed jobs stay in the failed set unless removeOnFail removes them. An operator can retry them.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/retrying-job.md#L3-L14",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ provides a `retry` method that allows you to programmatically retry jobs that have already completed or failed.\" Queue.retryJobs (src/classes/queue.ts#L885) retries failed jobs in bulk."
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/workers/pausing-queues.md#L3-L8",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ supports pausing queues _globally_ or _locally_. When a queue is paused _globally_ no workers will pick up any jobs from the queue.\" await myQueue.pause();"
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "Core defines a telemetry interface. The official bullmq-otel package gives traces and metrics.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/telemetry/getting-started.md#L5-L11",
+          "version": "6.3.16",
+          "evidence": "\"adding the `bullmq-otel` package... This module provides a working implementation of BullMQ's telemetry interface for the OpenTelemetry standard.\" npm: bullmq-otel repository github.com/taskforcesh/bullmq-otel, MIT."
+        },
+        "worker-languages": {
+          "value": "TypeScript, JavaScript, Python, Elixir, Rust, .NET",
+          "note": "All ports share the same Lua and SQL scripts, so queues interoperate across languages.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/README.md#L44-L50",
+          "version": "6.3.16",
+          "evidence": "README: \"Node.js / Bun — This repository\"; lists Python, Rust, Elixir, .Net, PHP ports. Worker classes: python/bullmq/worker.py#L84, elixir/lib/bullmq/worker.ex#L1, rust/src/worker.rs#L174, dotnet/src/BullMQ/Worker.cs#L22."
+        },
+        "enqueue-languages": {
+          "value": "PHP",
+          "note": "The PHP package has the producer side only.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/php/introduction.md#L9-L11",
+          "version": "6.3.16",
+          "evidence": "\"The PHP package only implements the Queue class (producer side). Workers are not included\""
+        },
+        "infrastructure": {
+          "value": "Redis, or PostgreSQL",
+          "note": "Redis is the default. The PostgreSQL backend runs the same API. Rust and PHP use Redis only.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/postgresql.md#L1-L12",
+          "version": "6.3.16",
+          "evidence": "\"BullMQ ships with an optional **PostgreSQL backend** that runs the exact same `Queue` / `Worker` / `QueueEvents` / `FlowProducer` API on PostgreSQL instead of Redis.\" \"The Redis backend remains the default\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "BullMQ Pro is a paid commercial edition with groups, batches, and observables.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/LICENSE#L1-L3",
+          "version": "6.3.16",
+          "evidence": "\"MIT License  Copyright (c) 2018 BullForce Labs AB and contributors.\"; package.json \"license\": \"MIT\"."
+        }
+      },
+      "rows": [
+        {
+          "id": "debounce-throttle",
+          "group": "producing",
+          "label": "Debounce and throttle by key",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Keyed debounce"
+            },
+            "page": "/docs/debounce",
+            "note": "Keyed throttle is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A TTL ignores duplicates for a period. Debounce replaces the delayed job with the newest one.",
+            "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/jobs/deduplication.md#L22-L43",
+            "version": "6.3.16",
+            "evidence": "\"In the Throttle Mode, deduplication works by assigning a delay (Time to Live, TTL)...\"; \"Debounce Mode can be achieved by delaying a job upon creation while providing a matching TTL as well as having extend and replace options set as true.\""
+          }
+        },
+        {
+          "id": "group-fairness",
+          "group": "executing",
+          "label": "Limits for each key",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Fleet-wide concurrency policies"
+            },
+            "page": "/docs/concurrency-policies",
+            "note": "Concurrency and rate limits for each key are free."
+          },
+          "cell": {
+            "status": "Partial",
+            "note": "Groups are in BullMQ Pro, the paid edition. Groups run jobs in round-robin order, with limits for each group.",
+            "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/bullmq-pro/groups/README.md#L3-L11",
+            "version": "6.3.16",
+            "evidence": "\"Groups allows you to use a single queue while distributing the jobs among groups... jobs will be processed in a \\\"round-robin\\\" fashion among all the users.\" bullmq-pro/groups/concurrency.md: max concurrency per group."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "celery",
+      "name": "Celery",
+      "aliases": ["celery"],
+      "category": "broker-queue",
+      "page": "planned",
+      "issue": "SM-1366",
+      "version": "5.6.3",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/celery/celery",
+      "summary": "Celery is a Python task queue in which clients send task messages through a broker to worker processes.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Partial",
+          "note": "Django delay_on_commit sends after commit. A rollback drops the task; commit and send are not atomic.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/django/first-steps-with-django.rst#L197-L212",
+          "version": "5.6.3",
+          "evidence": "\"The task is not sent to the broker when you call the method, only when the Django transaction finishes.\" (delay_on_commit)"
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole task again. Chains and chords are not checkpoints.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/tasks.rst#L579-L584",
+          "version": "5.6.3",
+          "evidence": "\"Task.retry() can be used to re-execute the task\" ... \"it'll send a new message, using the same task-id\". tasks.rst#L21-L23 asks for idempotent tasks. Chains and chords link separate tasks."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Flower, which the Celery docs recommend. It is a separate project outside the Celery organization.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/docs/userguide/monitoring.rst#L209-L215",
+          "version": "5.6.3",
+          "evidence": "\"Flower is a real-time web based monitor and administration tool for Celery.\" ... \"Being the recommended monitor for Celery\". Flower lives at github.com/mher/flower, outside the celery organization."
+        },
+        "worker-languages": {
+          "value": "Python",
+          "note": "The other listed clients are separate community projects.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/README.rst#L107-L109",
+          "version": "5.6.3",
+          "evidence": "\"Celery is written in Python, but the protocol can be implemented in any language. In addition to Python there's node-celery for Node.js, a PHP client, gocelery, gopher-celery for Go, and rusty-celery for Rust.\""
+        },
+        "infrastructure": {
+          "value": "A message broker (RabbitMQ or Redis)",
+          "note": "Other transports are experimental. A result backend is optional.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/README.rst#L145-L148",
+          "version": "5.6.3",
+          "evidence": "\"Celery is usually used with a message broker to send and receive messages. The RabbitMQ, Redis transports are feature complete, but there's also experimental support for a myriad of other solutions\""
+        },
+        "license": {
+          "value": "BSD-3-Clause",
+          "note": "No paid edition.",
+          "source": "https://github.com/celery/celery/blob/v5.6.3/setup.py#L147",
+          "version": "5.6.3",
+          "evidence": "setup.py: license='BSD-3-Clause'. LICENSE: \"Celery is licensed under The BSD License (3 Clause, also known as the new BSD license).\""
+        }
+      }
+    },
+    {
+      "slug": "sidekiq",
+      "name": "Sidekiq",
+      "aliases": ["sidekiq"],
+      "category": "broker-queue",
+      "page": "planned",
+      "issue": "SM-1367",
+      "version": "8.1.7",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/sidekiq/sidekiq",
+      "summary": "Sidekiq is a background job library for Ruby that uses threads to handle many jobs at the same time in one process.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Partial",
+          "note": "Jobs go to Redis after the Active Record commit. A rollback drops them; the steps are not atomic.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/transaction_aware_client.rb#L22-L31",
+          "version": "8.1.7",
+          "evidence": "TransactionAwareClient#push: \"@transaction_backend.call { @redis_client.push(item) }\" with ActiveRecord.after_all_transactions_commit. Enabled by Sidekiq.transactional_push!."
+        },
+        "checkpoints": {
+          "status": "Partial",
+          "note": "Iterable jobs save a cursor in Redis and continue from it. There are no named steps.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job/iterable.rb#L229-L233",
+          "version": "8.1.7",
+          "evidence": "iterable_job.rb#L22-L25: \"the cursor will be saved to Redis and the job re-queued to pick up the rest of the work upon restart.\" iterable.rb saves state on error: \"rescue Exception / flush_state / raise\"."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "The free Web UI ships in the open source gem.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/README.md#L37-L39",
+          "version": "8.1.7",
+          "evidence": "\"Here's the Web UI:\" with screenshot examples/web-ui.png. lib/sidekiq/web.rb ships in the gem."
+        },
+        "worker-languages": {
+          "value": "Ruby",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/README.md#L10-L11",
+          "version": "8.1.7",
+          "evidence": "\"Sidekiq uses threads to handle many jobs at the same time in the same process. Sidekiq can be used by any Ruby application.\""
+        },
+        "infrastructure": {
+          "value": "Redis",
+          "note": "Valkey and Dragonfly also work.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/README.md#L17-L23",
+          "version": "8.1.7",
+          "evidence": "\"Redis: Redis 7.0+, Valkey 7.2+ or Dragonfly 1.27+\" ... \"Sidekiq supports Valkey and Dragonfly as Redis alternatives.\""
+        },
+        "license": {
+          "value": "LGPL-3.0",
+          "note": "Sidekiq Pro and Sidekiq Enterprise are paid editions with a commercial license.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/LICENSE.txt#L3-L8",
+          "version": "8.1.7",
+          "evidence": "\"Sidekiq is an Open Source project licensed under the terms of the LGPLv3 license.\" ... \"Sidekiq Pro and Sidekiq Enterprise have a commercial-friendly license.\""
+        }
+      }
+    },
+    {
+      "slug": "dramatiq",
+      "name": "Dramatiq",
+      "aliases": ["dramatiq"],
+      "category": "broker-queue",
+      "page": "planned",
+      "issue": "SM-1378",
+      "version": "2.2.1",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/Bogdanp/dramatiq",
+      "summary": "Dramatiq is a distributed task processing library for Python 3 that sends messages through a RabbitMQ or Redis broker.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "Messages go to a RabbitMQ or Redis broker, outside the application database.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L396-L401",
+          "version": "2.2.1",
+          "evidence": "\"Dramatiq abstracts over the notion of a message broker and currently supports both RabbitMQ and Redis out of the box.\" Searched docs/source for 'transaction': no matches."
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A retry runs the whole actor again.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L155-L157",
+          "version": "2.2.1",
+          "evidence": "\"Dramatiq assumes all actors are idempotent so when an exception occurs during message processing, it automatically enqueues a retry for that message with exponential backoff.\""
+        },
+        "dashboard": {
+          "status": "Not supported",
+          "note": "The author's Redis-only dashboard requires Dramatiq below 2.0.",
+          "source": "https://github.com/Bogdanp/dramatiq_dashboard/blob/v0.4.0/setup.py#L27",
+          "version": "2.2.1",
+          "evidence": "dramatiq_dashboard v0.4.0 (2022) requires \"dramatiq[redis]>=1.6,<2.0\". The Dramatiq v2.2.1 docs list only a Grafana metrics dashboard."
+        },
+        "worker-languages": {
+          "value": "Python",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/README.md#L10",
+          "version": "2.2.1",
+          "evidence": "\"A fast and reliable distributed task processing library for Python 3.\""
+        },
+        "infrastructure": {
+          "value": "RabbitMQ or Redis",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/installation.rst#L17-L18",
+          "version": "2.2.1",
+          "evidence": "\"RabbitMQ is the recommended message broker, but Dramatiq also supports Redis.\""
+        },
+        "license": {
+          "value": "LGPL-3.0-or-later",
+          "note": "No paid edition.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/setup.py#L102",
+          "version": "2.2.1",
+          "evidence": "\"License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)\""
+        }
+      }
+    },
+    {
+      "slug": "asynq",
+      "name": "Asynq",
+      "aliases": ["asynq"],
+      "category": "broker-queue",
+      "page": "planned",
+      "issue": "SM-1379",
+      "version": "0.26.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/hibiken/asynq",
+      "summary": "Asynq is a Go library for queueing tasks and processing them asynchronously with workers, backed by Redis.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The client writes tasks to Redis, outside the application database transaction.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L11",
+          "version": "0.26.0",
+          "evidence": "README: \"It's backed by Redis\". The client writes tasks to Redis (asynq.NewClient(asynq.RedisClientOpt{...})), so a task cannot join an application database transaction."
+        },
+        "checkpoints": {
+          "status": "Not supported",
+          "note": "A task is one ProcessTask call. A retry runs the whole handler again.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/server.go#L638-L640",
+          "version": "0.26.0",
+          "evidence": "server.go: `type Handler interface { ProcessTask(context.Context, *Task) error }`. A task is one handler call; the README feature list names no steps or stored step results."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free. Asynqmon is a separate repository; its latest release is v0.7.1 from 2022.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L270-L272",
+          "version": "0.26.0",
+          "evidence": "README: \"Asynqmon is a web based tool for monitoring and administrating Asynq queues and tasks.\" Feature list: \"Web UI to inspect and remote-control queues and tasks\"."
+        },
+        "worker-languages": {
+          "value": "Go",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L11",
+          "version": "0.26.0",
+          "evidence": "README: \"Asynq is a Go library for queueing tasks and processing them asynchronously with workers.\""
+        },
+        "infrastructure": {
+          "value": "Redis",
+          "note": "Redis 4.0 or later. Some Lua scripts may not work with Redis Cluster.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L67",
+          "version": "0.26.0",
+          "evidence": "README: \"Make sure you're running a Redis server locally or from a Docker container. Version `4.0` or higher is required.\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "No paid edition.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/LICENSE#L1-L3",
+          "version": "0.26.0",
+          "evidence": "LICENSE: \"MIT License / Copyright (c) 2019 Kentaro Hibino\""
+        }
+      }
+    },
+    {
+      "slug": "temporal",
+      "name": "Temporal",
+      "aliases": ["temporalio"],
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1369",
+      "version": "1.32.1",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/temporalio/temporal",
+      "summary": "Temporal is a platform whose server runs units of application logic called Workflows and automatically handles intermittent failures and retries failed operations.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The application starts a Workflow with a gRPC call to the Temporal Service, not in its database.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L46",
+          "version": "1.32.1",
+          "evidence": "Architecture: \"The User Application uses one of the Temporal SDKs as a gRPC client to communicate with the Temporal server to start/cancel workflows\". The History Service stores the state in its own persistence."
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "The service records each Activity result in the event history. Replay does not run completed Activities again.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L32-L35",
+          "version": "1.32.1",
+          "evidence": "Architecture: \"an append-only history of events is stored for each workflow execution, and all required workflow state can be recreated at any time by replaying this history.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free. The Web UI is a separate MIT repository, temporalio/ui. Temporal Cloud has its own UI.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/README.md#L58-L60",
+          "version": "1.32.1",
+          "evidence": "README: \"Try Temporal Web UI by opening http://localhost:8233 for viewing your sample workflows executing on Temporal.\""
+        },
+        "worker-languages": {
+          "value": "Go, Java, .NET, PHP, Python, Ruby, Rust, TypeScript",
+          "note": "The documentation repository lists these SDKs.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/index.mdx#L5",
+          "version": "1.32.1",
+          "evidence": "Enhance your Temporal Application development with .NET, Go, Java, PHP, Python, Ruby, Rust, and TypeScript."
+        },
+        "infrastructure": {
+          "value": "A Temporal Service and a database (Cassandra, MySQL, PostgreSQL or SQLite)",
+          "note": "Elasticsearch is optional for advanced visibility. Temporal Cloud is the paid managed service.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L57-L61",
+          "version": "1.32.1",
+          "evidence": "Architecture: History, Matching and Frontend services; \"Users can host and operate the Temporal server and its database themselves, or use Temporal Cloud.\" schema/ at the tag holds cassandra, mysql, postgresql, sqlite and elasticsearch."
+        },
+        "license": {
+          "value": "MIT",
+          "note": "Temporal Cloud is the paid managed service.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/LICENSE#L1-L5",
+          "version": "1.32.1",
+          "evidence": "LICENSE: \"The MIT License / Copyright (c) 2025 Temporal Technologies Inc. ... Copyright (c) 2020 Uber Technologies, Inc.\""
+        }
+      }
+    },
+    {
+      "slug": "inngest",
+      "name": "Inngest",
+      "aliases": ["inngest"],
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1370",
+      "version": "1.46.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/inngest/inngest",
+      "summary": "Inngest runs durable step functions that the Inngest server invokes over HTTPS when triggering events arrive, with built-in queueing, flow control and scheduling.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The application sends an event over HTTP to the Inngest server, outside its database transaction.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L139",
+          "version": "1.46.0",
+          "evidence": "README: \"Event API - Receives events from SDKs via HTTP requests.\" The app calls `await inngest.send({ name, data })`, an HTTP request to the Inngest server."
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "The executor stores each step output. A retry or resume skips steps that completed.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L147-L148",
+          "version": "1.46.0",
+          "evidence": "README: \"Executor - ... writing incremental function run state to the State store\"; \"State store (database) - Persists data for pending and ongoing function runs. Data includes initial triggering event(s), step output and step errors.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free. The self-hosted server and the Dev Server include the dashboard.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L151",
+          "version": "1.46.0",
+          "evidence": "README: \"Dashboard UI - The UI to manage apps, functions and view function run history.\" and \"Open the Inngest Dev Server dashboard at http://localhost:8288\"."
+        },
+        "worker-languages": {
+          "value": "TypeScript/JavaScript, Python, Go, Kotlin/Java",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L122-L127",
+          "version": "1.46.0",
+          "evidence": "README SDKs: \"TypeScript / JavaScript (inngest-js)\", \"Python (inngest-py)\", \"Go (inngestgo)\", \"Kotlin / Java (inngest-kt)\"."
+        },
+        "infrastructure": {
+          "value": "An Inngest server, Redis and PostgreSQL",
+          "note": "By default the server runs in-memory Redis and SQLite. Inngest Cloud is the paid managed service.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/cmd/start/cmd.go#L49-L63",
+          "version": "1.46.0",
+          "evidence": "`inngest start` flags: redis-uri \"Defaults to self-contained, in-memory Redis server with periodic snapshot backups.\" postgres-uri \"Defaults to SQLite database.\""
+        },
+        "license": {
+          "value": "SSPL-1.0",
+          "note": "Source-available server; each release becomes Apache-2.0 after three years. SDKs are Apache-2.0. Inngest Cloud is paid.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/LICENSE.md#L1-L2",
+          "version": "1.46.0",
+          "evidence": "LICENSE.md: \"Server Side Public License, Version 1.0\" / \"Apache 2.0 Future License\": Apache-2.0 \"effective on the third anniversary of the date we make the Software available\". README: \"All Inngest SDKs are all available under the Apache 2.0 license.\""
+        }
+      }
+    },
+    {
+      "slug": "dbos",
+      "name": "DBOS",
+      "aliases": ["dbos"],
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1371",
+      "version": "3.3.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/dbos-inc/dbos-transact-py",
+      "summary": "DBOS Transact is an open-source library that adds durable workflows and queues to a program by checkpointing its state in Postgres.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Supported",
+          "note": "The Python client enqueues in a transaction on the DBOS system database. Application tables must be in that database.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/dbos/_client.py#L347-L358",
+          "version": "3.3.0",
+          "evidence": "DBOSClient.enqueue_in_transaction: \"Enqueue a workflow within a caller-owned synchronous SQLAlchemy transaction. The caller must commit or roll back the transaction. ... conn_or_session must target the DBOS system database.\""
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "DBOS stores each step result in Postgres. Recovery resumes after the last completed step.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/README.md#L41-L42",
+          "version": "3.3.0",
+          "evidence": "README: \"DBOS workflows make your program durable by checkpointing its state in Postgres. If your program ever fails, when it restarts all your workflows will automatically resume from the last completed step.\""
+        },
+        "dashboard": {
+          "status": "Partial",
+          "note": "Conductor serves the dashboard. Its free license connects one executor for each application. More executors need a paid license.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/faq.md#L147-L148",
+          "version": "3.3.0",
+          "evidence": "if you are self-hosting Conductor with a free license, you may connect at most one executor per application to Conductor ... To connect multiple executors, upgrade to a paid license."
+        },
+        "worker-languages": {
+          "value": "Python, TypeScript, Go, Java",
+          "note": "Each language has its own DBOS Transact repository.",
+          "source": "https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/index.md#L17-L113",
+          "version": "3.3.0",
+          "evidence": "<LargeTabItem value=\"python\" label=\"Python\"> ... value=\"typescript\" label=\"TypeScript\"> ... value=\"golang\" label=\"Go\"> ... value=\"java\" label=\"Java\">"
+        },
+        "infrastructure": {
+          "value": "PostgreSQL",
+          "note": "No other service. SQLite also works for the system database. Conductor is an optional paid service.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/README.md#L19-L24",
+          "version": "3.3.0",
+          "evidence": "README: \"DBOS provides lightweight durable workflows built on top of Postgres.\" \"DBOS is entirely contained in this open-source library, there's no additional infrastructure for you to configure or manage.\""
+        },
+        "license": {
+          "value": "MIT",
+          "note": "DBOS Conductor and DBOS Cloud are paid and proprietary. Conductor needs the dbos-enterprise package.",
+          "source": "https://github.com/dbos-inc/dbos-transact-py/blob/3.3.0/LICENSE#L1-L3",
+          "version": "3.3.0",
+          "evidence": "LICENSE: \"MIT License / Copyright (c) 2024 DBOS, Inc.\""
+        }
+      }
+    },
+    {
+      "slug": "restate",
+      "name": "Restate",
+      "aliases": ["restatedev"],
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1372",
+      "version": "1.8.0",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/restatedev/restate",
+      "summary": "Restate is a server that gives applications durable building blocks for workflows, microservice orchestration, event processing and async tasks, through SDKs.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The application starts an invocation with an HTTP request to the Restate Server, outside its database transaction.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/http.mdx#L7-L50",
+          "version": "1.8.0",
+          "evidence": "You can invoke handlers over HTTP with or without waiting for a response ... curl localhost:8080/restate/call/MyService/myHandler ... localhost:8080 refers to ingress port of the Restate Server"
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "The server records each step in a journal. A retry replays it and skips completed steps.",
+          "source": "https://github.com/restatedev/restate/blob/v1.8.0/README.md#L98",
+          "version": "1.8.0",
+          "evidence": "README: \"Failures result in retries that use the Durable Execution mechanism to recover partial progress and prevent re-executing completed steps.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free. The server serves the UI on its admin port by default.",
+          "source": "https://github.com/restatedev/restate/blob/v1.8.0/crates/admin/Cargo.toml#L11-L15",
+          "version": "1.8.0",
+          "evidence": "crates/admin/Cargo.toml: `default = [\"serve-web-ui\"]`; web_ui.rs serves `restate_web_ui::ASSETS` at `/ui`. README: \"Restate includes a UI and CLI to inspect the state of your application\"."
+        },
+        "worker-languages": {
+          "value": "TypeScript, Java, Kotlin, Python, Go, Rust",
+          "source": "https://github.com/restatedev/restate/blob/v1.8.0/README.md#L33-L41",
+          "version": "1.8.0",
+          "evidence": "README: \"Restate supports the following SDKs: Typescript, Java and Kotlin, Python, Go, Rust\"."
+        },
+        "infrastructure": {
+          "value": "A Restate Server with a persistent volume",
+          "note": "No external database. A cluster also needs an object store for snapshots.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/overview.mdx#L23-L24",
+          "version": "1.8.0",
+          "evidence": "2. A persistent volume attached to store Restate's state. Recommended for cluster deployments. Required for single-node deployments. 3. (For clustered setups) An object store to store snapshots."
+        },
+        "license": {
+          "value": "BUSL-1.1",
+          "note": "Source-available. Each release becomes Apache-2.0 after four years. Restate Cloud and BYOC are paid.",
+          "source": "https://github.com/restatedev/restate/blob/v1.8.0/LICENSE#L1-L40",
+          "version": "1.8.0",
+          "evidence": "LICENSE: \"Business Source License 1.1\"; Additional Use Grant forbids a \"Public Restate Platform Service\"; \"Change Date: 4 years after release\"; \"Change License: Apache License, Version 2.0\"."
+        }
+      }
+    },
+    {
+      "slug": "trigger-dev",
+      "name": "Trigger.dev",
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1373",
+      "version": "4.7.4",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/triggerdotdev/trigger.dev",
+      "summary": "Trigger.dev is an open-source platform for building AI workflows and long-running tasks in TypeScript, with retries, queues, observability and elastic scaling.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The backend triggers a run through the Trigger.dev API, outside its own database transaction.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L28-L30",
+          "version": "4.7.4",
+          "evidence": "Triggering docs: \"When you trigger a task from your backend code, create a named API key with Trigger only access ... and set it as TRIGGER_SECRET_KEY.\" tasks.trigger() sends the run to the Trigger.dev API."
+        },
+        "checkpoints": {
+          "status": "Partial",
+          "note": "A retry runs the task from the start. Subtasks with idempotency keys return cached results.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L236-L243",
+          "version": "4.7.4",
+          "evidence": "\"Result caching: The output of each subtask is cached based on its idempotency key. Intelligent retries: If a failure occurs, only the failed subtask and subsequent tasks are retried.\" L373: \"When retried, it starts from the beginning, but leverages cached results for completed subtasks.\""
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free when self-hosted. Trigger.dev Cloud includes the same dashboard.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L32-L35",
+          "version": "4.7.4",
+          "evidence": "Self-hosting overview: \"Webapp: includes the dashboard and other services like Redis and Postgres.\" README: \"We provide a full trace view of every task run\"."
+        },
+        "worker-languages": {
+          "value": "TypeScript, JavaScript",
+          "note": "A TypeScript task can run Python scripts through a build extension; there is no Python worker SDK.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/README.md#L43",
+          "version": "4.7.4",
+          "evidence": "README: \"JavaScript and TypeScript SDK - Build background tasks using familiar programming models\"; \"Build extensions ... Run Python scripts, FFmpeg, browsers, and more.\""
+        },
+        "infrastructure": {
+          "value": "The Trigger.dev webapp and supervisor, PostgreSQL, Redis, ClickHouse, ElectricSQL, a container registry and object storage",
+          "note": "Trigger.dev Cloud runs all of this as a paid managed service.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/hosting/docker/webapp/docker-compose.yml#L11-L230",
+          "version": "4.7.4",
+          "evidence": "Self-hosted webapp compose services: webapp, postgres, redis, electric, clickhouse, registry, minio; the worker compose adds supervisor and docker-proxy. Overview: \"Webapp: includes the dashboard and other services like Redis and Postgres.\""
+        },
+        "license": {
+          "value": "Apache-2.0",
+          "note": "Trigger.dev Cloud is the paid managed service.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/LICENSE#L1-L3",
+          "version": "4.7.4",
+          "evidence": "LICENSE: \"Apache License Version 2.0, January 2004\". No other license file at the tag outside package copies."
+        }
+      }
+    },
+    {
+      "slug": "hatchet",
+      "name": "Hatchet",
+      "category": "workflow-platform",
+      "page": "planned",
+      "issue": "SM-1376",
+      "version": "0.110.8",
+      "checked": "2026-10-17",
+      "repository": "https://github.com/hatchet-dev/hatchet",
+      "summary": "Hatchet is a platform for orchestrating background tasks, AI agents and durable workflows, using Postgres as its durability layer.",
+      "cells": {
+        "transactional-enqueue": {
+          "status": "Not supported",
+          "note": "The application triggers runs through the engine API, outside its own database transaction.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L13-L15",
+          "version": "0.110.8",
+          "evidence": "Self-hosting: the Engine exposes a \"gRPC API for core workflow orchestration and task scheduling\" and stores state in its own PostgreSQL. The run docs trigger tasks through SDK client calls; I found no transactional enqueue in the docs at the tag."
+        },
+        "checkpoints": {
+          "status": "Supported",
+          "note": "Durable tasks checkpoint each wait and child run. A retry replays from the last checkpoint.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/durable-tasks.mdx#L13",
+          "version": "0.110.8",
+          "evidence": "Durable tasks: \"Every time one of those happens, Hatchet writes a checkpoint to the durable event log. On retries, Hatchet can replay from that checkpoint instead of re-running completed application logic\"."
+        },
+        "dashboard": {
+          "status": "Supported",
+          "note": "Free in the open source release. Hatchet Cloud includes it too.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L17",
+          "version": "0.110.8",
+          "evidence": "Self-hosting: \"Dashboard - Web UI for monitoring workflows and debugging\". README: \"Real-time web UI with alerting, monitoring, and logging\"."
+        },
+        "worker-languages": {
+          "value": "Python, TypeScript, Go, Ruby",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/README.md#L31",
+          "version": "0.110.8",
+          "evidence": "README: \"It supports applications written in Python, TypeScript, Go and Ruby\"."
+        },
+        "infrastructure": {
+          "value": "The Hatchet engine and API server, and PostgreSQL",
+          "note": "RabbitMQ is optional. Hatchet Lite bundles the engine and API in one image. Hatchet Cloud is paid.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L11-L17",
+          "version": "0.110.8",
+          "evidence": "Self-hosting: \"API Server - REST APIs\", \"Engine - gRPC API for core workflow orchestration\", \"Database - PostgreSQL for storing workflow state and metadata\", \"Message Queue (optional) - RabbitMQ\", \"Dashboard - Web UI\"."
+        },
+        "license": {
+          "value": "MIT",
+          "note": "Hatchet Cloud is the paid managed service.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/LICENSE#L1-L3",
+          "version": "0.110.8",
+          "evidence": "LICENSE: \"MIT License / Copyright (c) 2023-present Hatchet Technologies Inc.\" Docs: \"we're open-source and 100% MIT-licensed\"."
+        }
+      }
+    }
+  ]
+}

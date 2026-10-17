@@ -228,6 +228,11 @@ try {
       `llms-full.txt grew to ${llmsFullBytes} bytes, well past its 1011823-byte shape`,
     );
   }
+  // ADR 0104 keeps the comparison pages out of the full file. Each comparison page adds tables
+  // that an agent integrating Workhorse does not need.
+  if (llmsFullText.includes("Canonical source: https://workhorse.run/docs/compare")) {
+    throw new Error("llms-full.txt contains a comparison page, which ADR 0104 keeps out");
+  }
 
   // The router's lead is the prose above its first `##`. It has to name the
   // entry point, the `.md` rule, and the Installation page, and the size it

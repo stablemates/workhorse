@@ -1,5 +1,6 @@
 import {
   ArrowDataTransferHorizontalIcon,
+  BalanceScaleIcon,
   Book02Icon,
   Database01Icon,
   GaugeIcon,
@@ -56,6 +57,7 @@ const groupIcons = {
   activity: GaugeIcon,
   plug: PlugSocketIcon,
   migrate: ArrowDataTransferHorizontalIcon,
+  compare: BalanceScaleIcon,
   database: Database01Icon,
   book: Book02Icon,
   code: SourceCodeIcon,
