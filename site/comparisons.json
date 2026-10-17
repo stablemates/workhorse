@@ -1715,12 +1715,11 @@
       "name": "Inngest",
       "aliases": ["inngest"],
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1370",
+      "page": "published",
       "version": "1.46.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/inngest/inngest",
-      "summary": "Inngest runs durable step functions that the Inngest server invokes over HTTPS when triggering events arrive, with built-in queueing, flow control and scheduling.",
+      "summary": "Inngest is a workflow platform. Its server calls step functions over HTTP when events arrive, with built-in queueing, flow control, and scheduling.",
       "cells": {
         "transactional-enqueue": {
           "status": "Not supported",
@@ -1729,12 +1728,89 @@
           "version": "1.46.0",
           "evidence": "README: \"Event API - Receives events from SDKs via HTTP requests.\" The app calls `await inngest.send({ name, data })`, an HTTP request to the Inngest server."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "An event with a future ts field starts its functions at that time.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/pkg/execution/executor/executor.go#L1588-L1595",
+          "version": "1.46.0",
+          "evidence": "executor.Schedule: `evtTs := time.UnixMilli(req.Events[0].GetEvent().Timestamp); if evtTs.After(at) { // Schedule functions in the future if there's a future event `ts` field. at = evtTs }`"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "A cron trigger starts the function.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L528-L537",
+          "version": "1.46.0",
+          "evidence": "SDK spec triggers: \"If a cron, this is the cron schedule that will trigger the Function. It is defined as a unix cron string, such as `0 0 * * *` for midnight every day.\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "An expression moves a run ahead of, or behind, the runs of the last 600 seconds.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L678-L691",
+          "version": "1.46.0",
+          "evidence": "SDK spec priority.run: \"The expression can return a number between `-600` and `600`, where `600` declares that this run should be executed before any others enqueued in the last 600 seconds (10 minutes)\""
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "An event ID or an idempotency key skips a duplicate for 24 hours.",
+          "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/guides/handling-idempotency.mdx#L84-L111",
+          "version": "1.46.0",
+          "evidence": "\"Event IDs will only be used to prevent duplicate execution for a 24 hour period.\" (L84); at the function level: \"Each unique expression will only trigger one function execution per 24 hour period.\" (L111). Server: pkg/consts/consts.go L138-L140 \"FunctionIdempotencyPeriod = 24 * time.Hour\"."
+        },
+        "task-dependencies": {
+          "status": "Partial",
+          "note": "No declared dependency between runs. A function can invoke other functions as steps and use their results.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1342-L1361",
+          "version": "1.46.0",
+          "evidence": "SDK spec Invoke: \"An Invocation Step informs the Inngest Server that the Run wishes to trigger another Inngest function and wait for its response.\" (Looked at the function configuration, L505-L800: no field names other runs to wait for.)"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Each step has its own retries, with backoff and jitter.",
+          "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/reference/typescript/v4/functions/step-run.mdx#L91-L95",
+          "version": "1.46.0",
+          "evidence": "\"Each step.run() call has its own independent retry counter. ... The retry configuration applies to each individual step, not as a shared pool across all steps in your function.\" Server pkg/backoff/backoff.go L47-L48: \"TableBackoff returns a fixed backoff maxing out at 2 hours, with up to 30 seconds of jitter.\""
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "The executor retries a step after a failed call. Completed steps keep their stored output.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L147-L148",
+          "version": "1.46.0",
+          "evidence": "README: \"Executor - Responsible for executing functions, from initial execution, step execution, writing incremental function run state to the State store, and retries after failures.\" \"State store ... Data includes initial triggering event(s), step output and step errors.\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "The API, the dashboard, or a cancelOn event cancels a run. A step that runs continues to its end, and no later step starts.",
+          "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/features/inngest-functions/cancellation.mdx#L16-L41",
+          "version": "1.46.0",
+          "evidence": "\"Inngest enables you to cancel running Functions via the API, Dashboard, or based on events\"; \"stop an ongoing Function run between some following steps\"; \"Cancelling a function that has a currently executing step will not stop the step's execution.\" Server pkg/execution/execution.go L115: \"Cancel cancels an in-progress function run, preventing any enqueued or future steps from running.\""
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "Up to two limits for each function, with a key and a scope. A limit counts running steps.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L693-L731",
+          "version": "1.46.0",
+          "evidence": "SDK spec concurrency: \"a limit on the total number of concurrent steps that can occur across all runs of the function ... A maximum of two concurrency options can be specified.\" key: an Expression; scope: \"fn\" | \"env\" | \"account\"."
+        },
+        "rate-limits": {
+          "status": "Supported",
+          "note": "For each function or each key. throttle delays the runs above the limit, and rateLimit drops them.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L733-L760",
+          "version": "1.46.0",
+          "evidence": "SDK spec throttle: \"Throttle function execution to a given number of runs per period. Unlike rateLimit which drops excess invocations, throttle queues them and executes at the specified rate.\" key: \"An optional key Expression to partition throttle groups.\""
+        },
         "checkpoints": {
           "status": "Supported",
           "note": "The executor stores each step output. A retry or resume skips steps that completed.",
-          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L147-L148",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1210-L1216",
           "version": "1.46.0",
-          "evidence": "README: \"Executor - ... writing incremental function run state to the State store\"; \"State store (database) - Persists data for pending and ongoing function runs. Data includes initial triggering event(s), step output and step errors.\""
+          "evidence": "SDK spec 5.2.2: \"As Steps are found by an SDK during a Call Request, it MUST try to find either the successful data already returned for that Step or the error\"; \"If a Step's hash is present in the steps object passed in the Call Request, it MUST NOT be reported\". README L147-L148: the State store holds \"step output and step errors\"."
+        },
+        "durable-waits": {
+          "status": "Supported",
+          "note": "step.sleep and step.waitForEvent end the call. The server calls the function again later.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1302-L1340",
+          "version": "1.46.0",
+          "evidence": "SDK spec Sleep: \"informs the Inngest Server that the Run wishes to be called again after the given amount of time\". Wait for Event: \"informs the Inngest Server that the Run wishes to be called again once a given event has been received.\""
         },
         "dashboard": {
           "status": "Supported",
@@ -1743,27 +1819,120 @@
           "version": "1.46.0",
           "evidence": "README: \"Dashboard UI - The UI to manage apps, functions and view function run history.\" and \"Open the Inngest Dev Server dashboard at http://localhost:8288\"."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "Failed runs stay in the run history. Rerun starts one again, from its start or from a chosen step.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/pkg/coreapi/gql.mutations.graphql#L18-L24",
+          "version": "1.46.0",
+          "evidence": "GraphQL mutations of the self-hosted API: \"cancelRun(runID: ULID!)\" and \"rerun(runID: ULID!, fromStep: RerunFromStepInput, ...)\"; RerunFromStepInput { stepID, input }. README L149: the database \"Persists ... Function run results.\""
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "Inngest Cloud pauses one function. The self-hosted dashboard has no pause control. Events that arrive during a pause do not run on resume. A replay can run them while the run history keeps them.",
+          "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/platform-and-operations/pause-and-resume-functions.mdx#L8-L15",
+          "version": "1.46.0",
+          "evidence": "\"Pause a function during maintenance so new events do not start its runs. Inngest still receives and stores those events, but skips the paused function.\" \"Events received during the pause do not run automatically. If they must be processed, create a Replay ... The available history depends on your plan's retention.\" (Looked at ui/apps/dev-server-ui and pkg/coreapi/gql.mutations.graphql at v1.46.0: no pause action.)"
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "In the TypeScript SDK, an experimental middleware exports function spans.",
+          "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/reference/typescript/v4/extended-traces.mdx#L9-L44",
+          "version": "1.46.0",
+          "evidence": "\"Inngest supports OpenTelemetry for distributed tracing and observability across your functions. The `extendedTracesMiddleware` exports OpenTelemetry spans from your functions to Inngest Traces\"; `import { extendedTracesMiddleware } from \"inngest/experimental\";`"
+        },
         "worker-languages": {
           "value": "TypeScript/JavaScript, Python, Go, Kotlin/Java",
           "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L122-L127",
           "version": "1.46.0",
           "evidence": "README SDKs: \"TypeScript / JavaScript (inngest-js)\", \"Python (inngest-py)\", \"Go (inngestgo)\", \"Kotlin / Java (inngest-kt)\"."
         },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Any language can send an event to the HTTP Event API.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L139",
+          "version": "1.46.0",
+          "evidence": "README: \"Event API - Receives events from SDKs via HTTP requests. Authenticates client requests via Event Keys.\""
+        },
         "infrastructure": {
-          "value": "An Inngest server, Redis and PostgreSQL",
-          "note": "By default the server runs in-memory Redis and SQLite. Inngest Cloud is the paid managed service.",
+          "value": "An Inngest server",
+          "note": "By default the server runs an in-memory Redis and SQLite. It can use an external Redis and PostgreSQL. Inngest Cloud is the managed service, with free and paid plans.",
           "source": "https://github.com/inngest/inngest/blob/v1.46.0/cmd/start/cmd.go#L49-L63",
           "version": "1.46.0",
-          "evidence": "`inngest start` flags: redis-uri \"Defaults to self-contained, in-memory Redis server with periodic snapshot backups.\" postgres-uri \"Defaults to SQLite database.\""
+          "evidence": "`inngest start` flags: redis-uri \"Redis server URI for external queue and run state. Defaults to self-contained, in-memory Redis server with periodic snapshot backups.\" postgres-uri \"PostgreSQL database URI for configuration and history persistence. Defaults to SQLite database.\" Website self-hosting.mdx L23: \"our hosted platform, including our generous free tier\"."
         },
         "license": {
           "value": "SSPL-1.0",
-          "note": "Source-available server; each release becomes Apache-2.0 after three years. SDKs are Apache-2.0. Inngest Cloud is paid.",
-          "source": "https://github.com/inngest/inngest/blob/v1.46.0/LICENSE.md#L1-L2",
+          "note": "The server is under SSPL-1.0, and each release becomes Apache-2.0 after three years. The SDKs are Apache-2.0. Inngest Cloud has free and paid plans.",
+          "source": "https://github.com/inngest/inngest/blob/v1.46.0/README.md#L174-L178",
           "version": "1.46.0",
-          "evidence": "LICENSE.md: \"Server Side Public License, Version 1.0\" / \"Apache 2.0 Future License\": Apache-2.0 \"effective on the third anniversary of the date we make the Software available\". README: \"All Inngest SDKs are all available under the Apache 2.0 license.\""
+          "evidence": "README: \"The Inngest server and CLI are available under the Server Side Public License and delayed open source publication (DOSP) under Apache 2.0.\" \"All Inngest SDKs are all available under the Apache 2.0 license.\" LICENSE.md L563-L565: Apache-2.0 \"effective on the third anniversary of the date we make the Software available\"."
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Partial",
+            "note": "The server calls the function again from its entry, and the SDK returns stored step results by step ID. No event history.",
+            "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1107-L1113",
+            "version": "1.46.0",
+            "evidence": "SDK spec: \"When an SDK exposes and supports Steps, it will receive multiple Call Requests for the same Run, with each exercised Call Request now comprising of separate phases of first memoizing the data of previous Steps, and then executing new Steps\"; \"an SDK MUST maintain determinism in Call Requests when the underlying code has not changed\"."
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "step.invoke starts another function and waits for its result.",
+            "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1342-L1361",
+            "version": "1.46.0",
+            "evidence": "SDK spec Invoke: \"An Invocation Step informs the Inngest Server that the Run wishes to trigger another Inngest function and wait for its response.\" \"When the invoked Function has run to completion and returned a value, the Inngest Server will memoize the Step\"."
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "Not pinned",
+            "note": "A run in progress calls the new code and reuses stored results by step ID. The SDK can warn when the stored step order no longer matches.",
+            "source": "https://github.com/inngest/inngest/blob/v1.46.0/docs/SDK_SPEC.md#L1456-L1460",
+            "version": "1.46.0",
+            "evidence": "SDK spec 5.4: \"the SDK can now detect some of the symptoms of a Function's underlying code changing mid-Run\"; \"it MUST first warn the user that the Function has appeared to change\"; \"Next, the SDK MUST continue to memoize Steps\"."
+          }
+        }
+      ]
     },
     {
       "slug": "dbos",
