@@ -558,8 +558,7 @@
       "name": "Graphile Worker",
       "aliases": ["graphile-worker"],
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1364",
+      "page": "published",
       "version": "0.18.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/graphile/worker",
@@ -572,12 +571,88 @@
           "version": "0.18.0",
           "evidence": "\"You can schedule jobs directly in the database, e.g. from a trigger or function, or by calling SQL from your application code. You do this using the graphile_worker.add_job function\""
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md#L28",
+          "version": "0.18.0",
+          "evidence": "run_at — a timestamp after which to run the job; defaults to now. (addJob: runAt, a Date to schedule this task to run in the future)"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "A crontab in UTC. It can backfill runs that it missed.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md#L10-L26",
+          "version": "0.18.0",
+          "evidence": "Graphile Worker supports triggering recurring tasks according to a cron-like schedule. ... can backfill missed jobs if desired ... works reliably even if you're running multiple workers (cron.md L37-L40: We only handle timestamps in UTC.)"
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "A smaller number runs first.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md#L36-L39",
+          "version": "0.18.0",
+          "evidence": "priority — an integer representing the jobs priority. Jobs are executed in numerically ascending order of priority (jobs with a numerically smaller priority are run first). Defaults to 0."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "The unsafe_dedupe mode keeps the first job. The default mode replaces a pending job with the same job_key.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#L45-L63",
+          "version": "0.18.0",
+          "evidence": "unsafe_dedupe - if an existing job is found, even if it is locked or permanently failed, then it won't be updated. This is very dangerous ... (replace (default) - overwrites the unlocked job with the new values)"
+        },
+        "task-dependencies": {
+          "status": "Not supported",
+          "note": "A task can add the next job itself.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md#L17-L54",
+          "version": "0.18.0",
+          "evidence": "Reviewed the add_job parameters (identifier, payload, queue_name, run_at, max_attempts, job_key, priority, flags, job_key_mode) and the docs: no parameter makes a job wait for other jobs. (tasks.md: helpers.addJob())"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "The backoff formula is fixed. The default is 25 attempts.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/exponential-backoff.md#L6-L10",
+          "version": "0.18.0",
+          "evidence": "We currently use the formula exp(least(10, attempt)) to determine the delays between attempts ... after ~4 hours attempts will be made every ~6 hours (sql-add-job.md L29: max_attempts defaults to 25)"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "After a crash or SIGKILL, a job stays locked for at least 4 hours. The paid Worker Pro releases it sooner.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/error-handling.md#L28-L37",
+          "version": "0.18.0",
+          "evidence": "the jobs that that worker was executing remain locked for at least 4 hours. Every 8-10 minutes a worker will sweep for jobs that have been locked for more than 4 hours and will make them available to be processed again automatically. (pro/recovery.md: Worker Pro tracks running workers via a heartbeat)"
+        },
+        "cancellation": {
+          "status": "Not supported",
+          "note": "Admin functions skip running jobs. helpers.abortSignal fires on shutdown.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/admin-functions.md#L20-L27",
+          "version": "0.18.0",
+          "evidence": "Unless otherwise noted, these functions ignore locked jobs (which includes all currently running jobs). (tasks.md L226-L233: abortSignal is triggered when the job should exit early ... for example, for a graceful shutdown request; marked Experimental)"
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "A named queue runs one job at a time. A higher limit needs dedicated workers or several named queues.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/techniques.md#L8-L38",
+          "version": "0.18.0",
+          "evidence": "Out of the box, Graphile Worker supports jobs being added to a named queue (in which case that queue has a concurrency of 1) ... Sometimes you want to limit concurrency to a small number, but larger than 1... Here are some techniques"
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "No built-in limit. forbiddenFlags lets the application skip jobs to build one.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/forbidden-flags.md#L26-L36",
+          "version": "0.18.0",
+          "evidence": "graphile-worker will invoke it each time a worker looks for a job to run, and will skip over any job that has any flag returned by your function. ... For an example of how this can be used to achieve rate-limiting logic, see the graphile-worker-rate-limiter project (forbidden-flags.md L6-L9: jobs with any of the given flags should not be executed)"
+        },
         "checkpoints": {
           "status": "Not supported",
           "note": "A retry runs the whole task again. The docs suggest smaller jobs instead.",
           "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L44-L50",
           "version": "0.18.0",
           "evidence": "Reviewed tasks.md and error-handling docs: no step API. \"Graphile Worker automatically retries the job if it fails, so it's often sensible to split a large job into multiple smaller jobs\""
+        },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A job waits only before it starts, through run_at.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L216-L284",
+          "version": "0.18.0",
+          "evidence": "Reviewed the task helpers (abortPromise, abortSignal, addJob, addJobs, getQueueName, job, logger, query, withPgClient) and the docs: no helper suspends a running job for a timer or a signal."
         },
         "dashboard": {
           "status": "Not supported",
@@ -586,12 +661,40 @@
           "version": "0.18.0",
           "evidence": "\"When implementing an administrative UI you may need more control over the jobs. For this we have added a few administrative functions that can be called in SQL or through the JS API.\" No UI package in the docs."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A job that uses all its attempts stays in the table. reschedule_jobs runs it again.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/admin-functions.md#L59-L89",
+          "version": "0.18.0",
+          "evidence": "This method can be used to postpone or advance job execution, or to schedule a previously failed or permanently failed job for execution. (permanently_fail_jobs: setting their attempts equal to their max_attempts)"
+        },
+        "queue-pause": {
+          "status": "Not supported",
+          "note": "forbiddenFlags can hold back jobs that carry a flag.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/admin-functions.md#L29-L140",
+          "version": "0.18.0",
+          "evidence": "Reviewed the admin functions (complete_jobs, permanently_fail_jobs, reschedule_jobs, force_unlock_workers, cleanup) and the config docs: no queue pause."
+        },
+        "opentelemetry": {
+          "status": "Not supported",
+          "note": "Worker events and a custom logger can feed your own telemetry.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/worker-events.md#L1-L12",
+          "version": "0.18.0",
+          "evidence": "Reviewed the docs, src, and package.json at v0.18.0: no OpenTelemetry dependency or integration. The events emitter reports worker and job events (worker-events.md L5-L10). library/logger.md L6-L10: You can override this by passing a custom logger."
+        },
         "worker-languages": {
           "value": "JavaScript, TypeScript",
           "note": "Workers run on Node.js. An experimental loader runs executable files as tasks.",
           "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L151-L164",
           "version": "0.18.0",
           "evidence": "\"if Graphile Worker finds an executable file inside of the taskDirectory it will create a task executor for it\" (marked Experimental). Task executors are otherwise Node.js modules."
+        },
+        "enqueue-languages": {
+          "value": "Any, through SQL",
+          "note": "add_job is a SQL function. A database trigger can also call it.",
+          "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md#L6-L15",
+          "version": "0.18.0",
+          "evidence": "You can schedule jobs directly in the database, e.g. from a trigger or function, or by calling SQL from your application code. You do this using the graphile_worker.add_job function"
         },
         "infrastructure": {
           "value": "PostgreSQL",
@@ -607,7 +710,53 @@
           "version": "0.18.0",
           "evidence": "package.json: \"license\": \"MIT\". website/docs/pro/index.md#L6: \"Worker Pro (@graphile-pro/worker) is a proprietary (not open source) preset\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "debounce-throttle",
+          "group": "producing",
+          "label": "Debounce and throttle by key",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Keyed debounce"
+            },
+            "page": "/docs/debounce",
+            "note": "Keyed throttle is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A job_key in replace mode debounces. In preserve_run_at mode it throttles.",
+            "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#L45-L58",
+            "version": "0.18.0",
+            "evidence": "replace (default) - ... primarily useful for rescheduling, updating, or debouncing ... preserve_run_at - ... primarily useful for throttling (executing at most once over a given time period)"
+          }
+        },
+        {
+          "id": "batch-delivery",
+          "group": "executing",
+          "label": "Process many items in one handler call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Batch handler delivery"
+            },
+            "page": "/docs/batch-handlers",
+            "note": "Each task in a batch has its own outcome."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "One job holds an array payload. If the handler returns one promise for each item, a retry keeps only the items that failed.",
+            "source": "https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#L199-L214",
+            "version": "0.18.0",
+            "evidence": "If the payload is an array, then optionally your task executor may choose to return an array of the same length, the entries in which are promises. Should any of these promises reject, then the job will be re-enqueued, but the payload will be overwritten to only contain the entries associated with the rejected promises"
+          }
+        }
+      ]
     },
     {
       "slug": "river",
