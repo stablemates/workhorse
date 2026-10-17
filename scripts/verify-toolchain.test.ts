@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
+  defaultExecutable,
   executableName,
   gofmtTool,
   readPins,
@@ -172,6 +173,82 @@ describe("a substituted tool", () => {
 
     expect(await refusals("uv", "pinned", [["uv", "0.8.9"]])).toEqual([]);
   });
+});
+
+describe("the JVM toolchain", () => {
+  const temurin = [
+    'echo "openjdk 25.0.4.1 2026-08-18 LTS"',
+    'echo "OpenJDK Runtime Environment Temurin-25.0.4.1+1 (build 25.0.4.1+1-LTS)"',
+  ].join("\n");
+  const pins: [string, string][] = [["java", "25.0.4"]];
+
+  it("reads the version of a pin that names its distribution", async () => {
+    const declared = await readPins(repositoryRoot);
+
+    expect(declared.get("java")).toMatch(/^\d+(?:\.\d+)*$/);
+    expect(declared.get("gradle")).toMatch(/^\d+(?:\.\d+)*$/);
+  });
+
+  it("checks the JDK that Gradle runs on, which JAVA_HOME names first", () => {
+    expect(defaultExecutable("java", { JAVA_HOME: "/opt/jdk" })).toBe(
+      join("/opt/jdk", "bin", "java"),
+    );
+    expect(defaultExecutable("java", { JAVA_HOME: "" })).toBe("java");
+    expect(defaultExecutable("java", {})).toBe("java");
+    expect(defaultExecutable("rust", {})).toBe("rustc");
+    expect(defaultExecutable("gradle", { JAVA_HOME: "/opt/jdk" })).toBe("gradle");
+  });
+
+  it.skipIf(!onPosix)("accepts the pinned Temurin build", async () => {
+    leadPath(await toolDirectory({ java: temurin }));
+
+    expect(await refusals("java", "pinned", pins)).toEqual([]);
+  });
+
+  it.skipIf(!onPosix)("refuses another JDK build only when the pin is asserted", async () => {
+    leadPath(
+      await toolDirectory({
+        java: 'echo "openjdk 25.0.4 2026-08-18"\necho "OpenJDK Runtime Environment (build 25.0.4)"',
+      }),
+    );
+
+    expect(await refusals("java", "identity", pins)).toEqual([]);
+    const [refusal] = await refusals("java", "pinned", pins);
+    expect(refusal).toContain("java 25.0.4 is not the temurin build that mise.toml pins");
+    expect(refusal).toContain("mise install java@temurin-25.0.4");
+  });
+
+  it.skipIf(!onPosix)("refuses a JDK that disagrees with its pin", async () => {
+    leadPath(await toolDirectory({ java: temurin.replaceAll("25.0.4.1", "21.0.12") }));
+
+    expect((await refusals("java", "pinned", pins))[0]).toContain(
+      "java 21.0.12 does not match the mise.toml pin 25.0.4",
+    );
+  });
+
+  it.skipIf(!onPosix)(
+    "reads Gradle's version under its banner, and refuses a stand-in",
+    async () => {
+      const gradle: [string, string][] = [["gradle", "9.8.1"]];
+      leadPath(
+        await toolDirectory({
+          gradle: [
+            'echo "Welcome to Gradle 9.8.1!"',
+            "echo",
+            'echo "------------------------------------------------------------"',
+            'echo "Gradle 9.8.1"',
+            'echo "------------------------------------------------------------"',
+          ].join("\n"),
+        }),
+      );
+      expect(await refusals("gradle", "pinned", gradle)).toEqual([]);
+
+      leadPath(await toolDirectory({ gradle: 'echo "Welcome to Gradle 9.8.1!"' }));
+      expect((await refusals("gradle", "identity", gradle))[0]).toContain(
+        "gradle did not identify itself",
+      );
+    },
+  );
 });
 
 describe("an unpinned version", () => {

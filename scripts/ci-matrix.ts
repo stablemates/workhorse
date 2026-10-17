@@ -15,12 +15,21 @@ interface Matrix<T> {
 
 export const WEEKLY_COMPATIBILITY_SCHEDULE = "17 4 * * 0";
 
+/**
+ * The Java releases CI tests, ascending from the floor (ADR 0103, "Floors"). A change runs the
+ * floor and the newest release, and the weekly run adds every release between them.
+ *
+ * SM-1397 moves this list to `support.json`, beside the other tested versions.
+ */
+export const TESTED_JAVA_RELEASES = [21, 25, 27] as const;
+
 export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
   readonly python: Matrix<{ readonly python: string; readonly postgres: number }>;
   readonly go: Matrix<{ readonly go: string; readonly postgres: number }>;
   readonly rust: Matrix<{ readonly postgres: number }>;
   readonly ruby: Matrix<{ readonly ruby: string; readonly postgres: number }>;
+  readonly jvm: Matrix<{ readonly java: number; readonly postgres: number }>;
   readonly packed: Matrix<{ readonly node: number }>;
 }
 
@@ -64,6 +73,12 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       },
       rust: { include: [{ postgres: newestPostgres }] },
       ruby: { include: [{ ruby: newestRuby, postgres: newestPostgres }] },
+      jvm: {
+        include: [TESTED_JAVA_RELEASES[0], TESTED_JAVA_RELEASES.at(-1)!].map((java) => ({
+          java,
+          postgres: newestPostgres,
+        })),
+      },
       packed: { include: [{ node: newestNode }] },
     };
   }
@@ -84,6 +99,9 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
     rust: { include: support.postgres.tested.map((postgres) => ({ postgres })) },
     ruby: {
       include: crossProduct("ruby", support.ruby.tested, "postgres", support.postgres.tested),
+    },
+    jvm: {
+      include: crossProduct("java", TESTED_JAVA_RELEASES, "postgres", support.postgres.tested),
     },
     packed: { include: [{ node: newestNode }] },
   };
