@@ -52,6 +52,10 @@ result.
    product, the OpenTelemetry cell of that product can cite the package. The note of the cell must
    name the OpenTelemetry project as the publisher. No other third-party source is permitted.
 
+   One status rule applies to every OpenTelemetry cell, also when the product supplies the support
+   itself. If the cited source shows traces and metrics, the status is "Supported". If it shows
+   traces only, the status is "Partial", and the note starts with "Traces only."
+
 6. **The Workhorse column.** Each Workhorse status uses the status words of `docs/features.md` and
    `docs/parity.md`, and names the row that it restates. The schema test fails when the two
    disagree.
