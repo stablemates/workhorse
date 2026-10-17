@@ -43,6 +43,11 @@ interface ToolProbe {
    * another tool's shape, or answers nothing, is not the tool the command named.
    */
   identity: RegExp;
+  /**
+   * A tool whose `mise.toml` pin names a distribution as well as a version, such as
+   * `temurin-25.0.4`. The pin agrees only when the output also names that distribution.
+   */
+  distribution?: { prefix: string; output: RegExp };
 }
 
 const version = String.raw`(\d+(?:\.\d+)*)`;
@@ -54,6 +59,17 @@ const probes: Record<string, ToolProbe> = {
     identity: new RegExp(String.raw`^cargo-deny ${version}`),
   },
   go: { arguments: ["version"], identity: new RegExp(String.raw`^go version go${version}`) },
+  // Gradle prints a banner, then a rule, then its name and version.
+  gradle: {
+    arguments: ["--version"],
+    identity: new RegExp(String.raw`(?:^|\n)Gradle ${version}\r?\n`),
+  },
+  // `--version` with two dashes prints to standard output. A JDK names its build on the next line.
+  java: {
+    arguments: ["--version"],
+    identity: new RegExp(String.raw`^openjdk ${version}`),
+    distribution: { prefix: "temurin-", output: /^OpenJDK Runtime Environment Temurin-/m },
+  },
   lefthook: { arguments: ["version"], identity: new RegExp(String.raw`^${version}`) },
   node: { arguments: ["--version"], identity: new RegExp(String.raw`^v${version}`) },
   pnpm: { arguments: ["--version"], identity: new RegExp(String.raw`^${version}`) },
@@ -117,11 +133,11 @@ export async function readPins(root = checkoutRoot): Promise<Map<string, string 
   const contents = await readFile(join(root, "mise.toml"), "utf8");
   const tools = (parseToml(contents) as { tools?: Record<string, unknown> }).tools ?? {};
   const pins = new Map<string, string | undefined>();
-  for (const [tool, value] of Object.entries(tools)) pins.set(tool, exactPin(value));
+  for (const [tool, value] of Object.entries(tools)) pins.set(tool, exactPin(tool, value));
   return pins;
 }
 
-function exactPin(value: unknown): string | undefined {
+function exactPin(tool: string, value: unknown): string | undefined {
   const candidate =
     typeof value === "string"
       ? value
@@ -131,7 +147,12 @@ function exactPin(value: unknown): string | undefined {
           typeof value.version === "string"
         ? value.version
         : undefined;
-  return candidate !== undefined && /^\d+(?:\.\d+)*$/.test(candidate) ? candidate : undefined;
+  const prefix = probes[tool]?.distribution?.prefix;
+  const pinned =
+    prefix !== undefined && candidate?.startsWith(prefix)
+      ? candidate.slice(prefix.length)
+      : candidate;
+  return pinned !== undefined && /^\d+(?:\.\d+)*$/.test(pinned) ? pinned : undefined;
 }
 
 /**
@@ -208,9 +229,22 @@ export async function verifyToolchain(options: {
     ];
   }
   return await verifyTools(
-    tools.map((tool) => ({ tool, executable: tool === "rust" ? "rustc" : tool })),
+    tools.map((tool) => ({ tool, executable: defaultExecutable(tool) })),
     { mode: options.mode, pins, checkoutRoot: root },
   );
+}
+
+/**
+ * The executable that answers for a tool when no command names it. Gradle runs on the JDK that
+ * `JAVA_HOME` names before the `java` on the PATH, so `java` is checked where Gradle finds it.
+ */
+export function defaultExecutable(tool: string, environment = process.env): string {
+  if (tool === "rust") return "rustc";
+  const javaHome = environment.JAVA_HOME;
+  if (tool === "java" && javaHome !== undefined && javaHome !== "") {
+    return join(javaHome, "bin", process.platform === "win32" ? "java.exe" : "java");
+  }
+  return tool;
 }
 
 async function verifyVersioned(
@@ -242,6 +276,19 @@ async function verifyVersioned(
 
   if (mode === "pinned" && pin !== undefined && !satisfiesPin(pin, reported)) {
     return describe(`${tool} ${reported} does not match the mise.toml pin ${pin}.`, tool, pin);
+  }
+  const distribution = probe.distribution;
+  if (
+    mode === "pinned" &&
+    pin !== undefined &&
+    distribution &&
+    !distribution.output.test(result.output)
+  ) {
+    return describe(
+      `${tool} ${reported} is not the ${distribution.prefix.slice(0, -1)} build that mise.toml pins.`,
+      tool,
+      pin,
+    );
   }
   return undefined;
 }
@@ -290,7 +337,8 @@ async function verifyGofmt(
 
 /** Say what was found, why it stops the command, and the exact repair. */
 function describe(finding: string, tool: string, pin: string | undefined): string {
-  const install = pin === undefined ? "mise install" : `mise install ${tool}@${pin}`;
+  const prefix = probes[tool]?.distribution?.prefix ?? "";
+  const install = pin === undefined ? "mise install" : `mise install ${tool}@${prefix}${pin}`;
   return [
     finding,
     "A check that runs on a substituted tool reports a pass without doing the work.",

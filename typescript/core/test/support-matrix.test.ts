@@ -254,6 +254,12 @@ describe("supported version constants", () => {
       // CI installs the advisory scanner itself, so `pnpm rust:vuln` runs the same release there.
       "cargo-deny": /tool: cargo-deny@(\S+)/.exec(workflow)?.[1],
       go: manifest.toolchains.go,
+      // The static job installs the JDK and Gradle that lint and format the JVM sources, so CI runs
+      // the same releases. SM-1397 moves both pins to `support.json`.
+      gradle: /gradle-version: (\S+) # Pinned to the gradle version in mise\.toml\./.exec(
+        workflow,
+      )?.[1],
+      java: `temurin-${/java-version: (\S+) # Pinned to the java version in mise\.toml\./.exec(workflow)?.[1]}`,
       // mise bootstraps the hook runner before pnpm install, so it pins the same release.
       lefthook: devDependencies.lefthook!.replace(/^\^/, ""),
       node: manifest.toolchains.node,
@@ -553,6 +559,7 @@ describe("continuous integration", () => {
       "packed",
       "rust",
       "ruby",
+      "jvm",
       "ruby-rails",
       "demo",
     ]);
@@ -565,12 +572,12 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
     );
-    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(5);
+    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(6);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
   });
 
