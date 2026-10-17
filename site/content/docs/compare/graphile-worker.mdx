@@ -1,0 +1,116 @@
+---
+title: "Workhorse compared with Graphile Worker"
+description: "Graphile Worker vs Workhorse: two task queues that keep work in PostgreSQL. Compare their features, find when Graphile Worker is the better choice, and move a job to Workhorse."
+---
+
+Workhorse is a durable task queue on PostgreSQL. Graphile Worker is a job queue that also keeps its
+work in PostgreSQL. Each one lets you enqueue a task in the same transaction as your data, so
+neither needs a broker. This page compares the two products, row by row, and tells you when
+Graphile Worker is the better choice.
+
+## Compare Workhorse and Graphile Worker
+
+The two products share the base of a PostgreSQL queue: transactional enqueue, delays, cron
+schedules, priorities, retries with backoff, debounce by key, and batch handler delivery. They
+differ in five areas:
+
+- **Enqueue from SQL.** Graphile Worker gives `add_job` as a SQL function. A database trigger or a
+  client in any language can add a job. Workhorse enqueues through its SDKs.
+- **Checkpoints inside a task.** A Workhorse handler can store the result of each checkpoint. When
+  the task runs again, the handler reuses each stored result. It can also wait for a timer or a
+  signal without a worker slot. In Graphile Worker, a retry runs the whole task again.
+- **Limits across workers.** A Graphile Worker named queue runs one job at a time. A higher limit
+  needs dedicated workers or several named queues. A rate limit needs `forbiddenFlags`. Workhorse
+  has concurrency and rate limits for a queue or for each key.
+- **Operations.** Workhorse includes a dashboard, queue pause, task dependencies, cancellation of a
+  running task, and OpenTelemetry. Graphile Worker gives SQL admin functions and events, and you
+  build these parts yourself.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby. Graphile Worker
+  runs workers on Node.js.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="graphile-worker" />
+
+## When Graphile Worker is the better choice
+
+Graphile Worker is the better choice in these cases:
+
+- Your application runs on Node.js, and its workers do not need another language.
+- A database trigger or a SQL function must add jobs directly.
+- Your jobs are short, and a retry that runs the whole task again is acceptable.
+- You want a small library, and you build your own dashboard and telemetry.
+
+Workhorse is the better choice in these cases:
+
+- A task has parts that are slow or costly to repeat.
+- A task waits for a timer, a signal, or a person.
+- You need a concurrency limit above one, or a rate limit, across all workers.
+- A task must run again soon after its worker crashes or gets `SIGKILL`. In Graphile Worker
+  without Worker Pro, the job stays locked for at least 4 hours, unless your own system unlocks it.
+- More than one language must run workers on the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Graphile Worker
+
+Move one task type at a time. Keep the Graphile Worker workers running until their jobs are done.
+The [migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** An application adds a `welcome_email` job in the transaction that creates a user. The
+job has three attempts.
+
+1. In Graphile Worker, the application calls `graphile_worker.add_job` on its transaction client.
+2. In Workhorse, the application passes its transaction client as the last argument of `enqueue()`.
+3. `max_attempts := 3` in Graphile Worker gives three attempts. In Workhorse, `maxAttempts: 3`
+   gives the same three attempts.
+
+Before the move, with Graphile Worker:
+
+```js
+await client.query("SELECT graphile_worker.add_job('welcome_email', $1::json, max_attempts := 3)", [
+  JSON.stringify({ userId }),
+]);
+
+await run({
+  connectionString,
+  taskList: {
+    welcome_email: async (payload) => {
+      await sendWelcomeEmail(payload.userId);
+    },
+  },
+});
+```
+
+After the move, with Workhorse:
+
+```ts
+await queue.enqueue(
+  "welcome_email",
+  { userId },
+  {
+    maxAttempts: 3,
+    retryPolicy: { type: "exponential", initialDelayMs: 5_000, multiplier: 2, maxDelayMs: 300_000 },
+  },
+  client,
+);
+
+const worker = new Worker(queue).handle("welcome_email", async (payload: { userId: string }) => {
+  await sendWelcomeEmail(payload.userId);
+});
+```
+
+`client` is the PostgreSQL client of your open transaction. Graphile Worker uses one fixed backoff
+formula for every job. A Workhorse exponential policy states its first delay, its multiplier, and
+its maximum delay in milliseconds. Choose values that suit the task.
+
+Graphile Worker runs a job with a smaller `priority` number first. Workhorse runs a task with a
+larger priority number first, so reverse the numbers when you move them.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler reuses stored results.
