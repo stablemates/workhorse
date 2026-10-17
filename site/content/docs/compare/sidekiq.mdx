@@ -1,0 +1,123 @@
+---
+title: "Workhorse compared with Sidekiq"
+description: "Sidekiq vs Workhorse: a Ruby task queue on Redis, and a PostgreSQL task queue. Compare their features and editions, find when Sidekiq is the better choice, and move a job to Workhorse."
+---
+
+Sidekiq is a task queue for Ruby that keeps its work in Redis. It has a free open source edition and
+two paid editions, Sidekiq Pro and Sidekiq Enterprise. Workhorse is a durable task queue that keeps
+its work in PostgreSQL. It enqueues a task in your transaction, continues a task after a worker
+crash, and runs workers in five languages. This page compares the two products, row by row, and
+tells you when Sidekiq is the better choice.
+
+## Compare Workhorse and Sidekiq
+
+The two products share many features. These include delays, retries with backoff, a dashboard, and
+a set of failed tasks that an operator can run again. They differ in five areas:
+
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Sidekiq can push a job to Redis after the Active Record transaction commits. The
+  commit and the push are two steps. Thus, if the process stops between them, the data has no job.
+- **Editions.** Sidekiq keeps some features in its paid editions. Batches, crash recovery, and
+  queue pause need Sidekiq Pro. Recurring schedules, unique jobs, and limits across all workers
+  need Sidekiq Enterprise. Workhorse has these features in its Apache-2.0 packages.
+- **Priorities.** Sidekiq gives priority to a queue, not to a job. A Workhorse task has its own
+  priority inside its queue.
+- **Progress inside a task.** A Workhorse handler can save checkpoints. A checkpoint is the stored
+  result of one part of the handler. When the task runs again, the handler uses the stored result.
+  A Sidekiq iterable job stores a cursor and continues from it.
+- **Languages.** Sidekiq runs jobs in Ruby only. Workhorse has workers in TypeScript, Python, Go,
+  Rust, and Ruby.
+
+A cell that names Sidekiq Pro or Sidekiq Enterprise describes a paid edition. Each cell links its
+source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="sidekiq" />
+
+## When Sidekiq is the better choice
+
+Sidekiq is the better choice in these cases:
+
+- Your application uses MySQL or SQLite, not PostgreSQL. Workhorse needs PostgreSQL.
+- You already run Redis, and your team already uses Sidekiq Pro or Sidekiq Enterprise.
+- You process large collections with iterable jobs and their cursor API.
+- Your application does not need the job and its data to commit together.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- You need crash recovery, queue pause, or limits across all workers without a paid edition.
+- A task has steps that are slow or costly to repeat.
+- Some workers are not in Ruby.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Sidekiq
+
+Move one queue at a time. Keep the Sidekiq processes running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+If your jobs use Active Job with the `:sidekiq` adapter, change the adapter. The
+[Active Job page](/docs/active-job) shows how. Calls such as `perform_later` and `queue_as` do not
+change. If a job class calls `sidekiq_options`, replace that call with `workhorse_options`. The two
+methods accept different keys. To get `workhorse_options`, include
+`Stablemates::Workhorse::ActiveJob::Options` one time in `ApplicationJob`. A job that includes `Sidekiq::Job` moves to a native handler, as this
+example shows.
+
+**Example.** An application starts an `OrderConfirmJob` after it saves an order. The job has five
+retries.
+
+1. With Sidekiq, the application saves the order, then calls `perform_async`. If the process stops
+   between the two calls, the order has no job.
+2. With Workhorse, the application calls `enqueue` inside the transaction that saves the order.
+3. `retry: 5` in Sidekiq gives one attempt and five retries. Thus Workhorse needs
+   `max_attempts: 6`.
+
+Before the move, with Sidekiq:
+
+```ruby
+class OrderConfirmJob
+  include Sidekiq::Job
+  sidekiq_options queue: "orders", retry: 5
+
+  def perform(order_id)
+    OrderMailer.confirm(order_id).deliver_now
+  end
+end
+
+order.save!
+OrderConfirmJob.perform_async(order.id)
+```
+
+After the move, with Workhorse:
+
+```ruby
+executor = Stablemates::Workhorse::ActiveRecordExecutor.new(ActiveRecord::Base)
+queue = Stablemates::Workhorse::Queue.new(executor, default_queue: "orders")
+
+ActiveRecord::Base.transaction do
+  order.save!
+  queue.enqueue("order.confirm", {"orderId" => order.id}, max_attempts: 6)
+end
+
+pool = ConnectionPool.new(size: 6) { PG.connect(ENV.fetch("DATABASE_URL")) }
+worker = Stablemates::Workhorse::Worker.new(pool, queues: ["orders"], concurrency: 5)
+worker.handle("order.confirm") do |payload, _context|
+  OrderMailer.confirm(payload["orderId"]).deliver_now
+  nil
+end
+Stablemates::Workhorse.run_worker_process(worker)
+```
+
+`ActiveRecordExecutor` runs the enqueue on the connection that holds the transaction. Thus the task
+commits and rolls back with the order. The worker runs in its own process, with its own connection
+pool, and reads the `orders` queue. The handler returns `nil`, because Workhorse stores the return
+value as the task result, and that value must be JSON. Sidekiq also stores its arguments as JSON, so a payload
+`Hash` holds the same values.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Run Rails jobs on Workhorse](/docs/active-job) explains the Active Job adapter.
