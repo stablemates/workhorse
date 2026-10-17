@@ -1202,8 +1202,7 @@
       "name": "Sidekiq",
       "aliases": ["sidekiq"],
       "category": "broker-queue",
-      "page": "planned",
-      "issue": "SM-1367",
+      "page": "published",
       "version": "8.1.7",
       "checked": "2026-10-17",
       "repository": "https://github.com/sidekiq/sidekiq",
@@ -1216,12 +1215,89 @@
           "version": "8.1.7",
           "evidence": "TransactionAwareClient#push: \"@transaction_backend.call { @redis_client.push(item) }\" with ActiveRecord.after_all_transactions_commit. Enabled by Sidekiq.transactional_push!."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "perform_in takes a delay. perform_at takes a time.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job.rb#L258-L263",
+          "version": "8.1.7",
+          "evidence": "\"+interval+ must be a timestamp, numeric or something that acts numeric\"; def perform_in(interval, *args) at(interval).perform_async(*args) end; alias_method :perform_at, :perform_in"
+        },
+        "recurring-schedules": {
+          "status": "Partial",
+          "note": "Periodic jobs with cron syntax are in Sidekiq Enterprise, a paid edition. The open source edition has none.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L154-L160",
+          "version": "8.1.7",
+          "evidence": "\"**NEW** Test helper to verify periodic job registration block\"; CRON_BLOCK = ->(mgr) { mgr.register(\"0 * * * * *\", \"SomeJob\") }. Ent-Changes.md#L47: \"The Web UI can now pause, unpause and manually enqueue periodic jobs.\" Read Changes.md and lib/: the open source gem has no periodic job API."
+        },
+        "priorities": {
+          "status": "Partial",
+          "note": "Priority comes from the queue. A process reads its queues in strict order or at random by weight. A job has no priority.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/fetch.rb#L74-L88",
+          "version": "8.1.7",
+          "evidence": "\"Creating the Redis#brpop command takes into account any configured queue weights. By default Redis#brpop returns data from the first queue that has pending elements.\" queues_cmd returns the queues in strict order or shuffled by weight. Client options (lib/sidekiq/client.rb#L77-L85) have no priority key."
+        },
+        "enqueue-deduplication": {
+          "status": "Partial",
+          "note": "Unique jobs are in Sidekiq Enterprise, a paid edition. A unique lock refuses a duplicate job.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L186-L193",
+          "version": "8.1.7",
+          "evidence": "7.0.4: \"Unique middleware now prints the JID holding the lock if there is a duplicate [#5736]\" and \"Unique locks set with older versions (<7.0.4) will not work with newer versions.\" Ent-Changes.md#L523: \"Fix `unique_for: false`\"."
+        },
+        "task-dependencies": {
+          "status": "Partial",
+          "note": "Sidekiq Pro, a paid edition, has batches. A callback job starts when all jobs of a batch finish. A job cannot wait for one other job.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/docs/Pro-2.0-Upgrade.md#L21-L45",
+          "version": "8.1.7",
+          "evidence": "\"Batches can now be nested within the `jobs` method.\" \"Parent batch callbacks are not processed until all child batch callbacks have run successfully.\" Batch callbacks: batch.on(:success, MyCallback, ...) (Pro-Changes.md#L66-L72)."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "25 retries by default. The delay grows with the fourth power of the retry count. sidekiq_retry_in sets a custom delay.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job_retry.rb#L48-L58",
+          "version": "8.1.7",
+          "evidence": "\"The default number of retries is 25 which works out to about 3 weeks\"; sidekiq_options retry: 10, retry_queue: 'low'. job_retry.rb#L238: delay = (count**4) + 15, which sidekiq_retry_in can replace."
+        },
+        "crash-recovery": {
+          "status": "Partial",
+          "note": "The open source fetch removes a job from Redis when it starts. If the process crashes, its running jobs are lost. Sidekiq Pro super_fetch recovers them.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L512-L516",
+          "version": "8.1.7",
+          "evidence": "Pro metrics: \"jobs.recovered.fetch - when a job is recovered by super_fetch after process crash\". Open source BasicFetch (lib/sidekiq/fetch.rb#L16-L17, #L48) removes the job with BRPOP and acknowledge does \"nothing\"; bulk_requeue pushes jobs back only on shutdown."
+        },
+        "cancellation": {
+          "status": "Partial",
+          "note": "Only iterable jobs can be cancelled. The job checks the flag between iterations, when 5 seconds or more passed since the last check.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Changes.md#L284-L289",
+          "version": "8.1.7",
+          "evidence": "\"Iterable jobs can be cancelled via `Sidekiq::Client#cancel!`\"; c.cancel!(jid) # => true. lib/sidekiq/job/iterable.rb#L52-L54: \"Cancellation is asynchronous and is checked at the start of iteration and every 5 seconds thereafter\". iterable.rb#L209-L216: the check runs inside enumerator.each when mono_now - state_flushed_at >= STATE_FLUSH_INTERVAL (5 seconds)."
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "The concurrent limiter is in Sidekiq Enterprise, a paid edition. In the open source edition, the limit is threads in each process.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L291-L296",
+          "version": "8.1.7",
+          "evidence": "\"Rate limiters may now customize their reschedule count\"; Sidekiq::Limiter.concurrent(\"somename\", 5, reschedule: 0). Open source concurrency is a thread count for each process (docs/capsule.md)."
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "Rate limiters are in Sidekiq Enterprise, a paid edition. The job calls within_limit around the limited code.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Ent-Changes.md#L280-L290",
+          "version": "8.1.7",
+          "evidence": "\"Add new **leaky bucket** rate limiter\"; leaker = Sidekiq::Limiter.leaky(\"shopify\", 60, :minute); leaker.within_limit do ... end. Bucket and window limiters: docs/Ent-2.0-Upgrade.md#L15-L17, Ent-Changes.md#L503."
+        },
         "checkpoints": {
           "status": "Partial",
           "note": "Iterable jobs save a cursor in Redis and continue from it. There are no named steps.",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job/iterable.rb#L229-L233",
           "version": "8.1.7",
           "evidence": "iterable_job.rb#L22-L25: \"the cursor will be saved to Redis and the job re-queued to pick up the rest of the work upon restart.\" iterable.rb saves state on error: \"rescue Exception / flush_state / raise\"."
+        },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running job cannot suspend. perform_in delays a job before it starts.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job.rb#L258-L263",
+          "version": "8.1.7",
+          "evidence": "perform_in(interval, *args) schedules a job before it starts. Read lib/sidekiq/job.rb, lib/sidekiq/job/iterable.rb, and Changes.md: no API suspends a running job until a timer or a signal."
         },
         "dashboard": {
           "status": "Supported",
@@ -1230,11 +1306,39 @@
           "version": "8.1.7",
           "evidence": "\"Here's the Web UI:\" with screenshot examples/web-ui.png. lib/sidekiq/web.rb ships in the gem."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "The dead set keeps jobs that used all retries. By default it keeps 10,000 jobs for six months. The Web UI and the API run them again.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/api.rb#L926-L945",
+          "version": "8.1.7",
+          "evidence": "\"The set of dead jobs within Sidekiq. Dead jobs have failed all of their retries and are helding in this set pending some sort of manual fix. They will be removed after 6 months (dead_timeout) if not.\" lib/sidekiq/config.rb#L35-L36: dead_max_jobs: 10_000. SortedEntry#retry (api.rb#L644) runs a job again."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "Queue pause is in Sidekiq Pro, a paid edition.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L887-L897",
+          "version": "8.1.7",
+          "evidence": "\"Add ability to pause reliable queues via API.\" q.pause!; q.paused? # => true; q.unpause!. Open source Sidekiq::Queue#paused? returns false (lib/sidekiq/api.rb#L314-L317)."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The OpenTelemetry project maintains the instrumentation gem. Sidekiq does not ship it.",
+          "source": "https://github.com/open-telemetry/opentelemetry-ruby-contrib/blob/opentelemetry-instrumentation-sidekiq/v0.29.0/instrumentation/sidekiq/README.md#L1-L23",
+          "version": "8.1.7",
+          "evidence": "\"The Sidekiq instrumentation is a community-maintained instrumentation for the Sidekiq Ruby jobs system.\" c.use 'OpenTelemetry::Instrumentation::Sidekiq'. instrumentation.rb#L86: MINIMUM_VERSION = Gem::Version.new('4.2.10'). Read the Sidekiq repository at v8.1.7: no OpenTelemetry code."
+        },
         "worker-languages": {
           "value": "Ruby",
           "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/README.md#L10-L11",
           "version": "8.1.7",
           "evidence": "\"Sidekiq uses threads to handle many jobs at the same time in the same process. Sidekiq can be used by any Ruby application.\""
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "A job is JSON in Redis. Other runtimes can write that format, but Sidekiq ships no client for them.",
+          "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/client.rb#L77-L95",
+          "version": "8.1.7",
+          "evidence": "\"The main method used to push a job to Redis\": queue, class, args (\"must be JSON-serializable\"), at, retry. \"because we are serializing to JSON\". The repository has only the Ruby client."
         },
         "infrastructure": {
           "value": "Redis",
@@ -1250,7 +1354,50 @@
           "version": "8.1.7",
           "evidence": "\"Sidekiq is an Open Source project licensed under the terms of the LGPLv3 license.\" ... \"Sidekiq Pro and Sidekiq Enterprise have a commercial-friendly license.\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Partial",
+            "note": "Batches are in Sidekiq Pro, a paid edition. A batch runs success and complete callbacks.",
+            "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/Pro-Changes.md#L215-L219",
+            "version": "8.1.7",
+            "evidence": "\"Add `complete_at`, `success_at` and `death_at` timestamps to `S::Batch::Status`, which track when that batch callback was triggered.\" Pro-Changes.md#L872: \"Use `Batch#on(:complete)` instead of `Batch#notify`.\" Pro-Changes.md#L66-L72: \"Warn if passing a single value as options in `batch.on(event, target, options)`.\" batch.on(:success, MyCallback, \"document_id\" => 1234). Pro-Changes.md#L1178: 0.5 \"Batches\". docs/Pro-4.0-Upgrade.md#L7-L9: \"Batches now \\\"die\\\" if any of their jobs die.\""
+          }
+        },
+        {
+          "id": "active-job",
+          "group": "languages",
+          "label": "Runs Rails Active Job jobs",
+          "kind": "text",
+          "workhorse": {
+            "value": "Yes",
+            "source": "docs/parity.md",
+            "page": "/docs/active-job",
+            "note": "The Ruby gem has an adapter. Some features need a native handler."
+          },
+          "cell": {
+            "value": "Yes",
+            "note": "The gem ships the :sidekiq adapter. An Active Job class can also set sidekiq_options.",
+            "source": "https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/active_job/queue_adapters/sidekiq_adapter.rb#L20-L40",
+            "version": "8.1.7",
+            "evidence": "The gem patches ActiveJob::QueueAdapters: \"Explicitly remove the implementation existing in older Rails.\" Active Job classes can call sidekiq_options, e.g. sidekiq_options retry: 3. Changes.md#L290: \"Take over support for ActiveJob's `:sidekiq` adapter [#6430]\"."
+          }
+        }
+      ]
     },
     {
       "slug": "dramatiq",
