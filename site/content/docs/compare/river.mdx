@@ -1,0 +1,117 @@
+---
+title: "Workhorse compared with River"
+description: "River vs Workhorse: two task queues that keep work in PostgreSQL. Compare their features, find when River is the better choice, and move a job to Workhorse."
+---
+
+River is a task queue for Go on PostgreSQL. Workhorse is a durable task queue for PostgreSQL. Each
+one lets you enqueue a task in the same transaction as your data, so neither needs a broker. This
+page compares the two products, row by row, and tells you when River is the better choice.
+
+## Compare Workhorse and River
+
+The two products share the base of a PostgreSQL queue: transactional enqueue, delays, recurring
+schedules, priorities, unique keys, retries, cancellation, queue pause, and a free dashboard. They
+differ in five areas:
+
+- **Steps inside a task.** Both products skip completed steps when a task runs again. A Workhorse
+  checkpoint also stores the result of its step, and the handler gets that result back. A River step
+  stores no result. River records the last step when the attempt ends, unless the handler calls
+  `ResumableSetStepTx`.
+- **Free and paid features.** Workhorse has task dependencies, signal waits, and concurrency limits
+  across all workers in its free library. River has these in River Pro, its paid edition. River has
+  no rate limits.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
+  protocol. River has workers in Go, Ruby, Rust, and TypeScript, and a Python client that inserts
+  jobs only.
+- **Databases.** River also runs on SQLite. Workhorse runs on PostgreSQL only.
+- **Transactional handlers.** River can complete a job in the transaction of the handler's writes. A
+  Workhorse handler commits its own writes, and delivery is at least once. Only the low-level
+  TypeScript `Queue` API can complete a task in your transaction.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="river" />
+
+## When River is the better choice
+
+River is the better choice in these cases:
+
+- Your application is in Go, and you want a library that follows Go idioms, such as typed job
+  arguments and workers.
+- You run SQLite, or you want the same queue on PostgreSQL and SQLite.
+- Your handlers must commit their writes and the job completion in one transaction.
+- Your jobs are short, and you do not need dependencies, signal waits, or limits across workers. Or
+  River Pro is acceptable for these features.
+
+Workhorse is the better choice in these cases:
+
+- A step must give its result to the steps that come after it when the task runs again.
+- A task waits for a signal or a person, or must start after other tasks finish, and you want this
+  in the free library.
+- Your workers need rate limits, or concurrency limits for each key across all workers.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from River
+
+Move one queue at a time. Keep the River workers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** A Go application inserts a `welcome_email` job in the transaction that creates a user.
+The job has five attempts.
+
+1. In River, the application calls `InsertTx` with its open `pgx.Tx`.
+2. In Workhorse, the application wraps the same `pgx.Tx` in `NewPGXExecutor` and calls `Enqueue`.
+3. River sets `MaxAttempts: 5` in `InsertOpts`. Workhorse sets `MaxAttempts: 5` in
+   `EnqueueOptions`.
+
+Before the move, with River:
+
+```go
+type WelcomeEmailArgs struct {
+	UserID string `json:"userId"`
+}
+
+func (WelcomeEmailArgs) Kind() string { return "welcome_email" }
+
+type WelcomeEmailWorker struct {
+	river.WorkerDefaults[WelcomeEmailArgs]
+}
+
+func (w *WelcomeEmailWorker) Work(ctx context.Context, job *river.Job[WelcomeEmailArgs]) error {
+	return sendWelcomeEmail(ctx, job.Args.UserID)
+}
+
+_, err = riverClient.InsertTx(ctx, tx, WelcomeEmailArgs{UserID: userID}, &river.InsertOpts{
+	MaxAttempts: 5,
+})
+```
+
+After the move, with Workhorse:
+
+```go
+queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+_, err = queue.Enqueue(ctx, "welcome_email", map[string]any{"userId": userID},
+	workhorse.EnqueueOptions{MaxAttempts: 5})
+
+worker.Handle("welcome_email", func(
+	ctx context.Context,
+	payload any,
+	_ *workhorse.HandlerContext,
+) (any, error) {
+	userID := payload.(map[string]any)["userId"].(string)
+	return nil, sendWelcomeEmail(ctx, userID)
+})
+```
+
+`tx` is the `pgx.Tx` of your open transaction. A River job kind becomes a Workhorse task type, and
+the job arguments become the payload. River retries with `ATTEMPT^4` backoff by default. Set
+`RetryPolicy` in Workhorse to choose a delay. [Retries](/docs/retries) gives the Workhorse defaults.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
