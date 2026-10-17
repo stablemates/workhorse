@@ -1,0 +1,126 @@
+---
+title: "Workhorse compared with Inngest"
+description: "Inngest vs Workhorse: a workflow platform with its own server, and a task queue in PostgreSQL. Compare their features, find when Inngest is the better choice, and move a function to Workhorse."
+---
+
+Inngest and Workhorse are in different categories. Inngest is a workflow platform. Its server
+receives events, keeps the state of each run, and calls your functions to run their steps. It calls
+them over HTTP or over a persistent connection. Workhorse is a durable task queue in PostgreSQL.
+Your workers claim tasks from tables in your database, and no server runs beside it. This page
+compares the two products, row by row, and tells you when Inngest is the better choice.
+
+## Compare Workhorse and Inngest
+
+The two products share many features. These include delays, cron schedules, retries with backoff,
+concurrency and rate limits for each key, and a free dashboard. A function or a handler can store
+the result of each step and skip the completed steps when it runs again. It can also wait for a
+timer or start child work without a worker slot. The two products differ in four areas:
+
+- **Category.** Inngest has a workflow model: events trigger functions, and steps are the unit of
+  retry. Workhorse has a task model: you enqueue a task, and a handler can add named checkpoints.
+  Workhorse is a task queue, not a workflow platform.
+- **Services.** Inngest needs its own server, or Inngest Cloud. By default, a self-hosted server
+  runs an in-memory Redis and SQLite. It can use an external Redis and PostgreSQL. Workhorse needs
+  only PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. An Inngest event goes to the server over HTTP, outside your database transaction.
+- **License.** The Inngest server is under SSPL-1.0, and each release becomes Apache-2.0 after
+  three years. Its SDKs are Apache-2.0. Workhorse is Apache-2.0.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="inngest" />
+
+## When Inngest is the better choice
+
+Inngest is the better choice in these cases:
+
+- **Your system is event-driven.** One Inngest event can start many functions, and a function can
+  wait for a matching event. Workhorse enqueues one task for one task type, and a handler waits
+  for a named signal.
+- **You want a managed service.** Inngest Cloud runs the server, the queue, and the run history for
+  you. Workhorse has no managed service, so you operate PostgreSQL and your workers.
+- **Your functions run on serverless platforms.** The Inngest server calls each step over HTTP, so a
+  function can run where no process stays alive. A Workhorse worker is a long-running process that
+  claims tasks from PostgreSQL.
+- **Your application has no PostgreSQL database.** Workhorse needs PostgreSQL. Inngest needs only
+  its server, or Inngest Cloud.
+- **You want to run a failed run again from a chosen step.** An Inngest rerun can start from a
+  chosen step. A Workhorse redrive starts a new task without the stored checkpoints.
+- **Your workers are in Kotlin or Java.** Inngest has an SDK for them. Workhorse has workers in
+  TypeScript, Python, Go, Rust, and Ruby.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- You want no service beside PostgreSQL.
+- Your workers are in Rust or Ruby.
+- You want the Apache-2.0 license for every part of the product.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Inngest
+
+Move one function at a time. Keep the Inngest functions running until their runs end. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+Some Inngest terms have a different meaning in Workhorse:
+
+| Inngest      | Workhorse  | Difference                                                                                   |
+| ------------ | ---------- | -------------------------------------------------------------------------------------------- |
+| Event        | Enqueue    | One event can start many functions. One enqueue call creates one task of one task type.      |
+| Function     | Handler    | The Inngest server calls a function. A Workhorse worker claims a task and calls its handler. |
+| Step         | Checkpoint | A step retries on its own. A checkpoint is part of one task attempt.                         |
+| Function run | Task       | A run starts when an event arrives. A task starts when you enqueue it.                       |
+
+**Example.** An application creates a user and starts a `user-signup` function. The function sends
+a welcome email, waits one day, and sends a follow-up email.
+
+1. In Inngest, the application creates the user, then sends a `user/created` event.
+2. In Workhorse, the application enqueues a `user-signup` task inside the transaction that creates
+   the user.
+3. Each `step.run` becomes a `ctx.checkpoint` with the same name. `step.sleep` becomes `ctx.sleep`.
+
+Before the move, with Inngest:
+
+```ts
+await createUser(user);
+await inngest.send({ name: "user/created", data: { email: user.email } });
+
+inngest.createFunction(
+  { id: "user-signup", triggers: { event: "user/created" } },
+  async ({ event, step }) => {
+    await step.run("send-welcome-email", () => sendWelcomeEmail(event.data.email));
+    await step.sleep("wait-a-day", "1d");
+    await step.run("send-follow-up", () => sendFollowUp(event.data.email));
+  },
+);
+```
+
+After the move, with Workhorse:
+
+```ts
+await db.transaction(async (tx) => {
+  await createUser(user, tx);
+  await workhorse.forTransaction(tx).enqueue("user-signup", { email: user.email });
+});
+
+const worker = new Worker(queue).handle("user-signup", async (payload: { email: string }, ctx) => {
+  await ctx.checkpoint("send-welcome-email", () => sendWelcomeEmail(payload.email));
+  await ctx.sleep("wait-a-day", 86_400_000);
+  await ctx.checkpoint("send-follow-up", () => sendFollowUp(payload.email));
+});
+```
+
+This example uses Drizzle. `ctx.sleep` takes milliseconds. The wait releases the worker, as
+`step.sleep` does. A checkpoint result must be a JSON value. An Inngest step retries on its own,
+but a failed Workhorse checkpoint fails the task attempt. The next attempt skips the completed
+checkpoints.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
