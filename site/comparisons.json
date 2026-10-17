@@ -1974,8 +1974,7 @@
       "name": "Temporal",
       "aliases": ["temporalio"],
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1369",
+      "page": "published",
       "version": "1.32.1",
       "checked": "2026-10-17",
       "repository": "https://github.com/temporalio/temporal",
@@ -1983,24 +1982,122 @@
       "cells": {
         "transactional-enqueue": {
           "status": "Not supported",
-          "note": "The application starts a Workflow with a gRPC call to the Temporal Service, not in its database.",
+          "note": "The application starts a Workflow with a gRPC call to the Temporal Service, not in its own database transaction.",
           "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L46",
           "version": "1.32.1",
-          "evidence": "Architecture: \"The User Application uses one of the Temporal SDKs as a gRPC client to communicate with the Temporal server to start/cancel workflows\". The History Service stores the state in its own persistence."
+          "evidence": "Architecture: \"The User Application uses one of the Temporal SDKs as a gRPC client to communicate with the Temporal server to start/cancel workflows, and interact with running workflows.\""
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "A start delay defers the first Workflow Task.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/design-patterns/delayed-start.mdx#L27",
+          "version": "1.32.1",
+          "evidence": "The Delayed Start uses a start delay option in WorkflowOptions to defer the first Workflow Task."
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "A Schedule starts a Workflow on an interval or a calendar expression.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/schedule.mdx#L19-L53",
+          "version": "1.32.1",
+          "evidence": "A Schedule contains instructions for starting a Workflow Execution at specific times. ... A simple interval ... A calendar-based expression, similar to the \"cron expressions\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "Five levels, from 1 to 5. Level 1 dispatches first.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/task-queue-priority-fairness.mdx#L41-L46",
+          "version": "1.32.1",
+          "evidence": "set a priority key at the Workflow, Activity, or Child Workflow level to a value within the integer range [1,5]. A lower value implies higher priority ... all Tasks within a Task Queue dispatch in Priority order."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "The Workflow Id is unique in a Namespace. Reuse and conflict policies decide what a second start does.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-execution/workflowid-runid.mdx#L89-L93",
+          "version": "1.32.1",
+          "evidence": "The Temporal Platform guarantees uniqueness of the Workflow Id within a Namespace based on the Workflow Id Reuse Policy. ... A Workflow Id Conflict Policy can be used to decide how to resolve a Workflow Id conflict with a Running Workflow."
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "A Workflow gets the result of an Activity before it starts the next step.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/activities/activity-execution.mdx#L38-L40",
+          "version": "1.32.1",
+          "evidence": "The Workflow schedules the Activity, and the result is delivered back to the Workflow when the Activity Execution closes."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Activities have a Retry Policy by default. Workflows do not.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/retry-policies.mdx#L119-L137",
+          "version": "1.32.1",
+          "evidence": "Activities in Temporal are associated with a Retry Policy by default, while Workflows are not. ... The default Retry Policy uses exponential backoff with a 2.0 backoff coefficient"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "The service recovers the Workflow state after a Worker outage.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-definition.mdx#L361-L362",
+          "version": "1.32.1",
+          "evidence": "The Temporal Platform ensures that the state of a Workflow Execution is recovered and progress resumes if there is an outage of either Worker Processes or the Temporal Service itself."
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "Cancellation is cooperative. An Activity gets it only when it heartbeats.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/cancellation-and-termination.mdx#L58-L64",
+          "version": "1.32.1",
+          "evidence": "Activity Cancellations are delivered to the Activity when it Heartbeats. ... An Activity that doesn't Heartbeat can't receive a Cancellation."
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "Each Worker sets its own task slots. These options do not affect other Workers.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/worker-performance/configuration.mdx#L14-L19",
+          "version": "1.32.1",
+          "evidence": "Options are specific to individual Workers and do not affect other members of your fleet. ... The maxConcurrentWorkflowTaskExecutionSize and maxConcurrentActivityExecutionSize options define the number of total available Workflow Task and Activity Task slots for a Worker."
+        },
+        "rate-limits": {
+          "status": "Supported",
+          "note": "For a Task Queue or for each fairness key.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/task-queue-priority-fairness.mdx#L716-L718",
+          "version": "1.32.1",
+          "evidence": "Set rate limits at the Task Queue level. Within a Task Queue, you can set dispatch rate limits for the whole queue using queue-rps-limit and for each fairness key using fairness-key-rps-limit-default."
         },
         "checkpoints": {
           "status": "Supported",
-          "note": "The service records each Activity result in the event history. Replay does not run completed Activities again.",
-          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L32-L35",
+          "note": "A completed Activity does not run again when the Workflow replays. Replay uses the recorded result.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/activities/workflow-activity.mdx#L77-L78",
           "version": "1.32.1",
-          "evidence": "Architecture: \"an append-only history of events is stored for each workflow execution, and all required workflow state can be recreated at any time by replaying this history.\""
+          "evidence": "Replay uses the recorded result. A completed Activity isn't executed again when the Workflow replays."
+        },
+        "durable-waits": {
+          "status": "Supported",
+          "note": "A Workflow waits on a persisted Timer. Workers use no additional resources while it waits.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-execution/timers-delays.mdx#L17-L19",
+          "version": "1.32.1",
+          "evidence": "Timers in Temporal are persisted ... Workers consume no additional resources while waiting for a Timer to fire"
         },
         "dashboard": {
           "status": "Supported",
-          "note": "Free. The Web UI is a separate MIT repository, temporalio/ui. Temporal Cloud has its own UI.",
-          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/README.md#L58-L60",
+          "note": "The Temporal Web UI ships with each Temporal CLI release and with Temporal Cloud. Its repositories are open source.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/web-ui.mdx#L12-L22",
           "version": "1.32.1",
-          "evidence": "README: \"Try Temporal Web UI by opening http://localhost:8233 for viewing your sample workflows executing on Temporal.\""
+          "evidence": "The Temporal Web UI provides users with Workflow Execution state and metadata for debugging purposes. It ships with every Temporal CLI release and is available with Temporal Cloud. ... Web UI open source repos: temporalio/ui, temporalio/ui-server"
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A Reset starts a closed Workflow again from a chosen point in its history.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-execution/event.mdx#L102-L104",
+          "version": "1.32.1",
+          "evidence": "A Reset terminates a Workflow Execution and creates a new Workflow Execution with the same Workflow Type and Workflow ID. The Event History is copied from the original execution up to and including the reset point."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "Pause holds one Activity at a time. It has no batch form.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/activities/activity-operations/pause.mdx#L92-L93",
+          "version": "1.32.1",
+          "evidence": "Pause operates on individual Activities. There's no --query flag on pause, so there's no batch form."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "Tracing through SDK interceptors.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/typescript/workers/interceptors.mdx#L30-L33",
+          "version": "1.32.1",
+          "evidence": "The TypeScript SDK comes with an optional interceptor package that adds tracing with OpenTelemetry."
         },
         "worker-languages": {
           "value": "Go, Java, .NET, PHP, Python, Ruby, Rust, TypeScript",
@@ -2009,21 +2106,92 @@
           "version": "1.32.1",
           "evidence": "Enhance your Temporal Application development with .NET, Go, Java, PHP, Python, Ruby, Rust, and TypeScript."
         },
-        "infrastructure": {
-          "value": "A Temporal Service and a database (Cassandra, MySQL, PostgreSQL or SQLite)",
-          "note": "Elasticsearch is optional for advanced visibility. Temporal Cloud is the paid managed service.",
-          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L57-L61",
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Each SDK implements the Worker runtime.",
+          "source": "https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L48-L49",
           "version": "1.32.1",
-          "evidence": "Architecture: History, Matching and Frontend services; \"Users can host and operate the Temporal server and its database themselves, or use Temporal Cloud.\" schema/ at the tag holds cassandra, mysql, postgresql, sqlite and elasticsearch."
+          "evidence": "Workflow and Activity code uses the SDK as a library, and the Worker runtime is implemented by the SDK."
+        },
+        "infrastructure": {
+          "value": "A Temporal Service and a database (Cassandra, MySQL or PostgreSQL)",
+          "note": "SQLite is for development and testing only.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/temporal-service/persistence.mdx#L50-L59",
+          "version": "1.32.1",
+          "evidence": "Cassandra v3.11, v4.0, and 5.0.4 and later ... PostgreSQL 13.18, 14.15, 15.10 and 16.6 ... MySQL v5.7 and v8.0 ... Temporal also supports SQLite v3.x persistence, but this is meant only for development and testing, not production usage."
         },
         "license": {
           "value": "MIT",
-          "note": "Temporal Cloud is the paid managed service.",
           "source": "https://github.com/temporalio/temporal/blob/v1.32.1/LICENSE#L1-L5",
           "version": "1.32.1",
           "evidence": "LICENSE: \"The MIT License / Copyright (c) 2025 Temporal Technologies Inc. ... Copyright (c) 2020 Uber Technologies, Inc.\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Workflow code must be deterministic, so the SDK can replay it against the event history.",
+            "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-definition.mdx#L200-L206",
+            "version": "1.32.1",
+            "evidence": "Generally speaking, this means you must take care to ensure that any time your Workflow code is executed it makes the same Workflow API calls in the same sequence, given the same input. ... Workflow code must be deterministic to support replay."
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Child Workflows. A Parent Close Policy decides what happens to a child when the parent closes.",
+            "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/child-workflows/child-workflows.mdx#L14-L44",
+            "version": "1.32.1",
+            "evidence": "A Child Workflow Execution is a Workflow Execution that is spawned from within another Workflow in the same Namespace. ... The Parent can optionally await on the result of the Child Workflow Execution. ... the Temporal Service propagates Cancellation Requests or Terminations to Child Workflow Executions depending on the Child's Parent Close Policy."
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "Worker Versioning",
+            "note": "A Pinned Workflow completes on one Worker Deployment Version. An Auto-Upgrade Workflow moves to the current version.",
+            "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workers/worker-versioning.mdx#L36-L46",
+            "version": "1.32.1",
+            "evidence": "You can declare each Workflow type to have a Versioning Behavior, either Pinned or Auto-Upgrade ... A Pinned Workflow is guaranteed to complete on a single Worker Deployment Version. ... An Auto-Upgrade Workflow will move to the latest Worker Deployment Version automatically whenever you change the current version."
+          }
+        }
+      ]
     },
     {
       "slug": "inngest",
