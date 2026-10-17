@@ -1587,8 +1587,7 @@
       "slug": "trigger-dev",
       "name": "Trigger.dev",
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1373",
+      "page": "published",
       "version": "4.7.4",
       "checked": "2026-10-17",
       "repository": "https://github.com/triggerdotdev/trigger.dev",
@@ -1596,47 +1595,215 @@
       "cells": {
         "transactional-enqueue": {
           "status": "Not supported",
-          "note": "The backend triggers a run through the Trigger.dev API, outside its own database transaction.",
+          "note": "The backend triggers a run with a call to the Trigger.dev API, not in its own database transaction.",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L28-L30",
           "version": "4.7.4",
-          "evidence": "Triggering docs: \"When you trigger a task from your backend code, create a named API key with Trigger only access ... and set it as TRIGGER_SECRET_KEY.\" tasks.trigger() sends the run to the Trigger.dev API."
+          "evidence": "\"When you trigger a task from your backend code, create a named API key with Trigger only access in the environment you want to target and set it as TRIGGER_SECRET_KEY.\" tasks.trigger() sends the run to the Trigger.dev API."
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "The delay option takes a duration or a date.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L691-L707",
+          "version": "4.7.4",
+          "evidence": "\"When you want to trigger a task now, but have it run at a later time, you can use the delay option\"; examples { delay: \"1h\" } and { delay: \"2024-12-01T00:00:00\" }."
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "A scheduled task runs on a cron expression, in a time zone.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/tasks/scheduled.mdx#L1-L32",
+          "version": "4.7.4",
+          "evidence": "\"Scheduled tasks (cron): A task that is triggered on a recurring schedule using cron syntax.\" The payload has \"the timezone the schedule was registered with, defaults to UTC\"."
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "A priority is a time offset in seconds. A run with priority 10 starts before runs with no priority that were triggered up to 10 seconds earlier.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/snippets/priority.mdx#L1-L22",
+          "version": "4.7.4",
+          "evidence": "\"The value for priority is a time offset in seconds that determines the order of dequeuing.\" \"If you specify a priority of 10 the run will dequeue before runs that were triggered with no priority 8 seconds ago\"."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "A second trigger with the same idempotency key returns the original run.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/idempotency.mdx#L6-L8",
+          "version": "4.7.4",
+          "evidence": "\"If you trigger a task with the same idempotencyKey twice, the second request does not create a new run. It returns the original run's handle\". L319: \"By default idempotency keys are stored for 30 days.\""
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "A parent run waits for child runs with batchTriggerAndWait(), then starts the next task.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L22-L24",
+          "version": "4.7.4",
+          "evidence": "\"yourTask.batchTriggerAndWait(): Triggers a task multiple times in parallel and then waits until they're all complete. You get the resulting data to continue with.\""
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Exponential backoff with a factor, a minimum and a maximum delay, and optional randomization.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/snippets/code/openai-retry.mdx#L12-L18",
+          "version": "4.7.4",
+          "evidence": "retry: { maxAttempts: 10, factor: 1.8, minTimeoutInMs: 500, maxTimeoutInMs: 30_000, randomize: false }. errors-retrying.mdx: \"You can configure retrying in two ways\" (config file defaults or each task)."
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "A run that stalls while it executes gets an error that Trigger.dev can retry.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/packages/core/src/v3/errors.ts#L511-L558",
+          "version": "4.7.4",
+          "evidence": "shouldRetryError(): case \"TASK_RUN_STALLED_EXECUTING\": case \"TASK_RUN_STALLED_EXECUTING_WITH_WAITPOINTS\": ... return true. docs/runs/heartbeats.mdx L7: \"If we don't receive a heartbeat within 5 minutes, we mark the run as stalled and stop it with a TASK_RUN_STALLED_EXECUTING error.\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "runs.cancel() stops the run and its child runs that are in progress.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/runs.mdx#L136-L152",
+          "version": "4.7.4",
+          "evidence": "\"When a run is canceled: The task execution is stopped; The run is marked as canceled; The task will not be retried; Any in-progress child runs are also canceled\". tasks/overview.mdx L557: \"Signal will be aborted when the task is cancelled\"."
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "For a task, for each concurrency key, or as a named limit that tasks share.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/concurrency.mdx#L14-L22",
+          "version": "4.7.4",
+          "evidence": "Use cases: \"Limit how many runs of a task execute at once\"; \"Share one limit across several tasks\"; \"Give each tenant its own separate concurrency\"; \"Cap a shared resource, like an external API, across tasks and tenants\"."
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "A concurrency limit caps the runs in progress, not the runs in a time period. The docs use it to protect an API that has rate limits.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/concurrency.mdx#L36-L53",
+          "version": "4.7.4",
+          "evidence": "\"Set the concurrency option on a task to limit how many of its runs execute at once.\" \"This is useful if you need to control access to a shared resource, like a database or an API that has rate limits.\""
         },
         "checkpoints": {
           "status": "Partial",
-          "note": "A retry runs the task from the start. Subtasks with idempotency keys return cached results.",
-          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L236-L243",
+          "note": "Only child runs that have an idempotency key keep their output for a retry.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L234-L243",
           "version": "4.7.4",
-          "evidence": "\"Result caching: The output of each subtask is cached based on its idempotency key. Intelligent retries: If a failure occurs, only the failed subtask and subsequent tasks are retried.\" L373: \"When retried, it starts from the beginning, but leverages cached results for completed subtasks.\""
+          "evidence": "\"Idempotency keys: Each subtask is assigned a unique idempotency key. Result caching: The output of each subtask is cached based on its idempotency key. Intelligent retries: If a failure occurs, only the failed subtask and subsequent tasks are retried.\" L373: \"When retried, it starts from the beginning, but leverages cached results for completed subtasks.\" idempotency.mdx L12: \"Without idempotency keys, each retry of the parent would trigger a new child task run.\""
+        },
+        "durable-waits": {
+          "status": "Supported",
+          "note": "On Trigger.dev Cloud only. Self-hosted instances have no checkpoints, which give non-blocking waits.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L39-L47",
+          "version": "4.7.4",
+          "evidence": "\"some features are only available on Trigger.dev Cloud\": \"Checkpoints | Cloud ✅ | Self-hosted ❌ | Non-blocking waits, less resource usage\". snippets/paused-execution-free.mdx: \"the concurrency slot is only released once we've snapshotted the machine and shut it down. For wait.for and wait.until that happens 60 seconds into the wait\"."
         },
         "dashboard": {
           "status": "Supported",
-          "note": "Free when self-hosted. Trigger.dev Cloud includes the same dashboard.",
-          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L32-L35",
+          "note": "The webapp includes the dashboard, in the self-hosted version and in Trigger.dev Cloud.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/self-hosting/overview.mdx#L22-L35",
           "version": "4.7.4",
-          "evidence": "Self-hosting overview: \"Webapp: includes the dashboard and other services like Redis and Postgres.\" README: \"We provide a full trace view of every task run\"."
+          "evidence": "\"The self-hosted version is functionally the same as Trigger.dev Cloud with some exceptions\"; \"Webapp: includes the dashboard and other services like Redis and Postgres.\""
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A replay copies a run, with the same payload, to the latest version.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/replaying.mdx#L1-L3",
+          "version": "4.7.4",
+          "evidence": "\"A replay is a copy of a run with the same payload but against the latest version in that environment. This is useful if something went wrong and you want to try again\"."
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "note": "Runs in progress continue to completion.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/queues.mdx#L208-L221",
+          "version": "4.7.4",
+          "evidence": "\"You can pause a queue to prevent new runs from starting. Runs that are currently executing will continue to completion.\" await queues.pause(...); \"To resume a paused queue\"."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "Run logs use OpenTelemetry. Custom exporters send traces, logs, and metrics to other services.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/config/config-file.mdx#L119-L157",
+          "version": "4.7.4",
+          "evidence": "\"We use OpenTelemetry (OTEL) for our run logs.\" \"You can also configure custom telemetry exporters to send your traces, logs, and metrics to other external services.\""
         },
         "worker-languages": {
           "value": "TypeScript, JavaScript",
-          "note": "A TypeScript task can run Python scripts through a build extension; there is no Python worker SDK.",
-          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/README.md#L43",
+          "note": "A build extension lets a TypeScript task run Python scripts.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/README.md#L43-L47",
           "version": "4.7.4",
           "evidence": "README: \"JavaScript and TypeScript SDK - Build background tasks using familiar programming models\"; \"Build extensions ... Run Python scripts, FFmpeg, browsers, and more.\""
         },
-        "infrastructure": {
-          "value": "The Trigger.dev webapp and supervisor, PostgreSQL, Redis, ClickHouse, ElectricSQL, a container registry and object storage",
-          "note": "Trigger.dev Cloud runs all of this as a paid managed service.",
-          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/hosting/docker/webapp/docker-compose.yml#L11-L230",
+        "enqueue-languages": {
+          "value": "Any language, through the HTTP API",
+          "note": "The REST API triggers a task by its identifier.",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/v3-openapi.yaml#L2582-L2588",
           "version": "4.7.4",
-          "evidence": "Self-hosted webapp compose services: webapp, postgres, redis, electric, clickhouse, registry, minio; the worker compose adds supervisor and docker-proxy. Overview: \"Webapp: includes the dashboard and other services like Redis and Postgres.\""
+          "evidence": "\"/api/v1/tasks/{taskIdentifier}/trigger\": post: operationId: trigger_task_v1, summary: Trigger a task, description: Trigger a task by its identifier."
+        },
+        "infrastructure": {
+          "value": "The Trigger.dev webapp, PostgreSQL, Redis, ClickHouse, ElectricSQL, an S2 stream server, a container registry and object storage",
+          "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/hosting/docker/webapp/docker-compose.yml#L11-L301",
+          "version": "4.7.4",
+          "evidence": "Webapp compose services: webapp, postgres, redis, electric, clickhouse, registry, minio, s2-init, s2. hosting/docker/worker/docker-compose.yml adds supervisor and docker-proxy for the workers."
         },
         "license": {
           "value": "Apache-2.0",
-          "note": "Trigger.dev Cloud is the paid managed service.",
           "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/LICENSE#L1-L3",
           "version": "4.7.4",
-          "evidence": "LICENSE: \"Apache License Version 2.0, January 2004\". No other license file at the tag outside package copies."
+          "evidence": "LICENSE: \"Apache License Version 2.0, January 2004\"."
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Not supported",
+            "note": "A retry runs the task again from the start.",
+            "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/how-it-works.mdx#L368-L373",
+            "version": "4.7.4",
+            "evidence": "\"How retries work ... The main task throws an error and is scheduled for retry. When retried, it starts from the beginning, but leverages cached results for completed subtasks.\" L141-L162: a waiting run restores a CRIU checkpoint of its process; no event history replay is described."
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "triggerAndWait() and batchTriggerAndWait() wait for child runs and return their results.",
+            "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/triggering.mdx#L22-L24",
+            "version": "4.7.4",
+            "evidence": "\"yourTask.triggerAndWait(): Triggers a task and then waits until it's complete. You get the result data to continue with.\" \"yourTask.batchTriggerAndWait(): Triggers a task multiple times in parallel and then waits until they're all complete.\""
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "Version locking",
+            "note": "A run stays on the version that it started on, also after a new deploy.",
+            "source": "https://github.com/triggerdotdev/trigger.dev/blob/v4.7.4/docs/versioning.mdx#L23-L31",
+            "version": "4.7.4",
+            "evidence": "\"When a task run starts it is locked to the latest version of the code (for that environment). Once locked it won't change versions, even if you deploy new versions.\" \"Trigger and wait functions version lock child task runs to the parent task run version.\""
+          }
+        }
+      ]
     },
     {
       "slug": "hatchet",
