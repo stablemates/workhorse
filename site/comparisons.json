@@ -1533,8 +1533,7 @@
       "name": "Restate",
       "aliases": ["restatedev"],
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1372",
+      "page": "published",
       "version": "1.8.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/restatedev/restate",
@@ -1547,12 +1546,89 @@
           "version": "1.8.0",
           "evidence": "You can invoke handlers over HTTP with or without waiting for a response ... curl localhost:8080/restate/call/MyService/myHandler ... localhost:8080 refers to ingress port of the Restate Server"
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "A one-way message takes a delay.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/http.mdx#L78-L94",
+          "version": "1.8.0",
+          "evidence": "\"You can **delay the message** by adding a delay request parameter in ISO8601 notation or using humantime format\"; curl \"localhost:8080/restate/send/MyService/myHandler?delay=10s\". develop/ts/service-communication.mdx#L114-L130: delayed messages from a handler."
+        },
+        "recurring-schedules": {
+          "status": "Partial",
+          "note": "No built-in cron. A documented recipe builds a scheduler from timers and a Virtual Object.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/guides/cron.mdx#L9-L45",
+          "version": "1.8.0",
+          "evidence": "\"Restate doesn't have built-in cron functionality, but its building blocks make it easy to build reliable, custom schedulers.\" The guide gives a cron service to copy into the project. L45: export const cronJob = restate.object({ ... }), a Virtual Object for each job."
+        },
+        "priorities": {
+          "status": "Not supported",
+          "note": "Invocation priorities are planned.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/flow-control.mdx#L19-L25",
+          "version": "1.8.0",
+          "evidence": "\"The first capability built on this scheduler is **concurrency limits**... Planned follow-ups include throttling and rate limits, invocation priorities, and finite queue (backlog) limits.\""
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "An idempotency key returns the stored response for 24 hours by default. A Workflow runs one time for each ID.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/http.mdx#L37-L113",
+          "version": "1.8.0",
+          "evidence": "\"If you re-invoke the service with the same idempotency key within 24 hours, Restate sends back the same response and doesn't re-execute the request to the service.\" L44: \"A workflow can be submitted only once.\""
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "A handler calls other handlers, waits for their results, and then starts the next step.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/develop/ts/concurrent-tasks.mdx#L33-L53",
+          "version": "1.8.0",
+          "evidence": "\"Similar to Promise.all, waits for all promises to resolve successfully\": RestatePromise.all([sleepPromise, callPromise, externalCallPromise]). service-communication.mdx#L21-L27: \"To call a Restate handler and wait for its result\"."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Exponential backoff. By default, Restate pauses the invocation after the last attempt.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/configuration.mdx#L11-L31",
+          "version": "1.8.0",
+          "evidence": "\"The retry policy always uses exponential back-off. You can tune the initial interval, the exponentiation factor and the maximum interval.\" Default: max-attempts = 70, on-max-attempts = \"pause\"."
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "The server retries the invocation on another instance and replays its journal.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/foundations/key-concepts.mdx#L44-L63",
+          "version": "1.8.0",
+          "evidence": "\"If your function crashes or fails, Restate replays the journal, skipping completed steps\"; \"Service crashes or restarts: Any ongoing executions are retried on new instances.\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "Cancellation is cooperative. The handler gets a terminal error at its next await point.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/managing-invocations.mdx#L28-L81",
+          "version": "1.8.0",
+          "evidence": "\"You can cancel an invocation at any point in its lifecycle.\" \"The cancellation exception (TerminalError in TypeScript/Python...) is thrown at the next **await point**\". Kill (L210-L216) stops an invocation whose service is not reachable."
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "For each scope, and for each limit key in a scope. The invocation carries its scope.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/flow-control.mdx#L19-L62",
+          "version": "1.8.0",
+          "evidence": "\"concurrency limits: the maximum number of invocations that may run concurrently for a given scope.\" \"Within a scope, a **limit key** gives you a finer, hierarchical level of concurrency control.\" L119-L121: \"A concurrency limit always applies **per scope**, never globally\". release-notes/v1.8.0.md#L48: VQueues \"are now on for every cluster\"."
+        },
+        "rate-limits": {
+          "status": "Partial",
+          "note": "No built-in rate limit. A documented recipe builds a token bucket in a Virtual Object.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/guides/rate-limiting.mdx#L9-L21",
+          "version": "1.8.0",
+          "evidence": "\"Built-in rate limits are planned as a follow-up. The token-bucket recipe below remains the way to do rate limiting today.\" \"Restate doesn't have built-in rate limiting functionality\"."
+        },
         "checkpoints": {
           "status": "Supported",
           "note": "The server records each step in a journal. A retry replays it and skips completed steps.",
           "source": "https://github.com/restatedev/restate/blob/v1.8.0/README.md#L98",
           "version": "1.8.0",
           "evidence": "README: \"Failures result in retries that use the Durable Execution mechanism to recover partial progress and prevent re-executing completed steps.\""
+        },
+        "durable-waits": {
+          "status": "Supported",
+          "note": "Signals and awakeables. The handler suspends while it waits.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/develop/ts/external-events.mdx#L12-L61",
+          "version": "1.8.0",
+          "evidence": "\"const approved = await ctx.signal<boolean>(\\\"approval\\\")\" (L14-L16); awakeables: \"Wait for result - Your handler suspends until the external system responds\" (L58-L61). Durable sleep: develop/ts/durable-timers.mdx#L11-L16, await ctx.sleep({ seconds: 10 })."
         },
         "dashboard": {
           "status": "Supported",
@@ -1561,27 +1637,120 @@
           "version": "1.8.0",
           "evidence": "crates/admin/Cargo.toml: `default = [\"serve-web-ui\"]`; web_ui.rs serves `restate_web_ui::ASSETS` at `/ui`. README: \"Restate includes a UI and CLI to inspect the state of your application\"."
         },
-        "worker-languages": {
-          "value": "TypeScript, Java, Kotlin, Python, Go, Rust",
-          "source": "https://github.com/restatedev/restate/blob/v1.8.0/README.md#L33-L41",
+        "dead-letters": {
+          "status": "Supported",
+          "note": "After the last attempt, Restate pauses the invocation. An operator can resume it.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/managing-invocations.mdx#L238-L245",
           "version": "1.8.0",
-          "evidence": "README: \"Restate supports the following SDKs: Typescript, Java and Kotlin, Python, Go, Rust\"."
+          "evidence": "\"If an invocation retries for too many times, Restate will pause it. When an invocation is paused, you can resume it manually.\" services/configuration.mdx#L17-L22: on-max-attempts is \"pause\" by default, or \"kill\"."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "An operator pauses invocations, one at a time or in bulk. The docs describe no pause for a whole service.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/managing-invocations.mdx#L287-L301",
+          "version": "1.8.0",
+          "evidence": "\"You can manually pause an invocation too\"; restate invocations pause Greeter (\"bulk pause, e.g. per service\"). The docs at this commit describe no pause for a service or for its new invocations."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The server exports traces over OTLP.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/monitoring/tracing.mdx#L14-L20",
+          "version": "1.8.0",
+          "evidence": "\"Set up the OTLP exporter by pointing the configuration entry `tracing-endpoint` to your trace collector.\" OTLP/gRPC by default, OTLP/HTTP with the otlp+http:// scheme."
+        },
+        "worker-languages": {
+          "value": "TypeScript, Java, Kotlin, Python, Go, Rust, Ruby",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/foundations/key-concepts.mdx#L16-L20",
+          "version": "1.8.0",
+          "evidence": "\"Restate has SDKs for TypeScript, Java, Kotlin, Python, Go, Rust, and Ruby.\" (L20). restate README v1.8.0#L33-L41 lists five SDK repositories, without Ruby."
+        },
+        "enqueue-languages": {
+          "value": "Any language with an HTTP client",
+          "note": "The server accepts invocations over HTTP.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/http.mdx#L19-L28",
+          "version": "1.8.0",
+          "evidence": "\"You can invoke services over HTTP 1.1 or higher. Request/response bodies should be encoded as JSON.\" curl localhost:8080/restate/call/MyService/myHandler."
         },
         "infrastructure": {
-          "value": "A Restate Server with a persistent volume",
-          "note": "No external database. A cluster also needs an object store for snapshots.",
-          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/overview.mdx#L23-L24",
+          "value": "A Restate Server",
+          "note": "No external database. A single node needs a persistent volume. A cluster needs an object store for snapshots.",
+          "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/overview.mdx#L18-L24",
           "version": "1.8.0",
-          "evidence": "2. A persistent volume attached to store Restate's state. Recommended for cluster deployments. Required for single-node deployments. 3. (For clustered setups) An object store to store snapshots."
+          "evidence": "2. A persistent volume attached to store Restate's state. Recommended for cluster deployments. Required for single-node deployments. 3. (For clustered setups) An object store to store snapshots. The list of prerequisites names no external database."
         },
         "license": {
           "value": "BUSL-1.1",
-          "note": "Source-available. Each release becomes Apache-2.0 after four years. Restate Cloud and BYOC are paid.",
+          "note": "Source-available. Each release becomes Apache-2.0 after four years.",
           "source": "https://github.com/restatedev/restate/blob/v1.8.0/LICENSE#L1-L40",
           "version": "1.8.0",
           "evidence": "LICENSE: \"Business Source License 1.1\"; Additional Use Grant forbids a \"Public Restate Platform Service\"; \"Change Date: 4 years after release\"; \"Change License: Apache License, Version 2.0\"."
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The handler replays against its journal. Code between journaled actions must be deterministic.",
+            "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/develop/ts/durable-steps.mdx#L7-L11",
+            "version": "1.8.0",
+            "evidence": "\"Restate uses an execution log to replay operations after failures and suspensions. Non-deterministic operations (database calls, HTTP requests, UUID generation) must be wrapped to ensure deterministic replay.\""
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A handler calls another handler and waits for the result.",
+            "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/develop/ts/service-communication.mdx#L21-L40",
+            "version": "1.8.0",
+            "evidence": "\"To call a Restate handler and wait for its result\": await ctx.serviceClient(myService).myHandler(\"Hi\"); the same for Virtual Objects and Workflows."
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "Immutable deployments",
+            "note": "Each retry goes to the deployment that started the invocation. Keep old deployments until their invocations finish.",
+            "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/versioning.mdx#L6-L39",
+            "version": "1.8.0",
+            "evidence": "\"Restate helps via the concept of **immutable deployments**... Restate then makes sure that requests start and end on the same version, by sending any retry attempts always to the same endpoint.\" L37-L39: \"you need to keep old deployments around until all invocations complete\"."
+          }
+        }
+      ]
     },
     {
       "slug": "trigger-dev",
