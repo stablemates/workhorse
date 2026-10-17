@@ -614,8 +614,7 @@
       "name": "River",
       "aliases": ["riverqueue"],
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1365",
+      "page": "published",
       "version": "0.49.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/riverqueue/river",
@@ -628,12 +627,88 @@
           "version": "0.49.0",
           "evidence": "\"Jobs are guaranteed to be enqueued if their transaction commits, are removed if their transaction rolls back, and aren't visible for work _until_ commit.\""
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/insert_opts.go#L58-L66",
+          "version": "0.49.0",
+          "evidence": "ScheduledAt is a time in future at which to schedule the job (i.e. in cases where it shouldn't be run immediately). The job is guaranteed not to run before this time"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Intervals, or cron through a separate package. The elected leader keeps the schedule state in memory.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/periodic_job.go#L54-L73",
+          "version": "0.49.0",
+          "evidence": "The helper PeriodicInterval is available for jobs that should run on simple, fixed intervals ... a custom schedule or third party cron package can be used ... each scheduler only retains in-memory state, so anytime a process quits or a new leader is elected, the whole process starts over"
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "Four levels, from 1 to 4.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/insert_opts.go#L43-L50",
+          "version": "0.49.0",
+          "evidence": "Priority is the priority of the job, with 1 being the highest priority and 4 being the lowest. When fetching available jobs to work, the highest priority jobs will always be fetched before any lower priority jobs"
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "UniqueOpts refuses a duplicate by kind, args, period, queue, and state.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/insert_opts.go#L84-L101",
+          "version": "0.49.0",
+          "evidence": "UniqueOpts contains parameters for uniqueness for a job. ... Uniqueness relies on a hash of the job kind and any unique properties along with a database unique constraint."
+        },
+        "task-dependencies": {
+          "status": "Partial",
+          "note": "Workflows with dependencies are in River Pro, the paid edition. The free library has none.",
+          "source": "https://github.com/riverqueue/riverui/blob/v0.21.0/riverproui/internal/prohandler/pro_handler_api_endpoints.go#L889-L899",
+          "version": "0.49.0",
+          "evidence": "type workflowTaskSerializable struct { ... Deps []string `json:\"deps\"`; IgnoreCancelledDeps ...; WorkflowID string } (riverproui, the River Pro build of River UI). No dependency option in insert_opts.go at v0.49.0."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "The default is 25 attempts with ATTEMPT^4 backoff. A worker can override NextRetry.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/retry_policy.go#L26-L47",
+          "version": "0.49.0",
+          "evidence": "DefaultClientRetryPolicy is River's default retry policy. ... Reschedules using a basic exponential backoff of `ATTEMPT^4` (client.go: MaxAttempts \"defaults to 25\")"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "A rescuer retries a job that runs longer than RescueStuckJobsAfter. The default is one hour.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L379-L397",
+          "version": "0.49.0",
+          "evidence": "RescueStuckJobsAfter is the amount of time a job can be running before it is considered stuck. ... This prevents jobs from being stuck forever if a worker crashes or is killed. ... this can result in repeat or duplicate execution of a job that is not actually stuck"
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "JobCancel cancels the context of the running job. Cancellation is cooperative.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L1503-L1511",
+          "version": "0.49.0",
+          "evidence": "If the job is currently running, it is not immediately cancelled, but is instead marked for cancellation. The client running the job will also be notified to cancel the running job's context. ... it is important for workers to respect context cancellation"
+        },
+        "concurrency-limits": {
+          "status": "Partial",
+          "note": "MaxWorkers limits each client process. Global limits and limits for each key are in River Pro.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L698-L708",
+          "version": "0.49.0",
+          "evidence": "This is the maximum number of workers within this particular client instance, but note that it doesn't control the total number of workers across parallel processes. River Pro: https://github.com/riverqueue/riverui/blob/v0.21.0/riverproui/internal/uitype/ui_api_types.go#L5-L13 defines ConcurrencyConfig with GlobalLimit, LocalLimit, and Partition.ByArgs."
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "note": "QueueConfig has worker counts and fetch intervals only. No limit on start rate.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L678-L708",
+          "version": "0.49.0",
+          "evidence": "type QueueConfig struct { FetchCooldown ...; FetchPollInterval ...; MaxWorkers int } (Looked at Config, QueueConfig, and InsertOpts: no option limits how many jobs start in a time period.)"
+        },
         "checkpoints": {
           "status": "Supported",
-          "note": "ResumableStep skips completed steps on retry. ResumableStepCursor resumes a step from a saved cursor.",
+          "note": "ResumableStep skips completed steps on a retry. River records the last step when the attempt ends, or at once with ResumableSetStepTx. A step stores no result.",
           "source": "https://github.com/riverqueue/river/blob/v0.49.0/resumable.go#L46-L57",
           "version": "0.49.0",
-          "evidence": "\"ResumableStep runs a resumable step, skipping the step on a later retry if an earlier attempt already completed it successfully.\" CHANGELOG.md#L240 adds resumable jobs."
+          "evidence": "ResumableStep runs a resumable step, skipping the step on a later retry if an earlier attempt already completed it successfully. (resumable_step_tx.go#L19-L24: \"Normally, a resumable job's step progress is recorded after it runs along with its result status. ... ResumableSetStepTx ... guarantee of a checkpoint being recorded durably\")"
+        },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "JobSnooze frees the worker until a later time. Signal waits are in River Pro workflows.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/error.go#L30-L43",
+          "version": "0.49.0",
+          "evidence": "JobSnooze can be returned from a Worker's Work method to cause the job to be tried again after the specified duration. This will not increment the job's Attempt count. River Pro: https://github.com/riverqueue/riverui/blob/v0.21.0/CHANGELOG.md#L67 \"the all new workflow engine in River Pro v0.24.0, including signals, timers\""
         },
         "dashboard": {
           "status": "Supported",
@@ -642,12 +717,39 @@
           "version": "0.49.0",
           "evidence": "\"River UI is a graphical user interface for the River job queue. It lets users view and manage jobs without having to resort to querying the database or the command line.\""
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "Discarded jobs stay for 7 days by default. JobRetry runs a job again.",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L1642-L1650",
+          "version": "0.49.0",
+          "evidence": "JobRetry updates the job with the given ID to make it immediately available to be retried. ... MaxAttempts is also incremented by one if the job has already exhausted its max attempts. (client.go#L131-L137: DiscardedJobRetentionPeriod \"Defaults to 7 days.\")"
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L2759-L2770",
+          "version": "0.49.0",
+          "evidence": "QueuePause pauses the queue with the given name. When a queue is paused, clients will not fetch any more jobs for that particular queue. To pause all queues at once, use the special queue name \"*\"."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The otelriver middleware in the rivercontrib repository gives traces and metrics.",
+          "source": "https://github.com/riverqueue/rivercontrib/blob/otelriver/v0.12.0/otelriver/README.md#L3-L19",
+          "version": "0.49.0",
+          "evidence": "OpenTelemetry utilities for the River job queue. ... otelriver.NewMiddleware(&MiddlewareConfig{ ... MeterProvider: meterProvider, TracerProvider: tracerProvider })"
+        },
         "worker-languages": {
           "value": "Go, Ruby, Rust, TypeScript",
           "note": "Go is the main SDK. The Ruby, Rust, and TypeScript SDKs are pre-1.0 and have their own tags.",
           "source": "https://github.com/riverqueue/river/blob/js/v0.2.0/js/README.md#L3-L6",
           "version": "0.49.0",
           "evidence": "js/v0.2.0: \"shares River's database protocol with River for Go and Rust, so services in all three languages can insert and work the same jobs\". ruby/v0.13.0 docs: \"It inserts and works jobs\"."
+        },
+        "enqueue-languages": {
+          "value": "Python",
+          "note": "The Python client inserts jobs only.",
+          "source": "https://github.com/riverqueue/riverqueue-python/blob/v0.7.0/README.md#L3",
+          "version": "0.49.0",
+          "evidence": "An insert-only Python client for River ... Allows jobs to be inserted in Python and run by a Go worker, but doesn't support working jobs in Python."
         },
         "infrastructure": {
           "value": "PostgreSQL or SQLite",
@@ -663,7 +765,49 @@
           "version": "0.49.0",
           "evidence": "LICENSE: \"Mozilla Public License Version 2.0\". riverqueue.com/pro: \"Extend River with durable workflows, concurrency limits, sequences, and more.\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "batch-enqueue",
+          "group": "producing",
+          "label": "Enqueue many tasks in one call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Atomic batch enqueue"
+            },
+            "page": "/docs/enqueue",
+            "note": "Up to 1,000 tasks commit or roll back together."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "InsertManyTx inserts the jobs in the application's transaction.",
+            "source": "https://github.com/riverqueue/river/blob/v0.49.0/client.go#L1980-L1998",
+            "version": "0.49.0",
+            "evidence": "InsertManyTx inserts many jobs at once. ... This variant lets a caller insert jobs atomically alongside other database changes."
+          }
+        },
+        {
+          "id": "transactional-worker",
+          "group": "executing",
+          "label": "Commit handler writes with the task result",
+          "kind": "text",
+          "workhorse": {
+            "value": "Low-level API only",
+            "source": "docs/architecture/lifecycle.md",
+            "note": "A Worker handler commits its own writes. A TypeScript Queue from forTransaction can call complete in your transaction."
+          },
+          "cell": {
+            "value": "Yes",
+            "note": "JobCompleteTx completes the job in the transaction of the handler's writes.",
+            "source": "https://github.com/riverqueue/river/blob/v0.49.0/job_complete_tx.go#L15-L33",
+            "version": "0.49.0",
+            "evidence": "JobCompleteTx marks the job as completed as part of transaction tx. If tx is rolled back, the completion will be as well."
+          }
+        }
+      ]
     },
     {
       "slug": "solid-queue",
