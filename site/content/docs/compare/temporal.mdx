@@ -1,0 +1,187 @@
+---
+title: "Workhorse compared with Temporal"
+description: "Temporal vs Workhorse: a workflow platform with its own server, and a task queue in PostgreSQL. Compare their features, find when Temporal is the better choice, and move a workflow to Workhorse."
+---
+
+Temporal and Workhorse are in different categories. Temporal is a workflow platform. You run the
+Temporal Service and its database, or you use Temporal Cloud. Workflow code replays from an event
+history that the service keeps.
+
+Workhorse is a durable task queue in your PostgreSQL database. A handler can store the result of
+each named step and wait for a timer or a signal. Workhorse has no server and no workflow runtime.
+This page compares the two products, row by row, and tells you when Temporal is the better choice.
+
+## Compare Workhorse and Temporal
+
+The two products share many features. These include delays, recurring schedules, priorities,
+deduplication by ID, retries with backoff, cooperative cancellation, timers, signals, child work,
+and a dashboard. They differ in five areas:
+
+- **The model of a step.** Temporal replays deterministic Workflow code against its event history.
+  A Workhorse handler starts again from its entry, and each named checkpoint returns its stored
+  result. The handler does not have to be deterministic. Its local variables start again on each
+  run.
+- **Services.** Temporal needs the Temporal Service and a database beside your application.
+  Workhorse needs only PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. An application starts a Temporal Workflow with a call to the Temporal Service, so
+  the start is not part of your database transaction.
+- **Code changes.** In Temporal, a
+  [patch](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/patching.mdx#L17-L19)
+  keeps a code change compatible with the history of a running Workflow. A Pinned Workflow
+  completes on one Worker Deployment Version. Workhorse gives two patterns in application code: a
+  version checkpoint, or one queue for each version.
+- **Languages.** Temporal has SDKs for Go, Java, .NET, PHP, Python, Ruby, Rust, and TypeScript.
+  Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+
+Temporal also runs single jobs without a Workflow. It calls these
+[Standalone Activities](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/evaluate/features/job-queue.mdx#L17-L19).
+They use the same Temporal Service.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="temporal" />
+
+## When Temporal is the better choice
+
+Temporal is the better choice in these cases:
+
+- Your workflows have many steps and branches, and you want to write them as ordinary code with
+  local state. Temporal
+  [recovers the state of a Workflow](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-definition.mdx#L361-L362)
+  after a Worker outage. In Workhorse, the handler runs again, so its local variables start again.
+  Store each result that a later run needs. A checkpoint stores the result of an external call.
+- Your workflows run for weeks or months and change while they run. The patching API and Worker
+  Versioning keep each running Workflow compatible with its history. A
+  [replay](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow/workflow-execution/workflow-execution.mdx#L67-L69)
+  checks the commands of the new code against the history. Workhorse detects only some changes,
+  such as a changed checkpoint input or a changed child request.
+- A client must read or change the state of a running workflow and get a reply. Temporal has
+  [Queries and Updates](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow-message-passing/workflow-message-passing.mdx#L18-L24)
+  for this. A Workhorse signal delivers data to a waiting task and returns no value from the
+  handler.
+- Your services use Java, .NET, or PHP. Workhorse has no SDK for these languages.
+- You do not want to run the workflow service yourself. You can host the Temporal server and its
+  database yourself, or
+  [use Temporal Cloud](https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L61).
+  Workhorse uses your PostgreSQL database, and you operate that database.
+- Your application does not use PostgreSQL. Workhorse needs PostgreSQL. A self-hosted Temporal
+  Service can use Cassandra, MySQL, or PostgreSQL in production.
+- You need to pause one Activity, or reset a Workflow to a point in its history.
+  Workhorse pauses a whole queue and runs a failed task again from its start.
+
+Workhorse is the better choice in these cases:
+
+- Your application uses PostgreSQL, and you do not want to run a second service.
+- A task must commit in the same transaction as your data.
+- You need concurrency limits that apply across all workers.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent: a second run must give the same result as the first run. A Temporal Activity has the
+same rule. The
+[Temporal architecture](https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L34-L35)
+says that activity code must be idempotent or non-retryable.
+
+## Move from Temporal
+
+Move one workflow type at a time. Let the running Temporal Workflows of that type finish in
+Temporal. Start new work in Workhorse. The [migration guide](/docs/migrate) gives the full
+procedure and the equivalent parts of a workflow platform.
+
+Some words have a different meaning in the two products:
+
+| Temporal                        | Workhorse                         | Difference                                                                             |
+| ------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
+| Workflow                        | Task with a handler               | A Workhorse handler runs again from its entry. Temporal replays the Workflow.          |
+| Activity                        | `ctx.checkpoint`                  | A checkpoint runs in the handler. It has no task, timeout, or retry policy of its own. |
+| Signal                          | `ctx.waitForSignal`, `sendSignal` | Workhorse refuses a signal before the handler waits. The sender must try again.        |
+| Workflow Id and conflict policy | `idempotency` on `enqueue`        | Workhorse keeps the key for a time-to-live, 24 hours by default.                       |
+
+**Example.** An order workflow charges a card, waits for an approval signal, and then ships the
+order.
+
+1. In Temporal, the Workflow calls two Activities, and a signal handler sets a local variable.
+2. In Workhorse, the handler wraps each call in a named checkpoint.
+3. The handler calls `ctx.waitForSignal("approval")`. The task releases its worker until the
+   signal arrives.
+4. When the signal arrives, a worker runs the handler again. The `charge` checkpoint returns its
+   stored result, and the card is not charged again.
+
+Before the move, with Temporal. The Workflow module:
+
+```ts
+// workflows.ts
+import { condition, defineSignal, proxyActivities, setHandler } from "@temporalio/workflow";
+import type * as activities from "./activities";
+
+const { chargeCard, shipOrder } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "1 minute",
+});
+export const approval = defineSignal<[{ approved: boolean }]>("approval");
+
+export async function processOrder(orderId: string): Promise<void> {
+  let approved: boolean | undefined;
+  setHandler(approval, (input) => {
+    approved = input.approved;
+  });
+  await chargeCard(orderId);
+  await condition(() => approved !== undefined);
+  if (approved) await shipOrder(orderId);
+}
+```
+
+The client module starts the Workflow and later sends the signal:
+
+```ts
+// client.ts
+import { approval, processOrder } from "./workflows";
+
+const handle = await client.workflow.start(processOrder, {
+  taskQueue: "orders",
+  workflowId: `order-${orderId}`,
+  args: [orderId],
+});
+await handle.signal(approval, { approved: true });
+```
+
+After the move, with Workhorse:
+
+```ts
+const worker = new Worker(queue, { queue: "orders" }).handle(
+  "order.process",
+  async (payload: { orderId: string }, ctx) => {
+    await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
+    const decision = await ctx.waitForSignal<{ approved: boolean }>("approval");
+    if (decision.approved) await ctx.checkpoint("ship", () => shipOrder(payload.orderId));
+    return null;
+  },
+);
+
+// The application enqueues the task and later sends the signal.
+const taskId = await queue.enqueue(
+  "order.process",
+  { orderId },
+  { queue: "orders", idempotency: { key: `order-${orderId}` } },
+);
+await queue.sendSignal(
+  taskId,
+  "approval",
+  { approved: true },
+  {
+    idempotencyKey: `approval-${orderId}`,
+    requestedBy: "review-service",
+  },
+);
+```
+
+`chargeCard` and `shipOrder` must return JSON, because Workhorse stores each checkpoint result as
+JSON. A Temporal Activity has its own timeout and Retry Policy. In Workhorse, the task has one
+retry policy, and a retry runs the handler again from its entry. If the status in the result of
+`sendSignal` is `not_waiting`, the handler has not called `waitForSignal` yet. Send the signal again later.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
