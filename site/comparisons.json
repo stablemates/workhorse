@@ -963,8 +963,7 @@
       "name": "Solid Queue",
       "aliases": ["solid_queue", "SolidQueue"],
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1368",
+      "page": "published",
       "version": "1.7.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/rails/solid_queue",
@@ -977,12 +976,89 @@
           "version": "1.7.0",
           "evidence": "\"taking advantage of transactional integrity to ensure some action in your app is not committed unless your job is also committed and vice versa\" ... \"by default Solid Queue is configured in a different database as the main app.\""
         },
-        "checkpoints": {
+        "scheduled-enqueue": {
           "status": "Supported",
-          "note": "Uses Rails Active Job Continuations. Solid Queue supports interrupting and resuming them.",
-          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/lib/active_job/queue_adapters/solid_queue_adapter.rb#L13-L20",
+          "note": "Active Job set(wait:) and set(wait_until:).",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L587",
           "version": "1.7.0",
-          "evidence": "Adapter comment: \"adapters can decide whether to checkpoint based on it. We rely solely on the worker shutdown flag\"; defines stopping?. Rails v8.1.4 continuation.rb#L18-L20: \"If a job is interrupted, previously completed steps will be skipped.\""
+          "evidence": "Jobs set to run in the future (via Active Job's `wait` or `wait_until` options) have concurrency limits enforced when they're due, not when they're scheduled."
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Cron schedules in config/recurring.yml, or tasks that the application adds at runtime.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L862-L953",
+          "version": "1.7.0",
+          "evidence": "Solid Queue supports defining recurring tasks that run at specific times in the future, on a regular basis like cron jobs. ... (L937: \"You can schedule and unschedule recurring tasks at runtime, without editing the configuration file.\" L947: SolidQueue.schedule_recurring_task.)"
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "A lower number runs first. The queue order of a worker comes before the priority.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L316-L318",
+          "version": "1.7.0",
+          "evidence": "In Solid Queue, the smaller the value, the higher the priority. The default is `0`. ... in a list of queues, the queue order takes precedence"
+        },
+        "enqueue-deduplication": {
+          "status": "Partial",
+          "note": "With on_conflict: :discard, a concurrency control drops a new job while another job with the same key holds the limit.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L522-L536",
+          "version": "1.7.0",
+          "evidence": "Alternatively, jobs can be configured to be discarded instead of blocked. This means that if a job with certain arguments has already been enqueued, other jobs with the same characteristics (in the same concurrency class) won't be enqueued. ... `:discard`: the job is discarded."
+        },
+        "task-dependencies": {
+          "status": "Partial",
+          "note": "A batch starts a callback job when all its jobs finish. No API makes a job wait for jobs outside its batch.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L694-L703",
+          "version": "1.7.0",
+          "evidence": "Solid Queue supports grouping jobs into batches ... `on_finish`: fired when all jobs have finished ... `on_success` ... `on_failure` (L744: \"A job joins the batch that's active when its enqueue is requested\". Looked at the README: no option makes a job start after a job outside its batch.)"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Active Job retry_on gives the retries and the backoff. Solid Queue has no retry of its own.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L638",
+          "version": "1.7.0",
+          "evidence": "Solid Queue doesn't include any automatic retry mechanism, it relies on Active Job for this. (Rails v8.1.4 exceptions.rb#L64: def retry_on(*exceptions, wait: 3.seconds, attempts: 5, ...), with wait: :polynomially_longer.)"
+        },
+        "crash-recovery": {
+          "status": "Partial",
+          "note": "A graceful stop puts jobs back in the queue. If a worker process dies, its jobs fail and need a manual or a custom retry.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L675-L677",
+          "version": "1.7.0",
+          "evidence": "Once another process notices the missing heartbeats and prunes the dead process's registration, its in-flight jobs are marked as failed with `SolidQueue::Processes::ProcessPrunedError`. Solid Queue deliberately doesn't retry these automatically (L402: on QUIT, in-flight jobs \"will be returned to the queue\")"
+        },
+        "cancellation": {
+          "status": "Not supported",
+          "note": "A job in progress cannot be discarded. Active Job has no cancel API.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/app/models/solid_queue/claimed_execution.rb#L85-L87",
+          "version": "1.7.0",
+          "evidence": "def discard; raise UndiscardableError, \"Can't discard a job in progress\"; end"
+        },
+        "concurrency-limits": {
+          "status": "Supported",
+          "note": "limits_concurrency limits the jobs of one key across all workers. After the duration, another job can take the limit.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L520-L538",
+          "version": "1.7.0",
+          "evidence": "Solid Queue extends Active Job with concurrency controls, that allows you to limit how many jobs of a certain type or with certain arguments can run at the same time. ... we'll ensure that, at most, the number of jobs (indicated as `to`) that yield the same `key` will be performed concurrently, and this guarantee will last for `duration`"
+        },
+        "rate-limits": {
+          "status": "Not supported",
+          "note": "No rate limit. The README suggests a queue with fewer workers for throttling.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L610",
+          "version": "1.7.0",
+          "evidence": "For throttling purposes, where you plan to have `limit` significantly larger than 1, we encourage relying on a limited number of workers per queue instead."
+        },
+        "checkpoints": {
+          "status": "Partial",
+          "note": "Active Job Continuations skip completed steps. They save progress before an isolated step, when the worker stops, or when a step raises an error.",
+          "source": "https://github.com/rails/rails/blob/v8.1.4/activejob/lib/active_job/continuation.rb#L144-L174",
+          "version": "1.7.0",
+          "evidence": "When interrupted, the job will automatically retry with the progress serialized in the job data under the +continuation+ key. ... You can specify that a step should always run in its own execution by passing the +isolated: true+ option. ... it ensures that progress is serialized back into the job data before the step starts. (L170-L174: progress is also kept when a job raises an error after it has made progress.)"
+        },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "No signal wait. Before an isolated step, a continuation ends its run and resumes after the resume_options delay of its job class.",
+          "source": "https://github.com/rails/rails/blob/v8.1.4/activejob/lib/active_job/continuation.rb#L157-L183",
+          "version": "1.7.0",
+          "evidence": "You can specify that a step should always run in its own execution by passing the +isolated: true+ option. ... :resume_options - Options to pass to +retry_job+ when resuming the job. Defaults to { wait: 5.seconds }. (continuable.rb#L94: retry_job(**self.resume_options). Looked at the Solid Queue README: no API makes a running job wait for a signal.)"
         },
         "dashboard": {
           "status": "Supported",
@@ -991,12 +1067,40 @@
           "version": "1.7.0",
           "evidence": "\"This gem provides a Rails-based frontend to Active Job adapters. It currently supports Resque and Solid Queue.\" ... \"inspect and retry or discard failed jobs.\""
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "Failed jobs stay as failed executions. Retry or discard them from the console or Mission Control.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L638-L645",
+          "version": "1.7.0",
+          "evidence": "Jobs that fail will be kept in the system, and a failed execution ... will be created for these. The job will stay there until manually discarded or re-enqueued. ... failed_execution.retry # This will re-enqueue the job"
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "note": "A pause is a row in the database, so all workers obey it.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/app/models/solid_queue/queue.rb#L21-L31",
+          "version": "1.7.0",
+          "evidence": "def paused?; Pause.exists?(queue_name: name) ... def pause; Pause.create_or_find_by!(queue_name: name) ... def resume; Pause.where(queue_name: name).delete_all"
+        },
+        "opentelemetry": {
+          "status": "Partial",
+          "note": "Traces only. The OpenTelemetry project publishes an Active Job instrumentation gem that traces enqueue, perform, retry, and step events. It has no metrics.",
+          "source": "https://github.com/open-telemetry/opentelemetry-ruby-contrib/blob/opentelemetry-instrumentation-active_job/v0.13.0/instrumentation/active_job/README.md#L59-L72",
+          "version": "1.7.0",
+          "evidence": "This instrumentation now relies entirely on `ActiveSupport::Notifications` and registers a custom Subscriber that listens to relevant events to report as spans. ... enqueue.active_job: Creates an egress span with kind producer ... perform.active_job: Creates an ingress span with kind consumer ... step.active_job: Creates an internal span (L88: messaging.active_job.adapter.name records the Active Job adapter. Looked at lib/: no meter or metric. Solid Queue v1.7.0 itself sends only Active Support notification events, lib/solid_queue.rb#L95-L97.)"
+        },
         "worker-languages": {
           "value": "Ruby",
           "note": "Jobs are Active Job classes in a Rails application.",
           "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L3",
           "version": "1.7.0",
           "evidence": "\"Solid Queue is a database-based queuing backend for Active Job\""
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "The README documents no client for another language.",
+          "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L3",
+          "version": "1.7.0",
+          "evidence": "Solid Queue is a database-based queuing backend for Active Job (Looked at the README: Active Job is the only way to enqueue.)"
         },
         "infrastructure": {
           "value": "MySQL, PostgreSQL, or SQLite",
@@ -1012,7 +1116,68 @@
           "version": "1.7.0",
           "evidence": "spec.license = \"MIT\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A batch fires on_finish, and on_success or on_failure. A job can add jobs to its batch.",
+            "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L696-L704",
+            "version": "1.7.0",
+            "evidence": "Solid Queue supports grouping jobs into batches, so you can track the progress of the set as a whole and optionally fire callbacks based on its status. ... Enqueuing more jobs for a batch from inside one of its jobs, with `batch.enqueue`"
+          }
+        },
+        {
+          "id": "active-job",
+          "group": "languages",
+          "label": "Runs Rails Active Job jobs",
+          "kind": "text",
+          "workhorse": {
+            "value": "Yes",
+            "source": "docs/parity.md",
+            "page": "/docs/active-job",
+            "note": "The Ruby gem has an adapter. Some features need a native handler."
+          },
+          "cell": {
+            "value": "Yes",
+            "note": "Solid Queue is an Active Job backend. It has no job API of its own.",
+            "source": "https://github.com/rails/solid_queue/blob/v1.7.0/lib/active_job/queue_adapters/solid_queue_adapter.rb#L9",
+            "version": "1.7.0",
+            "evidence": "class SolidQueueAdapter < (Rails::VERSION::MAJOR == 7 && Rails::VERSION::MINOR == 1 ? Object : AbstractAdapter)"
+          }
+        },
+        {
+          "id": "database-backends",
+          "group": "product",
+          "label": "Databases other than PostgreSQL",
+          "kind": "text",
+          "workhorse": {
+            "value": "None",
+            "source": "docs/compatibility.md",
+            "note": "PostgreSQL only."
+          },
+          "cell": {
+            "value": "MySQL, MariaDB, SQLite",
+            "note": "The README suggests SQLite for smaller applications.",
+            "source": "https://github.com/rails/solid_queue/blob/v1.7.0/README.md#L190",
+            "version": "1.7.0",
+            "evidence": "Solid Queue was designed for the highest throughput when used with MySQL 8+, MariaDB 10.6+, or PostgreSQL 9.5+ ... You can also use it with SQLite on smaller applications."
+          }
+        }
+      ]
     },
     {
       "slug": "oban",
