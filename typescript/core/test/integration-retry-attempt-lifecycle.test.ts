@@ -51,7 +51,7 @@ describe("retry and attempt lifecycle", () => {
     ).toEqual({ state: "succeeded", result: { ok: true } });
   });
 
-  it("uses Sidekiq-inspired SQL backoff with jitter when no retry delay is supplied", async () => {
+  it("uses the legacy SQL backoff with jitter when no retry delay is supplied", async () => {
     const id = await queue.enqueue("backoff", {}, { maxAttempts: 3 });
     const first = await queue.claim("worker-a");
     expect(await queue.fail(first!, "worker-a", new Error("immediate override"), 0)).toBe("ready");

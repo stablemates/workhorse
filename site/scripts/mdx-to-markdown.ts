@@ -1,3 +1,6 @@
+import { comparisonProduct, hubMarkdown, productMarkdown } from "../lib/comparisons.js";
+import { siteConfig } from "../lib/site.js";
+
 /**
  * Turns an MDX page body into the Markdown an agent reads at `/docs/<slug>.md`.
  *
@@ -18,13 +21,18 @@
  * A `<Diagram>` shows a generated diagram with a full-size view. The twin
  * replaces it with a Markdown image of the wide light variant.
  *
- * The transform knows `Tabs`, `Tab`, and `Diagram` and nothing else. Any other
+ * A `<ComparisonTable>` renders facts from `site/comparisons.json`. The twin
+ * replaces it with the same tables as Markdown, so an agent reads every cell
+ * and its source (ADR 0104).
+ *
+ * The transform knows `Tabs`, `Tab`, `Diagram`, and `ComparisonTable` and
+ * nothing else. Any other
  * MDX component throws, naming the component and the page, because a silent
  * pass through would put a bare JSX tag in front of an agent.
  */
 
 /** MDX components this transform can expand. Anything else is a build failure. */
-const knownComponents: ReadonlySet<string> = new Set(["Tabs", "Tab", "Diagram"]);
+const knownComponents: ReadonlySet<string> = new Set(["Tabs", "Tab", "Diagram", "ComparisonTable"]);
 
 const fenceEdge = /^\s*(?:```|~~~)/;
 const tabsOpen = /^\s*<Tabs\b([^>]*)>\s*$/;
@@ -32,6 +40,7 @@ const tabsClose = /^\s*<\/Tabs>\s*$/;
 const tabOpen = /^\s*<Tab\b([^>]*)>\s*$/;
 const tabClose = /^\s*<\/Tab>\s*$/;
 const diagramOpen = /^\s*<Diagram\b/;
+const comparisonTable = /^\s*<ComparisonTable(?:\s+product="([^"]+)")?\s*\/>\s*$/;
 const nameAttribute = /\bname="([^"]*)"/;
 const altAttribute = /\balt="([^"]*)"/;
 const itemsAttribute = /items=\{\[(.*?)]}/;
@@ -87,9 +96,28 @@ function diagramImage(source: string, page: string): string {
 }
 
 /**
+ * Turns one `<ComparisonTable />` line into Markdown tables: the hub matrix
+ * without a `product`, or the table of that product.
+ */
+function comparisonMarkdown(line: string, page: string): string | undefined {
+  if (!line.trimStart().startsWith("<ComparisonTable")) return undefined;
+  const match = comparisonTable.exec(line);
+  if (!match) {
+    throw new Error(
+      `The docs page "${page}" has a <ComparisonTable> that is not one self-closing line ` +
+        'with an optional product="<slug>"',
+    );
+  }
+  const slug = match[1];
+  return slug
+    ? productMarkdown(comparisonProduct(slug), siteConfig.url)
+    : hubMarkdown(siteConfig.url);
+}
+
+/**
  * Expands `body`, an MDX page with its frontmatter already removed, into
- * Markdown. Throws on any MDX component other than `Tabs`, `Tab`, and `Diagram`, naming the
- * component and `page`.
+ * Markdown. Throws on any MDX component other than `Tabs`, `Tab`, `Diagram`,
+ * and `ComparisonTable`, naming the component and `page`.
  */
 export function mdxToMarkdown(body: string, page: string): string {
   const output: string[] = [];
@@ -133,6 +161,12 @@ export function mdxToMarkdown(body: string, page: string): string {
       if (!line.includes("/>")) continue;
       sink().push(diagramImage(diagram.join(" "), page));
       diagram = undefined;
+      continue;
+    }
+
+    const comparison = comparisonMarkdown(line, page);
+    if (comparison !== undefined) {
+      sink().push(comparison);
       continue;
     }
 
