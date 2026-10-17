@@ -1,0 +1,188 @@
+---
+title: "Workhorse compared with Restate"
+description: "Restate vs Workhorse: a workflow platform with its own server, and a task queue in PostgreSQL. Compare their features, find when Restate is the better choice, and move a handler to Workhorse."
+---
+
+Restate and Workhorse are in different categories. Restate is a workflow platform. The
+[Restate Server](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/foundations/key-concepts.mdx#L14-L28)
+sits in front of your services, receives each request, and calls your handlers. It keeps a journal
+of each step of a handler. You run the server, or you use Restate Cloud.
+
+Workhorse is a durable task queue in your PostgreSQL database. Your workers take tasks from the
+database. A handler can wait for a timer or a signal, and it can use checkpoints. A checkpoint is a
+named piece of handler code whose result Workhorse stores for the task. Workhorse has no server and no workflow runtime. This page compares the two products, row by row,
+and tells you when Restate is the better choice.
+
+## Compare Workhorse and Restate
+
+The two products share many features. These include delays, deduplication by key, retries with
+backoff, crash recovery, cooperative cancellation, timers, signals, child work, and a dashboard.
+They differ in six areas:
+
+- **Recorded results.** Restate records each action of the handler context in a journal, and a
+  replay returns the recorded results. The code between two journaled actions must be
+  deterministic. Workhorse calls the handler again from its first line. On a replay, each
+  checkpoint returns its stored result, and each ended wait returns at once. The handler does not
+  have to be deterministic.
+- **How work arrives.** The Restate Server pushes each invocation to a service endpoint, such as an
+  HTTP server or an AWS Lambda function. Workhorse workers pull tasks from PostgreSQL.
+- **Services.** Restate needs the Restate Server. A single node needs a persistent volume for its
+  state, and a cluster needs an object store for snapshots. Workhorse needs only PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. An application starts a Restate invocation with a request to the Restate Server, so
+  the start is not part of your database transaction.
+- **Queue controls.** Workhorse has recurring schedules, priorities, and rate limits as built-in
+  features. Restate gives recipes for schedules and rate limits, and invocation priorities are
+  planned. Restate has concurrency limits for each scope. A scope is a name that an invocation
+  carries, such as a tenant. A limit key divides a scope into smaller groups with their own limits.
+- **License.** The Restate Server uses the Business Source License 1.1, and each release changes to
+  Apache-2.0 after four years. The
+  [Restate TypeScript SDK](https://github.com/restatedev/sdk-typescript/blob/v1.17.3/LICENSE#L1-L3)
+  uses the MIT license. Workhorse uses Apache-2.0.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="restate" />
+
+## When Restate is the better choice
+
+Restate is the better choice in these cases:
+
+- Your handlers run on AWS Lambda or another serverless platform. The Restate Server invokes the
+  function. When the handler must wait, the function
+  [suspends and stops](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/guides/request-lifecycle.mdx#L49-L56).
+  When the result is available, the server invokes the function again with its journal. A
+  Workhorse worker is a long-running process that polls PostgreSQL.
+- Your workflows have many steps and branches, and you want Restate to record each call without
+  extra code. Restate
+  [records each call to another service, each timer, and each `ctx.run` result](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/foundations/key-concepts.mdx#L44-L50)
+  in the journal. A replay returns these results, so the handler rebuilds its local variables.
+  Workhorse calls the handler again from its first line. On a replay, each checkpoint returns its
+  stored result, and each ended wait returns at once. Put each result that a later run needs in a
+  checkpoint.
+- You need state for each key, and one writer at a time for that key. A Restate
+  [Virtual Object](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/foundations/services.mdx#L11-L17)
+  has key-value state and runs one exclusive handler at a time for each key. Workhorse has no
+  key-value state. A concurrency policy can limit a key to one running task.
+- One service calls another service and waits for the result. Restate journals the call, retries it,
+  and returns the result to the caller. A client outside Restate can also call a handler over HTTP
+  and wait for the response. In Workhorse, the producer enqueues a task and reads its result later.
+- Your code changes while invocations run, and you do not want to write version logic. Restate
+  [sends each retry to the deployment that started the invocation](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/versioning.mdx#L6-L39).
+  You keep the old deployment until its invocations finish. Workhorse gives two patterns in
+  application code: a version checkpoint, or one queue for each version.
+- Your services use Java or Kotlin. Workhorse has no SDK for these languages.
+- Your application does not use PostgreSQL. The Restate Server keeps its own state and needs no
+  external database. Workhorse needs PostgreSQL.
+- You do not want to run the workflow server yourself. Restate operates
+  [Restate Cloud and Restate BYOC](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/hosting/overview.mdx#L18-L30)
+  for you. These hosted services have published pricing, and Restate Cloud has a free tier.
+  Workhorse uses your PostgreSQL database, and you operate that database.
+- An operator must restart a completed invocation from a point in its journal. Restate can
+  [restart an invocation from a prefix](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/invocation/managing-invocations.mdx#L355-L358)
+  of its journal. Workhorse runs a failed task again from its entry.
+
+Workhorse is the better choice in these cases:
+
+- Your application uses PostgreSQL, and you do not want to run a second service.
+- A task must commit in the same transaction as your data.
+- You need recurring schedules, priorities, or rate limits as built-in queue features.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent: a second run must give the same result as the first run.
+
+## Move from Restate
+
+Move one handler at a time. Let the running Restate invocations of that handler finish in Restate.
+Start new work in Workhorse. The [migration guide](/docs/migrate) gives the full procedure and the
+equivalent parts of a workflow platform.
+
+Some words have a different meaning in the two products:
+
+| Restate             | Workhorse                    | Difference                                                                                                     |
+| ------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Service and handler | Task type and handler        | A Restate handler runs in your service endpoint. A Workhorse handler runs in a worker.                         |
+| Workflow            | Task with an idempotency key | A Restate Workflow is a service type that runs one time for each ID.                                           |
+| `ctx.run`           | `ctx.checkpoint`             | Both store the result of a piece of code. A Workhorse handler starts again from its entry.                     |
+| Idempotency key     | `idempotency` on `enqueue`   | By default, Restate keeps the key for 24 hours after completion. Workhorse keeps it for `ttlMs` after enqueue. |
+
+**Example.** An order handler charges a card, waits one day, and then sends a follow-up email.
+
+1. In Restate, the handler wraps each call in `ctx.run` and calls `ctx.sleep`. A client sends the
+   invocation to the Restate Server.
+2. In Workhorse, the application enqueues the task inside the transaction that saves the order.
+3. The handler wraps each call in a named checkpoint and calls `ctx.sleep`. The task releases its
+   worker until the timer is due.
+4. When the timer is due, a worker runs the handler again. The `charge` checkpoint returns its
+   stored result, and the card is not charged again.
+
+Before the move, with Restate:
+
+```ts
+import * as restate from "@restatedev/restate-sdk";
+import * as restateClients from "@restatedev/restate-sdk-clients";
+
+const orders = restate.service({
+  name: "orders",
+  handlers: {
+    process: async (ctx: restate.Context, order: { orderId: string }) => {
+      await ctx.run("charge", () => chargeCard(order.orderId));
+      await ctx.sleep({ days: 1 });
+      await ctx.run("follow-up", () => sendFollowUp(order.orderId));
+    },
+  },
+});
+restate.serve({ services: [orders] });
+
+// The application sends the invocation to the Restate Server.
+const restateClient = restateClients.connect({ url: "http://localhost:8080" });
+await saveOrder(order);
+await restateClient
+  .serviceSendClient<typeof orders>({ name: "orders" })
+  .process({ orderId: order.id }, restateClients.rpc.sendOpts({ idempotencyKey: order.id }));
+```
+
+After the move, with Workhorse:
+
+```ts
+const worker = new Worker(queue, { queue: "orders" }).handle(
+  "order.process",
+  async (payload: { orderId: string }, ctx) => {
+    await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
+    await ctx.sleep("follow-up-delay", 24 * 60 * 60 * 1_000);
+    await ctx.checkpoint("follow-up", () => sendFollowUp(payload.orderId));
+    return null;
+  },
+);
+
+// The application enqueues the task in the transaction that saves the order.
+await db.transaction(async (tx) => {
+  await saveOrder(order, tx);
+  await workhorse.forTransaction(tx).enqueue(
+    "order.process",
+    { orderId: order.id },
+    {
+      queue: "orders",
+      idempotency: { key: order.id, ttlMs: 7 * 24 * 60 * 60 * 1_000 },
+    },
+  );
+});
+```
+
+This example uses Drizzle. `chargeCard` and `sendFollowUp` must return JSON, because Workhorse
+stores each checkpoint result as JSON.
+
+The Workhorse key expires at a fixed time after enqueue, also while the task runs. Thus the example
+sets `ttlMs` to seven days, longer than the one-day timer. Set `ttlMs` to the longest time in which
+a client can repeat the request. The card provider must also refuse a second charge for the same
+order.
+
+In Restate, a service endpoint must be registered with the Restate Server before a client can call
+it. In Workhorse, the worker takes tasks from PostgreSQL and needs no registration.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler reuses the results of its checkpoints.
