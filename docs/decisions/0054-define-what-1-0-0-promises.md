@@ -7,7 +7,9 @@
 - **Amended by:** [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md) (the Rust API is
   an eighth governed surface, and the crate rides the 1.0.0 train),
   [ADR 0084](0084-govern-the-ruby-api-as-a-ninth-surface.md) (the Ruby API is a ninth governed surface, and the gem rides
-  the 1.0.0 train)
+  the 1.0.0 train),
+  [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (the Java API is a tenth governed surface, the Kotlin API is an
+  eleventh, and the three JVM artifacts ride the 1.0.0 train)
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   WH-578,

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-11
+- **Amended by:** [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (one framework package,
+  `workhorse-spring-boot-starter`, whose worker bean is off by default; the dedicated worker process
+  stays the default topology)
 - **Related:** [ADR 0012](0012-dedicated-worker-processes.md), [ADR 0018](0018-framework-neutral-dashboard-host.md)
 
 ## Context

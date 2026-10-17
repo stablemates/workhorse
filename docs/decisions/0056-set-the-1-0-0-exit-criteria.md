@@ -8,7 +8,10 @@
   covers Rust),
   [ADR 0084](0084-govern-the-ruby-api-as-a-ninth-surface.md) (Gate 1 gains `ruby-api:check`, Gate 2's Ruby
   clock starts where `api/ruby.txt` lands and counts 0.6.0 and 0.7.0, and Gate 3's cold install
-  covers Ruby)
+  covers Ruby),
+  [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (Gate 1 gains `java-api:check` and `kotlin-api:check`, Gate 2's Java
+  and Kotlin clocks start where `api/java.txt` and `api/kotlin.txt` land, and Gate 3's cold install
+  covers the JVM)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),

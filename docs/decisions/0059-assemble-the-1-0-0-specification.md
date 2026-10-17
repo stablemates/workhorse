@@ -7,7 +7,9 @@
   [ADR 0084](0084-govern-the-ruby-api-as-a-ninth-surface.md) (the specification assembles nine surfaces; the
   ninth is the Ruby API),
   [ADR 0102](0102-keep-main-open-during-a-release-by-tagging-the-candidate-commit.md) (every tag of
-  the release train points to the candidate commit, and other commits can land on `main`)
+  the release train points to the candidate commit, and other commits can land on `main`),
+  [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (the specification assembles eleven surfaces; the tenth is the
+  Java API and the eleventh is the Kotlin API)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
