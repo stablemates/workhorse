@@ -613,7 +613,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue trace-context propagation",
-    jvm: { planned: "SM-1392" },
+    jvm: { fixtures: ["runtime/enqueue-trace-context-reaches-handler"] },
     ruby: { fixtures: ["runtime/enqueue-trace-context-reaches-handler"] },
     rust: { file: "enqueue_postgres.rs", test: "enqueue_propagates_the_current_trace_context" },
     typescript: {
@@ -974,7 +974,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "OpenTelemetry tracing and metrics",
-    jvm: { planned: "SM-1392" },
+    jvm: {
+      file: "dev/stablemates/workhorse/WorkerTelemetryDatabaseTest.java",
+      test: "continuesTheEnqueuingTraceInTheHandlerSpanAndRecordsTheSharedMetrics",
+    },
     ruby: {
       file: "integration/worker_runtime_spec.rb",
       example: "continues the enqueuing trace in the handler span and records the shared metrics",

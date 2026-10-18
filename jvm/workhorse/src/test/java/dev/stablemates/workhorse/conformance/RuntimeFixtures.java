@@ -21,12 +21,18 @@ import dev.stablemates.workhorse.HandlerContext;
 import dev.stablemates.workhorse.LeaseLostException;
 import dev.stablemates.workhorse.LimitExceededException;
 import dev.stablemates.workhorse.Queue;
+import dev.stablemates.workhorse.QueueOptions;
 import dev.stablemates.workhorse.RateLimit;
 import dev.stablemates.workhorse.RateLimitPolicyDefinition;
 import dev.stablemates.workhorse.Worker;
+import dev.stablemates.workhorse.WorkhorseTelemetry;
 import dev.stablemates.workhorse.internal.Json;
 import dev.stablemates.workhorse.internal.Sql;
 import dev.stablemates.workhorse.internal.SqlCatalogue;
+import dev.stablemates.workhorse.testing.RecordingOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -64,16 +70,13 @@ import org.jspecify.annotations.Nullable;
  */
 final class RuntimeFixtures {
   /** The JVM slices that are still open. A listed fixture names one of them. */
-  static final Set<String> OPEN_SLICES = Set.of("SM-1392");
+  static final Set<String> OPEN_SLICES = Set.of();
 
   /**
    * RuntimeFixtures fixtures that need a surface an open JVM slice owns, by fixture ID. Each one is
    * also on the expected-unsupported list with the same slice.
    */
-  private static final Map<String, String> GAPS =
-      Map.of(
-          "enqueue-trace-context-reaches-handler",
-          "needs the worker's OpenTelemetry handler span, which SM-1392 owns");
+  private static final Map<String, String> GAPS = Map.of();
 
   private static final Map<CancellationReason, String> CANCEL_NAMES =
       Map.of(
@@ -116,6 +119,7 @@ final class RuntimeFixtures {
   private void dispatch(Map<String, @Nullable Object> fixture) throws Exception {
     try {
       switch (String.valueOf(fixture.get("kind"))) {
+        case "trace-propagation" -> trace(fixture);
         case "cooperative-cancellation" -> cancellation(fixture);
         case "expiration" -> expiration(fixture);
         case "heartbeat-cadence" -> heartbeatCadence(fixture);
@@ -1160,6 +1164,65 @@ final class RuntimeFixtures {
           lateClaim.handle((value, error) -> value).get(10, TimeUnit.SECONDS);
         }
       }
+    }
+  }
+
+  /**
+   * The task stores the caller's W3C trace context at enqueue, and the handler span continues it.
+   * The counterpart of Ruby's {@code trace}.
+   */
+  // The scope only makes the caller span current, so the try block never reads it.
+  @SuppressWarnings("try")
+  private void trace(Map<String, @Nullable Object> fixture) throws Exception {
+    try (RecordingOpenTelemetry recording = new RecordingOpenTelemetry()) {
+      WorkhorseTelemetry telemetry = WorkhorseTelemetry.of(recording.sdk());
+      Queue traced =
+          new Queue(
+              Connections.borrowed(connection),
+              QueueOptions.builder().telemetry(telemetry).build());
+      Span caller = recording.sdk().getTracer("caller").spanBuilder("caller").startSpan();
+      UUID taskId;
+      try (Scope ignored = caller.makeCurrent()) {
+        synchronized (connection) {
+          taskId =
+              traced
+                  .enqueue(taskType(fixture), Map.of(), options(queueName(fixture)).build())
+                  .taskId();
+        }
+      } finally {
+        caller.end();
+      }
+      Object stored =
+          Json.parse(
+              String.valueOf(
+                  value(
+                      "SELECT COALESCE(trace_context::text, 'null') FROM workhorse.task WHERE id = '"
+                          + taskId
+                          + "'")));
+      String traceparent =
+          stored instanceof Map<?, ?> carrier ? String.valueOf(carrier.get("traceparent")) : "";
+      String[] parts = traceparent.split("-", -1);
+      check(
+          parts.length == 4 && parts[1].equals(caller.getSpanContext().getTraceId()),
+          "enqueue stored no caller trace context");
+      try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+        check(
+            worker(pool, fixture)
+                .telemetry(telemetry)
+                .handle(taskType(fixture), Object.class, (ctx, payload) -> null)
+                .build()
+                .runOnce(),
+            "the worker did not run the traced task");
+      }
+      List<SpanData> handlers = recording.spans("workhorse.handler");
+      check(handlers.size() == 1, "recorded " + handlers.size() + " handler spans, want 1");
+      SpanData handler = handlers.get(0);
+      check(
+          handler.getTraceId().equals(caller.getSpanContext().getTraceId()),
+          "the handler span left the enqueuing trace");
+      check(
+          handler.getParentSpanId().equals(parts[2]),
+          "the handler span's parent is not the stored context");
     }
   }
 

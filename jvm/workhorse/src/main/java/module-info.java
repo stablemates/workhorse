@@ -12,4 +12,6 @@ module dev.stablemates.workhorse {
   requires transitive org.jspecify;
   requires org.postgresql.jdbc;
   requires static transitive jakarta.servlet;
+  requires static io.opentelemetry.api;
+  requires static io.opentelemetry.context;
 }

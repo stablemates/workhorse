@@ -5,8 +5,10 @@ package dev.stablemates.workhorse;
  *
  * @param defaultQueue the queue of a request that names none, {@code "default"} by default
  * @param codec the codec of payloads and results, {@link JsonCodec#standard()} by default
+ * @param telemetry the OpenTelemetry instance that the queue reports to, {@code
+ *     GlobalOpenTelemetry} by default
  */
-public record QueueOptions(String defaultQueue, JsonCodec codec) {
+public record QueueOptions(String defaultQueue, JsonCodec codec, WorkhorseTelemetry telemetry) {
   /**
    * Checks the default queue.
    *
@@ -32,6 +34,7 @@ public record QueueOptions(String defaultQueue, JsonCodec codec) {
   public static final class Builder {
     private String defaultQueue = "default";
     private JsonCodec codec = JsonCodec.standard();
+    private WorkhorseTelemetry telemetry = WorkhorseTelemetry.global();
 
     private Builder() {}
 
@@ -47,9 +50,15 @@ public record QueueOptions(String defaultQueue, JsonCodec codec) {
       return this;
     }
 
+    /** Sets the OpenTelemetry instance that the queue reports to. */
+    public Builder telemetry(WorkhorseTelemetry telemetry) {
+      this.telemetry = telemetry;
+      return this;
+    }
+
     /** The options. */
     public QueueOptions build() {
-      return new QueueOptions(defaultQueue, codec);
+      return new QueueOptions(defaultQueue, codec, telemetry);
     }
   }
 }

@@ -11,6 +11,7 @@ import dev.stablemates.workhorse.internal.Sql;
 import dev.stablemates.workhorse.internal.SqlCatalogue;
 import dev.stablemates.workhorse.internal.Suspension;
 import dev.stablemates.workhorse.internal.Values;
+import dev.stablemates.workhorse.internal.telemetry.WorkerTelemetry;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Type;
@@ -135,6 +136,7 @@ public final class Worker implements AutoCloseable {
   private final @Nullable Consumer<Throwable> onRegistrationError;
   private final @Nullable Consumer<Throwable> onNotificationError;
   private final System.Logger logger;
+  private final WorkerTelemetry telemetry;
   private final JsonCodec codec;
   private final Map<String, Registration> handlers;
   private final Map<String, BatchCoordinator> coordinators;
@@ -269,6 +271,7 @@ public final class Worker implements AutoCloseable {
     this.onRegistrationError = builder.onRegistrationError;
     this.onNotificationError = builder.onNotificationError;
     this.logger = builder.logger;
+    this.telemetry = new WorkerTelemetry(builder.telemetry.telemetry());
     this.codec = builder.codec;
     this.handlers = Map.copyOf(builder.handlers);
     Map<String, BatchCoordinator> batches = new HashMap<>();
@@ -288,7 +291,11 @@ public final class Worker implements AutoCloseable {
     this.queue =
         new Queue(
             connections,
-            QueueOptions.builder().defaultQueue(queueNames.get(0)).codec(codec).build());
+            QueueOptions.builder()
+                .defaultQueue(queueNames.get(0))
+                .codec(codec)
+                .telemetry(builder.telemetry)
+                .build());
     this.heartbeat =
         builder.sharedHeartbeats
             ? Heartbeat.borrowing(dataSource)
@@ -1100,7 +1107,8 @@ public final class Worker implements AutoCloseable {
     int start = (int) Math.floorMod(nextQueueIndex.getAndIncrement(), (long) size);
     for (int offset = 0; offset < size && claimed.size() < limit; offset++) {
       String name = queueNames.get((start + offset) % size);
-      claim(name, limit - claimed.size(), fastLimit - claimed.size(), claimed);
+      int free = limit - claimed.size();
+      telemetry.claim(name, () -> claim(name, free, fastLimit - claimed.size(), claimed));
     }
   }
 
@@ -1129,6 +1137,8 @@ public final class Worker implements AutoCloseable {
       }
     }
     claimed.addAll(tasks);
+    telemetry.claimed(
+        name, startedAt, tasks.stream().map(task -> task.task).toList(), fast == null);
     logClaimed(tasks);
   }
 
@@ -1589,17 +1599,23 @@ public final class Worker implements AutoCloseable {
     long routine = lastRoutineAt.get();
     boolean routineDue =
         routine == NEVER || now - routine >= TimeUnit.MILLISECONDS.toNanos(routineMs);
-    withConnection(
-        connection -> {
-          for (Row row : Sql.rows(connection, SqlCatalogue.TICK_V1, "100", "100")) {
-            recordMaintenance(row);
-          }
-          if (routineDue) {
-            lastRoutineAt.set(now);
-            Sql.rows(connection, SqlCatalogue.RUN_MAINTENANCE_V1, Values.timestamp(Instant.now()));
-          }
-          return null;
-        });
+    telemetry.maintenance(
+        () ->
+            withConnection(
+                connection -> {
+                  for (Row row : Sql.rows(connection, SqlCatalogue.TICK_V1, "100", "100")) {
+                    recordMaintenance(row);
+                  }
+                  if (routineDue) {
+                    lastRoutineAt.set(now);
+                    Sql.rows(
+                            connection,
+                            SqlCatalogue.RUN_MAINTENANCE_V1,
+                            Values.timestamp(Instant.now()))
+                        .forEach(telemetry::maintenancePhase);
+                  }
+                  return null;
+                }));
     lastMaintenanceAt.set(now);
     if (!scheduleNamespaces.isEmpty()) {
       fireSchedules();
@@ -1607,6 +1623,7 @@ public final class Worker implements AutoCloseable {
   }
 
   private void recordMaintenance(Row row) {
+    telemetry.maintenancePhase(row);
     Long affected = row.longValue("rows_affected");
     boolean error = row.text("error") != null;
     if ((affected == null || affected == 0) && !error) {
@@ -1639,6 +1656,7 @@ public final class Worker implements AutoCloseable {
                     Integer.toString(scheduleCatchupLimit),
                     Long.toString(maintenanceMs)));
     for (Row row : rows) {
+      telemetry.scheduleFired(row, Instant.now());
       Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
       attributes.put("workhorse.schedule.namespace", row.text("namespace"));
       attributes.put("workhorse.schedule.name", row.text("schedule_name"));
@@ -1839,6 +1857,7 @@ public final class Worker implements AutoCloseable {
     Arbiter arbiter = new Arbiter();
     Map<String, @Nullable Object> attributes = taskAttributes(claimed);
     log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
+    WorkerTelemetry.Execution execution = telemetry.execute(claimed);
     try {
       if (registration == null) {
         log(
@@ -1850,8 +1869,12 @@ public final class Worker implements AutoCloseable {
       } else {
         runHandler(task, registration, arbiter);
       }
+    } catch (RuntimeException | Error error) {
+      telemetry.handlerError(error.getClass().getName());
+      throw error;
     } finally {
       Outcome outcome = arbiter.reportedOutcome();
+      execution.finish(outcome == null ? null : outcome.name());
       Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
       finished.put("workhorse.handler.outcome", outcomeLabel(outcome));
       log(
@@ -1939,9 +1962,14 @@ public final class Worker implements AutoCloseable {
   private void complete(Active active, String encoded, Arbiter arbiter) {
     ClaimedTask task = active.claimed.task;
     boolean accepted =
-        active.claimed.fastClaimed
-            ? completeFast(active, encoded)
-            : "t".equals(fencedRow(SqlCatalogue.COMPLETE_V1, task, encoded).text("accepted"));
+        telemetry.complete(
+            task,
+            () ->
+                active.claimed.fastClaimed
+                    ? completeFast(active, encoded)
+                    : "t"
+                        .equals(
+                            fencedRow(SqlCatalogue.COMPLETE_V1, task, encoded).text("accepted")));
     Map<String, @Nullable Object> attributes = taskAttributes(task);
     attributes.put("workhorse.complete.accepted", accepted);
     if (accepted) {
@@ -1965,6 +1993,7 @@ public final class Worker implements AutoCloseable {
   /** Hands an owned task back to PostgreSQL without charging the attempt. */
   private void releaseOwned(ClaimedTask task, Arbiter arbiter) {
     String status = fencedRow(SqlCatalogue.RELEASE_OWNED_V1, task).text("status");
+    telemetry.handlerSpanOutcome(status);
     Map<String, @Nullable Object> attributes = taskAttributes(task);
     attributes.put("workhorse.release.status", status);
     log(
@@ -1984,8 +2013,16 @@ public final class Worker implements AutoCloseable {
     String envelope = Json.write(failureEnvelope(error, task.redactErrorDetails()));
     Long delay = error instanceof ConflictException ? Long.valueOf(-1) : retryDelayOverride(task);
     String state =
-        fencedRow(SqlCatalogue.FAIL_V1, task, envelope, delay == null ? null : Long.toString(delay))
-            .text("state");
+        telemetry.fail(
+            task,
+            error,
+            () ->
+                fencedRow(
+                        SqlCatalogue.FAIL_V1,
+                        task,
+                        envelope,
+                        delay == null ? null : Long.toString(delay))
+                    .text("state"));
     Map<String, @Nullable Object> attributes = taskAttributes(task);
     attributes.put("workhorse.attempt.outcome", state);
     log(
@@ -2391,6 +2428,9 @@ public final class Worker implements AutoCloseable {
       }
     }
     logClaimed(claimed);
+    if (claimLimit > 0) {
+      telemetry.claimed(queueName, sentAt, claimed.stream().map(task -> task.task).toList(), false);
+    }
     reportFused(chunk.size(), claimLimit, claimed.size());
     // Claimed tasks go to the completions in order, each up to the slots it reserved.
     int offset = 0;
@@ -2478,6 +2518,7 @@ public final class Worker implements AutoCloseable {
 
   /** Logs one batch as it starts. */
   void recordBatchDispatch(String taskType, List<ClaimedTask> tasks, boolean full, long lingerMs) {
+    telemetry.batch(taskType, tasks, full, lingerMs);
     Map<String, @Nullable Object> attributes = batchAttributes(taskType, tasks, full);
     attributes.put("workhorse.handler.batch.linger_ms", lingerMs);
     log(
@@ -2646,6 +2687,7 @@ public final class Worker implements AutoCloseable {
           public void settle(String status) {
             Map<String, @Nullable Object> attributes = taskAttributes(task);
             attributes.put("workhorse.heartbeat.status", status);
+            telemetry.heartbeatRejected(status);
             log(
                 System.Logger.Level.INFO,
                 "workhorse.task.heartbeat_rejected",
@@ -2769,10 +2811,12 @@ public final class Worker implements AutoCloseable {
 
   private @Nullable String settleExpiration(
       ClaimedTask task, Arbiter arbiter, TaskCancellation cancellation) {
-    String status = fencedRow(SqlCatalogue.EXPIRE_OWNED_TELEMETRY_V1, task).text("status");
+    Row row = fencedRow(SqlCatalogue.EXPIRE_OWNED_TELEMETRY_V1, task);
+    String status = row.text("status");
     if ("not_due".equals(status)) {
       return status;
     }
+    telemetry.expired(task, row);
     Map<String, @Nullable Object> attributes = taskAttributes(task);
     attributes.put("workhorse.expiration.status", status);
     log(
@@ -3226,6 +3270,7 @@ public final class Worker implements AutoCloseable {
     private @Nullable Consumer<Throwable> onNotificationError;
     private System.Logger logger = System.getLogger(Worker.class.getName());
     private JsonCodec codec = JsonCodec.standard();
+    private WorkhorseTelemetry telemetry = WorkhorseTelemetry.global();
     private @Nullable Integer cohorts;
     private final Map<String, Registration> handlers = new LinkedHashMap<>();
 
@@ -3399,6 +3444,15 @@ public final class Worker implements AutoCloseable {
     /** The codec for payloads and results. The default is {@link JsonCodec#standard()}. */
     public Builder codec(JsonCodec codec) {
       this.codec = Objects.requireNonNull(codec, "codec");
+      return this;
+    }
+
+    /**
+     * The OpenTelemetry instance that the worker and its queue report to. The default reads {@code
+     * GlobalOpenTelemetry} when the API is on the class path.
+     */
+    public Builder telemetry(WorkhorseTelemetry telemetry) {
+      this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
       return this;
     }
 

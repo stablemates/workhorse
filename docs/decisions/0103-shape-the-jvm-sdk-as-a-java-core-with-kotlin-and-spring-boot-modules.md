@@ -885,7 +885,8 @@ POM marks it `optional`, and the Gradle metadata declares it as a feature varian
 The SDK emits the span names, counters, histograms, attributes, outcome values, and attribute
 limits of `api/telemetry.txt`, as `python/src/workhorse/_telemetry.py` does. It injects and extracts
 W3C trace context. SM-1392 adds a test that proves each name in `api/telemetry.txt` comes from the
-JVM SDK. A second test runs the SDK without OpenTelemetry on the class path.
+JVM SDK. A second test runs the SDK without OpenTelemetry on the class path. The amendment at the
+end of this record supersedes an earlier form of the first test.
 
 ### Spring Boot starter
 
@@ -1373,3 +1374,27 @@ and report `DOWN`. No other public method shows that state.
 
 The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
 SM-1393. SM-1387 adds the method.
+
+## Amendment: the telemetry test holds the Java names to `api/telemetry.txt` (2026-10-18)
+
+The Telemetry section first said that a test proves each name in `api/telemetry.txt` comes from the
+JVM SDK. This amendment supersedes that sentence.
+
+The TypeScript source generates `api/telemetry.txt`. Ruby and Python, the reference SDKs, emit a
+subset of it. For example, neither emits `workhorse.enqueue` or the `workhorse.redrive.*`
+attributes. So the JVM SDK does not emit each name in the file. The JVM SDK emits
+the Ruby reference set and the `workhorse.enqueue` span. The SM-1392 tests check three conditions:
+
+1. Each span, attribute, and instrument that the JVM SDK declares is in `api/telemetry.txt`. Each
+   instrument has the kind, unit, and description of the file.
+2. Each span, attribute, and instrument that a recording OpenTelemetry SDK captures from an enqueue
+   and a worker run against PostgreSQL is in the file.
+3. The test holds a sorted list of the names in the file that the JVM SDK does not emit. Each name
+   in the file must be declared by the JVM SDK or be on that list. A new name in the file then
+   fails the test until the JVM SDK emits it or the list names it. SM-1438 holds the listed names.
+
+The JVM SDK compiles against `opentelemetry-api` 1.55.0. `spring-boot-dependencies` 4.0.8, the
+Spring Boot floor, manages that version.
+
+The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
+SM-1392.
