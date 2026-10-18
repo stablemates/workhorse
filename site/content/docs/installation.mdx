@@ -12,7 +12,7 @@ does it.
 ## Check the requirements
 
 Each SDK runs on standard PostgreSQL and needs no extension. The schema CLI runs on Node.js during
-deployment. This is also true when the application uses Python, Go, Rust, or Ruby.
+deployment. This is also true when the application uses Python, Go, Rust, Ruby, Java, or Kotlin.
 [Compatibility](/docs/compatibility) gives each supported version. No other page gives them.
 
 Choose the runtime of your application:
@@ -23,6 +23,8 @@ Choose the runtime of your application:
 - Rust runs on Tokio with `tokio-postgres`.
 - Ruby runs on the `pg` gem. It can use the gem directly, through `connection_pool`, or through
   Active Record.
+- Java and Kotlin run on PgJDBC through a `DataSource`. A Spring Boot application can use the
+  starter.
 
 If the PostgreSQL version is not supported, `installSchema` refuses it before it starts. The error
 gives the version of the server. Thus, you do not get a syntax error halfway through the
@@ -98,6 +100,12 @@ its default PostgreSQL driver.
   </Tab>
 </Tabs>
 
+The JVM SDK has three artifacts in the group `run.workhorse`: `workhorse` for Java,
+`workhorse-kotlin` for Kotlin, and `workhorse-spring-boot-starter` for Spring Boot. Maven Central
+does not serve them yet. Thus, this page gives no Gradle or Maven command for them.
+[Compatibility](/docs/compatibility) gives the Java, Kotlin, Spring Boot, and PgJDBC versions that
+they support.
+
 Add a database adapter only if the process uses that integration. The adapters are
 `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, and `@stablemates/workhorse-knex`.
@@ -142,16 +150,15 @@ The `--no` option makes this command safe. The command runs the `workhorse` bina
 `pnpm exec workhorse …`. If it is Yarn, use `yarn workhorse …`. The project has only one version of
 the tool, so the versions cannot become different.
 
-A Python, Go, Rust, or Ruby project has no `node_modules` that holds the binary. Thus, the command
-gives the package and the version:
+A Python, Go, Rust, Ruby, Java, or Kotlin project has no `node_modules` that holds the binary. Thus,
+the command gives the package and the version:
 
 ```bash
 npx --package @stablemates/workhorse@0.8.0 workhorse schema install
 ```
 
-Use the version of the Python package, the Go module, the `workhorse` crate, or the Ruby gem that
-your application uses. All the SDKs release together from one commit, so their versions are the
-same.
+Use the SDK version that your application uses. All the SDKs release together from one commit, so
+their versions are the same.
 
 The `--package` option also tells `npx` where the binary comes from. Without it, `npx` looks for a
 package with the name `workhorse`, and a different owner has that package.
@@ -265,9 +272,9 @@ because inside a major line a migration only adds.
 
 ## Create a development database without Node.js
 
-The schema tool is available only on npm. Thus, a Python, Go, Rust, or Ruby developer has no local
-command that creates the database. In its place, each `vX.Y.Z` tag attaches the clean-install file
-`schema.sql` to its GitHub release. Do these steps:
+The schema tool is available only on npm. Thus, a Python, Go, Rust, Ruby, Java, or Kotlin developer
+has no local command that creates the database. In its place, each `vX.Y.Z` tag attaches the
+clean-install file `schema.sql` to its GitHub release. Do these steps:
 
 1. Download the file from the release of the version that your application uses.
 2. Apply the file with `psql`.
@@ -363,6 +370,16 @@ check.
 
   </Tab>
 </Tabs>
+
+In Java, build a `Queue` or an `Admin` and call `assertCompatible()`:
+
+```java
+Queue queue = new Queue(ConnectionSource.of(dataSource));
+queue.assertCompatible();
+```
+
+A refusal is a `CompatibilityException`, whose `code()` names the reason. Kotlin calls the same
+method, or `assertCompatibleSuspend()`.
 
 The check reads the installed version. It does not create or change anything. If the schema is
 missing, the error tells you to install it. If the version is not the version of the runtime, the

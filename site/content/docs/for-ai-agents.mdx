@@ -134,8 +134,8 @@ TypeScript project runs the binary of its own dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, or Ruby project has no Node.js dependencies. It names the version in the
-command. This version must be equal to the SDK version of the application:
+A Python, Go, Rust, Ruby, Java, or Kotlin project has no Node.js dependencies. It names the version
+in the command. This version must be equal to the SDK version of the application:
 
 ```bash
 npx --package @stablemates/workhorse@0.8.0 workhorse schema install
@@ -145,7 +145,8 @@ The machine that runs the deployment needs Node.js for this command. [Compatibil
 names the Node.js version. The application does not need Node.js.
 
 When the application starts, assert compatibility. Use `assertSchemaCompatible` in TypeScript,
-`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust and Ruby.
+`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust
+and Ruby. Java and Kotlin call the compatibility assertion of their queue.
 
 Install the SDK of the application language:
 
@@ -160,6 +161,9 @@ bundle add connection_pool
 
 The Ruby SDK also needs the `connection_pool` gem.
 
+The JVM SDK has no install command yet, because Maven Central does not serve its artifacts. Its
+README names the three artifacts and their supported versions.
+
 ### Enqueue in the transaction of your application data
 
 Enqueue the task in the same transaction that writes the application data. Then you do not need an
@@ -169,6 +173,9 @@ outbox. Each language gets the transaction in a different way:
 - Python constructs the `Queue` over the connection whose transaction is open.
 - Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`.
 - Rust and Ruby construct the `Queue` over the open transaction, as Python does.
+- Java passes the open JDBC connection as the first argument of the enqueue call. Kotlin gives the
+  connection to the suspend wrapper by name. A Spring Boot application enqueues inside its
+  transactional method.
 
 ### Register a handler
 
@@ -180,6 +187,8 @@ continuous method:
 - `worker.Run(ctx)` in Go.
 - `run_worker_process` in Rust.
 - `Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
+- The process helper of the core in Java and Kotlin, or the Spring Boot starter with its worker
+  switch on.
 
 ### Set the failure policy when you enqueue
 

@@ -1,7 +1,7 @@
 # Workhorse
 
-A durable task queue for PostgreSQL, with TypeScript, Python, Go, Rust, and Ruby workers on one SQL
-protocol.
+A durable task queue for PostgreSQL, with TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin
+workers on one SQL protocol.
 
 Workhorse is versioned SQL functions inside the database you already run. Every language gets the
 same workers, the same durable waits, and the same dashboard, with no broker or server beside

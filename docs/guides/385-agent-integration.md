@@ -87,7 +87,8 @@ For example, if the order service runs on MySQL, stop. Report the reason, and do
 <summary>Reference: schema compatibility refusals</summary>
 
 The TypeScript, Python, Go, and Rust compatibility checks return the same five refusal codes. Ruby
-returns the same codes as symbols with underscores, for example `:schema_too_old`.
+returns the same codes as symbols with underscores, for example `:schema_too_old`. Java and Kotlin
+return them as `CompatibilityException.Code` values, for example `SCHEMA_TOO_OLD`.
 
 | Code                      | Meaning                                                              |
 | ------------------------- | -------------------------------------------------------------------- |
@@ -97,14 +98,16 @@ returns the same codes as symbols with underscores, for example `:schema_too_old
 | `client-protocol-too-old` | The client's protocol is below the minimum this runtime supports.    |
 | `client-protocol-too-new` | The client's protocol is above the maximum this runtime supports.    |
 
-| Language   | Startup assertion          |
-| ---------- | -------------------------- |
-| TypeScript | `assertSchemaCompatible`   |
-| Python     | `assert_schema_compatible` |
-| Go         | `AssertSchemaCompatible`   |
-| Rust, Ruby | `assert_compatible`        |
+| Language   | Startup assertion           |
+| ---------- | --------------------------- |
+| TypeScript | `assertSchemaCompatible`    |
+| Python     | `assert_schema_compatible`  |
+| Go         | `AssertSchemaCompatible`    |
+| Rust, Ruby | `assert_compatible`         |
+| Java       | `Queue.assertCompatible()`  |
+| Kotlin     | `assertCompatibleSuspend()` |
 
-More detail: [Schema and SQL protocol: Schema compatibility checks](../architecture/schema-and-protocol.md#schema-compatibility-checks).
+More detail: [Schema and SQL protocol: Schema compatibility checks](../architecture/schema-and-protocol.md#schema-compatibility-checks) and [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources).
 
 </details>
 
@@ -138,8 +141,8 @@ TypeScript project runs the binary of its own dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, or Ruby project has no Node.js dependencies. It names the version in the
-command. This version must be equal to the SDK version of the application:
+A Python, Go, Rust, Ruby, Java, or Kotlin project has no Node.js dependencies. It names the version
+in the command. This version must be equal to the SDK version of the application:
 
 ```bash
 npx --package @stablemates/workhorse@0.8.0 workhorse schema install
@@ -149,7 +152,8 @@ The machine that runs the deployment needs Node.js for this command. [the compat
 names the Node.js version. The application does not need Node.js.
 
 When the application starts, assert compatibility. Use `assertSchemaCompatible` in TypeScript,
-`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust and Ruby.
+`assert_schema_compatible` in Python, `AssertSchemaCompatible` in Go, or `assert_compatible` in Rust
+and Ruby. Java and Kotlin call the compatibility assertion of their queue.
 
 Install the SDK of the application language:
 
@@ -164,6 +168,9 @@ bundle add connection_pool
 
 The Ruby SDK also needs the `connection_pool` gem.
 
+The JVM SDK has no install command yet, because Maven Central does not serve its artifacts. Its
+README names the three artifacts and their supported versions.
+
 ### Enqueue in the transaction of your application data
 
 Enqueue the task in the same transaction that writes the application data. Then you do not need an
@@ -173,6 +180,9 @@ outbox. Each language gets the transaction in a different way:
 - Python constructs the `Queue` over the connection whose transaction is open.
 - Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`.
 - Rust and Ruby construct the `Queue` over the open transaction, as Python does.
+- Java passes the open JDBC connection as the first argument of the enqueue call. Kotlin gives the
+  connection to the suspend wrapper by name. A Spring Boot application enqueues inside its
+  transactional method.
 
 ### Register a handler
 
@@ -184,6 +194,8 @@ continuous method:
 - `worker.Run(ctx)` in Go.
 - `run_worker_process` in Rust.
 - `Stablemates::Workhorse.run_worker_process(worker)` in Ruby.
+- The process helper of the core in Java and Kotlin, or the Spring Boot starter with its worker
+  switch on.
 
 ### Set the failure policy when you enqueue
 
@@ -204,6 +216,9 @@ remain.
   construct the `Queue` over the open transaction.
 - **Continuous worker.** Call `worker.run()` in TypeScript and Python, `worker.Run(ctx)` in Go, or
   `run_worker_process` in Rust and Ruby.
+- **Java and Kotlin.** Call `Queue.assertCompatible()` at startup. Pass the open `Connection` as the
+  first argument of `Queue.enqueue`, or call it inside a Spring `@Transactional` method. Run the
+  worker with `WorkerProcess.runWorkerProcess(worker)`.
 
 | Failure option       | Bounds                                               |
 | -------------------- | ---------------------------------------------------- |
@@ -212,7 +227,7 @@ remain.
 | `deadline`           | The whole task. When it passes, the task ends.       |
 | `executionTimeoutMs` | One attempt. The task retries while attempts remain. |
 
-More detail: [Task lifecycle](../architecture/lifecycle.md).
+More detail: [Task lifecycle](../architecture/lifecycle.md), [Schema and SQL protocol: JVM worker processes](../architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), and [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter).
 
 </details>
 
@@ -272,22 +287,26 @@ missing worker.
 | Python     | Construct the `Queue` over the connection whose transaction is open. |
 | Go         | Wrap the transaction with `workhorse.NewPGXExecutor(tx)`.            |
 | Rust, Ruby | Construct the `Queue` over the open transaction.                     |
+| Java       | Pass the open `Connection` as the first argument of `enqueue`.       |
+| Kotlin     | Pass the open `Connection` as `connection` to `enqueueSuspend`.      |
 
 **Checkpoint and read-back**
 
-| Language   | Checkpoint                            | Read the task back |
-| ---------- | ------------------------------------- | ------------------ |
-| TypeScript | `context.checkpoint(name, operation)` | `Admin.getTask`    |
-| Python     | `context.checkpoint(name, operation)` | `Admin.get_task`   |
-| Go         | `handler.Checkpoint(name, operation)` | `Admin.GetTask`    |
-| Rust       | `context.checkpoint(name, operation)` | `Admin::get_task`  |
-| Ruby       | `context.checkpoint(name) { … }`      | `Admin#get_task`   |
+| Language   | Checkpoint                                  | Read the task back |
+| ---------- | ------------------------------------------- | ------------------ |
+| TypeScript | `context.checkpoint(name, operation)`       | `Admin.getTask`    |
+| Python     | `context.checkpoint(name, operation)`       | `Admin.get_task`   |
+| Go         | `handler.Checkpoint(name, operation)`       | `Admin.GetTask`    |
+| Rust       | `context.checkpoint(name, operation)`       | `Admin::get_task`  |
+| Ruby       | `context.checkpoint(name) { … }`            | `Admin#get_task`   |
+| Java       | `context.checkpoint(name, type, operation)` | `Admin.getTask`    |
+| Kotlin     | `context.checkpoint<T>(name) { … }`         | `getTaskSuspend`   |
 
 **Failure policy.** `maxAttempts` and `retryPolicy` set the retry budget. `deadline` ends the whole
 task when it passes. `executionTimeoutMs` ends one attempt; the task then retries under its policy
 while attempts remain.
 
-More detail: [Task lifecycle: Enqueue](../architecture/lifecycle.md#enqueue).
+More detail: [Task lifecycle: Enqueue](../architecture/lifecycle.md#enqueue), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context), and [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module).
 
 </details>
 
@@ -310,13 +329,14 @@ page, because the compilation of its programs is a stronger check.
 <details>
 <summary>Reference: example checks</summary>
 
-| Language   | Check                                                                                                               |
-| ---------- | ------------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `tsc` type-checks the `ts verify` fence.                                                                            |
-| Python     | `ruff format --check` and `mypy` check the `python verify` fence.                                                   |
-| Go         | `gofmt` and the Go compiler check the `go verify` fence.                                                            |
-| Rust       | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
-| Ruby       | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
+| Language     | Check                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| TypeScript   | `tsc` type-checks the `ts verify` fence.                                                                            |
+| Python       | `ruff format --check` and `mypy` check the `python verify` fence.                                                   |
+| Go           | `gofmt` and the Go compiler check the `go verify` fence.                                                            |
+| Rust         | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
+| Ruby         | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
+| Java, Kotlin | No check yet. The page has no Java or Kotlin program.                                                               |
 
 `site/scripts/check-language-examples.ts` runs these checks. Its `crossSdkGuidePaths` list, the
 feature-page name sweep, does not include `for-ai-agents.mdx`.

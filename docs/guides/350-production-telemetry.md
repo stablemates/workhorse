@@ -94,10 +94,10 @@ with a run time 10 minutes later. A worker in another process runs the task.
 In your backend, one trace shows the HTTP request, the enqueue, and the handler run. The handler ran
 10 minutes later in another process.
 
-The TypeScript queue makes an enqueue span and stores its context. Python, Go, Rust, and Ruby queues
-store the active context of the caller. Each worker can restore the two forms, and all workers use
-the same span names. Thus, one trace can include workers in different languages. The Go host
-installs its own providers, and the library adds no SDK or exporter.
+The TypeScript and Java queues make an enqueue span and store its context. Python, Go, Rust, and
+Ruby queues store the active context of the caller. Each worker can restore the two forms, and all
+workers use the same span names. Thus, one trace can include workers in different languages. The Go
+host installs its own providers, and the library adds no SDK or exporter.
 
 The web request can also carry baggage, for example the email address of the customer. Baggage is a
 set of values that OpenTelemetry sends with a request. Workhorse does not store baggage. Baggage
@@ -124,7 +124,7 @@ difficult to limit and to remove.
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.queue.name`. Workhorse emits at most
 eight attributes on one span and exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8`.
 
-More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation) and [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans).
+More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), and [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry).
 
 </details>
 

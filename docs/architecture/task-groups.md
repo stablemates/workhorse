@@ -467,12 +467,21 @@ Each SDK calls the functions above through its `Queue`, its `Admin`, and its han
 `Queue` and `Admin` in every SDK also have the get and member-list reads. `Admin` also has the
 event read. Python `AsyncQueue` has the same calls as `Queue`.
 
+Java spells each operation as TypeScript does: `Queue.createTaskGroup`, `Queue.taskGroup`,
+`Queue.addToTaskGroup`, `Queue.sealTaskGroup`, `Queue.findTaskGroup`, `Admin.cancelTaskGroup`,
+`Admin.listTaskGroupDrift`, and `Admin.repairTaskGroupDrift`. A Java handler reads and adds with
+`HandlerContext.taskGroup().get()` and `HandlerContext.taskGroup().add(requests)`. Kotlin calls the
+suspend wrapper of each `Queue` and `Admin` method, such as `createTaskGroupSuspend`, and
+`ctx.taskGroup.get()` and `ctx.taskGroup.add(requests)` in a handler.
+
 The callbacks are `onFinish`, `onSuccess`, and `onFailure` in TypeScript. Go uses `OnFinish`,
 `OnSuccess`, and `OnFailure`. Python, Rust, and Ruby use `on_finish`, `on_success`, and
 `on_failure`.
 
 The block form takes a builder function in TypeScript and Go. Python uses a `with` block, and Ruby
-uses a block. In Rust, `Queue::task_group` takes a list of requests in place of a block.
+uses a block. In Rust, `Queue::task_group` takes a list of requests in place of a block. Java takes
+a `Consumer<TaskGroupBuilder>`, and a `TaskGroupCallbacks(onFinish, onSuccess, onFailure)` record
+holds the callbacks. Kotlin `taskGroupSuspend` takes a block with a `TaskGroupBuilder` receiver.
 
 The SDKs map the refusals of an add to these errors:
 
@@ -483,6 +492,9 @@ The SDKs map the refusals of an add to these errors:
 | `P1009`  | `TaskGroupLimitExceededError`      | `*TaskGroupLimitExceededError`, which wraps `ErrTaskGroupLimitExceeded`           | `Error::TaskGroupLimitExceeded`      |
 | `P1010`  | `TaskGroupMembershipConflictError` | `*TaskGroupMembershipConflictError`, which wraps `ErrTaskGroupMembershipConflict` | `Error::TaskGroupMembershipConflict` |
 
+Java and Kotlin throw `FastTierUnsupportedException`, `TaskGroupClosedException`,
+`TaskGroupLimitExceededException`, and `TaskGroupMembershipConflictException` for these four codes.
+
 ### Queue of a request with no queue
 
 An add through `Queue` sends a request with no queue to the default queue of that `Queue`. An add
@@ -492,13 +504,14 @@ A request that names a queue keeps that queue. [ADR
 0097](../decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the
 rule.
 
-| SDK        | Where the SDK sets the queue of a handler add request with no queue               |
-| ---------- | --------------------------------------------------------------------------------- |
-| TypeScript | `TaskGroups.addAsMember` in `typescript/core/src/queue/task-groups.ts`            |
-| Python     | `add_to_task_group` of the handler context in `python/src/workhorse/worker.py`    |
-| Go         | `HandlerContext.AddToTaskGroup` in `go/task_groups.go`, from `handler.Task.Queue` |
-| Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                 |
-| Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`  |
+| SDK        | Where the SDK sets the queue of a handler add request with no queue                      |
+| ---------- | ---------------------------------------------------------------------------------------- |
+| TypeScript | `TaskGroups.addAsMember` in `typescript/core/src/queue/task-groups.ts`                   |
+| Python     | `add_to_task_group` of the handler context in `python/src/workhorse/worker.py`           |
+| Go         | `HandlerContext.AddToTaskGroup` in `go/task_groups.go`, from `handler.Task.Queue`        |
+| Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                        |
+| Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`         |
+| JVM        | `Queue.addToTaskGroupAsMember` in `jvm/workhorse/src/main/java/run/workhorse/Queue.java` |
 
 A child task request with no queue follows the same rule: the child goes to the queue of the parent
 task. [Data model: Queue of a child request with no

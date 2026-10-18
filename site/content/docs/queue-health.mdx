@@ -39,7 +39,8 @@ snapshot is from the same instant. The snapshot gives this instant as `capturedA
 - Go `Queue.Health()`;
 - Python `Queue.health()` and `AsyncQueue.health()`.
 
-The Rust and Ruby clients call it through `queue.health()` and `queue.health`.
+The Rust and Ruby clients call it through `queue.health()` and `queue.health`. Java calls
+`Queue.health()`, and Kotlin calls `healthSuspend()`.
 
 One MVCC snapshot covers the verified schema version, state counts, and dispatch depths. It also
 covers dependency, child, deadline, timeout, promotion, concurrency, rate-limit, rollup, and
@@ -251,12 +252,13 @@ Each client returns the same reason codes and the same `capped` lower-bound mark
 Promotion and expired-lease recovery are the two phases of the worker tick, `tick_v1`.
 
 **Clients.** TypeScript `Queue.health()` returns a typed `QueueHealth` object. Go, Python, and Rust
-return the document as a map type named `QueueHealth`. Ruby returns it as a `Hash`.
+return the document as a map type named `QueueHealth`. Ruby returns it as a `Hash`. Java returns a
+`QueueHealth` record whose `snapshot()` holds the document as one map.
 
 **CLI.** `workhorse health --json` writes the same `QueueHealth` object. `workhorse health` exits 2
 when the level is not `healthy`, with or without `--json`.
 
-More detail: [Task lifecycle: Health verdict](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-verdict), [Task lifecycle: Health snapshot](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-snapshot), and [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence).
+More detail: [Task lifecycle: Health verdict](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-verdict), [Task lifecycle: Health snapshot](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#health-snapshot), [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence), and [Schema and SQL protocol: JVM queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-queue).
 
 </details>
 

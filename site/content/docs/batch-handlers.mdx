@@ -8,9 +8,10 @@ many rows. A batch handler is a handler that gets several tasks of one type in o
 downstream call can serve several tasks.
 
 Each task in the call keeps its own lease, fence token, retry budget, checkpoints, progress, and
-cancellation. Register a batch handler with `Worker.handleBatch` in TypeScript, `Worker.handle_batch`
-in Python, `Worker.HandleBatch` in Go, `Worker::handle_batch` in Rust, or `Worker#handle_batch` in
-Ruby.
+cancellation. Register a batch handler with `Worker.handleBatch` in TypeScript,
+`Worker.handle_batch` in Python, `Worker.HandleBatch` in Go, `Worker::handle_batch` in Rust,
+`Worker#handle_batch` in Ruby. In Java, use `Worker.Builder.handleBatch`. In Kotlin, call
+`handleBatch` in the `java { }` block of `workhorseWorker`.
 
 ## Send several tasks to one handler call
 
@@ -117,21 +118,23 @@ Each SDK names the two options in its own way:
 - Go uses `MaxSize` and `Linger` in `BatchHandlerOptions`.
 - Rust uses `max_size` and `linger` in `BatchOptions`.
 - Ruby uses the keywords `max_size:` and `linger:`.
+- Java uses `maxSize` and `linger` in `BatchOptions`.
 
 <details>
 <summary>Reference: options</summary>
 
-| SDK        | Method                                                       | Batch size                              | Linger                                            |
-| ---------- | ------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------- |
-| TypeScript | `Worker.handleBatch(type, options: BatchHandlerOptions, fn)` | `maxSize`: integer, 1 to 100            | `lingerMs`: integer, 0 to 60,000 ms               |
-| Python     | `Worker.handle_batch(type, fn, *, max_size, linger_ms)`      | `max_size`: integer, 1 to 100           | `linger_ms`: integer, 0 to 60,000 ms              |
-| Go         | `Worker.HandleBatch(taskType, options, fn)`                  | `BatchHandlerOptions.MaxSize`: 1 to 100 | `BatchHandlerOptions.Linger`: 0 to 60 s, whole ms |
+| SDK        | Method                                                                 | Batch size                              | Linger                                            |
+| ---------- | ---------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------- |
+| TypeScript | `Worker.handleBatch(type, options: BatchHandlerOptions, fn)`           | `maxSize`: integer, 1 to 100            | `lingerMs`: integer, 0 to 60,000 ms               |
+| Python     | `Worker.handle_batch(type, fn, *, max_size, linger_ms)`                | `max_size`: integer, 1 to 100           | `linger_ms`: integer, 0 to 60,000 ms              |
+| Go         | `Worker.HandleBatch(taskType, options, fn)`                            | `BatchHandlerOptions.MaxSize`: 1 to 100 | `BatchHandlerOptions.Linger`: 0 to 60 s, whole ms |
+| Java       | `Worker.Builder.handleBatch(taskType, payloadClass, options, handler)` | `BatchOptions.maxSize`: 1 to 100        | `BatchOptions.linger`: 0 to 60 s, whole ms        |
 
 Both options are required. The batch size cannot exceed the `concurrency` of the worker
 (`WorkerOptions.Concurrency` in Go). `AsyncWorker.handle_batch` takes the same limits as
 `Worker.handle_batch`.
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers) and [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers).
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers).
 
 </details>
 
@@ -220,13 +223,15 @@ own fence token.
 - Python handlers return the same `succeeded` and `failed` statuses as mappings. A Python batch
   context reads and writes progress with `get_progress` and `set_progress`.
 - Go handlers return `BatchSucceeded` or `BatchFailed` values in the order of the items. A Go batch
-  context gives the standard cancellation context, checkpoints, and the latest progress value through
-  `GetProgress` and `SetProgress`.
-- Rust callbacks get `BatchItem` values. Each item has a payload and its own `BatchHandlerContext`. The
-  callback returns one `BatchResult::Succeeded` or `BatchResult::Failed` for each item, in item
+  context gives the standard cancellation context, checkpoints, and the latest progress value
+  through `GetProgress` and `SetProgress`.
+- Rust callbacks get `BatchItem` values. Each item has a payload and its own `BatchHandlerContext`.
+  The callback returns one `BatchResult::Succeeded` or `BatchResult::Failed` for each item, in item
   order.
 - Ruby blocks get `BatchHandlerItem` values. Each item has a payload and its own
   `BatchHandlerContext`. The block returns one hash for each item, in item order.
+- Java handlers get `BatchHandlerItem` values. Each item has a payload and its own
+  `BatchHandlerContext`. The handler returns one `BatchHandlerOutcome` for each item, in item order.
 
 <details>
 <summary>Reference: outcomes</summary>
@@ -241,6 +246,7 @@ a `BatchHandlerOutcome`.
 | Go         | `BatchSucceeded{Result: value}`                 | `BatchFailed{Error: err}`                                        |
 | Rust       | `BatchResult::Succeeded`                        | `BatchResult::Failed`                                            |
 | Ruby       | `{status: :succeeded, result: value}`           | `{status: :failed, error: exception}`                            |
+| Java       | `new BatchSucceeded(value)`                     | `new BatchFailed(exception)`                                     |
 
 A failed outcome goes through the persisted retry policy and the remaining attempt budget of that
 task.
@@ -250,10 +256,11 @@ task.
 - TypeScript: a thrown error, a non-array return, a wrong outcome count, or an invalid outcome.
 - Python: a raised exception, a non-sequence return, a wrong outcome count, or an invalid mapping.
 - Go: a panic, a wrong outcome count, a nil outcome, or `BatchFailed` with a nil error.
+- Java: a thrown exception or error, a `null` list, a wrong outcome count, or a `null` outcome.
 
 The execution path of each task still submits the failure under its own fence.
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers) and [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers).
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers).
 
 </details>
 
@@ -284,12 +291,18 @@ reads and writes, wait reads, progress reads and writes, and `taskGroup`.
 | ------ | ---------------------------------------------------------------------------------------------------------------- |
 | Python | `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, `set_progress`, `task_group`             |
 | Go     | `Task`, the cancellation `Context`, `Checkpoint`, `GetProgress`, `SetProgress`, `GetTaskGroup`, `AddToTaskGroup` |
+| Java   | `task`, `cancellation`, `getCheckpoint`, `checkpoint`, `getProgress`, `setProgress`, `taskGroup`                 |
 
-**Task groups.** The batch context reads the task group and adds to it in every SDK: TypeScript
-(`taskGroup`), Python (`task_group`), Go (`GetTaskGroup` and `AddToTaskGroup`), Rust
-(`BatchHandlerContext::task_group`), and Ruby (`BatchHandlerContext#task_group`).
+**Task groups.** The batch context reads the task group and adds to it in every SDK:
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls).
+- TypeScript: `taskGroup`
+- Python: `task_group`
+- Go: `GetTaskGroup` and `AddToTaskGroup`
+- Rust: `BatchHandlerContext::task_group`
+- Ruby: `BatchHandlerContext#task_group`
+- Java: `BatchHandlerContext.taskGroup`
+
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM batch handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handler-context).
 
 </details>
 

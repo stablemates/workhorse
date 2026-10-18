@@ -138,7 +138,34 @@ dashboard = Stablemates::Workhorse::Dashboard.new(
 app = Rack::Builder.new { map("/workhorse") { run dashboard } }
 ```
 
-All five hosts serve the same browser bundle and the same `dashboard/v1` procedures. Only the HTTP
+In Java, `run.workhorse.dashboard.Dashboard` is a Jakarta Servlet filter over a
+`ConnectionSource`. Register it for `/*`. It serves the requests under its path, and it passes each
+other request to the next filter.
+
+```java
+Dashboard dashboard =
+    Dashboard.builder(
+            ConnectionSource.of(dataSource),
+            request -> {
+              String username = applicationAdminSession(request);
+              return username != null
+                  ? DashboardAuthorization.principal(username)
+                  : DashboardAuthorization.deny();
+            })
+        .path("/workhorse")
+        .environment("production")
+        .allowedHosts(List.of("ops.example.com"))
+        .build();
+servletContext
+    .addFilter("workhorse-dashboard", dashboard)
+    .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/*");
+```
+
+A Kotlin application uses the same Java API. A Spring Boot application sets
+`workhorse.dashboard.enabled=true` and defines one `DashboardAuthorizer` bean. The starter then
+registers the filter, and the `workhorse.dashboard.*` properties set its options.
+
+All six hosts serve the same browser bundle and the same `dashboard/v1` procedures. Only the HTTP
 adapter changes with the language. PostgreSQL keeps the operator behavior the same in each host.
 
 A workspace is one named database that a dashboard serves. If the TypeScript host serves more than
@@ -151,13 +178,14 @@ Do not configure the built-in login together with `authorize`. If you configure 
 <details>
 <summary>Reference: embedded hosts</summary>
 
-| Language   | Host                                       | `authorize` returns                                                |
-| ---------- | ------------------------------------------ | ------------------------------------------------------------------ |
-| TypeScript | `createDashboardHost`                      | A `DashboardPrincipal`, `true`, `false`, or a `Response`.          |
-| Python     | `workhorse.dashboard.DashboardHost` (WSGI) | A `DashboardPrincipal`, `True`, `False`, or a `DashboardResponse`. |
-| Go         | `dashboard.NewHandler` (`net/http`)        | A `dashboard.Authorization` with `Principal` or `Response`.        |
-| Rust       | `dashboard::handler` (`tower::Service`)    | `Authorization::Principal`, `Unauthenticated`, or `Response`.      |
-| Ruby       | `Stablemates::Workhorse::Dashboard` (Rack) | A `Principal`, `true`, `false`, or a Rack response.                |
+| Language   | Host                                                 | `authorize` returns                                                |
+| ---------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| TypeScript | `createDashboardHost`                                | A `DashboardPrincipal`, `true`, `false`, or a `Response`.          |
+| Python     | `workhorse.dashboard.DashboardHost` (WSGI)           | A `DashboardPrincipal`, `True`, `False`, or a `DashboardResponse`. |
+| Go         | `dashboard.NewHandler` (`net/http`)                  | A `dashboard.Authorization` with `Principal` or `Response`.        |
+| Rust       | `dashboard::handler` (`tower::Service`)              | `Authorization::Principal`, `Unauthenticated`, or `Response`.      |
+| Ruby       | `Stablemates::Workhorse::Dashboard` (Rack)           | A `Principal`, `true`, `false`, or a Rack response.                |
+| Java       | `run.workhorse.dashboard.Dashboard` (Servlet filter) | `DashboardAuthorization.principal(actor)`, `allow()`, or `deny()`. |
 
 - `createDashboardHost` accepts exactly one of `authorize` and `singleAdmin`. It rejects both or
   neither.
@@ -168,12 +196,15 @@ Do not configure the built-in login together with `authorize`. If you configure 
 - In workspaces mode, TypeScript calls `authorize(request, workspace)` with the resolved workspace
   name. It passes null in single-workspace mode and outside every workspace.
 - The Python host rejects a connection without `autocommit=True`.
+- The Java host has no response result. `deny()` answers `401`. The filter passes each request
+  outside its path to `chain.doFilter`.
 - A non-empty `allowedHosts` list answers `421` for any other host, before `authorize` runs.
 
 More detail: [Overview: Workspace routing](../architecture/overview.md#workspace-routing),
 [Dashboard: Python backend](../architecture/dashboard.md#python-backend),
+[Dashboard: JVM backend](../architecture/dashboard.md#jvm-backend),
 [Dashboard: Schema compatibility answer](../architecture/dashboard.md#schema-compatibility-answer),
-and [Dashboard: Allowed hosts](../architecture/dashboard.md#allowed-hosts).
+[Dashboard: Allowed hosts](../architecture/dashboard.md#allowed-hosts), and [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter).
 
 </details>
 
@@ -197,8 +228,8 @@ The server takes the actor from one of these sources:
 - If `authorize` returns only `true`, the server records its configured audit actor.
 
 A principal always has priority over the audit actor. The TypeScript, Python, and Ruby hosts accept
-a `true` result, so they have an audit actor option. The Go and Rust callbacks must return a
-principal, so those hosts have no audit actor option.
+a `true` result, and the Java host accepts `allow()`. Thus these hosts have an audit actor option.
+The Go and Rust callbacks must return a principal, so those hosts have no audit actor option.
 
 A mutation is a request that changes queue state. Each mutation must have an `Origin` header that
 matches the origin of the dashboard. Thus, a valid session cookie alone cannot let a form or a
@@ -213,13 +244,14 @@ script from a different site change queue state.
 | Principal, every host        | The principal's `actor`.                                              |
 | TypeScript `true`            | `auditActor`, default `dashboard`.                                    |
 | Python `True` or Ruby `true` | `audit_actor`, default `dashboard`.                                   |
+| Java `allow()`               | `auditActor`, default `dashboard`.                                    |
 
 - `auditWithOccurredAt` replaces the browser's `audit.actor` before any operator controller runs.
 - `rejectCrossOriginMutation` requires an `Origin` header whose origin exactly matches the request
-  URL origin. The Python, Go, Rust, and Ruby hosts make the same check.
+  URL origin. The Python, Go, Rust, Ruby, and Java hosts make the same check.
 - `BoundaryTimeline` shows `details.requested_by` beside each operator event's reason.
 
-More detail: [Dashboard: Mutations and attribution](../architecture/dashboard.md#mutations-and-attribution).
+More detail: [Dashboard: Mutations and attribution](../architecture/dashboard.md#mutations-and-attribution) and [Dashboard: JVM backend](../architecture/dashboard.md#jvm-backend).
 
 </details>
 

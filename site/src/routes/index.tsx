@@ -332,8 +332,9 @@ const operatingNote = (
 
 const dashboardNote = (
   <>
-    TypeScript, Python, Go, Rust, and Ruby embed the same packaged dashboard through their native
-    HTTP interfaces. Each host needs a database connection, with no worker runtime or extra service.
+    TypeScript, Python, Go, Rust, Ruby, and Java embed the same packaged dashboard through their
+    native HTTP interfaces. Each host needs a database connection, with no worker runtime or extra
+    service.
   </>
 );
 
@@ -999,9 +1000,9 @@ function HomePage() {
                 One config file is a production worker.
               </h2>
               <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-                TypeScript, Python, Go, Rust, and Ruby connect process signals to bounded drain and
-                fleet registration. Active handlers finish before the supervisor replaces the
-                process.
+                TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin connect process signals to
+                bounded drain and fleet registration. Active handlers finish before the supervisor
+                replaces the process.
               </p>
               <p className="mt-4">
                 <a

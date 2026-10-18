@@ -325,11 +325,146 @@ More detail: [Schema and SQL protocol: Active Job adapter](../architecture/schem
 
 </details>
 
+## Pass a JDBC connection in Java
+
+Java has a transaction argument. Each `Queue` method has a caller form that takes a
+`java.sql.Connection` first. The queue runs on that connection, in your open transaction.
+
+To enqueue in a JDBC transaction:
+
+1. Get a `Connection` from your `DataSource`.
+2. Turn off autocommit on the connection.
+3. Insert the account row through the connection.
+4. Give the same connection to `Queue.enqueue` as its first argument.
+5. Commit. If a step throws an exception, roll back instead.
+
+```java
+void createAccount(String id, String email) throws SQLException {
+  try (Connection connection = dataSource.getConnection()) {
+    connection.setAutoCommit(false);
+    try {
+      try (PreparedStatement insert =
+          connection.prepareStatement("INSERT INTO account (id, email) VALUES (?, ?)")) {
+        insert.setString(1, id);
+        insert.setString(2, email);
+        insert.executeUpdate();
+      }
+      queue.enqueue(connection, "account.created", Map.of("accountId", id));
+      connection.commit();
+    } catch (SQLException | RuntimeException error) {
+      connection.rollback();
+      throw error;
+    }
+  }
+}
+```
+
+The queue in this example is `new Queue(ConnectionSource.of(dataSource))`. The `catch` clause also
+catches the unchecked Workhorse exceptions. If the code rolls back, the
+account row and the task disappear together.
+
+Kotlin uses the same caller form through the `workhorse-kotlin` module. Give the connection to the
+suspend wrapper as the named `connection` argument.
+
+```kotlin
+suspend fun createAccount(dataSource: DataSource, queue: Queue, id: String, email: String) {
+  dataSource.connection.use { connection ->
+    connection.autoCommit = false
+    try {
+      connection.prepareStatement("INSERT INTO account (id, email) VALUES (?, ?)").use { insert ->
+        insert.setString(1, id)
+        insert.setString(2, email)
+        insert.executeUpdate()
+      }
+      queue.enqueueSuspend("account.created", mapOf("accountId" to id), connection = connection)
+      connection.commit()
+    } catch (error: Throwable) {
+      connection.rollback()
+      throw error
+    }
+  }
+}
+```
+
+<details>
+<summary>Reference: JVM connection sources</summary>
+
+| Form        | Call                                                           | Connection                                              |
+| ----------- | -------------------------------------------------------------- | ------------------------------------------------------- |
+| Caller form | `queue.enqueue(connection, type, payload)`                     | Your `Connection`, in your transaction                  |
+| Source form | `queue.enqueue(type, payload)`                                 | One connection from the `ConnectionSource` for the call |
+| Kotlin      | `queue.enqueueSuspend(type, payload, connection = connection)` | The caller form when `connection` is set                |
+
+- Each Workhorse exception extends the unchecked `WorkhorseException`, a `RuntimeException`.
+- The caller form only reads `getAutoCommit()`. It never begins, commits, rolls back, or closes,
+  and it changes no session state.
+- `ConnectionSource.of(DataSource)` runs each call in autocommit. If the pool gives a connection
+  with autocommit off, it turns autocommit on for the call and then restores it.
+- `Admin` has the same two forms.
+
+More detail: [Schema and SQL protocol: JVM connection sources](../architecture/schema-and-protocol.md#jvm-connection-sources), [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module), and [Schema and SQL protocol: JVM SDK](../architecture/schema-and-protocol.md#jvm-sdk).
+
+</details>
+
+## Enqueue inside `@Transactional` with Spring Boot
+
+A Spring Boot application uses the `workhorse-spring-boot-starter` module. The starter builds a
+`Queue` bean on a connection source that joins the active Spring transaction. Thus the source form
+of `Queue.enqueue` joins your `@Transactional` method.
+
+```java
+@Service
+class Accounts {
+  private final JdbcTemplate jdbc;
+  private final Queue queue;
+
+  Accounts(JdbcTemplate jdbc, Queue queue) {
+    this.jdbc = jdbc;
+    this.queue = queue;
+  }
+
+  @Transactional
+  public void create(String id, String email) {
+    jdbc.update("INSERT INTO account (id, email) VALUES (?, ?)", id, email);
+    queue.enqueue("account.created", Map.of("accountId", id));
+  }
+}
+```
+
+If `create` throws an exception, Spring rolls back the transaction, and the task disappears with
+your row. Outside a transaction, each enqueue commits at once.
+
+In Kotlin, call the Java `queue.enqueue` from a `@Transactional` function that does not suspend.
+Spring binds a transaction to its thread. A suspend wrapper runs the call on another thread, so it
+does not join the transaction unless you give it the connection.
+
+Do not mark a `suspend` function `@Transactional` when the transaction manager uses JDBC. With a
+`DataSourceTransactionManager`, Spring commits that transaction at the first suspension point. Thus
+the rest of the function runs outside the transaction.
+
+<details>
+<summary>Reference: Spring Boot transactions</summary>
+
+- The starter's `ConnectionSource` bean is a `TransactionAwareConnectionSource`. It acquires
+  through `DataSourceUtils.getConnection`.
+- Inside an active Spring transaction, it returns the connection that holds the transaction. The
+  SDK does not commit it.
+- Outside a transaction, it runs the call in autocommit.
+- The starter applies only when the context has one `DataSource` candidate.
+- Spring takes its coroutine transaction path only for a `ReactiveTransactionManager`.
+- With a `DataSourceTransactionManager`, a `suspend` `@Transactional` method commits at its first
+  suspension point.
+
+More detail: [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter) and [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module).
+
+</details>
+
 ## Use the Workhorse package for your ORM
 
 If your TypeScript application uses an ORM to access PostgreSQL, use the Workhorse package for that
-ORM. Do not manage a separate raw client next to the ORM. Python, Go, Rust, and Ruby have no such
-package. In these languages, give your own connection or transaction, as the sections above show.
+ORM. Do not manage a separate raw client next to the ORM. Python, Go, Rust, Ruby, Java, and Kotlin
+have no such package. In these languages, give your own connection or transaction, as the sections
+above show. A Spring Boot application uses the starter, as the previous section shows.
 
 Each provider wraps the database object that you already have. Its `forTransaction` method returns
 a `Queue` bound to your open transaction. The provider does not commit, roll back, or close that

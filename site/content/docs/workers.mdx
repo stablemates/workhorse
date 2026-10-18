@@ -542,7 +542,7 @@ workers of another queue. A notification wakes the claim loop only. It does not 
 maintenance or registration.
 
 TypeScript, Go, and Ruby workers that share a database pool also share one listener connection. A
-Python or Rust worker holds its own.
+Python, Rust, Java, or Kotlin worker holds its own.
 
 <details>
 <summary>Reference: polling cadence</summary>
@@ -658,26 +658,43 @@ The other SDKs give the same process boundary:
 - A Ruby app calls `Stablemates::Workhorse.run_worker_process`. It drains the worker on `SIGINT` or
   `SIGTERM` within `shutdown_grace`. To control the boundary yourself, call `Worker#run` on a
   thread, and call `Worker#stop` from your own signal handling.
+- A Java or Kotlin program without Spring calls `WorkerProcess.runWorkerProcess(worker)`. It drains
+  the worker on `SIGINT` or `SIGTERM` within `shutdownGrace` and a short cleanup. To control the
+  boundary yourself, call `Worker.run` and call `Worker.stop` from your own code.
+- A Spring Boot worker process sets `workhorse.worker.enabled=true`. Spring stops the worker before
+  the `DataSource` closes. Keep `spring.lifecycle.timeout-per-shutdown-phase` above
+  `workhorse.worker.shutdown-grace` and the cleanup after it. If the Spring timeout is shorter,
+  Spring continues its shutdown before the drain ends.
 
-In Go and Rust, a handler panic becomes a recorded failure of the attempt. In Ruby, an exception
-from a handler does the same. In each case, the worker process continues to run later tasks.
+In Go and Rust, a handler panic becomes a recorded failure of the attempt. In Ruby, Java, and
+Kotlin, an exception from a handler does the same. In each case, the worker process continues to
+run later tasks. A fatal JVM error from an ordinary Java or Kotlin handler, such as an
+out-of-memory error, is different. It ends the run of the worker.
 
 <details>
 <summary>Reference: process entry points</summary>
 
-| SDK        | Entry point                                                                       |
-| ---------- | --------------------------------------------------------------------------------- |
-| TypeScript | `defineWorkerProcess()`, then `runWorkerProcess()` or `workhorse worker --config` |
-| TypeScript | `startWorkerProcess()`, without global signal handling                            |
-| Python     | `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)`                  |
-| Go         | A context from `signal.NotifyContext`, passed to `Worker.Run`                     |
-| Rust       | `run_worker_process(&worker)`                                                     |
-| Ruby       | `Stablemates::Workhorse.run_worker_process(worker)`, bounded by `shutdown_grace`  |
+| SDK         | Entry point                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------- |
+| TypeScript  | `defineWorkerProcess()`, then `runWorkerProcess()` or `workhorse worker --config`              |
+| TypeScript  | `startWorkerProcess()`, without global signal handling                                         |
+| Python      | `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)`                               |
+| Go          | A context from `signal.NotifyContext`, passed to `Worker.Run`                                  |
+| Rust        | `run_worker_process(&worker)`                                                                  |
+| Ruby        | `Stablemates::Workhorse.run_worker_process(worker)`, bounded by `shutdown_grace`               |
+| Java        | `WorkerProcess.runWorkerProcess(worker)`, bounded by `shutdownGrace` plus about 2 s of cleanup |
+| Kotlin      | The same Java call, on a `Worker` from `workhorseWorker`                                       |
+| Spring Boot | `workhorse.worker.enabled=true`; `WorkerLifecycle` drains the worker                           |
+
+- A Spring Boot application keeps `spring.lifecycle.timeout-per-shutdown-phase` above
+  `workhorse.worker.shutdown-grace` plus 2 s.
+- A `java.lang.Error` from an ordinary Java handler ends the run, and `run` throws it after the
+  drain. A batch handler `Error` fails each task in the batch instead.
 
 The optional TypeScript probe listener reports liveness while the process runs or drains. It
 reports readiness only while the process accepts claims.
 
-More detail: [Operations and CLI: Worker process lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-process-lifecycle).
+More detail: [Operations and CLI: Worker process lifecycle](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#worker-process-lifecycle), [Schema and SQL protocol: JVM worker processes](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: Spring Boot starter](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#spring-boot-starter), and [Schema and SQL protocol: JVM failure settlement](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-failure-settlement).
 
 </details>
 
@@ -838,11 +855,12 @@ Thus, two different controls use the word "pause":
 
 - **Local.** In TypeScript and Python, `Worker.pause` stops this worker from claiming, and active
   handlers finish. `Worker.resume` lets the worker claim again, and `Worker.isPaused` reads the
-  effective state. A Ruby worker has the same `pause` and `resume` methods.
+  effective state. A Ruby worker has the same `pause` and `resume` methods. A Java worker has
+  `pause`, `resume`, and `isPaused`.
 - **Operator.** `Admin.setWorkerPaused` stores the pause in `worker_registry`. A dashboard, or
   `workhorse admin pause-worker` in the [terminal](/docs/operations), can then pause a process that
-  it does not host. TypeScript, Python, Go, Rust, and Ruby workers read the pause at their next
-  registry refresh.
+  it does not host. TypeScript, Python, Go, Rust, Ruby, and Java workers read the pause at their
+  next registry refresh.
 
 A local resume cannot clear an operator pause. If it could, the fleet could undo a pause that an
 operator sets from a dashboard. But an operator pause applies only to the process that it names. A
@@ -888,8 +906,8 @@ are alive when workers run in separate deployments. `Worker.runtimeState` reads 
 process state of a TypeScript worker. The dashboard and `Admin.listWorkers` read the registry that
 each worker refreshes. The slot counts in the registry are recent observations, not live reads.
 
-TypeScript, Python, Go, Rust, and Ruby workers all write this row by default. A worker on an older
-SDK can report none of the three identity fields. Then the registry records that the worker
+TypeScript, Python, Go, Rust, Ruby, and Java workers all write this row by default. A worker on an
+older SDK can report none of the three identity fields. Then the registry records that the worker
 reported nothing. It does not guess. `workhorse schema status --json` counts the live workers by
 their reported protocol. Producers never register, so these counts describe only workers.
 
@@ -930,7 +948,8 @@ operator stopped.
 | Ruby       | `registry_interval:` in seconds    | 5 s     | `disable_registry: true`          |
 
 **Client identity.** All three fields are nullable. Each SDK stamps its own `sdk_language`
-(`typescript`, `python`, `go`, `rust`, `ruby`) and package version. A refresh overwrites all three.
+(`typescript`, `python`, `go`, `rust`, `ruby`, `java`) and package version. A Kotlin worker stamps
+`java`. A refresh overwrites all three.
 
 **Claims.** `claim_v1` and the other claim functions never read `worker_registry`.
 
