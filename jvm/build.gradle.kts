@@ -10,7 +10,7 @@ import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 // - `-Pworkhorse.lint` adds Error Prone and NullAway in JSpecify mode. `pnpm jvm:lint` sets it on
 //   the pinned JDK. The checkers are build-only: they live in the `errorprone` configuration, so
 //   no published POM and no runtime class path names them.
-// - Spotless checks the Java sources with google-java-format.
+// - Spotless checks the Java sources with google-java-format, and the Kotlin sources with ktfmt.
 
 plugins {
   base
@@ -72,6 +72,12 @@ subprojects {
       target("src/**/*.java")
       targetExclude("**/internal/SqlCatalogue.java")
       googleJavaFormat(catalogue.findVersion("google-java-format").get().requiredVersion)
+    }
+    pluginManager.withPlugin("org.jetbrains.kotlin.jvm") {
+      kotlin {
+        target("src/**/*.kt")
+        ktfmt(catalogue.findVersion("ktfmt").get().requiredVersion).googleStyle()
+      }
     }
   }
 

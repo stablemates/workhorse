@@ -17,10 +17,16 @@ nullaway = "0.14.2"
 spotless = "8.10.4"
 # Spotless 8.10.4 cannot load google-java-format 1.37.0, which changed an API that Spotless calls.
 google-java-format = "1.36.1"
+# The Kotlin formatter: the default of Spotless 8.10.4 (plugin-gradle/CHANGES.md, "8.10.4").
+ktfmt = "0.65"
 # The Spring Boot lines the starter tests run on besides the 4.0 floor (ADR 0103, "Floors").
 # `-Pworkhorse.springBoot=4.1` or `=snapshot` selects one for the starter's test class paths.
 spring-boot-4-1 = "4.1.1"
 spring-boot-snapshot = "4.2.0-SNAPSHOT"
+# The kotlinx-coroutines floor of the Kotlin module (ADR 0103, "Floors"). 1.10.2 is the newest
+# release that requires kotlin-stdlib 2.1.0, so a Kotlin 2.2 caller resolves no newer standard
+# library through it. 1.11.0 requires kotlin-stdlib 2.2.20.
+kotlinx-coroutines = "1.10.2"
 
 [libraries]
 pgjdbc = { module = "org.postgresql:postgresql", version.ref = "pgjdbc" }
@@ -43,6 +49,7 @@ spring-web = { module = "org.springframework:spring-web" }
 spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

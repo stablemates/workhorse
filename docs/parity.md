@@ -99,6 +99,11 @@ telemetry, and graceful shutdown.
 
 <!-- END GENERATED PARITY WORKER -->
 
+The `workhorse-kotlin` module reaches every cell of the JVM column through the core. Its suspend
+handlers, its worker DSL, and its suspend wrappers call the `workhorse` artifact and add no protocol
+behavior. The Spring Boot starter reaches every Client, Worker, and Operator cell through the
+`Queue` and `Admin` beans and the `Worker` that it builds.
+
 ## Active Job reachability
 
 The Ruby column above records the native SDK. A Rails application can also reach Workhorse through
