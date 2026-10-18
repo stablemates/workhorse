@@ -10,6 +10,7 @@ import dev.stablemates.workhorse.TaskState;
 import dev.stablemates.workhorse.spring.WorkhorseProperties;
 import java.lang.reflect.Type;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -23,12 +24,25 @@ import org.springframework.context.annotation.Bean;
  * Without an argument, prints the file name of the jar that holds the starter. With a PostgreSQL JDBC URL, starts the
  * application with the starter's worker, enqueues one task through the `Queue` bean, waits for its
  * outcome, and prints the task id for the check to read back.
+ *
+ * <p>The application asks for none of the starter's optional features. So it first refuses a class path that holds one
+ * of their modules, and the run proves that the starter starts without them.
  */
 @SpringBootApplication
 public class Main {
   static final String QUEUE = "release-consumer";
   static final String TASK_TYPE = "release.consumer";
   static final CountDownLatch handled = new CountDownLatch(1);
+
+  /** One class of each optional module of the starter. The starter POM marks each module optional. */
+  static final List<String> OPTIONAL_CLASSES =
+      List.of(
+          "org.springframework.boot.jackson.JacksonComponent",
+          "tools.jackson.databind.json.JsonMapper",
+          "org.springframework.boot.health.contributor.HealthIndicator",
+          "org.springframework.web.filter.OncePerRequestFilter",
+          "jakarta.servlet.Filter",
+          "io.opentelemetry.api.OpenTelemetry");
 
   /** The handler bean. The starter registers it with the worker. */
   @Bean
@@ -53,6 +67,14 @@ public class Main {
   }
 
   public static void main(String[] args) throws InterruptedException {
+    for (String name : OPTIONAL_CLASSES) {
+      try {
+        Class.forName(name, false, Main.class.getClassLoader());
+        throw new IllegalStateException("the class path holds the optional " + name);
+      } catch (ClassNotFoundException expected) {
+        // The starter took the module as optional, so the application does not have it.
+      }
+    }
     System.out.println(
         Path.of(WorkhorseProperties.class.getProtectionDomain().getCodeSource().getLocation().getPath())
             .getFileName());
