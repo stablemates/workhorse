@@ -1350,3 +1350,26 @@ break the governed surface. A map lets a key appear without a change to the Java
 
 Python and Go already type the snapshot as an open map: `python/src/workhorse/types.py:12` and
 `go/queue.go:188`. The maintainer chose this form during SM-1385.
+
+## Amendment: `Worker` reports whether a run is in progress (2026-10-18)
+
+The Worker surface section lists the public methods of `Worker`. This amendment adds one method to
+that list.
+
+```java
+public boolean isRunning();          // a run from start, run, or runOnce is in progress
+```
+
+`isRunning` returns `true` from `start` until the worker-owned thread ends. It also returns `true`
+from the start of `run` or `runOnce` until that call returns or throws, including the drain. The
+worker counts the runs in progress, and `close` is not a run, so a `close` that waits for a run does
+not change the result. `isRunning` returns `false` before the first run and after a run ends,
+whether a `stop` or an error ended it.
+
+The Spring Boot starter starts its worker with `start`. A lifecycle `stop` that arrives before a
+caller-owned thread reads its stop version is lost, so the starter cannot call `run` on its own
+thread. The starter health indicator must then see that a started worker stopped without a `stop`,
+and report `DOWN`. No other public method shows that state.
+
+The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
+SM-1393. SM-1387 adds the method.

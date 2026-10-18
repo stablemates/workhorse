@@ -80,7 +80,12 @@ class CancellationTokenTest {
   @Test
   void theContextDelegatesToTheToken() {
     TaskCancellation token = new TaskCancellation();
-    HandlerContext context = new TaskContext(sampleTask(), token);
+    Worker worker =
+        Worker.builder(new dev.stablemates.workhorse.testing.ScratchDataSource(true))
+            .queues("default")
+            .build();
+    HandlerContext context =
+        new TaskContext(worker, sampleTask(), token, new Worker.Arbiter(), () -> false);
     assertFalse(context.isCancelled());
     token.cancel(CancellationReason.DEADLINE_EXCEEDED);
     assertTrue(context.isCancelled());

@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -247,13 +248,13 @@ public final class Queue {
    * request order. A request cannot use debounce or throttle.
    */
   public List<EnqueueResult> addToTaskGroup(UUID groupId, List<EnqueueRequest> requests) {
-    return run(null, call -> addTaskGroupMembers(call, groupId, requests));
+    return run(null, call -> addTaskGroupMembers(call, groupId, requests, NO_MEMBER));
   }
 
   /** Adds member tasks inside the caller's transaction. */
   public List<EnqueueResult> addToTaskGroup(
       Connection connection, UUID groupId, List<EnqueueRequest> requests) {
-    return run(connection, call -> addTaskGroupMembers(call, groupId, requests));
+    return run(connection, call -> addTaskGroupMembers(call, groupId, requests, NO_MEMBER));
   }
 
   /**
@@ -456,7 +457,7 @@ public final class Queue {
   }
 
   private List<EnqueueResult> addTaskGroupMembers(
-      Call call, UUID groupId, List<EnqueueRequest> requests) {
+      Call call, UUID groupId, List<EnqueueRequest> requests, List<@Nullable String> member) {
     validateGroupAdd(requests);
     if (requests.isEmpty()) {
       return List.of();
@@ -471,10 +472,137 @@ public final class Queue {
                     SqlCatalogue.ADD_TASK_GROUP_MEMBERS_V1,
                     groupId.toString(),
                     document,
-                    null,
-                    null,
-                    null));
+                    member.get(0),
+                    member.get(1),
+                    member.get(2)));
     return enqueueResults(rows, requests.size());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Handler context (SM-1387)
+
+  /** The task ID, worker ID, and fence token of no member task. */
+  private static final List<@Nullable String> NO_MEMBER = Arrays.asList(null, null, null);
+
+  /**
+   * The contract version and the queue that a stored child was created under. A {@code null}
+   * version stamps no contract.
+   */
+  record ChildVersion(@Nullable String version, @Nullable String queue) {}
+
+  /**
+   * Adds {@code requests} to the group of {@code task}, a running member task, under its fenced
+   * lease. A request with no queue goes to the queue of {@code task}, as in the other SDKs. The
+   * counterpart of Ruby's {@code Queue#add_to_task_group_as_member}.
+   */
+  List<EnqueueResult> addToTaskGroupAsMember(
+      ClaimedTask task, String workerId, List<EnqueueRequest> requests) {
+    return run(
+        null,
+        call -> {
+          validateGroupAdd(requests);
+          Optional<TaskGroupLink> link = findTaskGroup(call, task.id());
+          if (link.isEmpty() || link.get().role() != TaskGroupRole.MEMBER) {
+            throw new IllegalArgumentException(
+                "Task " + task.id() + " is not a member of a task group");
+          }
+          List<EnqueueRequest> routed = new ArrayList<>(requests.size());
+          for (EnqueueRequest request : requests) {
+            String named = request.options().queue();
+            routed.add(
+                named == null || named.isEmpty()
+                    ? new EnqueueRequest(
+                        request.taskType(),
+                        request.payload(),
+                        request.options().toBuilder().queue(task.queue()).build())
+                    : request);
+          }
+          return addTaskGroupMembers(
+              call,
+              link.get().group().id(),
+              routed,
+              Arrays.asList(task.id().toString(), workerId, Long.toString(task.fenceToken())));
+        });
+  }
+
+  /**
+   * The {@code create_child_v2} request for one child of {@code parent}. The counterpart of Ruby's
+   * {@code Queue#serialize_child_request}.
+   *
+   * <p>A child inherits the trace context of {@code parent}, and takes no coalescing or dependency
+   * option. A request with no queue runs on the stored queue of the child, or else on the queue of
+   * {@code parent}. A contracted child carries the contract PostgreSQL holds now, because a child
+   * write has no stale-contract retry. A {@code stored} child stamps the version it was created
+   * under instead. {@code contracts} caches those loads across one child set.
+   */
+  Map<String, @Nullable Object> serializeChildRequest(
+      Connection connection,
+      ClaimedTask parent,
+      String taskType,
+      @Nullable Object payload,
+      EnqueueOptions options,
+      Map<String, @Nullable PayloadContract> contracts,
+      @Nullable ChildVersion stored) {
+    if (options.idempotency() != null
+        || options.debounce() != null
+        || options.throttle() != null
+        || options.dependencies() != null) {
+      throw new IllegalArgumentException(
+          "Child tasks cannot use coalescing or dependency enqueue options");
+    }
+    Map<String, @Nullable Object> input =
+        taskInput(
+            taskType,
+            payload,
+            options.queue(),
+            options.priority() == null ? 0 : options.priority(),
+            options.concurrencyKey(),
+            options.maxAttempts(),
+            options.retryPolicy());
+    if (options.queue() == null || options.queue().isEmpty()) {
+      String storedQueue = stored == null ? null : stored.queue();
+      input.put("queue", storedQueue == null ? parent.queue() : storedQueue);
+    }
+    Instant deadline = options.deadline();
+    input.put("deadline", deadline == null ? null : Values.timestamp(deadline));
+    input.put("budget", optionalBytes(options.budget(), MAX_NAME_BYTES, "budget"));
+    Long timeout =
+        options.executionTimeout() == null
+            ? null
+            : Values.milliseconds(
+                options.executionTimeout(), "execution timeout", 0, MAX_DURATION_MS);
+    input.put("executionTimeoutMs", timeout == null || timeout == 0 ? null : timeout);
+    input.put("prerequisiteTaskId", null);
+    input.put("dependencies", null);
+    input.put("tags", tags(options.tags()));
+    if (parent.traceContext() != null) {
+      input.put("traceContext", parent.traceContext());
+    }
+    Instant runAt = options.runAt();
+    if (runAt != null) {
+      input.put("runAt", Values.timestamp(runAt));
+    }
+    String key =
+        stored == null ? "current:" + taskType : "stored:" + taskType + ":" + stored.version();
+    PayloadContract contract;
+    if (contracts.containsKey(key)) {
+      contract = contracts.get(key);
+    } else if (stored != null) {
+      String version = stored.version();
+      contract = version == null ? null : Contracts.load(connection, taskType, version);
+      contracts.put(key, contract);
+    } else {
+      contract = Contracts.load(connection, taskType, null);
+      contracts.put(key, contract);
+      lock.lock();
+      try {
+        this.contracts.put(taskType, contract);
+      } finally {
+        lock.unlock();
+      }
+    }
+    stampContract(input, taskType, contract);
+    return input;
   }
 
   /** Throws {@link IllegalArgumentException} for an add that PostgreSQL would refuse. */
