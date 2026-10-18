@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, expect } from "vitest";
 import { Admin, type Json, Queue, type RetentionPolicyDefinition } from "../../src/index.js";
 import { createDatabaseTestHarness } from "./db.js";
+import { trackWorkerRuns } from "./worker-runs.js";
 
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
   taskIdentityRetentionDays: 14,
@@ -110,7 +111,7 @@ export function createIntegrationTestContext(
     await database.setup();
   });
 
-  beforeEach(async () => {
+  beforeEach(async ({ onTestFinished }) => {
     await database.reset();
     await pool.query(`UPDATE workhorse.task_stat_state SET
       rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
@@ -138,6 +139,11 @@ export function createIntegrationTestContext(
           - interval '14 days'
         ELSE NULL END,
       updated_at = clock_timestamp()`);
+    // A test that fails before it stops its worker must not leave that worker running into the
+    // next test. Its statements can claim the tasks of the next test or deadlock the next reset.
+    // Vitest calls onTestFinished after the afterEach hooks, also when one of them fails.
+    const workerRuns = trackWorkerRuns();
+    onTestFinished(() => workerRuns.stopAll());
   });
 
   afterAll(async () => {

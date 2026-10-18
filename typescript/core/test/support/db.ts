@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { Pool } from "pg";
+import { setTimeout as sleep } from "node:timers/promises";
+import { Pool, type PoolClient } from "pg";
 import { dropLocalDatabase } from "../../src/drop-local-database.js";
 import { installSchema } from "../../src/index.js";
 import {
@@ -30,6 +31,8 @@ export function createDatabaseTestHarness(
      * a pooler's configured pool name, for example — can name the database ahead of time.
      */
     nameSuffix?: string;
+    /** How long reset waits for its table locks before it fails. */
+    resetLockWaitMs?: number;
   } = {},
 ): {
   databaseUrl: string;
@@ -92,7 +95,9 @@ export function createDatabaseTestHarness(
         ],
       );
       if (result.rows.length > 0) {
-        await pool.query(
+        await truncateWithoutDeadlock(
+          pool,
+          options.resetLockWaitMs ?? 30_000,
           `TRUNCATE ${result.rows.map((row) => row.table_name).join(", ")} RESTART IDENTITY CASCADE`,
         );
       }
@@ -102,6 +107,78 @@ export function createDatabaseTestHarness(
       await dropDatabase(isolatedUrl, isolatedName);
     },
   };
+}
+
+/**
+ * Run the TRUNCATE of the reset without a deadlock with a session that an earlier test left.
+ *
+ * TRUNCATE takes an AccessExclusiveLock on each table in list order. A worker statement locks
+ * `task` and `task_runtime` first, and an earlier table of that list after them. Thus the two
+ * sessions can wait for each other (SM-1436). PostgreSQL looks for a deadlock only after
+ * `deadlock_timeout`, and the lock wait of the reset ends before that. Then the reset releases its
+ * locks, the other statement finishes, and the reset tries again. If the locks stay held, the
+ * error names the sessions that hold them.
+ */
+async function truncateWithoutDeadlock(
+  pool: Pool,
+  lockWaitMs: number,
+  truncate: string,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const setting = await client.query<{ deadlock_timeout_ms: number }>(
+      "SELECT setting::integer AS deadlock_timeout_ms FROM pg_settings WHERE name = 'deadlock_timeout'",
+    );
+    const deadlockTimeoutMs = setting.rows[0]!.deadlock_timeout_ms;
+    const lockTimeoutMs = Math.max(1, Math.min(200, Math.floor(deadlockTimeoutMs / 5)));
+    const deadline = Date.now() + lockWaitMs;
+    for (;;) {
+      await client.query("BEGIN");
+      try {
+        await client.query(`SET LOCAL lock_timeout = ${lockTimeoutMs}`);
+        await client.query(truncate);
+        await client.query("COMMIT");
+        return;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        // 55P03 is lock_not_available, the error of an expired lock_timeout.
+        if ((error as { code?: string }).code !== "55P03") throw error;
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `The reset could not lock the tables within ${lockWaitMs} ms. ` +
+              `A session from an earlier test still holds locks:\n${await lockHolders(client)}`,
+            { cause: error },
+          );
+        }
+      }
+      await sleep(20);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+async function lockHolders(client: PoolClient): Promise<string> {
+  const holders = await client.query<{ pid: number; state: string | null; query: string }>(
+    `SELECT activity.pid, activity.state, activity.query
+       FROM pg_stat_activity AS activity
+      WHERE activity.datname = current_database()
+        AND activity.pid <> pg_backend_pid()
+        AND EXISTS (
+          SELECT 1
+            FROM pg_locks AS lock
+            JOIN pg_class AS relation ON relation.oid = lock.relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+           WHERE lock.pid = activity.pid
+             AND lock.granted
+             AND namespace.nspname <> 'pg_catalog'
+        )
+      ORDER BY activity.pid`,
+  );
+  if (holders.rows.length === 0) return "(no session holds a lock now)";
+  return holders.rows
+    .map((row) => `pid ${row.pid} (${row.state ?? "unknown"}): ${row.query}`)
+    .join("\n");
 }
 
 /** Drop a scratch test database by name. The name must keep the test-purpose marker. */
