@@ -1108,7 +1108,7 @@ async fn heartbeat_status(observer: &Client, worker_id: &str, task: Uuid, lease_
 
 // SM-1443: a heartbeat round skips a task row that another transaction holds. It answers `busy`
 // while the lock is held, renews nothing, and gives no ownership verdict, so the attempt keeps
-// running. Once the holder commits, a round renews the lease again.
+// running. Once the holder commits, a round of the worker renews the lease again.
 #[tokio::test]
 async fn a_heartbeat_round_reports_a_locked_row_as_busy() {
     let Some(harness) = harness("worker_heartbeat_busy").await else { return };
@@ -1152,8 +1152,15 @@ async fn a_heartbeat_round_reports_a_locked_row_as_busy() {
     assert_eq!(lease_expiry(&observer, task).await, held, "a busy round renewed the lease");
     lock.commit().await.unwrap();
 
-    assert_eq!(heartbeat_status(&observer, &worker_id, task, lease_ms).await, "accepted");
-    assert!(lease_expiry(&observer, task).await > held, "the accepted round renewed nothing");
+    // The worker's own round renews the lease. A call from the test here could answer `busy`,
+    // because a worker round can hold the row lock at that time (SM-1472).
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while lease_expiry(&observer, task).await <= held {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("no heartbeat round renewed the lease after the commit");
     release.notify_one();
     harness.wait_for(task, TaskState::Succeeded).await;
     let result = harness.admin.get_task(task).await.unwrap().unwrap().result;
