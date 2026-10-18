@@ -210,3 +210,74 @@ export function renderMachineReadable(site: AgentSurfaceSite): string {
     "",
   ].join("\n");
 }
+
+/**
+ * A Markdown body with its table alignment padding removed, for `llms-full.txt`.
+ * The twin aligns each column for a person who reads the raw file. An agent
+ * reads the cells, not the columns. Thus the padding only adds bytes to a file
+ * that carries every page.
+ *
+ * A table is a block of consecutive lines that start with `|`. Its second line
+ * must be a separator row. Other blocks do not change. In a table, each row
+ * keeps one space on each side of a cell border. An escaped `\|` inside a cell
+ * is text, not a border.
+ *
+ * Each separator cell becomes `---` and keeps its alignment colons. A later row
+ * that contains only dashes is data, so it keeps its text.
+ *
+ * Lines inside a fenced code block do not change, because a `|` there is code.
+ * A fence opens with three or more backticks or tildes. Only a line with the
+ * same character, at least as many times, and nothing else closes it.
+ */
+export function compactMarkdownTables(markdown: string): string {
+  const lines = markdown.split("\n");
+  const code = codeLines(lines);
+  const isRow = (index: number) => !code[index] && lines[index]!.startsWith("|");
+  let index = 0;
+  while (index < lines.length) {
+    if (!isRow(index)) {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end < lines.length && isRow(end)) end += 1;
+    if (end - index >= 2 && /^\|(?:\s*:?-+:?\s*\|)+$/.test(lines[index + 1]!)) {
+      for (let row = index; row < end; row += 1) {
+        lines[row] = row === index + 1 ? compactSeparator(lines[row]!) : compactRow(lines[row]!);
+      }
+    }
+    index = end;
+  }
+  return lines.join("\n");
+}
+
+/** For each line, whether it is a fence line or a line inside a fenced code block. */
+function codeLines(lines: readonly string[]): boolean[] {
+  let fence: string | undefined;
+  return lines.map((line) => {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === undefined) {
+      fence = marker;
+      return marker !== undefined;
+    }
+    if (
+      marker !== undefined &&
+      marker[0] === fence[0] &&
+      marker.length >= fence.length &&
+      line.trim() === marker
+    ) {
+      fence = undefined;
+    }
+    return true;
+  });
+}
+
+const compactSeparator = (line: string): string =>
+  `| ${line
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cell.trim().replace(/-+/, "---"))
+    .join(" | ")} |`;
+
+const compactRow = (line: string): string =>
+  line.replace(/ {2,}\|/g, " |").replace(/(?<!\\)\| {2,}/g, "| ");
