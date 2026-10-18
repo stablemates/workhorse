@@ -1704,6 +1704,12 @@ public final class Worker implements AutoCloseable {
     private final AtomicInteger state = new AtomicInteger(QUEUED);
     private @Nullable Thread handlerThread;
 
+    /** How many of the worker's own writes run on the handler thread now. */
+    private int deferrals;
+
+    /** Whether an interrupt waits for the end of the worker's writes. */
+    private boolean interruptDeferred;
+
     private static final int QUEUED = 0;
     private static final int STARTED = 1;
     private static final int ABANDONED = 2;
@@ -1743,6 +1749,7 @@ public final class Worker implements AutoCloseable {
       lock.lock();
       try {
         handlerThread = Thread.currentThread();
+        HANDLER_TASK.set(this);
       } finally {
         lock.unlock();
       }
@@ -1756,7 +1763,52 @@ public final class Worker implements AutoCloseable {
       lock.lock();
       try {
         handlerThread = null;
+        HANDLER_TASK.remove();
+        deferrals = 0;
+        interruptDeferred = false;
         Thread.interrupted();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    /**
+     * Starts one of the worker's own writes on the handler thread. Until the matching {@link
+     * #resumeInterrupt}, the drain's interrupt waits, and an interrupt that the thread already has
+     * waits too.
+     */
+    void deferInterrupt() {
+      lock.lock();
+      try {
+        if (deferrals++ == 0) {
+          interruptDeferred = Thread.interrupted();
+        }
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    /**
+     * Ends one of the worker's own writes. After the last one, the thread gets the interrupt that
+     * waited, before control returns to handler code.
+     */
+    void resumeInterrupt() {
+      lock.lock();
+      try {
+        if (--deferrals == 0 && interruptDeferred) {
+          interruptDeferred = false;
+          Thread.currentThread().interrupt();
+        }
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    /** Whether the drain's interrupt waits for the end of the worker's writes. */
+    boolean interruptDeferred() {
+      lock.lock();
+      try {
+        return interruptDeferred;
       } finally {
         lock.unlock();
       }
@@ -1766,11 +1818,42 @@ public final class Worker implements AutoCloseable {
       lock.lock();
       try {
         if (handlerThread != null) {
-          handlerThread.interrupt();
+          if (deferrals > 0) {
+            interruptDeferred = true;
+          } else {
+            handlerThread.interrupt();
+          }
         }
       } finally {
         lock.unlock();
       }
+    }
+  }
+
+  /** The attempt whose handler region this thread is in, if any. */
+  private static final ThreadLocal<@Nullable Active> HANDLER_TASK = new ThreadLocal<>();
+
+  /** The attempt whose handler region the current thread is in, or {@code null}. */
+  static @Nullable Active handlerTask() {
+    return HANDLER_TASK.get();
+  }
+
+  /**
+   * Runs one of the worker's own statements. In a handler region, the drain's interrupt waits until
+   * the statement ends, because an interrupt closes a virtual thread's socket and loses the write.
+   * The thread then gets the interrupt before control returns to handler code. {@code body} must
+   * not call caller code, such as the codec, because that code would not see the drain.
+   */
+  private <T extends @Nullable Object> T withoutInterrupt(SqlBody<T> body) {
+    Active task = HANDLER_TASK.get();
+    if (task == null) {
+      return withConnection(body);
+    }
+    task.deferInterrupt();
+    try {
+      return withConnection(body);
+    } finally {
+      task.resumeInterrupt();
     }
   }
 
@@ -2471,7 +2554,8 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Records a batch's dispatch or failure evidence. A write failure only logs, because the evidence
-   * must not decide the members' outcomes.
+   * must not decide the members' outcomes. The drain's interrupt waits until the write ends, as
+   * {@link #withoutInterrupt} describes.
    */
   void recordBatchEvidence(
       SqlCatalogue.Statement statement,
@@ -2490,7 +2574,7 @@ public final class Worker implements AutoCloseable {
     }
     try {
       List<Row> rows =
-          withConnection(
+          withoutInterrupt(
               connection ->
                   Sql.fencedRows(
                       connection,
@@ -3078,9 +3162,12 @@ public final class Worker implements AutoCloseable {
     return result;
   }
 
-  /** The rows of a read on a connection from the pool. */
+  /**
+   * The rows of a read on a connection from the pool. In a handler region, the drain's interrupt
+   * waits until the read ends, as {@link #withoutInterrupt} describes.
+   */
   List<Row> rows(SqlCatalogue.Statement statement, @Nullable Object... parameters) {
-    return withConnection(connection -> Sql.rows(connection, statement, parameters));
+    return withoutInterrupt(connection -> Sql.rows(connection, statement, parameters));
   }
 
   /** A lifecycle write returns exactly one row; anything else means the protocol changed. */
@@ -3091,7 +3178,7 @@ public final class Worker implements AutoCloseable {
     parameters[2] = Long.toString(task.fenceToken());
     System.arraycopy(rest, 0, parameters, 3, rest.length);
     List<Row> rows =
-        withConnection(connection -> Sql.fencedRows(connection, statement, parameters));
+        withoutInterrupt(connection -> Sql.fencedRows(connection, statement, parameters));
     if (rows.size() != 1) {
       throw new WorkhorseException(
           "PostgreSQL lifecycle transition did not return exactly one row");
