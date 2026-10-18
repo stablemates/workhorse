@@ -19,7 +19,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Types;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -246,50 +245,15 @@ final class Backend {
       days[index] =
           definition.containsKey(name) ? textOf(definition.get(name)) : current.text(snake(name));
     }
-    Map<String, Long> counts = previewCounts(days);
+    Row counts = one(SqlCatalogue.RETENTION_POLICY_PREVIEW, days);
     Map<String, @Nullable Object> eligible = new LinkedHashMap<>();
     Map<String, @Nullable Object> capped = new LinkedHashMap<>();
     for (List<String> preview : PREVIEW_COUNTS) {
-      long count = Objects.requireNonNull(counts.get(preview.get(1)));
+      long count = counts.requiredLong(preview.get(1));
       eligible.put(preview.get(0), Math.min(count, PREVIEW_CAP));
       capped.put(preview.get(0), count > PREVIEW_CAP);
     }
     return orderedMap("eligible", eligible, "capped", capped);
-  }
-
-  /**
-   * Runs {@code retention_policy_preview} with each day count bound as an {@code integer}.
-   *
-   * <p>The statement uses each {@code $n} more than once, and casts only its first use. PostgreSQL
-   * infers one type for each {@code $n}, but each JDBC placeholder has a type of its own, so {@link
-   * Sql#rows}, which binds text, leaves the uncast {@code make_interval(days => ?)} uses without an
-   * integer type.
-   */
-  private Map<String, Long> previewCounts(@Nullable Object[] days) {
-    SqlCatalogue.Statement statement = SqlCatalogue.RETENTION_POLICY_PREVIEW;
-    return withConnection(
-        connection -> {
-          try (PreparedStatement prepared = connection.prepareStatement(statement.sql())) {
-            for (int placeholder = 1; placeholder <= statement.placeholderCount(); placeholder++) {
-              Object value = days[statement.protocolParameter(placeholder) - 1];
-              if (value == null) {
-                prepared.setNull(placeholder, Types.INTEGER);
-              } else {
-                prepared.setInt(placeholder, Integer.parseInt((String) value));
-              }
-            }
-            try (ResultSet resultSet = prepared.executeQuery()) {
-              if (!resultSet.next()) {
-                throw new WorkhorseException(statement.name() + " returned no row");
-              }
-              Map<String, Long> counts = new LinkedHashMap<>();
-              for (List<String> preview : PREVIEW_COUNTS) {
-                counts.put(preview.get(1), resultSet.getLong(preview.get(1)));
-              }
-              return counts;
-            }
-          }
-        });
   }
 
   private Object setQueuePaused(Map<String, ? extends @Nullable Object> input, String actor) {
