@@ -1,0 +1,142 @@
+---
+title: "Workhorse compared with Hangfire"
+description: "Hangfire vs Workhorse: a .NET background job library, and a PostgreSQL task queue. Compare their features and editions, find when Hangfire is the better choice, and move a job to Workhorse."
+---
+
+Hangfire is a background job library for .NET. It keeps its jobs in a storage database, such as SQL
+Server. It has a free open source edition and two paid package sets, Hangfire Pro and Hangfire Ace.
+
+Workhorse is a durable task queue that keeps its work in PostgreSQL. It enqueues a task in your
+transaction, continues a task after a worker crash, and runs workers in five languages. Workhorse
+has no .NET SDK. This page compares the two products, row by row, and tells you when Hangfire is
+the better choice.
+
+## Compare Workhorse and Hangfire
+
+The two products share many features. These include delays, cron schedules, retries with backoff,
+recovery from a stopped server, cooperative cancellation, and a free dashboard. In both products,
+a job can wait for another job, and an operator can run a failed job again. They differ in five
+areas:
+
+- **Languages.** A Hangfire job is a .NET method call that Hangfire serializes. Workhorse has
+  workers in TypeScript, Python, Go, Rust, and Ruby, and no .NET SDK. Thus a .NET application
+  cannot run Workhorse workers in its own code.
+- **Databases.** Hangfire keeps jobs in SQL Server, or in Redis with the paid Hangfire Pro. The
+  storage is an abstraction, so other packages can implement it. Workhorse needs PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Hangfire joins an ambient `TransactionScope` only in its net451 build on Windows.
+  Other builds use their own transaction.
+- **Editions.** Hangfire keeps batches in Hangfire Pro. Batches create many jobs atomically and
+  start a continuation after all jobs of a batch finish. Hangfire Ace has semaphores for
+  concurrency limits and window counters for rate limits. Workhorse has batch enqueue, task groups,
+  concurrency limits, and rate limits in its Apache-2.0 packages.
+- **Steps inside a task.** A Workhorse handler can save checkpoints. A checkpoint is the stored
+  result of one part of the handler. When the task runs again, the handler uses the stored result.
+  It can also wait for a timer or a signal without a worker slot. In Hangfire, a retry runs the
+  whole method again.
+
+A Hangfire cell describes the open source edition. If Hangfire Pro or Hangfire Ace has more, the
+cell also names that package set and its status. Each cell links its source. A Workhorse cell links
+the page that explains the feature.
+
+<ComparisonTable product="hangfire" />
+
+## When Hangfire is the better choice
+
+Hangfire is the better choice in these cases:
+
+- Your application and your jobs are in .NET. Workhorse has no .NET SDK.
+- Your application uses SQL Server, not PostgreSQL. Workhorse needs PostgreSQL.
+- You want the dashboard to run inside your .NET application.
+- Your team already uses Hangfire Pro or Hangfire Ace.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data in PostgreSQL.
+- You need batches, or rate limits across all workers, without a paid package.
+- A task has steps that are slow or costly to repeat.
+- A task waits for a timer, a signal, or a person.
+- Workers in more than one language must use the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Hangfire
+
+A move from Hangfire changes the language of your workers, because Workhorse has no .NET SDK. Write
+each handler again in one of the five Workhorse languages. If your jobs are in SQL Server, the move
+also changes the database to PostgreSQL.
+
+Move one job type at a time. Keep the Hangfire servers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** An application saves an order, then starts a job that charges the order. A second job
+sends the receipt after the charge succeeds. The charge job has five retries.
+
+1. With Hangfire, the application saves the order, then calls `BackgroundJob.Enqueue`.
+2. `ContinueJobWith` makes the receipt job wait until the charge job succeeds.
+3. With Workhorse, the application enqueues both tasks inside the transaction that saves the order.
+   `dependencies` makes the receipt task wait for the charge task.
+4. `Attempts = 5` in Hangfire gives one attempt and five retries. Thus Workhorse needs
+   `maxAttempts: 6`.
+
+Before the move, with Hangfire in C#:
+
+```csharp
+public class OrderJobs
+{
+    [AutomaticRetry(Attempts = 5)]
+    public void Charge(int orderId) => Payments.Charge(orderId);
+
+    public void SendReceipt(int orderId) => Mailer.SendReceipt(orderId);
+}
+
+db.Orders.Add(order);
+db.SaveChanges();
+
+var chargeId = BackgroundJob.Enqueue<OrderJobs>(x => x.Charge(order.Id));
+BackgroundJob.ContinueJobWith<OrderJobs>(chargeId, x => x.SendReceipt(order.Id));
+```
+
+After the move, with Workhorse in TypeScript:
+
+```ts
+await client.query("BEGIN");
+const orderId = await saveOrder(client, order);
+const chargeId = await queue.enqueue("order.charge", { orderId }, { maxAttempts: 6 }, client);
+await queue.enqueue(
+  "order.receipt",
+  { orderId },
+  {
+    dependencies: {
+      prerequisiteTaskIds: [chargeId],
+      onSuccess: "release",
+      onFailure: "cancel",
+      onCancellation: "cancel",
+    },
+  },
+  client,
+);
+await client.query("COMMIT");
+
+const worker = new Worker(queue)
+  .handle("order.charge", async (payload: { orderId: number }) => {
+    await chargeOrder(payload.orderId);
+  })
+  .handle("order.receipt", async (payload: { orderId: number }) => {
+    await sendReceipt(payload.orderId);
+  });
+```
+
+`client` is the PostgreSQL client of your open transaction. Thus the two tasks commit and roll back
+with the order. `onSuccess: "release"` starts the receipt task when the charge task succeeds. The
+two other policies cancel the receipt task when the charge task fails or is canceled. Without a
+`retryPolicy`, both products use a delay that grows with the fourth power of the attempt number.
+Their random parts are different.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Task dependencies](/docs/task-dependencies) explains how a task waits for other tasks.
