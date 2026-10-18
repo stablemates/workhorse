@@ -9,11 +9,15 @@ module Stablemates
     # tasks run at once. Every write an attempt makes carries its fence token, so an attempt that
     # lost its lease cannot change the task.
     #
-    # Durations are Numeric seconds. +run+ blocks until +stop+; +run_once+ claims and runs one
-    # batch. A stopping worker claims nothing new, waits up to +shutdown_grace+ for running
-    # handlers, cancels the rest with +:shutdown+, and raises ShutdownIncompleteError when any
-    # handler still runs after one short unwind window. A handler that raises the CancelledError of
-    # that cancellation, as +check!+ does, returns its task to the queue without charging the attempt.
+    # Durations are Numeric seconds. +heartbeat+ defaults to a third of +lease+, at least 0.1. The
+    # smallest supported +heartbeat+ is 0.1. The worker accepts a shorter value, but on a loaded
+    # host it can renew no lease.
+    #
+    # +run+ blocks until +stop+; +run_once+ claims and runs one batch. A stopping worker claims
+    # nothing new, waits up to +shutdown_grace+ for running handlers, cancels the rest with
+    # +:shutdown+, and raises ShutdownIncompleteError when any handler still runs after one short
+    # unwind window. A handler that raises the CancelledError of that cancellation, as +check!+
+    # does, returns its task to the queue without charging the attempt.
     class Worker
       MAX_EMPTY_POLL_MS = 5_000
       NOTIFICATION_POLL_MS = 5_000

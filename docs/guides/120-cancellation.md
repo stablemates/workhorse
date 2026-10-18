@@ -131,6 +131,8 @@ cancellation. Your handler code decides how quickly the cancellation occurs.
 | `leaseMs`            | 30,000 ms                         |
 | `heartbeatMs`        | `max(100, floor(leaseMs / 3))` ms |
 
+The smallest supported `heartbeatMs` is 100 ms.
+
 More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
 
 </details>

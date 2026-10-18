@@ -134,7 +134,8 @@ pub struct WorkerOptions {
     pub cohorts: Option<usize>,
     /// Whole milliseconds between 100ms and 24h.
     pub lease_duration: Duration,
-    /// Defaults to a third of the lease.
+    /// Defaults to a third of the lease. The smallest supported value is 100ms. The worker accepts
+    /// a shorter value, but on a loaded host it can renew no lease.
     pub heartbeat_interval: Option<Duration>,
     /// Defaults to 5s while a notification listener is expected and 250ms when polling only.
     pub poll_interval: Option<Duration>,

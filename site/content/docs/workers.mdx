@@ -162,7 +162,8 @@ covers the whole database, not one task or queue. Thus, a later claim always has
 | `leaseMs`     | 30,000 ms                         |
 | `heartbeatMs` | `max(100, floor(leaseMs / 3))` ms |
 
-`heartbeatMs` must be shorter than `leaseMs`.
+`heartbeatMs` must be shorter than `leaseMs`. The smallest supported value is 100 ms. A worker
+accepts a shorter value, but on a loaded host it can renew no lease.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
 default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
@@ -202,6 +203,10 @@ A round on the reserved connection also has a deadline that is shorter than one 
 If the heartbeat takes too long, PostgreSQL ends it before the deadline. The round then renews no
 lease, and its heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has
 already started can still finish later. The next round tries again.
+
+A very short heartbeat interval gives a short deadline. On a loaded host, that deadline can be
+shorter than one round needs, and the worker can then renew no lease. Do not set an interval below
+the supported minimum.
 
 The worker also renews the lease while it checks the result of a handler and writes the completion.
 In TypeScript, Python, and Go, a slow final write thus cannot give finished work to recovery. For
@@ -256,6 +261,11 @@ transaction. Before the statement, the round sets `statement_timeout` to one hal
 before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
 the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 
+**Smallest supported interval.** The smallest supported interval is 100 ms, in all six SDKs. Its
+round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its behavior does not
+change. On a loaded host, each round can then miss its deadline, and the worker can renew no
+lease.
+
 **Statuses** (`heartbeat_v1` and `heartbeat_many_v2`)
 
 | Status              | Effect                                                      |
@@ -283,7 +293,7 @@ Both moments come before the database renews, so the local countdown never ends 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round returns, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule).
+More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#supported-heartbeat-interval), and [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 

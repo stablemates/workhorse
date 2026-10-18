@@ -3500,7 +3500,8 @@ public final class Worker implements AutoCloseable {
 
     /**
      * The interval between lease renewals. It must be less than the lease. The default is a third
-     * of it.
+     * of it. The smallest supported value is 100 ms. The worker accepts a shorter value, but on a
+     * loaded host it can renew no lease.
      */
     public Builder heartbeat(Duration heartbeat) {
       this.heartbeatMs = Values.milliseconds(heartbeat, "heartbeat", 1, Integer.MAX_VALUE);

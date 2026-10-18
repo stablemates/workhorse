@@ -1286,7 +1286,12 @@ class _HandlerDurability:
 
 
 class Worker:
-    """A synchronous worker over a Psycopg connection pool."""
+    """A synchronous worker over a Psycopg connection pool.
+
+    ``heartbeat_ms`` defaults to a third of ``lease_ms``, at least 100, and must be less than
+    ``lease_ms``. The smallest supported value is 100. The worker accepts a shorter value, but on a
+    loaded host it can renew no lease. ``AsyncWorker`` takes the same option.
+    """
 
     def __init__(
         self,

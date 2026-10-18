@@ -41,7 +41,8 @@ covers the whole database, not one task or queue. So a later claim always has a 
 | `leaseMs`     | 30,000 ms                         |
 | `heartbeatMs` | `max(100, floor(leaseMs / 3))` ms |
 
-`heartbeatMs` must be shorter than `leaseMs`.
+`heartbeatMs` must be shorter than `leaseMs`. The smallest supported value is 100 ms. A worker
+accepts a shorter value, but on a loaded host it can renew no lease.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
 default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
@@ -129,6 +130,10 @@ interval is 10 s.
 4. At 30 s, one interval after the failed round started, worker A sends the next round. The
    database answers in time, so PostgreSQL renews the lease before it expires at 40 s.
 
+A very short heartbeat interval gives a short deadline. On a loaded host, that deadline can be
+shorter than one round needs, and the worker can then renew no lease. Do not set an interval below
+the supported minimum.
+
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
 the lease until this write is complete. Thus, Workhorse does not give a finished task to another
@@ -172,7 +177,7 @@ both be busy before the watchdog ends at 30 s. Busy retries run between them.
 deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartbeatMany` still wait
 for a row lock and never report `busy`.
 
-More detail: [Task lifecycle: Batched renewal](../architecture/lifecycle.md#batched-renewal), [Task lifecycle: A renewal that meets a lock](../architecture/lifecycle.md#a-renewal-that-meets-a-lock), and [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry).
+More detail: [Task lifecycle: Batched renewal](../architecture/lifecycle.md#batched-renewal), [Task lifecycle: A renewal that meets a lock](../architecture/lifecycle.md#a-renewal-that-meets-a-lock), [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry), and [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval).
 
 </details>
 
@@ -201,6 +206,11 @@ gives a margin only where the deadline is below the interval. The defaults meet 
 of 50 ms, a timed-out round leaves about 0 ms of margin. Near the 8 ms minimum of the settings
 statement, renewal depends on the host load and the driver. The worker does not reject settings
 that do not meet the rule.
+
+**Smallest supported interval.** The smallest supported interval is 100 ms, in all six SDKs. Its
+round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its behavior does not
+change. On a loaded host, each round can then miss its deadline, and the worker can renew no
+lease.
 
 A round on the reserved connection sends `heartbeat_many_v2` in its own
 transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
@@ -234,7 +244,7 @@ moments come before the database renews, so the local countdown never ends after
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 

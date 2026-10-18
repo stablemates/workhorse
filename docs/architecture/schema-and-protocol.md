@@ -681,6 +681,9 @@ statement.
 | `maintenance_routine_poll_ms` | 60000                                         | Integers of at least 100. Bounds how often the worker offers the slow retention routines.                                                          |
 | `retry_delay_ms`              | Unset                                         | A whole number of milliseconds, or a callable over the attempt and the claimed task. The callable returns `None` to leave the delay to the policy. |
 
+The smallest supported `heartbeat_ms` is 100. The worker accepts a shorter value
+([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
+
 `retry_delay_ms` reports the delay of one failed attempt to `fail_v1`. This delay replaces the
 choice of the persisted retry policy.
 
@@ -1370,6 +1373,9 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 | `WorkerOptions.PollingOnly`                | False                                                          |                                                                    |
 | `WorkerOptions.Logger`                     | `slog.Default()`                                               | A `*slog.Logger`                                                   |
 
+The smallest supported `HeartbeatInterval` is 100 milliseconds. The worker accepts a shorter value
+([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
+
 The `PollInterval` defaults match the TypeScript and Python defaults that
 [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md) records.
 
@@ -1719,6 +1725,9 @@ refuses a missing or non-integer `size`. Every worker built on one pool shares o
 | `lease`          | 30 seconds                                              | 0.1 through 86,400 seconds    |
 | `heartbeat`      | The larger of 100 milliseconds and a third of the lease | Values shorter than the lease |
 | `shutdown_grace` | 25 seconds                                              | 0 through 86,400 seconds      |
+
+The smallest supported `heartbeat` is 0.1 seconds. The worker accepts a shorter value
+([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
 Durations are finite Numeric seconds. `cohorts` splits the slots for fast-tier dispatch, as
 [Workers on a fast-tier queue](fast-tier.md#workers-on-a-fast-tier-queue) describes.
@@ -2156,6 +2165,9 @@ crate. Then it tests the default consumer.
 | `shutdown_grace_period`        | 25 seconds                                                          | Positive whole milliseconds                                             |
 | `retry_delay`                  |                                                                     | Overrides one failed attempt's delay; `None` keeps the persisted policy |
 
+The smallest supported `heartbeat_interval` is 100 milliseconds. The worker accepts a shorter value
+([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
+
 The worker expects a listener only when all of these conditions are true:
 
 - `listen_config` is set;
@@ -2491,6 +2503,9 @@ throws `IllegalArgumentException` before any statement.
 | `scheduleCatchupLimit`       | 100                                                                                                 | 1 through 10,000                                                               |
 | `shutdownGrace`              | 25 seconds                                                                                          | 0 through 1 day                                                                |
 | `cohorts`                    | 1 when `concurrency` is below 8; otherwise `concurrency` divided by 8, rounded up, from 2 through 8 | 1 through `concurrency`                                                        |
+
+The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a shorter value
+([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
 
 `disableRegistry(true)` turns off the worker registry. `sharedHeartbeats(true)` makes heartbeat
 rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
