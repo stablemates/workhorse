@@ -804,7 +804,9 @@ infinities, and fractions throw before any queue operation.
 | `scheduleCatchupLimit`     | 1 through 10,000.                                                |
 
 The default of `leaseMs` is 30,000 ms. The default of `heartbeatMs` is
-`max(100, floor(leaseMs / 3))` ms.
+`max(100, floor(leaseMs / 3))` ms. The smallest supported `heartbeatMs` is 100 ms. The worker
+accepts a shorter value, but it does not keep its leases reliably on a loaded host ([Supported
+heartbeat interval](#supported-heartbeat-interval)).
 `maintenanceIntervalMs` defaults to 1,000 ms.
 
 #### Queue set
@@ -1420,8 +1422,8 @@ least 50 ms. A short interval still leaves time for a round.
 statement. Near this minimum, renewal depends on the load of the host and on the driver. The payload,
 the wait for the connection, and `BEGIN` use part of the bound first. In one trace, an async
 psycopg worker with an interval of 10 ms had a median of 8.59 ms left at the settings statement.
-More than half of its rounds failed before the heartbeat. Workhorse does not state a smallest
-interval that always renews.
+More than half of its rounds failed before the heartbeat. Thus the smallest supported interval is
+100 ms ([Supported heartbeat interval](#supported-heartbeat-interval)).
 
 Rounds under `sharedHeartbeats` (TypeScript), `shared_heartbeats` (Python, Rust, Ruby), and the
 JVM's shared heartbeats do not change. They have no client deadline and no server timeouts. The
@@ -1434,6 +1436,41 @@ A round that reaches its deadline renews no lease in it, however many leases the
 exception is a `COMMIT` that PostgreSQL has already started: it can finish later and renew the
 stored leases, but the worker does not count that renewal. The next round still falls due on the
 schedule that [Heartbeat schedule](#heartbeat-schedule) describes.
+
+#### Supported heartbeat interval
+
+The smallest supported heartbeat interval is 100 ms, in all six SDKs. At 100 ms, the round bound is
+75 ms. With that bound, a worker renewed its leases in tests on a loaded host. A supported interval
+does not guarantee renewal: the [margin rule](#heartbeat-schedule) and the load of the host still
+apply.
+
+Below 100 ms, the behavior of the worker does not change. The worker accepts the interval, and it
+does not reject or warn about it. But on a loaded host, the round bound can be shorter than one
+round needs. Then a round can miss its deadline every time. Each failed round also discards its
+connection, so the worker must take a new one, as step 2 of [Heartbeat round
+deadline](#heartbeat-round-deadline) describes.
+
+If every renewal of a lease misses its deadline, the worker never renews that lease. In Ruby and
+JVM, one round can send more than one statement, so one statement can renew its leases while a later
+statement fails. When the watchdog of an attempt expires, the attempt loses its lease, and recovery
+makes the task available again.
+
+In Ruby and JVM, one heartbeat thread sends the rounds of every worker on a pool that uses its
+dedicated connection. The shortest interval among the leases in those rounds sets the round bound.
+Thus one worker below 100 ms also shortens the rounds of the other workers on that connection.
+
+The minimum applies to the interval option of each SDK:
+
+| SDK        | Interval option                                        | Smallest supported value |
+| ---------- | ------------------------------------------------------ | ------------------------ |
+| TypeScript | `WorkerOptions.heartbeatMs`                            | 100                      |
+| Python     | `heartbeat_ms` of `Worker` and `AsyncWorker`           | 100                      |
+| Go         | `WorkerOptions.HeartbeatInterval`                      | 100 ms                   |
+| Rust       | `WorkerOptions::heartbeat_interval`                    | 100 ms                   |
+| Ruby       | `heartbeat:` of `Worker`, in seconds                   | 0.1                      |
+| JVM        | `Worker.Builder.heartbeat` and `WorkerScope.heartbeat` | 100 ms                   |
+
+The minimum also applies to a worker that uses shared heartbeats.
 
 #### Heartbeat schedule
 

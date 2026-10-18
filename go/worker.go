@@ -200,11 +200,14 @@ type Handler func(context.Context, any, *HandlerContext) (any, error)
 
 // WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
-	Queue               string
-	Queues              []string
-	WorkerID            string
-	Concurrency         int
-	LeaseDuration       time.Duration
+	Queue         string
+	Queues        []string
+	WorkerID      string
+	Concurrency   int
+	LeaseDuration time.Duration
+	// HeartbeatInterval defaults to a third of LeaseDuration and must be shorter than it. The
+	// smallest supported value is 100 ms. The worker accepts a shorter value, but on a loaded host
+	// it can renew no lease.
 	HeartbeatInterval   time.Duration
 	PollInterval        time.Duration
 	MaintenanceInterval time.Duration

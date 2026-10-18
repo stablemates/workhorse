@@ -454,7 +454,10 @@ export interface WorkerOptions {
   cohorts?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
   leaseMs?: number;
-  /** Local heartbeat interval. It must remain shorter than leaseMs. */
+  /**
+   * Local heartbeat interval. It must remain shorter than leaseMs. The smallest supported value
+   * is 100 ms. The worker accepts a shorter value, but on a loaded host it can renew no lease.
+   */
   heartbeatMs?: number;
   /**
    * Send heartbeats through the queue's shared pool instead of a dedicated connection.

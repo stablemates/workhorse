@@ -51,6 +51,7 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   public var concurrency: Int? = null
   public var executor: ExecutorService? = null
   public var lease: Duration? = null
+  /** The interval between lease renewals. The smallest supported value is 100 ms. */
   public var heartbeat: Duration? = null
   public var pollInterval: Duration? = null
   public var pollingOnly: Boolean? = null

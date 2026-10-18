@@ -71,7 +71,8 @@ public class WorkhorseProperties {
 
     /**
      * The interval between lease renewals. It must be less than the lease. The default is a third
-     * of the lease.
+     * of the lease. The smallest supported value is 100 ms. The worker accepts a shorter value, but
+     * on a loaded host it can renew no lease.
      */
     private @Nullable Duration heartbeat;
 
