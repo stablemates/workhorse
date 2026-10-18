@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -62,7 +63,7 @@ class DurableCallTest {
   fun keepsAFailureThatTheCallThrowsAfterTheCancellation() {
     val failure = IllegalStateException("the write failed")
     val thrown = cancelDuring { throw failure }
-    assertEquals(failure, thrown)
+    assertFailureOrRecoveredCopy(failure, thrown)
   }
 
   @Test
@@ -136,6 +137,20 @@ class DurableCallTest {
     // A blocking checkpoint operation answers the interrupt with an InterruptedException.
     val thrown = cancelDuring { gate -> gate.interruptible { Thread.sleep(WAIT_SECONDS * 1000) } }
     assertInstanceOf(CancellationException::class.java, thrown)
+  }
+
+  /**
+   * Asserts that the caller receives [failure], or the copy that kotlinx.coroutines makes of it.
+   * Gradle runs the tests with `-ea`, which turns on stack-trace recovery by default. If the call
+   * fails before the caller's `await` gets the cancellation, `await` can throw a recovered copy.
+   * The copy has the class and the message of [failure], and [failure] as its cause. A
+   * `CancellationException` fails the class check.
+   */
+  private fun assertFailureOrRecoveredCopy(failure: Throwable, thrown: Throwable?) {
+    if (thrown === failure) return
+    assertEquals(failure.javaClass, thrown?.javaClass, "the caller gets the call's failure")
+    assertEquals(failure.message, thrown?.message, "the copy keeps the message")
+    assertSame(failure, thrown?.cause, "the copy keeps the failure as its cause")
   }
 
   private fun <T : Any> present(value: T?, message: String): T =
