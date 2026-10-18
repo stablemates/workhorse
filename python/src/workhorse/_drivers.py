@@ -85,6 +85,11 @@ class SyncExecutor:
             cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, cursor.fetchall())
 
+    def command(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> None:
+        """Send a statement that returns no rows, such as BEGIN."""
+        with self.connection.cursor(row_factory=tuple_row) as cursor:
+            cursor.execute(statement.for_dialect(self.dialect), parameters)
+
 
 class AsyncPsycopgExecutor:
     dialect: DriverDialect = "psycopg"
@@ -99,12 +104,21 @@ class AsyncPsycopgExecutor:
             await cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, await cursor.fetchall())
 
+    async def command(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> None:
+        """Send a statement that returns no rows, such as BEGIN."""
+        async with self.connection.cursor(row_factory=tuple_row) as cursor:
+            await cursor.execute(statement.for_dialect(self.dialect), parameters)
+
 
 class AsyncpgExecutor:
     dialect: DriverDialect = "asyncpg"
 
     def __init__(self, connection: AsyncpgConnection) -> None:
         self.connection = connection
+
+    async def command(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> None:
+        """Send a statement that returns no rows, such as BEGIN."""
+        await self.connection.fetch(statement.for_dialect(self.dialect), *parameters)
 
     async def rows(
         self, statement: DriverStatement, parameters: Sequence[object] = ()

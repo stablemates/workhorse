@@ -26,12 +26,14 @@ const closeFailureRegistration = async () =>
     (entry) => entry.workerId === "registry-notification-close-failure",
   );
 
+// A heartbeat round ends with the COMMIT of its transaction, and no other worker statement or test
+// in this file sends one. So the reserved backend's last query is the heartbeat or that COMMIT.
 const heartbeatBackends = async (): Promise<number[]> => {
   const backends = await pool.query<{ pid: number }>(
     `SELECT pid
        FROM pg_stat_activity
       WHERE datname = current_database()
-        AND query LIKE '%workhorse.heartbeat_many_v1%'
+        AND (query LIKE '%workhorse.heartbeat_many_v1%' OR query = 'COMMIT')
         AND query NOT LIKE '%pg_stat_activity%'`,
   );
   return backends.rows.map((row) => row.pid);

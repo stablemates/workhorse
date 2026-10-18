@@ -41,6 +41,8 @@ def test_production_sql_literals_live_in_the_generated_catalogue() -> None:
         Path("_statements.py"),
         Path("dashboard_v1.py"),
         Path("dashboard/_backend.py"),
+        # The transaction around a heartbeat round sets timeouts, and calls no protocol function.
+        Path("_heartbeat_round.py"),
     }
     violations: list[str] = []
 

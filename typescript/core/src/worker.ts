@@ -583,6 +583,8 @@ export class Worker {
   }
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
+  // The deadline of one heartbeat round on the reserved connection. It equals heartbeatMs.
+  private readonly heartbeatRoundMs: number;
   private readonly pollMs: number;
   private readonly dispatchPollMs: number;
   private readonly supportsNotifications: boolean;
@@ -684,14 +686,14 @@ export class Worker {
       // earlier than the database's renewal, so local lease windows never outlast the real ones.
       const sentAt = monotonicNow();
       const channel = this.reservedHeartbeatChannel();
-      // A round on the reserved connection is bounded by the heartbeat interval, so a statement
-      // stuck on it cannot hold back the next round.
+      // A round on the reserved connection is bounded by heartbeatRoundMs, so a statement stuck on
+      // it cannot hold back the next round.
       const heartbeat = channel
         ? channel.heartbeatMany(
             leases.map((lease) => lease.task),
             this.workerId,
             this.leaseMs,
-            this.heartbeatMs,
+            this.heartbeatRoundMs,
           )
         : this.queue.heartbeatMany
           ? this.queue.heartbeatMany(
@@ -787,6 +789,7 @@ export class Worker {
       );
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
+    this.heartbeatRoundMs = this.heartbeatMs;
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
     this.dispatchPollMs =
       options.pollMs ??

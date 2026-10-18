@@ -1499,7 +1499,9 @@ other. It uses a dedicated connection that the workers on the pool share.
 
 - Each call includes the ID, fence token, and lease duration of every active task.
 - Heartbeat batches never overlap.
-- Each round has a heartbeat-interval timeout.
+- Each round has a heartbeat-interval deadline. The round sends `heartbeat_many_v1` in its own
+  transaction, with server timeouts that end the statement by that deadline
+  ([Heartbeat round deadline](lifecycle.md#heartbeat-round-deadline)).
 - If a round fails, the goroutine destroys the connection and retries. It does not cancel handlers.
 - If a handler has no accepted renewal for one lease, a local watchdog cancels it.
 

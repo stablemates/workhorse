@@ -967,6 +967,74 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
     lock.rollback().await.unwrap();
 }
 
+// SM-1442: dropping a connection does not stop its statement, so each round that timed out used to
+// leave one more backend waiting on the same row lock. PostgreSQL now ends the round's transaction
+// by the round's deadline.
+#[tokio::test]
+async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_its_deadline() {
+    let Some(harness) = harness("worker_heartbeat_bound").await else { return };
+    let task = harness.enqueue("rust.bounded", json!({}), EnqueueOptions::default()).await;
+    let interval = Duration::from_millis(200);
+    let options = WorkerOptions {
+        lease_duration: Duration::from_secs(30),
+        heartbeat_interval: Some(interval),
+        ..options()
+    };
+    let worker = harness.worker(options);
+    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = release.clone();
+    worker.handle("rust.bounded", move |_: Value, _| {
+        let _ = started.send(());
+        let gate = gate.clone();
+        async move {
+            gate.notified().await;
+            Ok::<Value, HandlerError>(json!({}))
+        }
+    });
+    let (stop, running) = run(&worker);
+    running_handlers.recv().await.unwrap();
+
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    let locked = lock
+        .execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
+        .await
+        .unwrap();
+    assert_eq!(locked, 1, "the task has no runtime row");
+    let observer = harness.database.connect().await;
+    let mut samples: Vec<Vec<f64>> = Vec::new();
+    let until = tokio::time::Instant::now() + 8 * interval;
+    while tokio::time::Instant::now() < until {
+        let rows = observer
+            .query(
+                "SELECT (extract(epoch FROM clock_timestamp() - query_start) * 1000)::float8 \
+                 FROM pg_stat_activity WHERE datname = current_database() \
+                 AND pid <> pg_backend_pid() AND state = 'active' \
+                 AND query LIKE '%workhorse.heartbeat_many_v1%'",
+                &[],
+            )
+            .await
+            .unwrap();
+        samples.push(rows.iter().map(|row| row.get::<_, f64>(0)).collect());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    lock.commit().await.unwrap();
+    release.notify_one();
+    harness.wait_for(task, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+
+    assert!(samples.iter().any(|sample| !sample.is_empty()), "no heartbeat waited on the lock");
+    let most = samples.iter().map(Vec::len).max().unwrap_or(0);
+    assert!(most <= 1, "{most} heartbeat statements were active at once: {samples:?}");
+    // A statement ends by its round's deadline. The slack allows for a slow host, and stays far
+    // below the 1.6 s that the lock was held.
+    let oldest = samples.iter().flatten().fold(0.0_f64, |oldest, age| oldest.max(*age));
+    let limit = 5.0 * interval.as_millis() as f64;
+    assert!(oldest < limit, "a heartbeat statement ran for {oldest} ms: {samples:?}");
+}
+
 #[tokio::test]
 async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
     let Some(harness) = harness("worker_unwind").await else { return };
@@ -1511,7 +1579,8 @@ async fn worker_metrics_reach_the_global_meter_provider() {
     }
 }
 
-/// The pid of a backend other than `observer`'s whose last statement was a heartbeat round.
+/// The pid of a backend other than `observer`'s whose last statement was a heartbeat round. A round
+/// ends with the `COMMIT` of its transaction, and no other worker statement sends one.
 ///
 /// With `idle`, the backend must also have finished that statement, which is how a connection the
 /// worker holds between tasks looks.
@@ -1522,7 +1591,8 @@ async fn heartbeat_backend(observer: &Client, except: Option<i32>, idle: bool) -
                 .query_opt(
                     "SELECT pid FROM pg_stat_activity
                       WHERE datname = current_database() AND pid <> pg_backend_pid()
-                        AND query LIKE '%heartbeat_many_v1%' AND pid IS DISTINCT FROM $1
+                        AND (query LIKE '%heartbeat_many_v1%' OR query = 'COMMIT')
+                        AND pid IS DISTINCT FROM $1
                         AND (NOT $2 OR state = 'idle')
                       LIMIT 1",
                     &[&except, &idle],

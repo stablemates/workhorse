@@ -42,6 +42,12 @@ from ._external_waits import (
     validate_wait_timeout as _validate_wait_timeout,
 )
 from ._fenced_write import fenced_write_rows as _fenced_write_rows
+from ._heartbeat_round import (
+    ROUND_BEGIN as _ROUND_BEGIN,
+    ROUND_COMMIT as _ROUND_COMMIT,
+    ROUND_ROLLBACK as _ROUND_ROLLBACK,
+    ROUND_TIMEOUTS as _ROUND_TIMEOUTS,
+)
 from ._notifications import (
     NotificationConnectionFactory as _NotificationConnectionFactory,
     TaskNotificationListener as _TaskNotificationListener,
@@ -131,6 +137,119 @@ else:
 
 # Opens the heartbeat executor and returns it with the callable that closes it.
 _HeartbeatExecutorFactory = Callable[[], tuple[_SyncRowExecutor, Callable[[], None]]]
+
+# A round with less time than this left fails before it sends its heartbeat. At this size every
+# budget of _round_timeouts is at least 1 ms, and the budgets still fit in the time left.
+_MINIMUM_ROUND_REMAINING_SECONDS = 0.008
+
+
+def _round_timeouts(remaining_ms: float) -> tuple[str, str]:
+    """The server budgets for the rest of a round, in whole milliseconds.
+
+    PostgreSQL measures `statement_timeout` for each statement and
+    `idle_in_transaction_session_timeout` for each idle gap, and restarts both every time. While
+    the round can hold a row lock, it has one idle gap before the heartbeat, the heartbeat, and one
+    idle gap before COMMIT. So the heartbeat gets one half, each gap one eighth, and the last
+    quarter is kept for COMMIT. No setting bounds COMMIT itself.
+    """
+    return str(max(1, int(remaining_ms // 2))), str(max(1, int(remaining_ms // 8)))
+
+
+class _HeartbeatRoundExpired(TimeoutError):
+    """A heartbeat round reached its deadline."""
+
+
+class _ServerBoundedExecutor:
+    """Send each statement in its own transaction, with server timeouts that fit before `deadline`.
+
+    Closing a connection does not stop its statement: PostgreSQL notices a closed client only when
+    it next writes to it. So the server must end a round that the client stopped waiting for. The
+    timeouts (`_round_timeouts`) end the heartbeat, and a transaction whose client stopped before
+    COMMIT, by the deadline. A COMMIT that PostgreSQL has already started can still finish later.
+    Both settings end with the transaction, so the connection keeps no session state. No command
+    goes out after the deadline; a rollback that cannot go out leaves the round to discard the
+    connection.
+    """
+
+    def __init__(self, executor: _SyncRowExecutor, deadline: float) -> None:
+        self._executor = executor
+        self._commands = cast(Any, executor)
+        self._deadline = deadline
+
+    def rows(
+        self, statement: _DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Mapping[str, object]]:
+        self._require_time()
+        self._commands.command(_ROUND_BEGIN)
+        try:
+            set_at = monotonic()
+            remaining_ms = (self._deadline - set_at) * 1000
+            if remaining_ms < _MINIMUM_ROUND_REMAINING_SECONDS * 1000:
+                raise _HeartbeatRoundExpired("heartbeat round reached its deadline")
+            self._executor.rows(_ROUND_TIMEOUTS, _round_timeouts(remaining_ms))
+            # The budgets fit only if the settings statement used at most the quarter kept for
+            # COMMIT.
+            if (monotonic() - set_at) * 1000 > remaining_ms / 4:
+                raise _HeartbeatRoundExpired("heartbeat round settings took too long")
+            rows = self._executor.rows(statement, parameters)
+            self._require_time()
+            self._commands.command(_ROUND_COMMIT)
+            # A COMMIT that ends after the deadline does not count as a renewal.
+            self._require_time()
+            return rows
+        except BaseException:
+            # A deadlock resend needs a clean session. A broken connection fails here too, and
+            # the round discards it.
+            with suppress(Exception):
+                self._require_time()
+                self._commands.command(_ROUND_ROLLBACK)
+            raise
+
+    def _require_time(self) -> None:
+        if monotonic() >= self._deadline:
+            raise _HeartbeatRoundExpired("heartbeat round reached its deadline")
+
+
+def _discard_round_connection(executor: object) -> None:
+    """Close the driver connection under `executor`, so its pool can only discard it."""
+    discard = getattr(executor, "discard", None)
+    if callable(discard):
+        discard()
+        return
+    connection = getattr(executor, "connection", None)
+    if isinstance(connection, _PoolConnectionLease):
+        connection.discard()
+        return
+    close = getattr(connection, "close", None)
+    if callable(close):
+        close()
+
+
+class _HeartbeatRound:
+    """One heartbeat round on the dedicated connection. The first of finish and abandon wins."""
+
+    def __init__(self, deadline: float) -> None:
+        self.deadline = deadline
+        self.result: Future[list[Mapping[str, object]]] = Future()
+        self._lock = Lock()
+        self._state: Literal["running", "finished", "abandoned"] = "running"
+
+    def finish(self) -> bool:
+        """Claim the result for the heartbeat thread. False when that thread stopped waiting."""
+        with self._lock:
+            if self._state == "abandoned":
+                return False
+            self._state = "finished"
+            return True
+
+    def abandon(self) -> bool:
+        """Stop waiting for the round. False when the round already finished."""
+        with self._lock:
+            if self._state == "finished":
+                return False
+            self._state = "abandoned"
+            return True
+
 
 Handler = Callable[[Any, HandlerContext], Json]
 BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandlerOutcome]]
@@ -1254,6 +1373,8 @@ class Worker:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
         self.heartbeat_ms = heartbeat_ms if heartbeat_ms is not None else max(100, lease_ms // 3)
+        # The deadline of one round on the dedicated connection. It equals heartbeat_ms.
+        self._heartbeat_round_ms = self.heartbeat_ms
         if not 0 < self.heartbeat_ms < self.lease_ms:
             raise ValueError("heartbeat_ms must be positive and less than lease_ms")
         if (
@@ -1344,6 +1465,9 @@ class Worker:
         )
         self._heartbeat_connection_lock = Lock()
         self._heartbeat_connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
+        # Counts the cleanups of the slot. A round that started before a cleanup closes its
+        # connection instead of putting it back, because nothing would close it later.
+        self._heartbeat_generation = 0
         self._notification_connection_factory: _NotificationConnectionFactory | None = (
             _psycopg_pool_notification_factory(pool)
         )
@@ -1397,7 +1521,8 @@ class Worker:
             sent_at = monotonic()
             try:
                 rows = self._heartbeat_rows(
-                    (self.worker_id, json.dumps(leases, separators=(",", ":")))
+                    (self.worker_id, json.dumps(leases, separators=(",", ":"))),
+                    sent_at + self._heartbeat_round_ms / 1000,
                 )
             except Exception:
                 # A failed round proves nothing about ownership, so every task keeps running and
@@ -1442,24 +1567,78 @@ class Worker:
                     member.errors.append(error)
                     member.cancellation._cancel(error)
 
-    def _heartbeat_rows(self, parameters: Sequence[object]) -> list[Mapping[str, object]]:
+    def _heartbeat_rows(
+        self, parameters: Sequence[object], deadline: float
+    ) -> list[Mapping[str, object]]:
         if self._heartbeat_executor_factory is None:
             return _fenced_write_rows(self._executor, _STATEMENTS.heartbeat_many, parameters)
+        # One deadline bounds the whole round on the dedicated connection: the checkout and the
+        # transaction. The round runs on its own thread, so this thread stops waiting at the
+        # deadline even when the driver does not.
+        heartbeat_round = _HeartbeatRound(deadline)
+        # Read before the thread starts, so a cleanup that runs first is always seen.
         with self._heartbeat_connection_lock:
-            if self._heartbeat_connection is None:
-                self._heartbeat_connection = self._heartbeat_executor_factory()
-            executor, close = self._heartbeat_connection
+            generation = self._heartbeat_generation
+        Thread(
+            target=self._run_heartbeat_round,
+            args=(heartbeat_round, parameters, generation),
+            name="workhorse-heartbeat-round",
+            daemon=True,
+        ).start()
+        try:
+            return heartbeat_round.result.result(timeout=max(0.0, deadline - monotonic()))
+        except FutureTimeoutError:
+            if heartbeat_round.abandon():
+                raise _HeartbeatRoundExpired("heartbeat round reached its deadline") from None
+            # The round finished as the deadline passed, so its result is about to arrive.
+            return heartbeat_round.result.result()
+
+    def _run_heartbeat_round(
+        self, heartbeat_round: _HeartbeatRound, parameters: Sequence[object], generation: int
+    ) -> None:
+        factory = cast(_HeartbeatExecutorFactory, self._heartbeat_executor_factory)
+        try:
+            # The round takes the connection out of the slot, so a later round never shares it.
+            with self._heartbeat_connection_lock:
+                connection, self._heartbeat_connection = self._heartbeat_connection, None
+            if connection is None:
+                connection = factory()
+            executor, close = connection
             try:
-                return _fenced_write_rows(executor, _STATEMENTS.heartbeat_many, parameters)
+                rows = _fenced_write_rows(
+                    _ServerBoundedExecutor(executor, heartbeat_round.deadline),
+                    _STATEMENTS.heartbeat_many,
+                    parameters,
+                )
             except BaseException:
                 # Reconnect on the next beat rather than reuse a connection in an unknown state.
-                self._heartbeat_connection = None
+                # Closing the driver connection first ends any open transaction on the server, so
+                # the pool cannot commit it when the connection goes back.
+                with suppress(Exception):
+                    _discard_round_connection(executor)
                 with suppress(Exception):
                     close()
                 raise
+            if not heartbeat_round.finish():
+                # The heartbeat thread stopped waiting, so nothing counts this renewal.
+                with suppress(Exception):
+                    close()
+                return
+            with self._heartbeat_connection_lock:
+                if self._heartbeat_connection is None and self._heartbeat_generation == generation:
+                    self._heartbeat_connection, connection = connection, None
+            # The result goes first, so a close that blocks cannot hold the heartbeat thread.
+            heartbeat_round.result.set_result(rows)
+            if connection is not None:
+                with suppress(Exception):
+                    connection[1]()
+        except BaseException as error:
+            heartbeat_round.finish()
+            heartbeat_round.result.set_exception(error)
 
     def _close_heartbeat_connection(self) -> None:
         with self._heartbeat_connection_lock:
+            self._heartbeat_generation += 1
             connection, self._heartbeat_connection = self._heartbeat_connection, None
         if connection is not None:
             with suppress(Exception):
@@ -3382,12 +3561,27 @@ class _PoolConnectionLease:
     def __init__(self, context: Any, connection: Any) -> None:
         self._context = context
         self._connection = connection
+        self._returned = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connection, name)
 
     def close(self) -> None:
+        if self._returned:
+            return
+        self._returned = True
         self._context.__exit__(None, None, None)
+
+    def discard(self) -> None:
+        """Close the driver connection, then return it, so the pool can only discard it.
+
+        A normal return commits an open transaction, so a connection in an unknown state must
+        not take that path.
+        """
+        try:
+            self._connection.close()
+        finally:
+            self.close()
 
 
 def _pool_connection(pool: _PsycopgPool) -> _PoolConnectionLease:

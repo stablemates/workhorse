@@ -1,4 +1,6 @@
 import { connectionPoolOf, type ConnectionPool } from "./connection-pool.js";
+import type { QueryResult, QueryResultRow } from "pg";
+import { monotonicNow } from "./timers.js";
 import type { Queryable } from "./types.js";
 
 /**
@@ -49,12 +51,102 @@ async function connectClient(pool: ConnectionPool): Promise<ReservedClient> {
 }
 
 /**
+ * Sets both server timeouts for the current transaction only. `SET LOCAL` cannot take a bind
+ * parameter, and `set_config(..., true)` has the same scope.
+ */
+const ROUND_TIMEOUTS =
+  "SELECT set_config('statement_timeout', $1, true), " +
+  "set_config('idle_in_transaction_session_timeout', $2, true)";
+
+/**
+ * A round with less time than this left fails before it sends its heartbeat. At this size every
+ * budget of `roundTimeouts` is at least 1 ms, and the budgets still fit in the time left.
+ */
+const MINIMUM_REMAINING_MS = 8;
+
+function roundExpired(): Error {
+  return new Error("Heartbeat round reached its deadline");
+}
+
+/**
+ * The server budgets for the rest of a round that has `remainingMs` left, in whole milliseconds.
+ *
+ * PostgreSQL measures `statement_timeout` for each statement and
+ * `idle_in_transaction_session_timeout` for each idle gap, and restarts both every time. While the
+ * round can hold a row lock, it has one idle gap before the heartbeat, the heartbeat, and one idle
+ * gap before `COMMIT`. So the heartbeat gets one half, each gap one eighth, and the last quarter is
+ * kept for `COMMIT`. No setting bounds `COMMIT` itself.
+ */
+function roundTimeouts(remainingMs: number): [statement: string, idle: string] {
+  return [
+    String(Math.max(1, Math.floor(remainingMs / 2))),
+    String(Math.max(1, Math.floor(remainingMs / 8))),
+  ];
+}
+
+/**
+ * A view of `client` that sends each statement in its own transaction, with server timeouts that
+ * fit in the time left before `deadline`, a `monotonicNow()` value. `expired` reports that the
+ * round's client timer has fired.
+ *
+ * Destroying a connection does not stop its statement: PostgreSQL notices a closed client only
+ * when it next writes to it. So the server must end a round that the client stopped waiting for.
+ * The timeouts (`roundTimeouts`) end the heartbeat, and a transaction whose client stopped before
+ * `COMMIT`, by the deadline. A `COMMIT` that PostgreSQL has already started can still finish later.
+ * Both settings end with the transaction, so the connection keeps no session state.
+ *
+ * The view sends no command after the deadline. It rolls back a failed statement only while time is
+ * left; otherwise the caller discards the connection.
+ */
+function boundOnServer(client: Queryable, deadline: number, expired: () => boolean): Queryable {
+  const send = <R extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+    // The client timer can fire a little before the clock reaches the deadline, so both count.
+    if (expired() || monotonicNow() >= deadline) throw roundExpired();
+    return client.query<R>(text, values);
+  };
+  return {
+    async query<R extends QueryResultRow = QueryResultRow>(
+      text: string,
+      values?: readonly unknown[],
+    ): Promise<QueryResult<R>> {
+      await send("BEGIN");
+      try {
+        const setAt = monotonicNow();
+        const remaining = deadline - setAt;
+        if (remaining < MINIMUM_REMAINING_MS) throw roundExpired();
+        await send(ROUND_TIMEOUTS, roundTimeouts(remaining));
+        // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
+        if (monotonicNow() - setAt > remaining / 4) throw roundExpired();
+        const result = await send<R>(text, values);
+        await send("COMMIT");
+        // A COMMIT that ends after the deadline does not count as a renewal.
+        if (expired() || monotonicNow() >= deadline) throw roundExpired();
+        return result;
+      } catch (error) {
+        // A deadlock resend needs a clean session.
+        try {
+          await send("ROLLBACK");
+        } catch {
+          // The round reports its own error below, and the caller discards the connection.
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+/**
  * One pooled connection kept for heartbeats, with every round bounded in time.
  *
  * Handlers that hold every other pooled connection cannot delay a heartbeat queued behind them,
- * because the heartbeat never waits for the shared pool. A round that outlives its bound destroys
- * the connection, which is the client-side cancel: no session setting is involved, so the
- * connection stays safe behind a transaction-mode pooler. The next round reconnects.
+ * because the heartbeat never waits for the shared pool. One deadline bounds a whole round: the wait
+ * for the rounds before it, the connect, and the transaction. A round that passes the deadline
+ * destroys the connection, and server timeouts end its heartbeat and its idle waits by the same
+ * deadline (`boundOnServer`). The timeouts are transaction-scoped, so the connection stays safe
+ * behind a transaction-mode pooler. The next round reconnects.
+ *
+ * Rounds take turns, because every worker on the pool sends its rounds here and one session runs
+ * one transaction at a time.
  *
  * A connection that fails between rounds, as when PostgreSQL terminates its backend, is discarded
  * the same way. The failure changes no lease: each attempt's watchdog alone decides when one lapses.
@@ -62,6 +154,7 @@ async function connectClient(pool: ConnectionPool): Promise<ReservedClient> {
 export class ReservedConnection {
   private client: Promise<ReservedClient> | undefined;
   private readonly rounds = new Set<Promise<unknown>>();
+  private turn: Promise<void> = Promise.resolve();
   private closed = false;
 
   constructor(private readonly pool: ConnectionPool) {}
@@ -136,7 +229,16 @@ export class ReservedConnection {
     operation: (client: Queryable) => Promise<T>,
     timeoutMs: number,
   ): Promise<T> {
-    const pending = this.acquire();
+    const deadline = monotonicNow() + timeoutMs;
+    // The next round waits for this one and for every round before it. A round that expires while
+    // it waits thus ends only its own wait: the round ahead of it keeps the connection to itself.
+    const previous = this.turn;
+    let finished!: () => void;
+    const own = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    this.turn = Promise.all([previous, own]).then(() => undefined);
+    let pending: Promise<ReservedClient> | undefined;
     let expired = false;
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
@@ -146,23 +248,34 @@ export class ReservedConnection {
       }, timeoutMs);
       timer.unref();
     });
-    // A client lent after the bound passed is only destroyed; its renewal would arrive too late.
-    const renewal = pending.then((client) => (expired ? timedOut : operation(client)));
+    const renewal = (async () => {
+      await previous;
+      // A round whose deadline passed while it waited for its turn sends nothing.
+      if (expired) return timedOut;
+      pending = this.acquire();
+      const client = await pending;
+      // A client lent after the deadline is only destroyed; its renewal would arrive too late.
+      if (expired) return timedOut;
+      return operation(boundOnServer(client, deadline, () => expired));
+    })();
     try {
       return await Promise.race([renewal, timedOut]);
     } catch (error) {
-      this.discard(pending, error);
+      if (pending !== undefined) this.discard(pending, error);
       throw error;
     } finally {
       clearTimeout(timer);
+      // This round is done, or its connection is discarded.
+      finished();
     }
   }
 
   private discard(pending: Promise<ReservedClient>, error: unknown): void {
     if (this.client !== pending) return;
     this.client = undefined;
-    // Releasing with an error destroys the connection instead of returning it to the pool, which
-    // also ends a statement still running on it. A connect that lands later is destroyed as well.
+    // Releasing with an error destroys the connection instead of returning it to the pool. A
+    // heartbeat or an idle wait still open on it ends by its server-side timeout. A connect that
+    // lands later is destroyed as well.
     void pending.then(
       (client) => client.release(error instanceof Error ? error : true),
       () => undefined,

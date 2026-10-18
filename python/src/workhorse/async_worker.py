@@ -181,6 +181,30 @@ class _AsyncExecutorBridge:
         future = asyncio.run_coroutine_threadsafe(self._rows(statement, parameters), loop)
         return future.result()
 
+    def discard(self) -> None:
+        """Close the driver connection, so its pool can only discard it."""
+        loop = self._loop
+        connection = getattr(self._executor, "connection", None)
+        if loop is None or connection is None:
+            return
+        terminate = getattr(connection, "terminate", None)
+
+        async def close() -> None:
+            if callable(terminate):
+                terminate()
+            else:
+                await connection.close()
+
+        asyncio.run_coroutine_threadsafe(close(), loop).result()
+
+    def command(self, statement: _DriverStatement, parameters: Sequence[object] = ()) -> None:
+        """Send a statement that returns no rows, such as BEGIN."""
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("AsyncWorker database access requires an active run call")
+        command = cast(Any, self._executor).command
+        asyncio.run_coroutine_threadsafe(command(statement, parameters), loop).result()
+
     async def _rows(
         self, statement: _DriverStatement, parameters: Sequence[object]
     ) -> list[Mapping[str, object]]:

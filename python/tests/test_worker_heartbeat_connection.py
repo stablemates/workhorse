@@ -314,10 +314,14 @@ class FailingHeartbeatExecutor:
         self._failed = failed
 
     def rows(self, statement: Any, parameters: Any = ()) -> Any:
-        if self._failing():
+        # The round also sends its transaction settings through rows; only the heartbeat fails.
+        if "heartbeat_many_v1" in statement.psycopg and self._failing():
             self._failed.set()
             raise RuntimeError("heartbeat round failed")
         return self._executor.rows(statement, parameters)
+
+    def command(self, statement: Any, parameters: Any = ()) -> None:
+        self._executor.command(statement, parameters)
 
 
 def heartbeat_executor_factory(failing: Any, failed: Event) -> Any:
@@ -472,11 +476,15 @@ class BlockingTask:
 
 
 def heartbeat_backends(database_url: str) -> list[int]:
-    """List the backends whose latest statement was a heartbeat round, excluding the observer."""
+    """List the backends whose latest statement was a heartbeat round, excluding the observer.
+
+    A round ends with the COMMIT of its transaction, and no other worker statement sends one.
+    """
     with psycopg.connect(database_url, autocommit=True) as observer:
         rows = observer.execute(
             "SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
-            "AND pid <> pg_backend_pid() AND query LIKE '%workhorse.heartbeat_many_v1%'"
+            "AND pid <> pg_backend_pid() "
+            "AND (query LIKE '%workhorse.heartbeat_many_v1%' OR query = 'COMMIT')"
         ).fetchall()
     return [int(row[0]) for row in rows]
 
@@ -620,3 +628,106 @@ async def test_a_terminated_idle_async_heartbeat_connection_is_replaced_on_the_n
         after.release.set()
         worker.stop()
         await asyncio.wait_for(running, timeout=30)
+
+
+# SM-1442: a round on the dedicated connection has one deadline, and PostgreSQL ends its statement
+# by that deadline. Before, a round that waited on a row lock kept waiting until the lock was gone.
+BOUND_HEARTBEAT_MS = 200
+
+
+def active_heartbeats(observer: psycopg.Connection[Any]) -> list[float]:
+    """The age in milliseconds of each active heartbeat statement in the test database."""
+    rows = observer.execute(
+        """SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000
+             FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
+              AND query LIKE '%%workhorse.heartbeat_many_v1%%'"""
+    ).fetchall()
+    return [float(row[0]) for row in rows]
+
+
+def sample_heartbeats_while_locked(database_url: str, task_id: str) -> list[list[float]]:
+    """Hold the task's row lock for eight intervals, and sample the heartbeat statements."""
+    samples: list[list[float]] = []
+    with (
+        psycopg.connect(database_url) as blocker,
+        psycopg.connect(database_url, autocommit=True) as observer,
+    ):
+        blocker.execute(
+            "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
+        )
+        until = monotonic() + 8 * BOUND_HEARTBEAT_MS / 1000
+        while monotonic() < until:
+            samples.append(active_heartbeats(observer))
+            sleep(0.02)
+        blocker.commit()
+    return samples
+
+
+def assert_one_bounded_statement(samples: list[list[float]]) -> None:
+    assert any(samples), "no heartbeat statement waited on the locked row"
+    assert max(len(sample) for sample in samples) <= 1, samples
+    # A statement ends by its round's deadline. The slack allows for a slow host, and stays far
+    # below the 1.6 s that the lock was held.
+    assert max(age for sample in samples for age in sample) < 5 * BOUND_HEARTBEAT_MS, samples
+
+
+def test_a_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_by_its_deadline(
+    database_url: str,
+) -> None:
+    task_id = enqueue(database_url, "heartbeat.bound", "heartbeat-bound")
+    task = BlockingTask()
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-bound",
+        worker_id="python-heartbeat-bound",
+        lease_ms=30_000,
+        heartbeat_ms=BOUND_HEARTBEAT_MS,
+    ).handle("heartbeat.bound", task.handler)
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        assert task.started.wait(30)
+        samples = sample_heartbeats_while_locked(database_url, task_id)
+    finally:
+        task.release.set()
+        run.join(30)
+
+    assert_one_bounded_statement(samples)
+    assert processed == [True]
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_by_its_deadline(
+    database_url: str, driver: str, async_psycopg_pool, asyncpg_pool
+) -> None:
+    queue = f"heartbeat-bound-{driver}"
+    task_id = enqueue(database_url, "heartbeat.bound", queue)
+    task = BlockingTask()
+    options: dict[str, Any] = {
+        "queue": queue,
+        "worker_id": f"python-async-heartbeat-bound-{driver}",
+        "lease_ms": 30_000,
+        "heartbeat_ms": BOUND_HEARTBEAT_MS,
+    }
+    if driver == "psycopg":
+        worker = AsyncWorker.from_psycopg(async_psycopg_pool, **options)
+    else:
+        worker = AsyncWorker.from_asyncpg(asyncpg_pool, **options)
+    worker.handle("heartbeat.bound", task.async_handler)
+    run = asyncio.create_task(worker.run_once())
+    try:
+        assert await asyncio.to_thread(task.started.wait, 30)
+        samples = await asyncio.to_thread(sample_heartbeats_while_locked, database_url, task_id)
+    finally:
+        task.release.set()
+        processed = await asyncio.wait_for(run, timeout=30)
+
+    assert_one_bounded_statement(samples)
+    assert processed is True
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)

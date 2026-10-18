@@ -111,12 +111,18 @@ One failed round does not change who owns a task.
 A heartbeat renews only a lease that is still live when PostgreSQL checks it. A late heartbeat cannot
 start an expired lease again.
 
-**Example.** The heartbeat at 10 s moved the expiry of the invoice task to 40 s.
+A round on the reserved connection also has a deadline of one heartbeat interval. If the heartbeat
+waits too long, PostgreSQL ends it before the deadline. The round then renews no lease, and its
+heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has already started
+can still finish later.
 
-1. At 20 s, worker A sends the next heartbeat.
+**Example.** The heartbeat at 10 s moved the expiry of the invoice task to 40 s. The heartbeat
+interval is 10 s.
+
+1. At 20 s, worker A sends the next heartbeat round. Its deadline is 30 s.
 2. The heartbeat waits for a row lock, because another transaction holds the lock.
-3. At 45 s, the heartbeat gets the lock. PostgreSQL then reads the clock.
-4. The lease expired at 40 s, so PostgreSQL does not renew it.
+3. At about 25 s, PostgreSQL ends the heartbeat. The round renews no lease.
+4. At about 35 s, worker A sends the next round. The lock is free, so PostgreSQL renews the lease.
 
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
@@ -133,6 +139,11 @@ worker. A Rust task stops its heartbeats when its handler returns.
 - The function reads `clock_timestamp()` after those locks.
 - One `UPDATE ... FROM` renews every matching row.
 - The function returns `(ordinal, task_id, status)` in input order.
+
+**Round deadline.** A round on the reserved connection sends `heartbeat_many_v1` in its own
+transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
+before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
+the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 
 **Statuses** (`heartbeat_v1` and `heartbeat_many_v1`)
 
@@ -159,7 +170,7 @@ moments come before the database renews, so the local countdown never ends after
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat).
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat) and [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline).
 
 </details>
 
