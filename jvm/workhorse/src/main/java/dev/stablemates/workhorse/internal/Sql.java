@@ -35,8 +35,11 @@ import org.postgresql.util.ServerErrorMessage;
  * Executor}.
  *
  * <p>Each parameter is a {@code String}, a {@code String[]} for a {@code text[]} parameter, or
- * {@code null}. The statement's SQL casts each parameter to its protocol type. The runner changes
- * no session state, and it never begins, commits, or rolls back a transaction.
+ * {@code null}. The runner binds a {@code String} or a {@code null} as an untyped parameter, as
+ * libpq does. PostgreSQL infers its type from its cast, or else from the context of its {@code ?}.
+ * A {@code $n} that a statement uses more than once becomes one {@code ?} for each use. PostgreSQL
+ * infers the type of each {@code ?} separately. The runner changes no session state. It never
+ * begins, commits, or rolls back a transaction.
  */
 public final class Sql {
   private static final int FENCED_WRITE_DEADLOCK_ATTEMPTS = 3;
@@ -101,8 +104,8 @@ public final class Sql {
       Connection connection, PreparedStatement prepared, int index, @Nullable Object value)
       throws SQLException {
     switch (value) {
-      case null -> prepared.setNull(index, Types.VARCHAR);
-      case String text -> prepared.setString(index, text);
+      case null -> prepared.setNull(index, Types.OTHER);
+      case String text -> prepared.setObject(index, text, Types.OTHER);
       case String[] texts -> prepared.setArray(index, connection.createArrayOf("text", texts));
       default -> throw new IllegalStateException("cannot bind " + value.getClass().getName());
     }
