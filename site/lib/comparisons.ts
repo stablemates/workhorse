@@ -160,6 +160,20 @@ export function hubRows(): readonly ComparisonRow[] {
   return comparisons.rows.filter((row) => row.hub);
 }
 
+/** One category of the hub, with its products in data order. */
+export interface HubCategory {
+  readonly category: ComparisonCategory;
+  readonly products: readonly ComparisonProduct[];
+}
+
+/** The categories of the hub, each with its products. */
+export function hubCategories(): readonly HubCategory[] {
+  return comparisons.categories.map((category) => ({
+    category,
+    products: comparisons.products.filter((product) => product.category === category.id),
+  }));
+}
+
 /** One group of a product table: the core rows, then the product's own rows of that group. */
 export interface ProductGroup {
   readonly group: ComparisonGroup;
@@ -252,41 +266,55 @@ export function productMarkdown(product: ComparisonProduct, base: string): strin
   return [checkedLine(product), "", tables.join("\n\n")].join("\n");
 }
 
-/** The Markdown of the hub matrix: one table for each category, one row for each product. */
+/** The product name, as a link when the product has a page. */
+function productNameMarkdown(product: ComparisonProduct, base: string): string {
+  return isPublished(product)
+    ? `[${tableText(product.name)}](${base}${productUrl(product)}.md)`
+    : tableText(product.name);
+}
+
+/**
+ * The Markdown of the hub, in the order of the HTML: one table for each hub
+ * row, with Workhorse first and a bold line for each category, then one table
+ * of versions and check dates for each category.
+ */
 export function hubMarkdown(base: string): string {
-  const columns = hubRows();
-  const header = [
-    `| Product | ${columns.map((row) => tableText(row.label)).join(" | ")} | Checked |`,
-    `| --- | ${columns.map(() => "---").join(" | ")} | --- |`,
-  ];
-  const workhorse = `| Workhorse | ${columns.map((row) => workhorseMarkdown(row.workhorse, base)).join(" | ")} | — |`;
-  return comparisons.categories
-    .map((category) => {
-      const members = comparisons.products.filter((product) => product.category === category.id);
-      const rows = members.map((product) => {
-        const name = isPublished(product)
-          ? `[${tableText(product.name)}](${base}${productUrl(product)}.md)`
-          : tableText(product.name);
-        const cells = columns.map((row) => {
+  const features = hubRows().map((row) => {
+    const rows = hubCategories().flatMap(({ category, products }) =>
+      [`| **${tableText(category.title)}** | |`].concat(
+        products.map((product) => {
           const cell = product.cells[row.id];
           if (!cell) {
             throw new Error(
               `The product "${product.slug}" has no cell for the hub row "${row.id}"`,
             );
           }
-          return competitorMarkdown(cell);
-        });
-        return `| ${name} ${product.version} | ${cells.join(" | ")} | ${product.checked} |`;
-      });
-      return [
-        `### ${category.title}`,
-        "",
-        category.summary,
-        "",
-        ...header,
-        workhorse,
-        ...rows,
-      ].join("\n");
-    })
-    .join("\n\n");
+          return `| ${productNameMarkdown(product, base)} ${product.version} | ${competitorMarkdown(cell)} |`;
+        }),
+      ),
+    );
+    return [
+      `### ${tableText(row.label)}`,
+      "",
+      `| Product | ${tableText(row.label)} |`,
+      "| --- | --- |",
+      `| Workhorse | ${workhorseMarkdown(row.workhorse, base)} |`,
+      ...rows,
+    ].join("\n");
+  });
+  const categories = hubCategories().map(({ category, products }) =>
+    [
+      `### ${category.title}`,
+      "",
+      category.summary,
+      "",
+      "| Product | Version | Checked |",
+      "| --- | --- | --- |",
+      ...products.map(
+        (product) =>
+          `| ${productNameMarkdown(product, base)} | ${product.version} | ${product.checked} |`,
+      ),
+    ].join("\n"),
+  );
+  return [...features, ...categories].join("\n\n");
 }
