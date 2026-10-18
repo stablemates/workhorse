@@ -25,20 +25,46 @@ val springBootTestVersion =
     .get()
     .requiredVersion
 
+// Each optional dependency is a feature variant of the main source set, as the core does (ADR 0103,
+// "Three artifacts and their dependencies"). The published POM marks each one
+// `<optional>true</optional>`, and the Gradle module metadata gives each its own capability, so a
+// caller resolves none unless it asks: for example `requireFeature("health")`. Each feature names
+// the class-path condition of the configuration that uses it. `scripts/check-jvm-release.ts` checks
+// both files.
+//
+// - `jackson`: `JacksonCodecConfiguration`, `@ConditionalOnClass(JsonMapper.class)`.
+// - `health`: `HealthConfiguration`, `@ConditionalOnClass(HealthIndicator.class, ...)`.
+// - `servlet`: `DashboardConfiguration`, `@ConditionalOnClass(Filter.class,
+//   FilterRegistrationBean.class)`. javac reads `OncePerRequestFilter` of `spring-web` through
+//   `FilterRegistrationBean`.
+// - `opentelemetry`: `OpenTelemetryConfiguration`, `@ConditionalOnClass(OpenTelemetry.class)`.
+val optionalFeatures = listOf("jackson", "health", "servlet", "opentelemetry")
+extensions.configure<JavaPluginExtension> {
+  val main = the<SourceSetContainer>()["main"]
+  optionalFeatures.forEach { registerFeature(it) { usingSourceSet(main) } }
+}
+
+// The Spring Boot floor gives the versions of the optional modules on both class paths of the main
+// sources. No published variant extends this configuration, so no caller takes the platform.
+val springBootFloor =
+  configurations.dependencyScope("springBootFloor") {
+    description = "The Spring Boot floor that gives the versions of the optional modules."
+  }
+configurations.named("compileClasspath") { extendsFrom(springBootFloor.get()) }
+configurations.named("runtimeClasspath") { extendsFrom(springBootFloor.get()) }
+
 dependencies {
   api(project(":workhorse"))
   api(libs.spring.boot.autoconfigure)
   api(libs.spring.boot.jdbc)
 
-  // Jackson, Actuator health, the servlet registration, and OpenTelemetry are optional (ADR 0103).
-  // Each configuration that uses one is conditional on its classes.
-  compileOnly(platform(libs.spring.boot.dependencies))
-  compileOnly(libs.spring.boot.jackson)
-  compileOnly(libs.jackson.databind)
-  compileOnly(libs.spring.boot.health)
-  compileOnly(libs.spring.web)
-  compileOnly(libs.jakarta.servlet.api)
-  compileOnly(libs.opentelemetry.api)
+  springBootFloor(platform(libs.spring.boot.dependencies))
+  "jacksonApi"(libs.spring.boot.jackson)
+  "jacksonApi"(libs.jackson.databind)
+  "healthApi"(libs.spring.boot.health)
+  "servletApi"(libs.spring.web)
+  "servletApi"(libs.jakarta.servlet.api)
+  "opentelemetryApi"(libs.opentelemetry.api)
 
   // Writes META-INF/spring-configuration-metadata.json from the property classes.
   annotationProcessor(libs.spring.boot.configuration.processor)
@@ -54,6 +80,14 @@ dependencies {
   testImplementation(libs.opentelemetry.api)
   testImplementation(libs.opentelemetry.sdk.testing)
   testImplementation(libs.spring.boot.opentelemetry)
+}
+
+// The optional modules name no version, so each published variant takes the version that the
+// compile class path resolves from the Spring Boot floor.
+extensions.configure<PublishingExtension> {
+  publications.named<MavenPublication>("maven") {
+    versionMapping { allVariants { fromResolutionOf("compileClasspath") } }
+  }
 }
 
 tasks.jar { manifest { attributes("Automatic-Module-Name" to "dev.stablemates.workhorse.spring") } }

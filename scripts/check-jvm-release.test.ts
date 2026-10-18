@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bundleFiles,
+  group,
   jvmTrainVersion,
   moduleProblems,
   pomProblems,
@@ -53,8 +54,13 @@ function pom(
 </project>`;
 }
 
-function dependency(group: string, artifact: string, depVersion: string, optional = false): string {
-  return `<dependency><groupId>${group}</groupId><artifactId>${artifact}</artifactId><version>${depVersion}</version>${optional ? "<optional>true</optional>" : ""}</dependency>`;
+function dependency(
+  dependencyGroup: string,
+  artifact: string,
+  depVersion: string,
+  optional = false,
+): string {
+  return `<dependency><groupId>${dependencyGroup}</groupId><artifactId>${artifact}</artifactId><version>${depVersion}</version>${optional ? "<optional>true</optional>" : ""}</dependency>`;
 }
 
 const coreDependencies = [
@@ -63,29 +69,70 @@ const coreDependencies = [
   dependency("io.opentelemetry", "opentelemetry-api", "1.55.0", true),
 ].join("");
 
-function coreModule(apiDependencies: readonly { group: string; module: string }[] = []): string {
-  const capability = (feature: string) => [
-    { group: "dev.stablemates", name: `workhorse-${feature}`, version },
-  ];
+/** The starter's optional Spring modules, by the feature variant that carries them. */
+const starterFeatures: Readonly<Record<string, readonly [group: string, module: string][]>> = {
+  jackson: [
+    ["org.springframework.boot", "spring-boot-jackson"],
+    ["tools.jackson.core", "jackson-databind"],
+  ],
+  health: [["org.springframework.boot", "spring-boot-health"]],
+  servlet: [
+    ["org.springframework", "spring-web"],
+    ["jakarta.servlet", "jakarta.servlet-api"],
+  ],
+  opentelemetry: [["io.opentelemetry", "opentelemetry-api"]],
+};
+
+const starterDependencies = [
+  dependency(group, "workhorse", version),
+  dependency("org.springframework.boot", "spring-boot-autoconfigure", "4.0.8"),
+  dependency("org.springframework.boot", "spring-boot-jdbc", "4.0.8"),
+  ...Object.values(starterFeatures)
+    .flat()
+    .map(([moduleGroup, artifact]) => dependency(moduleGroup, artifact, "1.0.0", true)),
+].join("");
+
+type ModuleDependency = { group: string; module: string };
+
+/** Module metadata with `apiElements` and one variant for each feature. */
+function moduleMetadata(
+  artifact: string,
+  apiDependencies: readonly ModuleDependency[],
+  features: Readonly<Record<string, readonly [group: string, module: string][]>>,
+): string {
   return JSON.stringify({
-    component: { group: "dev.stablemates", module: "workhorse", version },
+    component: { group, module: artifact, version },
     variants: [
-      {
-        name: "apiElements",
-        dependencies: [{ group: "org.jspecify", module: "jspecify" }, ...apiDependencies],
-      },
-      {
-        name: "servletApiElements",
-        capabilities: capability("servlet"),
-        dependencies: [{ group: "jakarta.servlet", module: "jakarta.servlet-api" }],
-      },
-      {
-        name: "opentelemetryApiElements",
-        capabilities: capability("opentelemetry"),
-        dependencies: [{ group: "io.opentelemetry", module: "opentelemetry-api" }],
-      },
+      { name: "apiElements", dependencies: apiDependencies },
+      ...Object.entries(features).flatMap(([feature, modules]) =>
+        (["Api", "Runtime"] as const).map((kind) => ({
+          name: `${feature}${kind}Elements`,
+          attributes: { "org.gradle.usage": kind === "Api" ? "java-api" : "java-runtime" },
+          capabilities: [{ group, name: `${artifact}-${feature}`, version }],
+          dependencies: modules.map(([moduleGroup, module]) => ({ group: moduleGroup, module })),
+        })),
+      ),
     ],
   });
+}
+
+function coreModule(apiDependencies: readonly ModuleDependency[] = []): string {
+  return moduleMetadata(
+    "workhorse",
+    [{ group: "org.jspecify", module: "jspecify" }, ...apiDependencies],
+    {
+      servlet: [["jakarta.servlet", "jakarta.servlet-api"]],
+      opentelemetry: [["io.opentelemetry", "opentelemetry-api"]],
+    },
+  );
+}
+
+function starterModule(apiDependencies: readonly ModuleDependency[] = []): string {
+  return moduleMetadata(
+    "workhorse-spring-boot-starter",
+    [{ group, module: "workhorse" }, ...apiDependencies],
+    starterFeatures,
+  );
 }
 
 describe("the JVM train version", () => {
@@ -186,15 +233,48 @@ describe("the published POMs", () => {
   });
 
   it("refuses a POM without the metadata Central requires", () => {
-    const bare = pom(
-      "workhorse-spring-boot-starter",
-      dependency("dev.stablemates", "workhorse", version),
-    )
+    const bare = pom("workhorse-spring-boot-starter", starterDependencies)
       .replace(/<scm>.*<\/scm>/, "")
       .replace("<description>Workhorse</description>", "");
     expect(pomProblems("workhorse-spring-boot-starter", bare, version)).toEqual([
       "the workhorse-spring-boot-starter POM has no description",
       "the workhorse-spring-boot-starter POM has no scm with a url",
+    ]);
+  });
+});
+
+describe("the starter POM", () => {
+  const starter = "workhorse-spring-boot-starter";
+
+  it("accepts a starter POM that marks each conditional Spring module optional", () => {
+    expect(pomProblems(starter, pom(starter, starterDependencies), version)).toEqual([]);
+  });
+
+  it("refuses a starter POM that makes a conditional Spring module a required dependency", () => {
+    const required = starterDependencies.replace(
+      /(<artifactId>spring-boot-health<\/artifactId><version>[^<]+<\/version>)<optional>true<\/optional>/,
+      "$1",
+    );
+    expect(pomProblems(starter, pom(starter, required), version)).toEqual([
+      "the workhorse-spring-boot-starter POM does not declare org.springframework.boot:spring-boot-health as optional",
+    ]);
+  });
+
+  it("refuses a starter POM that leaves out a conditional Spring module", () => {
+    const missing = starterDependencies.replace(
+      dependency("org.springframework", "spring-web", "1.0.0", true),
+      "",
+    );
+    expect(pomProblems(starter, pom(starter, missing), version)).toEqual([
+      "the workhorse-spring-boot-starter POM does not declare org.springframework:spring-web as optional",
+    ]);
+  });
+
+  it("refuses a starter POM that requires a module outside the core, auto-configuration, and JDBC", () => {
+    const actuator =
+      starterDependencies + dependency("org.springframework.boot", "spring-boot-actuator", "4.0.8");
+    expect(pomProblems(starter, pom(starter, actuator), version)).toEqual([
+      "the workhorse-spring-boot-starter POM requires org.springframework.boot:spring-boot-actuator, which must be optional",
     ]);
   });
 });
@@ -218,11 +298,51 @@ describe("the core's Gradle module metadata", () => {
 
   it("refuses metadata without a feature variant", () => {
     const metadata = JSON.parse(coreModule()) as { variants: { name: string }[] };
-    metadata.variants = metadata.variants.filter(
-      (variant) => variant.name !== "servletApiElements",
-    );
+    metadata.variants = metadata.variants.filter((variant) => !variant.name.startsWith("servlet"));
     expect(moduleProblems("workhorse", JSON.stringify(metadata), version)).toEqual([
+      "the workhorse module metadata has no java-api variant of workhorse-servlet",
+      "the workhorse module metadata has no java-runtime variant of workhorse-servlet",
       "the workhorse module metadata has no workhorse-servlet variant with jakarta.servlet:jakarta.servlet-api",
+    ]);
+  });
+});
+
+describe("the starter's Gradle module metadata", () => {
+  const starter = "workhorse-spring-boot-starter";
+
+  it("accepts a feature variant for each conditional Spring module", () => {
+    expect(moduleProblems(starter, starterModule(), version)).toEqual([]);
+  });
+
+  it("refuses a conditional Spring module on the main variants", () => {
+    expect(
+      moduleProblems(
+        starter,
+        starterModule([{ group: "tools.jackson.core", module: "jackson-databind" }]),
+        version,
+      ),
+    ).toEqual([
+      "the workhorse-spring-boot-starter apiElements variant requires the optional tools.jackson.core:jackson-databind",
+    ]);
+  });
+
+  it("refuses metadata without a feature variant", () => {
+    const metadata = JSON.parse(starterModule()) as { variants: { name: string }[] };
+    metadata.variants = metadata.variants.filter((variant) => !variant.name.startsWith("health"));
+    expect(moduleProblems(starter, JSON.stringify(metadata), version)).toEqual([
+      "the workhorse-spring-boot-starter module metadata has no java-api variant of workhorse-spring-boot-starter-health",
+      "the workhorse-spring-boot-starter module metadata has no java-runtime variant of workhorse-spring-boot-starter-health",
+      "the workhorse-spring-boot-starter module metadata has no workhorse-spring-boot-starter-health variant with org.springframework.boot:spring-boot-health",
+    ]);
+  });
+
+  it("refuses a feature without its runtime variant", () => {
+    const metadata = JSON.parse(starterModule()) as { variants: { name: string }[] };
+    metadata.variants = metadata.variants.filter(
+      (variant) => variant.name !== "servletRuntimeElements",
+    );
+    expect(moduleProblems(starter, JSON.stringify(metadata), version)).toEqual([
+      "the workhorse-spring-boot-starter module metadata has no java-runtime variant of workhorse-spring-boot-starter-servlet",
     ]);
   });
 });

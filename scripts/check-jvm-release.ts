@@ -10,8 +10,11 @@
  * 3. An artifact lacks its jar, `-sources.jar`, `-javadoc.jar`, POM, or Gradle module metadata, or
  *    one of those files lacks its `.asc`, `.md5`, or `.sha1` file.
  * 4. A checksum does not match, or a signature does not verify with the signing key.
- * 5. A POM lacks the metadata Central requires, or the core does not mark the OpenTelemetry API and
- *    the Servlet API as optional in its POM and as feature variants in its module metadata.
+ * 5. A POM lacks the metadata Central requires.
+ * 6. The core or the starter does not mark each optional dependency as optional in its POM and as a
+ *    feature variant in its module metadata. The core has the OpenTelemetry API and the Servlet
+ *    API. The starter has each Spring module that a class-path condition guards, and it requires
+ *    nothing beyond the core and Spring Boot's auto-configuration and JDBC modules.
  *
  * The signing key comes from one of two places. By default the check generates a throwaway key in
  * a temporary GnuPG home and discards it at the end. That is the dry run of ADR 0103: it signs with
@@ -49,7 +52,8 @@ const root = path.resolve(import.meta.dirname, "..");
 const jvmDirectory = path.join(root, "jvm");
 const stagingDirectory = path.join(jvmDirectory, "build", "staging-deploy");
 const consumerDirectory = path.join(jvmDirectory, "release-consumer");
-const group = "dev.stablemates";
+/** The Maven group of the three artifacts. */
+export const group = "dev.stablemates";
 const groupPath = group.replaceAll(".", "/");
 const consumerQueue = "release-consumer";
 const consumerTaskType = "release.consumer";
@@ -62,11 +66,45 @@ export const publishedArtifacts = [
 ] as const;
 type Artifact = (typeof publishedArtifacts)[number];
 
-/** The core's optional dependencies, by the feature variant that carries each one. */
-export const coreFeatures: Readonly<Record<string, string>> = {
-  opentelemetry: "io.opentelemetry:opentelemetry-api",
-  servlet: "jakarta.servlet:jakarta.servlet-api",
+/**
+ * The optional dependencies of each artifact, by the feature variant that carries them. Each
+ * starter feature serves one configuration of `WorkhorseAutoConfiguration` that a class-path
+ * condition guards.
+ */
+const optionalFeatures: Readonly<
+  Partial<Record<Artifact, Readonly<Record<string, readonly string[]>>>>
+> = {
+  workhorse: {
+    opentelemetry: ["io.opentelemetry:opentelemetry-api"],
+    servlet: ["jakarta.servlet:jakarta.servlet-api"],
+  },
+  "workhorse-spring-boot-starter": {
+    // `JacksonCodecConfiguration`: `@ConditionalOnClass(JsonMapper.class)`.
+    jackson: [
+      "org.springframework.boot:spring-boot-jackson",
+      "tools.jackson.core:jackson-databind",
+    ],
+    // `HealthConfiguration`: `@ConditionalOnClass({HealthIndicator.class, ...})`.
+    health: ["org.springframework.boot:spring-boot-health"],
+    // `DashboardConfiguration`: `@ConditionalOnClass({Filter.class, FilterRegistrationBean.class})`.
+    servlet: ["org.springframework:spring-web", "jakarta.servlet:jakarta.servlet-api"],
+    // `OpenTelemetryConfiguration`: `@ConditionalOnClass(OpenTelemetry.class)`.
+    opentelemetry: ["io.opentelemetry:opentelemetry-api"],
+  },
 };
+
+/** Every dependency the starter may require. Each other dependency must be optional. */
+const starterRequirements: ReadonlySet<string> = new Set([
+  `${group}:workhorse`,
+  "org.springframework.boot:spring-boot-autoconfigure",
+  "org.springframework.boot:spring-boot-jdbc",
+]);
+
+function optionalDependencies(artifact: Artifact): [feature: string, coordinates: string][] {
+  return Object.entries(optionalFeatures[artifact] ?? {}).flatMap(([feature, modules]) =>
+    modules.map((coordinates): [string, string] => [feature, coordinates]),
+  );
+}
 
 /** The files each artifact publishes, after `<artifact>-<version>`. */
 const artifactFiles = [".jar", "-sources.jar", "-javadoc.jar", ".pom", ".module"] as const;
@@ -245,14 +283,26 @@ export function pomProblems(artifact: Artifact, pom: string, version: string): s
     }
   }
   const dependencies = pomDependencies(pom);
-  if (artifact === "workhorse") {
-    for (const coordinates of Object.values(coreFeatures)) {
-      const dependency = dependencies.find((entry) => entry.coordinates === coordinates);
-      if (!dependency?.optional) {
-        problems.push(`the workhorse POM does not declare ${coordinates} as optional`);
+  const optional = optionalDependencies(artifact).map(([, coordinates]) => coordinates);
+  for (const coordinates of optional) {
+    const dependency = dependencies.find((entry) => entry.coordinates === coordinates);
+    if (!dependency?.optional) {
+      problems.push(`the ${artifact} POM does not declare ${coordinates} as optional`);
+    }
+  }
+  if (artifact === "workhorse-spring-boot-starter") {
+    for (const dependency of dependencies) {
+      const { coordinates } = dependency;
+      if (
+        !dependency.optional &&
+        !optional.includes(coordinates) &&
+        !starterRequirements.has(coordinates)
+      ) {
+        problems.push(`the ${artifact} POM requires ${coordinates}, which must be optional`);
       }
     }
-  } else {
+  }
+  if (artifact !== "workhorse") {
     const core = dependencies.find((entry) => entry.coordinates === `${group}:workhorse`);
     if (core?.version !== version) {
       problems.push(
@@ -276,10 +326,14 @@ interface ModuleMetadata {
   };
   readonly variants?: readonly {
     readonly name: string;
+    readonly attributes?: Readonly<Record<string, unknown>>;
     readonly capabilities?: readonly { group: string; name: string; version: string }[];
     readonly dependencies?: readonly { group: string; module: string }[];
   }[];
 }
+
+/** The Gradle attribute that tells an API variant from a runtime variant. */
+const usage = "org.gradle.usage";
 
 /** The problems with one artifact's Gradle module metadata. */
 export function moduleProblems(artifact: Artifact, json: string, version: string): string[] {
@@ -291,25 +345,43 @@ export function moduleProblems(artifact: Artifact, json: string, version: string
       `the ${artifact} module metadata names ${component.group}:${component.module}:${component.version}`,
     );
   }
-  if (artifact !== "workhorse") return problems;
   const variants = metadata.variants ?? [];
   const depends = (variant: (typeof variants)[number], coordinates: string) =>
     (variant.dependencies ?? []).some((entry) => `${entry.group}:${entry.module}` === coordinates);
-  for (const [feature, coordinates] of Object.entries(coreFeatures)) {
-    const capability = `workhorse-${feature}`;
-    const carriers = variants.filter((variant) =>
+  const carriersOf = (feature: string) =>
+    variants.filter((variant) =>
       (variant.capabilities ?? []).some(
-        (entry) => entry.group === group && entry.name === capability && entry.version === version,
+        (entry) =>
+          entry.group === group &&
+          entry.name === `${artifact}-${feature}` &&
+          entry.version === version,
       ),
     );
+  // A caller that asks for a feature compiles with its API variant and runs with its runtime
+  // variant, so each feature needs both.
+  for (const feature of Object.keys(optionalFeatures[artifact] ?? {})) {
+    const usages = new Set(carriersOf(feature).map((variant) => variant.attributes?.[usage]));
+    for (const required of ["java-api", "java-runtime"]) {
+      if (!usages.has(required)) {
+        problems.push(
+          `the ${artifact} module metadata has no ${required} variant of ${artifact}-${feature}`,
+        );
+      }
+    }
+  }
+  for (const [feature, coordinates] of optionalDependencies(artifact)) {
+    const capability = `${artifact}-${feature}`;
+    const carriers = carriersOf(feature);
     if (carriers.length === 0 || !carriers.every((variant) => depends(variant, coordinates))) {
       problems.push(
-        `the workhorse module metadata has no ${capability} variant with ${coordinates}`,
+        `the ${artifact} module metadata has no ${capability} variant with ${coordinates}`,
       );
     }
     for (const variant of variants) {
       if (!carriers.includes(variant) && depends(variant, coordinates)) {
-        problems.push(`the workhorse ${variant.name} variant requires the optional ${coordinates}`);
+        problems.push(
+          `the ${artifact} ${variant.name} variant requires the optional ${coordinates}`,
+        );
       }
     }
   }
