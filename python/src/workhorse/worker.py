@@ -182,6 +182,15 @@ class _ServerBoundedExecutor:
         self, statement: _DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Mapping[str, object]]:
         self._require_time()
+        # PostgreSQL restarts the statement timer after a preparation in a cycle of its own. So
+        # such a preparation comes before the budgets are set, and its time counts only against
+        # the client deadline. Drivers without this method parse in the cycle that runs the
+        # statement (prepare=False in psycopg).
+        prepare = getattr(self._executor, "prepare", None)
+        if callable(prepare):
+            for prepared in (_ROUND_TIMEOUTS, statement):
+                prepare(prepared)
+                self._require_time()
         self._commands.command(_ROUND_BEGIN)
         try:
             set_at = monotonic()
@@ -3756,7 +3765,10 @@ def _psycopg_pool_heartbeat_executor_factory(pool: _PsycopgPool) -> _HeartbeatEx
         if getattr(connection, "autocommit", False) is not True:
             connection.close()
             raise ValueError("Heartbeat connection must be in autocommit mode")
-        return _SyncExecutor(cast(_PsycopgConnection, connection)), connection.close
+        # psycopg then parses each round statement in the cycle that runs it, inside the round's
+        # server budgets (_ServerBoundedExecutor).
+        executor = _SyncExecutor(cast(_PsycopgConnection, connection), prepare=False)
+        return executor, connection.close
 
     return open_heartbeat_executor
 

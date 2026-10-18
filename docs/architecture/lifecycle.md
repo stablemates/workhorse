@@ -1381,10 +1381,18 @@ then. The worker checks the deadline again after `COMMIT`, and does not count a 
 after it.
 
 Some drivers prepare a statement in a cycle of its own, and PostgreSQL restarts the statement timer
-after that cycle. Go and Rust prepare the heartbeat statement before step 4, so the preparation
-uses none of its budget. asyncpg does the same on the first use of a statement on each connection,
-and psycopg when it prepares a statement automatically. In those two cases the preparation is not
-inside the budget.
+after that cycle. So the drivers below prepare no statement of the round in a cycle of its own
+after step 4. A preparation uses time before the deadline, but none of the server budgets.
+
+- Go and Rust prepare the heartbeat statement before step 4.
+- Python with asyncpg prepares the settings statement and the heartbeat statement before step 3, once
+  on each connection (`AsyncpgExecutor.prepare`). It sends `BEGIN`, `COMMIT`, and `ROLLBACK` as
+  simple queries, which asyncpg does not prepare. Without a statement cache, asyncpg parses the
+  prepared statement again in the cycle that runs it.
+- Python with psycopg sends each statement of the round with `prepare=False`. PostgreSQL then parses
+  the statement in the cycle that runs it, inside the budget of that statement.
+
+If a preparation uses the time that remains, the Python round fails before it sends `BEGIN`.
 
 A failed statement rolls back while time remains. In TypeScript, Go, and Python, a deadlock
 (`40P01`) is then sent again in a new transaction with the time that remains. In Rust, Ruby, and

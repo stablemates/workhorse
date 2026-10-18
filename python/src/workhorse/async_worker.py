@@ -205,6 +205,16 @@ class _AsyncExecutorBridge:
         command = cast(Any, self._executor).command
         asyncio.run_coroutine_threadsafe(command(statement, parameters), loop).result()
 
+    def prepare(self, statement: _DriverStatement) -> None:
+        """Prepare `statement` when the driver prepares in a cycle of its own (asyncpg)."""
+        prepare = getattr(self._executor, "prepare", None)
+        if prepare is None:
+            return
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("AsyncWorker database access requires an active run call")
+        asyncio.run_coroutine_threadsafe(prepare(statement), loop).result()
+
     async def _rows(
         self, statement: _DriverStatement, parameters: Sequence[object]
     ) -> list[Mapping[str, object]]:
@@ -671,7 +681,9 @@ class AsyncWorker:
             if getattr(connection, "autocommit", False) is not True:
                 close()
                 raise ValueError("Heartbeat connection must be in autocommit mode")
-            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(connection)
+            # psycopg then parses the heartbeat statement inside its statement_timeout. asyncpg
+            # cannot do that, so a round prepares the statement before it sets that timeout.
+            executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(connection, prepare=False)
         else:
             executor = _AsyncpgExecutor(connection)
         bridge = _AsyncExecutorBridge(executor)
