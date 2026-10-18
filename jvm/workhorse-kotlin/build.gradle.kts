@@ -30,11 +30,53 @@ evaluationDependsOn(":workhorse")
 
 val coreTests = project(":workhorse").the<SourceSetContainer>()["test"].output
 
+// The Spring Boot line of the Spring tests, as in the starter: `4.0` (the floor), `4.1`, or
+// `snapshot`. `SuspendTransactionTest` calls the suspend wrappers inside a Spring transaction. The
+// Spring modules are test dependencies only, so the published POM names none of them.
+val springBootLine = providers.gradleProperty("workhorse.springBoot").getOrElse("4.0")
+val springBootTestVersion =
+  the<VersionCatalogsExtension>()
+    .named("libs")
+    .findVersion(
+      when (springBootLine) {
+        "4.0" -> "spring-boot"
+        "4.1" -> "spring-boot-4-1"
+        "snapshot" -> "spring-boot-snapshot"
+        else -> throw GradleException("workhorse.springBoot must be 4.0, 4.1, or snapshot")
+      }
+    )
+    .get()
+    .requiredVersion
+
 dependencies {
   api(project(":workhorse"))
   api(libs.kotlinx.coroutines.core)
 
   testImplementation(coreTests)
+  testImplementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootTestVersion"))
+  testImplementation(project(":workhorse-spring-boot-starter"))
+  testImplementation(libs.spring.boot.starter.test)
+  testImplementation(libs.spring.boot.starter.jdbc)
+  testImplementation(libs.spring.boot.jackson)
+}
+
+// `WithoutSpringTest`, tagged `without-spring`, runs on a class path with no Spring jar, so it
+// proves that a wrapper finds no Spring transaction scope when `spring-tx` is absent. The other
+// test classes can name Spring types and cannot load there. `test` depends on this task.
+val testSources = the<SourceSetContainer>()["test"]
+val withoutSpring =
+  tasks.register<Test>("testWithoutSpring") {
+    description = "Runs the tests tagged without-spring with no Spring jar."
+    group = "verification"
+    testClassesDirs = testSources.output.classesDirs
+    classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("spring-") }
+    filter { includeTestsMatching("run.workhorse.kotlin.WithoutSpringTest") }
+    useJUnitPlatform { includeTags("without-spring") }
+  }
+
+tasks.test {
+  useJUnitPlatform { excludeTags("without-spring") }
+  dependsOn(withoutSpring)
 }
 
 tasks.jar { manifest { attributes("Automatic-Module-Name" to "run.workhorse.kotlin") } }

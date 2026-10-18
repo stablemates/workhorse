@@ -1,10 +1,14 @@
 package run.workhorse.kotlin
 
+import java.lang.invoke.MethodHandle
+import java.lang.invoke.MethodHandles
+import java.lang.invoke.MethodType
 import java.lang.reflect.GenericArrayType
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
 import java.lang.reflect.TypeVariable
 import java.lang.reflect.WildcardType
+import java.sql.Connection
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -39,6 +43,73 @@ internal val VirtualThreads: CoroutineDispatcher =
  */
 @PublishedApi
 internal suspend fun <T> blocking(call: () -> T): T = runInterruptible(VirtualThreads, call)
+
+/**
+ * Runs a `Queue` or `Admin` call of a suspend wrapper. Spring binds its transaction to a thread. So
+ * a source form call, with no [connection], runs on the calling thread when that thread is in a
+ * Spring transaction scope. The call then behaves as the Java method on that thread. It joins the
+ * active transaction. If the scope has no active transaction, the call runs in autocommit. That is
+ * the case under `NOT_SUPPORTED`, and under `SUPPORTS` with no outer transaction.
+ *
+ * On that path, a cancellation does not interrupt the thread. The connection belongs to the
+ * caller's transaction, and an interrupt closes the socket of a virtual thread. The statement ends,
+ * and then the caller gets the cancellation. Every other call runs in [blocking] (ADR 0103,
+ * "Amendment: a Kotlin suspend wrapper joins the caller's Spring transaction").
+ */
+internal suspend fun <T> client(connection: Connection?, call: () -> T): T =
+  if (connection == null && SpringTransactionScope.active()) bound(call) else blocking(call)
+
+/**
+ * Runs [call] on the calling thread with no interrupt. A cancellation of the caller reaches it
+ * after [call] ends, and a caller that is already cancelled does not start [call].
+ */
+internal suspend fun <T> bound(call: () -> T): T {
+  val context = currentCoroutineContext()
+  context.ensureActive()
+  val result = call()
+  context.ensureActive()
+  return result
+}
+
+/**
+ * Finds a Spring transaction scope on the calling thread, with no dependency on Spring. The first
+ * call looks up `TransactionSynchronizationManager.isSynchronizationActive` by reflection. It tries
+ * the thread context class loader and then the module's own loader. So the lookup works in a Spring
+ * Boot executable jar. If neither loader has the class, no thread is ever in a scope.
+ */
+internal object SpringTransactionScope {
+  internal const val MANAGER: String =
+    "org.springframework.transaction.support.TransactionSynchronizationManager"
+
+  private val synchronizationActive: MethodHandle? by lazy {
+    find(
+      listOf(
+        Thread.currentThread().contextClassLoader,
+        SpringTransactionScope::class.java.classLoader,
+      ),
+    )
+  }
+
+  /** Whether the calling thread is in a Spring transaction scope. */
+  fun active(): Boolean = synchronizationActive?.let { it.invoke() as Boolean } ?: false
+
+  /** The `isSynchronizationActive` method of the first of [loaders] that has the class. */
+  internal fun find(loaders: List<ClassLoader?>): MethodHandle? =
+    loaders.filterNotNull().firstNotNullOfOrNull { loader ->
+      try {
+        MethodHandles.publicLookup()
+          .findStatic(
+            Class.forName(MANAGER, false, loader),
+            "isSynchronizationActive",
+            MethodType.methodType(Boolean::class.javaPrimitiveType),
+          )
+      } catch (_: ReflectiveOperationException) {
+        null
+      } catch (_: LinkageError) {
+        null
+      }
+    }
+}
 
 /**
  * Runs a durable call of a suspend handler on a virtual thread. Unlike [blocking], a cancellation

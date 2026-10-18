@@ -662,7 +662,7 @@ jobs:
         with:
           gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=4.1
+      - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-kotlin:test :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=4.1
 
   spring-boot-snapshot:
     name: Spring Boot snapshot starter (non-blocking)
@@ -707,7 +707,7 @@ jobs:
         with:
           gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=snapshot
+      - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-kotlin:test :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=snapshot
 
   ruby-rails:
     name: Ruby Active Job on Rails 8.0
