@@ -89,12 +89,15 @@ async function writeFixture(root: string, version: string, pep440 = version): Pr
     "Cargo.lock": `[[package]]\nname = "workhorse"\nversion = "${version}"\n`,
     "ruby/lib/stablemates/workhorse/version.rb": `module Stablemates\n  module Workhorse\n    VERSION = "${version}"\n  end\nend\n`,
     "ruby/Gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
+    "jvm/gradle.properties": `# The train version.\nversion=${version}\norg.gradle.daemon=false\n`,
     "ruby/gemfiles/rails_8_0.gemfile.lock": `PATH\n  specs:\n    stablemates-workhorse (${version.replace("-", ".pre.")})\n`,
     "support.json": JSON.stringify({
       install: {
         node: "npm install @stablemates/workhorse",
         schemaDownload: `curl -fLO https://github.com/stablemates/workhorse/releases/download/v${version}/schema.sql`,
         schemaPinned: `npx --package @stablemates/workhorse@${version} workhorse schema install`,
+        gradle: `implementation("dev.stablemates:workhorse:${version}")`,
+        maven: `<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>${version}</version></dependency>`,
       },
     }),
     "CHANGELOG.md": `# Changelog\n\n## Unreleased\n\n## ${version} — 2026-10-20\n`,
@@ -149,6 +152,9 @@ describe("checkRelease across the release train", () => {
     ["ruby/gemfiles/rails_8_0.gemfile.lock", "(0.8.0)", "(0.7.1)"],
     ["support.json", "download/v0.8.0/", "download/v0.7.1/"],
     ["support.json", "workhorse@0.8.0 ", "workhorse@0.7.1 "],
+    ["jvm/gradle.properties", "version=0.8.0", "version=0.7.1"],
+    ["support.json", "workhorse:0.8.0", "workhorse:0.7.1"],
+    ["support.json", "<version>0.8.0<", "<version>0.7.1<"],
   ])("rejects %s when it carries another version", async (relativePath, from, to) => {
     await edit(relativePath, from, to);
     for (const tag of ["v0.8.0", "go/v0.8.0"] as const) {

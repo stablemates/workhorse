@@ -901,7 +901,11 @@ describe("continuous integration", () => {
     // which npm performs from 11.5.1 and Node 22 does not ship. A token in this workflow would be
     // readable by everything the step runs, and there is no longer one to read.
     expect(workflow).not.toContain("NODE_AUTH_TOKEN:");
-    expect(workflow).not.toContain("secrets.");
+    // Maven Central has no trusted publishing, so its job is the one that reads secrets.
+    const withoutCentral =
+      workflow.slice(0, workflow.indexOf("\n  maven-central:")) +
+      workflow.slice(workflow.indexOf("\n  github-release:"));
+    expect(withoutCentral).not.toContain("secrets.");
     expect(publish).toContain("readOidcIdentity(process.env)");
     expect(publish).not.toContain('"whoami"');
     expect(publish).not.toContain('"access", "list", "packages"');
@@ -936,7 +940,7 @@ describe("continuous integration", () => {
     const rakefile = await read("ruby/Rakefile");
     const job = workflow.slice(
       workflow.indexOf("\n  rubygems:"),
-      workflow.indexOf("\n  github-release:"),
+      workflow.indexOf("\n  maven-central:"),
     );
 
     expect(workflow).toContain(
@@ -963,15 +967,78 @@ describe("continuous integration", () => {
     expect(rakefile).toContain('require "bundler/gem_tasks"');
   });
 
+  it("uploads the JVM artifacts to the Central Portal from the protected maven-central environment", async () => {
+    const workflow = await read(".github/workflows/release.yml");
+    const ci = await read(".github/workflows/ci.yml");
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const job = workflow.slice(
+      workflow.indexOf("\n  maven-central:"),
+      workflow.indexOf("\n  github-release:"),
+    );
+    const steps = job.split(/\n      - /);
+    const stepReading = (secret: string) =>
+      steps.filter((step) => step.includes(`\${{ secrets.${secret} }}`));
+
+    // The dry run: the build job and the CI floor lane sign with a throwaway key and read no secret.
+    expect(workflow).toContain(
+      "- run: pnpm jvm:release-check\n        env:\n          DATABASE_URL_TEST: postgres://",
+    );
+    expect(scripts["jvm:release-check"]).toBe("pnpm jvm:gates && pnpm jvm:package-check");
+    expect(scripts["jvm:package-check"]).toContain("scripts/check-jvm-release.ts");
+    expect(ci).toContain(
+      "- if: matrix.java == fromJSON(needs.plan.outputs.jvm).include[0].java\n        run: pnpm jvm:package-check\n",
+    );
+    expect(ci).not.toContain("secrets.MAVEN");
+
+    expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
+    expect(job).toContain("needs: publish");
+    expect(job).toContain("environment: maven-central");
+    expect(job).toContain("contents: read");
+    expect(job).not.toContain("id-token: write");
+    expect(job).not.toContain("contents: write");
+    // The lockfiles alone decide what runs beside the key and the token.
+    expect(job).not.toContain("cache: pnpm");
+    expect(job).toContain("cache-disabled: true");
+    expect(job).toContain('if [ "v$jvm" != "$GITHUB_REF_NAME" ]; then');
+    // The job reads exactly the four secrets that SM-1384 creates, each in one step only. The
+    // version step learns only whether they exist.
+    expect(new Set([...job.matchAll(/secrets\.(\w+)/g)].map((match) => match[1]))).toEqual(
+      new Set([
+        "MAVEN_CENTRAL_USERNAME",
+        "MAVEN_CENTRAL_PASSWORD",
+        "MAVEN_SIGNING_KEY",
+        "MAVEN_SIGNING_PASSWORD",
+      ]),
+    );
+    const signing = stepReading("MAVEN_SIGNING_KEY");
+    expect(signing).toHaveLength(1);
+    expect(stepReading("MAVEN_SIGNING_PASSWORD")).toEqual(signing);
+    expect(signing[0]).toContain(
+      'pnpm jvm:package-check --tag "$GITHUB_REF_NAME" --signing-key environment',
+    );
+    const upload = stepReading("MAVEN_CENTRAL_USERNAME");
+    expect(upload).toHaveLength(1);
+    expect(stepReading("MAVEN_CENTRAL_PASSWORD")).toEqual(upload);
+    expect(upload[0]).toContain("scripts/upload-maven-central.ts");
+    expect(upload[0]).not.toContain("SIGNING");
+    expect(await read("scripts/upload-maven-central.ts")).toContain(
+      'publishingType: "USER_MANAGED"',
+    );
+  });
+
   it("announces the GitHub release only after every registry on the v* tag succeeds", async () => {
     const workflow = await read(".github/workflows/release.yml");
     const job = workflow.slice(workflow.indexOf("\n  github-release:"));
     const registries = [
       workflow.slice(workflow.indexOf("\n  crates-io:"), workflow.indexOf("\n  rubygems:")),
-      workflow.slice(workflow.indexOf("\n  rubygems:"), workflow.indexOf("\n  github-release:")),
+      workflow.slice(workflow.indexOf("\n  rubygems:"), workflow.indexOf("\n  maven-central:")),
+      workflow.slice(
+        workflow.indexOf("\n  maven-central:"),
+        workflow.indexOf("\n  github-release:"),
+      ),
     ];
 
-    expect(job).toContain("needs: [publish, crates-io, rubygems]");
+    expect(job).toContain("needs: [publish, crates-io, rubygems, maven-central]");
     expect(job).toContain("if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true");
     // A crate or gem that sits the train out must still succeed, or the release never appears.
     for (const registry of registries) {

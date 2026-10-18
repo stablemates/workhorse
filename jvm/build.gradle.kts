@@ -111,3 +111,98 @@ subprojects {
     dependsOn("compileJava", "compileTestJava", verifyNullMarked)
   }
 }
+
+// The three artifacts of ADR 0103 publish to Maven Central. `api-snapshot` is a build tool and never
+// publishes, so it gets no publication.
+val publishedArtifacts = setOf("workhorse", "workhorse-kotlin", "workhorse-spring-boot-starter")
+
+// The local Maven repository that the release stage zips and uploads to the Central Portal
+// (ADR 0103, "Governed surface and release"). `scripts/check-jvm-release.ts` reads it.
+val stagingRepository = layout.buildDirectory.dir("staging-deploy")
+
+// The signing key and its passphrase. The release stage reads both from the `maven-central`
+// environment secrets, and the dry run passes a throwaway key that it generates. Without a key the
+// publications are not signed, and `scripts/check-jvm-release.ts` refuses the staging directory.
+val signingKey = providers.environmentVariable("MAVEN_SIGNING_KEY")
+val signingPassword = providers.environmentVariable("MAVEN_SIGNING_PASSWORD")
+
+configure(subprojects.filter { it.name in publishedArtifacts }) {
+  apply(plugin = "maven-publish")
+  apply(plugin = "signing")
+
+  extensions.configure<JavaPluginExtension> {
+    withSourcesJar()
+    withJavadocJar()
+  }
+
+  // Central requires a `-javadoc.jar`. A doclint warning about a missing comment does not fail the
+  // release, but every other doclint error does.
+  tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).apply {
+      encoding = "UTF-8"
+      addBooleanOption("Xdoclint:all,-missing", true)
+      addBooleanOption("Werror", true)
+    }
+  }
+
+  extensions.configure<PublishingExtension> {
+    publications {
+      create<MavenPublication>("maven") {
+        from(components["java"])
+        pom {
+          name = project.name
+          description = provider { project.description }
+          url = "https://workhorse.run"
+          licenses {
+            license {
+              name = "The Apache License, Version 2.0"
+              url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+            }
+          }
+          developers {
+            developer {
+              id = "stablemates"
+              name = "Stablemates"
+              url = "https://github.com/stablemates"
+            }
+          }
+          scm {
+            url = "https://github.com/stablemates/workhorse"
+            connection = "scm:git:https://github.com/stablemates/workhorse.git"
+            developerConnection = "scm:git:ssh://git@github.com/stablemates/workhorse.git"
+          }
+        }
+      }
+    }
+    repositories { maven { name = "staging"; url = uri(stagingRepository) } }
+  }
+
+  if (signingKey.isPresent) {
+    extensions.configure<SigningExtension> {
+      useInMemoryPgpKeys(signingKey.get(), signingPassword.orNull)
+      sign(the<PublishingExtension>().publications)
+    }
+  }
+}
+
+// Clears the staging directory, then writes the three signed artifacts to it.
+tasks.register("stageRelease") {
+  group = "publishing"
+  description = "Writes the three JVM artifacts, signed, to build/staging-deploy."
+  val publishTasks = publishedArtifacts.map { ":$it:publishAllPublicationsToStagingRepository" }
+  dependsOn(publishTasks)
+}
+
+gradle.taskGraph.whenReady {
+  if (hasTask(":stageRelease") && !signingKey.isPresent) {
+    throw GradleException("stageRelease needs MAVEN_SIGNING_KEY, so that every file is signed")
+  }
+}
+
+tasks.register<Delete>("cleanStaging") { delete(stagingRepository) }
+
+subprojects {
+  tasks.matching { it.name == "publishAllPublicationsToStagingRepository" }.configureEach {
+    mustRunAfter(":cleanStaging")
+  }
+}

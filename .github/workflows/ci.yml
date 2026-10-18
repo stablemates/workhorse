@@ -613,6 +613,12 @@ jobs:
       - run: pnpm jvm:build
       # Each database test makes its own scratch database from DATABASE_URL_TEST.
       - run: pnpm jvm:test
+      # The JVM release dry run of ADR 0103, on the floor lane only: it stages the three artifacts,
+      # signs them with a throwaway key that it generates and discards, verifies them, and runs the
+      # Java, Kotlin, and Spring Boot consumers from the staged files. It uploads nothing and reads no
+      # secret. The first matrix entry is the Java floor of support.json.
+      - if: matrix.java == fromJSON(needs.plan.outputs.jvm).include[0].java
+        run: pnpm jvm:package-check
 
   spring-boot:
     name: Spring Boot 4.1 starter (Java ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }})

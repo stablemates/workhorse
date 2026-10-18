@@ -27,7 +27,8 @@ concurrency:
 jobs:
   build:
     runs-on: depot-ubuntu-24.04
-    timeout-minutes: 30
+    # The JVM release check added its gates and consumers to the npm, Rust, and Ruby checks.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:18-alpine
@@ -74,6 +75,17 @@ jobs:
       - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
+      # The JVM release check builds and signs the three artifacts. Not the Gradle cache: a cache
+      # restored into the job that builds the published artifacts would let an earlier run decide
+      # its plugins and dependencies.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 25.0.4 # Pinned to the java version in mise.toml.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
       - name: Install matching PostgreSQL client
         run: |
           sudo apt-get update
@@ -94,6 +106,12 @@ jobs:
           DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
       # The Ruby specs refuse to skip under CI as well, and they read the same variable.
       - run: pnpm ruby:release-check
+        env:
+          DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
+      # The JVM dry run: the JVM gates, then the three artifacts staged and signed with a throwaway
+      # key that the check generates and discards. Its consumers read the same variable. It uploads
+      # nothing and reads no secret.
+      - run: pnpm jvm:release-check
         env:
           DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
 
@@ -250,17 +268,98 @@ jobs:
         with:
           working-directory: ruby
 
+  # The three JVM artifacts of ADR 0103 publish to Maven Central from the train tag. Like the crate
+  # and the gem, they join only when `jvm/gradle.properties` carries the tag's version, and they
+  # follow npm so that a stopped train never reaches Central.
+  #
+  # Unlike the other registries, Central has no trusted publishing, so this job reads four secrets
+  # of the protected `maven-central` environment (SM-1384): `MAVEN_SIGNING_KEY` and
+  # `MAVEN_SIGNING_PASSWORD` in the step that signs, and `MAVEN_CENTRAL_USERNAME` and
+  # `MAVEN_CENTRAL_PASSWORD` in the step that uploads. No other step receives them. Until the
+  # maintainer adds them, the job writes a notice and publishes nothing.
+  #
+  # The upload uses `publishingType=USER_MANAGED`. The Portal validates the deployment and holds it,
+  # and the maintainer publishes it in the Portal. Central never deletes a published version.
+  maven-central:
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+    needs: publish
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    environment: maven-central
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare the JVM version with the tag
+        id: version
+        env:
+          # Only whether each secret exists. The values stay out of this step.
+          HAS_CREDENTIALS: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.MAVEN_SIGNING_KEY != '' && secrets.MAVEN_SIGNING_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          jvm="$(sed -n 's/^version=//p' jvm/gradle.properties)"
+          if [ "v$jvm" != "$GITHUB_REF_NAME" ]; then
+            message="jvm/gradle.properties is at $jvm, so $GITHUB_REF_NAME does not publish the JVM artifacts to Maven Central"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_CREDENTIALS" != "true" ]; then
+            message="The maven-central environment lacks a Maven Central secret, so $GITHUB_REF_NAME does not publish the JVM artifacts (SM-1384)"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.version.outputs.publish == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No pnpm store cache and no Gradle cache, for the same reason as the publish job: this job
+      # holds the signing key and the Portal token, so the lockfiles alone decide what runs beside
+      # them.
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 25.0.4 # Pinned to the java version in mise.toml.
+      - if: steps.version.outputs.publish == 'true'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
+          cache-disabled: true
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+      # The check stages the three artifacts, signs them with the release key, verifies every
+      # signature and checksum, and refuses a version that differs from the tag. The build job ran
+      # the consumers on the same commit.
+      - name: Stage and sign the JVM artifacts
+        if: steps.version.outputs.publish == 'true'
+        env:
+          MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: pnpm jvm:package-check --tag "$GITHUB_REF_NAME" --signing-key environment --no-consumers --bundle "$RUNNER_TEMP/workhorse-jvm.zip"
+      - name: Upload the bundle to the Central Portal
+        if: steps.version.outputs.publish == 'true'
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: pnpm exec tsx scripts/upload-maven-central.ts "$RUNNER_TEMP/workhorse-jvm.zip" "workhorse-jvm-$GITHUB_REF_NAME"
+
   # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
   # no way to create a development database from a published artifact. Attaching the clean-install
   # SQL to the release gives them one. It is a development path: `psql -f` applies none of the CLI's
   # guards, so the documentation points deployments at the CLI.
   #
   # The release announces the version, so it waits for every registry that publishes from this tag.
-  # A crate or gem whose version does not match the tag sits the train out, and its job still
-  # succeeds. A failed crate or gem publication leaves no public release to retract.
+  # A crate, gem, or JVM line whose version does not match the tag sits the train out, and its job
+  # still succeeds. A failed crate, gem, or Central upload leaves no public release to retract.
   github-release:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
-    needs: [publish, crates-io, rubygems]
+    needs: [publish, crates-io, rubygems, maven-central]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     permissions:
