@@ -4,6 +4,13 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, waitForDatabaseCondition } = createIntegrationTestContext(import.meta.url);
 
+// The scenario drains 1,250 tasks four times: one and three workers, each with and without a group.
+// The tasks fill two enqueue batches. Alone, the test takes about 4 s. When other test files load
+// the host and the database, it takes about ten times longer, which is more than the default test
+// timeout. A timed-out scenario continues to run, and the reset before the next test can deadlock
+// with its workers. This timeout is about three times the slowest run of the test under load, 41 s.
+const drainWait = { timeout: 120_000 };
+
 async function sampleRowWaiters(): Promise<{
   group_row_waiters: number;
   shard_row_waiters: number;
@@ -15,7 +22,7 @@ async function sampleRowWaiters(): Promise<{
 }
 
 describe("hot task group benchmark scenario", () => {
-  it("drains the same tasks with and without a group against PostgreSQL", async () => {
+  it("drains the same tasks with and without a group against PostgreSQL", drainWait, async () => {
     const report = await runOperationalScenarios(pool, {
       scenarios: ["hot-task-group"],
       hotGroupTasks: 1_250,

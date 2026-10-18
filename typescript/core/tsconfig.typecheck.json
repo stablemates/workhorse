@@ -11,6 +11,7 @@
   },
   "include": [
     "test/**/*.ts",
+    "../../scripts/vitest-database-hook-timeout.ts",
     "../examples/stripe-invoice-paid.ts",
     "../examples/slack-approvals.ts",
     "../examples/github-triage.ts"

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -70,6 +71,10 @@ const concurrentDatabase = createDatabaseTestHarness(new URL("?concurrent", impo
   schemaProvisioning: "install",
 });
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const releasedArtifacts = readdirSync(path.join(repository, "sql", "releases"))
+  .filter((file) => file.endsWith(".sql"))
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  .sort();
 const executeFile = promisify(execFile);
 
 /**
@@ -340,8 +345,8 @@ describe("schema migrations", () => {
     ]);
     await contractDatabase.pool.query("DELETE FROM workhorse.schema_migration WHERE version > 1");
     await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = 1");
-    // The released-artifact loop seeds history rows into a fixed history day, and a partition is a
-    // schema object. The clean installation the loop compares dumps against creates the same day so
+    // The released-artifact tests seed history rows into a fixed history day, and a partition is a
+    // schema object. The clean installation the tests compare dumps against creates the same day so
     // the comparison stays byte-for-byte on everything else.
     await createHistoryFixtureDay(cleanDatabase.pool);
   });
@@ -648,17 +653,15 @@ describe("schema migrations", () => {
     expect(drift.map((finding) => formatSignatureDrift(finding))).toEqual([]);
   });
 
-  it("migrates every released schema version to a clean-installation schema and keeps its rows", async () => {
-    // The first frozen artifact is `0006.sql`, the 0.2.0 clean install and the baseline this
-    // release migrates from. Each later release freezes its own, and this loop proves every one of
-    // them migrates to a schema byte-identical to a clean installation of the current artifact, on
-    // a database populated first.
-    const releases = (await readdir(path.join(repository, "sql", "releases")))
-      .filter((file) => file.endsWith(".sql"))
-      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-      .sort();
-
-    for (const release of releases) {
+  // The first frozen artifact is `0006.sql`, the 0.2.0 clean install and the baseline this release
+  // migrates from. Each later release freezes its own, and these tests prove every one of them
+  // migrates to a schema byte-identical to a clean installation of the current artifact, on a
+  // database populated first. Each artifact has its own test, so one test migrates one release.
+  // The time of a test does not grow when a release adds an artifact, and a slow database makes
+  // each test wait for one migration only.
+  it.each(releasedArtifacts)(
+    "migrates the released schema %s to a clean-installation schema and keeps its rows",
+    async (release) => {
       const releasedVersion = Number.parseInt(release, 10);
       await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
       await releaseDatabase.pool.query(
@@ -763,8 +766,8 @@ describe("schema migrations", () => {
       ]);
       // Whatever the artifact carried below it, the supported range is covered end to end.
       expect(releasedVersion).toBeGreaterThanOrEqual(WORKHORSE_SCHEMA_BASELINE_VERSION);
-    }
-  });
+    },
+  );
 
   // A dump proves the migrated functions are defined identically. It says nothing about what they
   // answer on rows a migration rewrote, and an operator read is where a rewritten column shows up

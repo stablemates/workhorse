@@ -1019,14 +1019,19 @@ describe("worker registry", () => {
       maintenanceRoutinePollMs: 100,
       registryIntervalMs: 0,
     });
-    const maintenanceTimes: number[] = [];
+    const maintenancePasses: Array<{ startedAt: number; endedAt?: number }> = [];
     const privateWorker = worker as unknown as { runMaintenance(): Promise<void> };
     const originalRunMaintenance = privateWorker.runMaintenance.bind(worker);
     const runMaintenance = vi
       .spyOn(privateWorker, "runMaintenance")
       .mockImplementation(async () => {
-        maintenanceTimes.push(Date.now());
-        await originalRunMaintenance();
+        const pass: { startedAt: number; endedAt?: number } = { startedAt: Date.now() };
+        maintenancePasses.push(pass);
+        try {
+          await originalRunMaintenance();
+        } finally {
+          pass.endedAt = Date.now();
+        }
       });
 
     const running = worker.run();
@@ -1036,12 +1041,18 @@ describe("worker registry", () => {
       expect(runMaintenance).toHaveBeenCalledOnce();
       expect(notify).toBeDefined();
       notificationLoad = setInterval(() => notify?.(), 10);
-      await vi.waitFor(() => expect(runMaintenance).toHaveBeenCalledTimes(3), { timeout: 500 });
+      // The gaps below are the check. Under load, a maintenance pass can take longer than 100 ms,
+      // so the wait for three passes has no short limit. The maintenance loop waits its interval
+      // after a pass ends, so each gap starts when the previous pass ends. A notification that woke
+      // maintenance would start the next pass at once, however long the passes take.
+      await vi.waitFor(() => expect(runMaintenance).toHaveBeenCalledTimes(3), { timeout: 10_000 });
       clearInterval(notificationLoad);
       notificationLoad = undefined;
 
-      for (let index = 1; index < maintenanceTimes.length; index += 1) {
-        expect(maintenanceTimes[index]! - maintenanceTimes[index - 1]!).toBeGreaterThanOrEqual(80);
+      for (let index = 1; index < maintenancePasses.length; index += 1) {
+        const previous = maintenancePasses[index - 1]!;
+        expect(previous.endedAt).toBeTypeOf("number");
+        expect(maintenancePasses[index]!.startedAt - previous.endedAt!).toBeGreaterThanOrEqual(80);
       }
     } finally {
       if (notificationLoad) clearInterval(notificationLoad);
@@ -1521,54 +1532,77 @@ describe("worker registry", () => {
   it("notifies only the queue whose scheduled work was promoted", async () => {
     const queueName = `notification-routing-${randomUUID()}`;
     const handled: string[] = [];
-    const claim = vi.spyOn(queue, "claimMany");
+    // The worker also polls, at most 5 s apart, so a claim does not prove a notification. Count the
+    // wakes that the notification listener gives the worker.
+    let wakes = 0;
+    const subscribeToTaskNotifications = queue.subscribeToTaskNotifications.bind(queue);
+    const subscribe = vi
+      .spyOn(queue, "subscribeToTaskNotifications")
+      .mockImplementation((subscribedQueue, wake, error) =>
+        subscribeToTaskNotifications(
+          subscribedQueue,
+          () => {
+            wakes += 1;
+            wake();
+          },
+          error,
+        ),
+      );
     const worker = new Worker(queue, {
       queue: queueName,
       workerId: "notification-routing",
       pollMs: 15_000,
-      maintenanceIntervalMs: 10_000,
+      // Only the promote() calls below may promote the tasks of this test.
+      maintenanceIntervalMs: 3_600_000,
+      maintenanceRoutinePollMs: 3_600_000,
       registryIntervalMs: 0,
     }).handle<{ message: string }>("notification-routing", ({ message }) => {
       handled.push(message);
       return null;
     });
+    let maintenancePasses = 0;
+    const privateWorker = worker as unknown as { runMaintenance(): Promise<void> };
+    const runMaintenance = privateWorker.runMaintenance.bind(worker);
+    vi.spyOn(privateWorker, "runMaintenance").mockImplementation(async () => {
+      await runMaintenance();
+      maintenancePasses += 1;
+    });
+    // A task that is enqueued after its run time is ready at once, and the enqueue notifies. Each
+    // task starts an hour ahead, and the test moves it into the past, so only promote() notifies.
+    const promoteScheduled = async (
+      type: string,
+      taskQueue: string,
+      payload: { message: string } | null,
+    ) => {
+      const id = await queue.enqueue(type, payload, {
+        queue: taskQueue,
+        runAt: new Date(Date.now() + 3_600_000),
+      });
+      expect((await admin.getTask(id))?.state).toBe("scheduled");
+      await pool.query(
+        `UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 second'
+          WHERE task_id = $1`,
+        [id],
+      );
+      expect(await queue.promote()).toBe(1);
+    };
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
-      await vi.waitFor(async () => {
-        const listeners = await pool.query<{ count: number }>(
-          `SELECT count(*)::integer AS count
-             FROM pg_stat_activity
-            WHERE datname = current_database()
-              AND state = 'idle'
-              AND query = 'LISTEN workhorse_tasks'`,
-        );
-        expect(listeners.rows[0]?.count).toBeGreaterThan(0);
-      });
-      await sleep(75);
-      const initialClaimCount = claim.mock.calls.length;
-      await queue.enqueue("other-queue-notification", null, {
-        queue: `${queueName}-other`,
-        runAt: new Date(Date.now() + 100),
-      });
-      await sleep(120);
-      await queue.promote();
+      // The listener wakes the worker once when its LISTEN starts.
+      await vi.waitFor(() => expect(wakes).toBe(1), { timeout: 10_000 });
+      await vi.waitFor(() => expect(maintenancePasses).toBe(1), { timeout: 10_000 });
+      await promoteScheduled("other-queue-notification", `${queueName}-other`, null);
       await sleep(50);
-      expect(claim).toHaveBeenCalledTimes(initialClaimCount);
+      expect(wakes).toBe(1);
 
-      await queue.enqueue(
-        "notification-routing",
-        { message: "promoted" },
-        { queue: queueName, runAt: new Date(Date.now() + 100) },
-      );
-      await sleep(120);
-      await queue.promote();
-      await vi.waitFor(() => expect(handled).toEqual(["promoted"]), { timeout: 1_000 });
+      await promoteScheduled("notification-routing", queueName, { message: "promoted" });
+      await vi.waitFor(() => expect(wakes).toBe(2), { timeout: 10_000 });
+      await vi.waitFor(() => expect(handled).toEqual(["promoted"]), { timeout: 10_000 });
     } finally {
       worker.stop();
       await running;
-      claim.mockRestore();
+      subscribe.mockRestore();
     }
   });
 
