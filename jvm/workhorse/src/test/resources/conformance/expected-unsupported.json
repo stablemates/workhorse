@@ -1,0 +1,20 @@
+{
+  "$comment": "protocol/v1 fixtures the JVM lane does not pass yet. Each entry names the open slice that owns the gap. ProtocolConformanceTest fails when an unlisted fixture does not pass and when a listed fixture passes.",
+  "fixtures": [
+    {
+      "fixture": "runtime/enqueue-trace-context-reaches-handler",
+      "issue": "SM-1392",
+      "reason": "needs the worker's OpenTelemetry handler span"
+    },
+    {
+      "fixture": "runtime/oversized-fast-tier-result-fails-through-the-retry-policy",
+      "issue": "SM-1388",
+      "reason": "needs the fast task tier"
+    },
+    {
+      "fixture": "runtime/priority-ordered-mixed-batch",
+      "issue": "SM-1388",
+      "reason": "needs batch handler delivery"
+    }
+  ]
+}

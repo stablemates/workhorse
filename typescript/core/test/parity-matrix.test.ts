@@ -7,6 +7,7 @@ import {
   PARITY_TEST_ROOTS,
   PRODUCT_PARITY_ROWS,
   PRODUCT_PARITY_TEST_ROOTS,
+  type JvmParityCell,
   type ParityCell,
   type ParityDefaultRow,
   type ParityLanguage,
@@ -29,6 +30,8 @@ type Status = "Supported" | "Planned" | "Absent";
 interface DocumentedRow {
   capability: string;
   statuses: Record<ExistingLanguage, Status>;
+  /** The JVM column, the seventh cell of a row. */
+  jvm?: Status;
 }
 
 /**
@@ -41,7 +44,7 @@ function documentedTables(markdown: string): DocumentedRow[][] {
   let current: DocumentedRow[] | null = null;
   for (const line of markdown.split("\n")) {
     if (
-      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*(\|\s*Ruby\s*)?)?\|$/.test(
+      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*(\|\s*Ruby\s*(\|\s*JVM\s*)?)?)?\|$/.test(
         line,
       )
     ) {
@@ -59,11 +62,12 @@ function documentedTables(markdown: string): DocumentedRow[][] {
       .slice(1, -1)
       // The generator links a Planned cell to its issue, as `[Planned][SM-1261]`.
       .map((cell) => cell.trim().replace(/^\[Planned\]\[[^\]]+\]$/, "Planned"));
-    if (cells.length < 4 || cells.length > 6 || /^-+$/.test(cells[0]!)) continue;
-    const [capability, ...statuses] = cells as [string, Status, Status, Status];
+    if (cells.length < 4 || cells.length > 7 || /^-+$/.test(cells[0]!)) continue;
+    const [capability, ...statuses] = cells as [string, ...Status[]];
     current.push({
       capability,
-      statuses: { typescript: statuses[0], python: statuses[1], go: statuses[2] },
+      statuses: { typescript: statuses[0]!, python: statuses[1]!, go: statuses[2]! },
+      jvm: statuses[5],
     });
   }
   return tables;
@@ -73,6 +77,10 @@ function statusOf(cell: ParityCell): Status {
   if ("absent" in cell) return "Absent";
   if ("planned" in cell) return "Planned";
   return "Supported";
+}
+
+function jvmStatusOf(cell: JvmParityCell): Status {
+  return "planned" in cell ? "Planned" : "Supported";
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -167,6 +175,17 @@ describe("parity matrix", () => {
     },
   );
 
+  it.each(
+    PARITY_TABLES.flatMap((table, index) =>
+      table.map((row) => [row.capability, index, row] as const),
+    ),
+  )("%s / jvm has the same status in the document and the registry", (_capability, index, row) => {
+    // Executed evidence for a JVM Supported cell is checked by scripts/jvm-parity-evidence.test.ts.
+    expect(row.jvm).toBeDefined();
+    const documented = tables[index]?.find((entry) => entry.capability === row.capability)?.jvm;
+    expect(documented).toBe(row.jvm === undefined ? undefined : jvmStatusOf(row.jvm));
+  });
+
   it("records a reason for every Absent cell", () => {
     expect(unexplainedAbsent(registryCells.map(({ row, language }) => row[language]))).toEqual([]);
   });
@@ -229,11 +248,27 @@ describe("parity matrix", () => {
     expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
   });
 
+  it.each(
+    PARITY_DEFAULT_ROWS.flatMap((row) =>
+      row.jvm === undefined || "planned" in row.jvm ? [] : [[row.setting, row.jvm] as const],
+    ),
+  )("%s / jvm publishes the value its source still sets", async (_setting, cell) => {
+    expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
+  });
+
+  it("gives every runtime default a JVM cell", () => {
+    expect(
+      PARITY_DEFAULT_ROWS.filter((row) => row.jvm === undefined).map((row) => row.setting),
+    ).toEqual([]);
+  });
+
   it("links the Linear Issue behind every Planned cell", () => {
     // A Planned cell's evidence is the open Issue that owns the gap. The document must link
     // it, so the cell cannot outlive the work it points at unnoticed.
     const unlinked = [
       ...registryCells.map(({ row, language }) => row[language]),
+      ...PARITY_TABLES.flatMap((table) => table.flatMap((row) => (row.jvm ? [row.jvm] : []))),
+      ...PARITY_DEFAULT_ROWS.flatMap((row) => (row.jvm ? [row.jvm] : [])),
       ...productCells.map(({ row, target }) => row[target]),
     ]
       .filter((cell) => "planned" in cell)
