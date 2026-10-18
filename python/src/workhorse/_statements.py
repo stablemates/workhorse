@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 69
-MAXIMUM_SCHEMA_VERSION = 71
+MINIMUM_SCHEMA_VERSION = 72
+MAXIMUM_SCHEMA_VERSION = 72
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -119,9 +119,9 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=%s::uuid AND wait_name=%s::text",
         "SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text",
     ),
-    "heartbeat_many_v1": (
-        "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1(%s::text, %s::jsonb) ORDER BY ordinal",
-        "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
+    "heartbeat_many_v2": (
+        "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2(%s::text, %s::jsonb) ORDER BY ordinal",
+        "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
     ),
     "heartbeat_v1": (
         "SELECT workhorse.heartbeat_v1(%s::uuid, %s::text, %s::bigint, %s::integer) AS status",
@@ -727,7 +727,7 @@ STATEMENTS = StatementRegistry(
     release_owned=_statement("release_owned_v1"),
     fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
-    heartbeat_many=_statement("heartbeat_many_v1"),
+    heartbeat_many=_statement("heartbeat_many_v2"),
     list_checkpoints=_statement("list_checkpoints"),
     list_concurrency_policies=_statement("list_concurrency_policies"),
     list_progress=_statement("list_progress"),

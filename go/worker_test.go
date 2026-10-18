@@ -96,6 +96,8 @@ type workerRuntimeFixture struct {
 	Payload                              any                               `json:"payload"`
 	Injection                            workerFixtureInjection            `json:"injection"`
 	ExpectedMinimumFailedRounds          int                               `json:"expectedMinimumFailedRounds"`
+	ExpectedBusyRounds                   int                               `json:"expectedBusyRounds"`
+	MaximumRetryGapMS                    float64                           `json:"maximumRetryGapMs"`
 	RenewalTimeoutMS                     int                               `json:"renewalTimeoutMs"`
 	ExpectedCancellations                int                               `json:"expectedCancellations"`
 	ExpectedPhase                        string                            `json:"expectedPhase"`
@@ -125,11 +127,15 @@ type workerFixtureReleasedState struct {
 // workerFixtureInjection replaces one installed function with a raising body, so a fixture can
 // fail a call the SDK makes without reaching into the SDK.
 type workerFixtureInjection struct {
-	Function        string `json:"function"`
-	Header          string `json:"header"`
-	ErrorCode       string `json:"errorCode"`
-	Message         string `json:"message"`
-	CounterSequence string `json:"counterSequence"`
+	Function        string   `json:"function"`
+	Header          string   `json:"header"`
+	ErrorCode       string   `json:"errorCode"`
+	Message         string   `json:"message"`
+	CounterSequence string   `json:"counterSequence"`
+	Setup           []string `json:"setup"`
+	Body            string   `json:"body"`
+	RoundsQuery     string   `json:"roundsQuery"`
+	Teardown        []string `json:"teardown"`
 }
 
 type workerFixtureTaskState struct {
@@ -583,7 +589,7 @@ func (tracer heartbeatGateTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if strings.Contains(data.SQL, "heartbeat_many_v1") {
+	if strings.Contains(data.SQL, "heartbeat_many_v2") {
 		<-tracer.release
 	}
 	return ctx
@@ -678,7 +684,7 @@ func (tracer *heartbeatQueryTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if !strings.Contains(data.SQL, "heartbeat_many_v1") {
+	if !strings.Contains(data.SQL, "heartbeat_many_v2") {
 		return ctx
 	}
 	tracer.mu.Lock()

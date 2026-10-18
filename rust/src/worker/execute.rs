@@ -74,7 +74,11 @@ impl Inner {
             "Handler started"
         );
         let task = Arc::new(task);
-        let mut membership = self.register_heartbeat(task.id, task.fence_token);
+        // The first lease window runs from the claim. Only an accepted renewal moves it: a busy
+        // round leaves it as it was.
+        let lease = self.options.lease_duration;
+        let mut membership =
+            self.register_heartbeat(task.id, task.fence_token, task.claim_sent_at + lease);
         let token = CancellationToken::default();
         let context = HandlerContext::new(
             Arc::clone(&task),
@@ -87,7 +91,6 @@ impl Inner {
             .instrument(span.clone());
         tokio::pin!(future);
 
-        let lease = self.options.lease_duration;
         let watchdog = tokio::time::sleep_until(task.claim_sent_at + lease);
         tokio::pin!(watchdog);
         let mut watchdog_armed = true;

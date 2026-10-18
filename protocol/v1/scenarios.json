@@ -183,6 +183,71 @@
       },
       {
         "id": "heartbeat-many",
+        "sql": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
+        "parameters": [
+          "protocol-success",
+          [
+            {
+              "taskId": {
+                "$ref": "successfulTask"
+              },
+              "fenceToken": {
+                "$ref": "successfulFence"
+              },
+              "leaseMs": 30000
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "task_id": {
+                "$ref": "successfulTask"
+              },
+              "status": "accepted"
+            }
+          ]
+        }
+      },
+      {
+        "id": "heartbeat-many-keeps-input-order-and-reports-an-unknown-lease-stale",
+        "sql": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
+        "parameters": [
+          "protocol-success",
+          [
+            {
+              "taskId": "00000000-0000-4000-8000-000000000000",
+              "fenceToken": 1,
+              "leaseMs": 30000
+            },
+            {
+              "taskId": {
+                "$ref": "successfulTask"
+              },
+              "fenceToken": {
+                "$ref": "successfulFence"
+              },
+              "leaseMs": 30000
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "task_id": "00000000-0000-4000-8000-000000000000",
+              "status": "stale"
+            },
+            {
+              "task_id": {
+                "$ref": "successfulTask"
+              },
+              "status": "accepted"
+            }
+          ]
+        }
+      },
+      {
+        "id": "heartbeat-many-v1-still-renews",
         "sql": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
         "parameters": [
           "protocol-success",
@@ -2229,7 +2294,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 71,
+                "schemaVersion": 72,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

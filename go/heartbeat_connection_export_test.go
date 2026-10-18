@@ -40,3 +40,11 @@ func (test HeartbeatConnectionForTest) Held() bool {
 
 // Release stops reserving.
 func (test HeartbeatConnectionForTest) Release() { test.connection.release() }
+
+// HeartbeatRoundForTest sends one heartbeat round for one lease on the path the worker's own
+// rounds take, bounded by bound, and returns the status of the lease.
+func (worker *Worker) HeartbeatRoundForTest(taskID string, fenceToken int64, bound time.Duration) (string, error) {
+	member := &heartbeatMember{ctx: context.Background(), task: ClaimedTask{ID: taskID, FenceToken: fenceToken}}
+	statuses, err := worker.queryHeartbeatRound([]*heartbeatMember{member}, time.Now().Add(bound))
+	return string(statuses[taskID]), err
+}

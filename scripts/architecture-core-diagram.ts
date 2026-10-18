@@ -43,7 +43,7 @@ const contextTitle =
   "Every component reaches the durable state through SQL functions in PostgreSQL";
 const contextDescription =
   "The application transaction calls enqueue_v1 or enqueue_batch_v1. The deployment syncs " +
-  "schedules. The TypeScript Worker calls claim_many_v1, heartbeat_many_v1, acknowledge_cancel_v1, " +
+  "schedules. The TypeScript Worker calls claim_many_v1, heartbeat_many_v2, acknowledge_cancel_v1, " +
   "complete_v1, fail_v1, register_worker_v1, tick_v1, fire_due_schedules_v2, and the split " +
   "maintenance routines, and gets the payload, attempt, fence, and operator pause flag. The " +
   "operator layer calls cancel_v1 with attribution, list_dead_letters_v1, redrive_v1, and " +
@@ -64,7 +64,7 @@ const callers: readonly (readonly [
     "TypeScript Worker",
     "claim and lease",
     "focal",
-    "claim_many_v1 · heartbeat_many_v1 · acknowledge_cancel_v1",
+    "claim_many_v1 · heartbeat_many_v2 · acknowledge_cancel_v1",
   ],
   ["TypeScript Worker", "settle", "focal", "complete_v1 · fail_v1"],
   [
@@ -444,7 +444,7 @@ export const durableSuspensionsNarrow = {
 const leaseTitle =
   "Recovery replaces the generation, so the late write of the old worker matches no row";
 const leaseDescription =
-  "Worker A calls claim_many_v1 and gets the task with attempt 1 and fence 41. Its heartbeat_many_v1 " +
+  "Worker A calls claim_many_v1 and gets the task with attempt 1 and fence 41. Its heartbeat_many_v2 " +
   "with fence 41 is accepted, and expires_at is extended. Then A stalls past its lease. Worker B " +
   "calls tick_v1, which calls recover_expired_v1: the lease expires, and the task is ready with " +
   "attempt 2. B calls claim_many_v1 and gets attempt 2 with fence 42. The late complete_v1 of A " +
@@ -461,7 +461,7 @@ const messages: readonly (readonly [
 ])[] = [
   ["a", "pg", "claim_many_v1"],
   ["pg", "a", "task, attempt 1, fence 41", true],
-  ["a", "pg", "heartbeat_many_v1 (fence 41)"],
+  ["a", "pg", "heartbeat_many_v2 (fence 41)"],
   ["pg", "a", "accepted, expires_at extended", true],
   ["b", "pg", "tick_v1 calls recover_expired_v1"],
   ["b", "pg", "claim_many_v1"],
@@ -534,7 +534,7 @@ export const leaseRecoveryNarrow = {
       d,
       [
         ["A", "backend", "claim_many_v1", "attempt 1, fence 41"],
-        ["A", "backend", "heartbeat_many_v1", "accepted · A then stalls"],
+        ["A", "backend", "heartbeat_many_v2", "accepted · A then stalls"],
         ["B", "store", "tick_v1", "recover_expired_v1 · attempt 2"],
         ["B", "focal", "claim_many_v1", "attempt 2, fence 42"],
         ["A", "external", "complete_v1 (fence 41)", "false, no generation matches"],

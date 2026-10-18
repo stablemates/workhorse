@@ -267,7 +267,7 @@ lock. No production path is affected. The session forms exist only in test harne
 #### Heartbeat connection
 
 The reserved heartbeat connection of the TypeScript worker holds no session state. It runs only
-`heartbeat_many_v1`, each time in its own transaction. Each round has one deadline on the client,
+`heartbeat_many_v2`, each time in its own transaction. Each round has one deadline on the client,
 and transaction-local server timeouts that end the heartbeat by the same deadline
 ([Heartbeat round deadline](lifecycle.md#heartbeat-round-deadline)). It works in every pool mode.
 

@@ -3,6 +3,29 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+Requires **schema v72**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migration 0073 moves the schema to version **72**.
+The SDK compatibility floor rises from 69 to **72**, because every SDK statement catalogue now names
+`heartbeat_many_v2`. An updated process refuses a schema below version 72 at startup. A 0.8 process
+keeps working on version 72, because a migration inside a major line only adds.
+
+### Heartbeats do not wait for a locked task row
+
+Before this release, a heartbeat waited for a task row that another transaction locked. If a
+settlement held the row, the heartbeat then kept the row locked after the settlement committed, and
+a claim skipped the ready task (SM-1434). The worker now renews leases through `heartbeat_many_v2`
+(SM-1443, ADR 0105). It skips a locked row and reports that lease as `busy`: no renewal and no
+ownership verdict. The worker keeps a busy lease, retries only the busy leases after a short delay
+with jitter, and does not move the regular heartbeat schedule. A busy answer never extends the local
+lease watchdog, so a lease that stays busy until the watchdog ends is lost, as before. Old and new
+workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

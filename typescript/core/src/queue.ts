@@ -30,6 +30,7 @@ import type {
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
+  HeartbeatBatchStatus,
   HeartbeatStatus,
   Json,
   MaintenancePolicy,
@@ -687,7 +688,7 @@ export class Queue {
     tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs = 30_000,
-  ): Promise<Map<string, HeartbeatStatus>> {
+  ): Promise<Map<string, HeartbeatBatchStatus>> {
     return this.modules.claimLeaseFence.heartbeatMany(tasks, workerId, leaseMs);
   }
 

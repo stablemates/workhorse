@@ -385,6 +385,15 @@
         "task_id": "uuid"
       }
     },
+    "heartbeat_many_v2": {
+      "arguments": ["text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "ordinal": "bigint",
+        "status": "text",
+        "task_id": "uuid"
+      }
+    },
     "heartbeat_v1": {
       "arguments": ["uuid", "text", "bigint", "integer?"],
       "returns": "text"

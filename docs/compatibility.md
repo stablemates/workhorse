@@ -1246,6 +1246,34 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
+## Upgrade from 0.8.x to the next minor release
+
+The next minor release renews leases through `heartbeat_many_v2`, which does not wait for a locked
+task row ([ADR 0105](decisions/0105-skip-a-locked-row-in-a-heartbeat-and-report-the-lease-as-busy.md)).
+Its SDKs call the new function, so the schema floor rises. The upgrade is a rolling deployment, and
+a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migrations 0073 through 0073 and leaves the schema at
+   version 72.
+2. Roll out the new processes, producers too.
+
+A 0.8.0 database is at schema version 71. The migration only adds:
+
+| Migration                                   | Schema version | Adds                                                        |
+| ------------------------------------------- | -------------- | ----------------------------------------------------------- |
+| `0073-skip-a-locked-row-in-a-heartbeat.sql` | 72             | `heartbeat_many_v2`, which reports a locked lease as `busy` |
+
+The SDK schema floor rises from 69 to 72. Every SDK statement catalogue names `heartbeat_many_v2`.
+A new process refuses a schema below version 72 at startup. Thus the migration must run before the
+first new process starts. The next minor release freezes `sql/releases/0072.sql`.
+
+A 0.8 process keeps working on schema version 72. It calls `heartbeat_many_v1`, which does not
+change, so it still waits for a locked row. A new worker calls `heartbeat_many_v2` and does not
+wait. Both renew the same columns.
+
+The TypeScript return type of the batched heartbeat surfaces gains `busy`, as
+[`CHANGELOG.md`](../CHANGELOG.md) states.
+
 ## Upgrade from 0.7.x to 0.8.0
 
 0.8.0 adds task groups and the checkpoint input check. Its SDKs call new SQL functions, so the

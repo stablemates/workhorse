@@ -1,10 +1,13 @@
 """The transaction statements around one heartbeat round on the dedicated connection.
 
 They are not protocol calls, so they do not live in the generated catalogue. The round sends the
-catalogue's `heartbeat_many_v1` statement unchanged between them.
+catalogue's `heartbeat_many_v2` statement unchanged between them.
 """
 
 from __future__ import annotations
+
+import random
+from collections.abc import Callable
 
 from ._statements import DriverStatement
 
@@ -19,6 +22,20 @@ def heartbeat_round_bound_ms(heartbeat_ms: int) -> int:
     formula.
     """
     return max(1, heartbeat_ms * 3 // 4, min(50, heartbeat_ms))
+
+
+# The longest base delay before a busy retry, in milliseconds.
+BUSY_RETRY_BASE_MS = 100
+
+
+def busy_retry_delay_ms(heartbeat_ms: int, sample: Callable[[], float] = random.random) -> float:
+    """The wait before a round renews the leases that the previous round reported busy.
+
+    It is ``base * (1 + random)``, with ``base = min(BUSY_RETRY_BASE_MS, heartbeat_ms / 8)``. The
+    jitter keeps two workers from meeting the same lock holder in step. Every SDK uses the same
+    formula.
+    """
+    return min(BUSY_RETRY_BASE_MS, heartbeat_ms / 8) * (1 + sample())
 
 
 ROUND_BEGIN = DriverStatement(psycopg="BEGIN", asyncpg="BEGIN")

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -29,7 +30,7 @@ import run.workhorse.ConnectionSource;
  * own heartbeat, which borrows a connection for each round instead.
  */
 public final class Heartbeat {
-  /** The most leases one {@code heartbeat_many_v1} call renews. */
+  /** The most leases one {@code heartbeat_many_v2} call renews. */
   private static final int ROUND_LIMIT = 100;
 
   /** The wait before a dedicated heartbeat checks out a new connection after a failed round. */
@@ -46,6 +47,12 @@ public final class Heartbeat {
    * server budget is at least 1 ms, and the budgets still fit in the time left.
    */
   private static final long MIN_REMAINING_NANOS = TimeUnit.MILLISECONDS.toNanos(8);
+
+  /**
+   * The longest base delay before a busy retry. The retry waits {@code base × (1 + random)}, with
+   * {@code base = min(BUSY_RETRY_BASE_MS, interval / 8)}.
+   */
+  private static final long BUSY_RETRY_BASE_MS = 100;
 
   /**
    * Sets both server timeouts for the current transaction only. {@code SET LOCAL} cannot take a
@@ -77,10 +84,20 @@ public final class Heartbeat {
     /** The interval between renewals, in nanoseconds. */
     long intervalNanos();
 
+    /**
+     * The end of the attempt's local lease window, a {@link System#nanoTime} value. A busy retry
+     * never runs past it, and does not send a lease whose window has ended.
+     */
+    long leaseEndsAt();
+
     /** Records an accepted round that left at {@code sentAt}, a {@link System#nanoTime} value. */
     void renew(long sentAt);
 
-    /** Acts on a status other than {@code accepted}. */
+    /**
+     * Acts on a status other than {@code accepted}. The status {@code busy} means that another
+     * transaction held the task's row: the round renewed nothing and gave no ownership verdict, so
+     * the member must keep its lease window and stay registered.
+     */
     void settle(String status) throws Exception;
 
     /** Records an error that {@link #settle} threw. */
@@ -94,18 +111,40 @@ public final class Heartbeat {
   private final Map<List<Object>, Member> members = new LinkedHashMap<>();
   private @Nullable Thread thread;
 
+  /** A round that replaces every connection, for tests of the schedule. */
+  private final @Nullable Round fixedRound;
+
   /**
-   * The start of the latest round, a {@link System#nanoTime} value. Only the heartbeat thread uses
-   * it. A new connection keeps it, so a failed round does not start a new schedule.
+   * The start of the latest regular round, a {@link System#nanoTime} value. Only the heartbeat
+   * thread uses it. A new connection keeps it, so a failed round does not start a new schedule. A
+   * busy retry does not move it.
    */
   private long previous;
 
   /** The batch that the next dedicated round sends first. Only the heartbeat thread uses it. */
   private int rotation;
 
+  /**
+   * The members that the latest round reported busy, which a retry renews before the next regular
+   * slot, or {@code null}. A round of either kind replaces it. Only the heartbeat thread uses it.
+   */
+  private @Nullable List<Member> busyRetry;
+
+  /** When the busy retry falls due, a {@link System#nanoTime} value. */
+  private long busyRetryAt;
+
   Heartbeat(DataSource dataSource, boolean dedicated) {
+    this(dataSource, dedicated, null);
+  }
+
+  /**
+   * A heartbeat whose rounds go through {@code fixedRound} instead of a connection, when it is not
+   * {@code null}. A failed round then acts as a failed dedicated round.
+   */
+  Heartbeat(DataSource dataSource, boolean dedicated, @Nullable Round fixedRound) {
     this.dataSource = dataSource;
     this.dedicated = dedicated;
+    this.fixedRound = fixedRound;
   }
 
   /** The heartbeat that every worker on {@code dataSource} shares. */
@@ -164,6 +203,21 @@ public final class Heartbeat {
 
   private void run() {
     previous = System.nanoTime();
+    busyRetry = null;
+    Round fixed = fixedRound;
+    if (fixed != null) {
+      while (true) {
+        try {
+          if (rounds(fixed)) {
+            return;
+          }
+        } catch (SQLException | RuntimeException error) {
+          if (stopIfIdle()) {
+            return;
+          }
+        }
+      }
+    }
     if (!dedicated) {
       ConnectionSource source = ConnectionSource.of(dataSource);
       try {
@@ -221,11 +275,11 @@ public final class Heartbeat {
   }
 
   /**
-   * Runs rounds until no member remains, and returns {@code true} then. A round falls due one
-   * shortest member interval after the previous round started. A round that ends after its next
-   * slot starts one overdue round at once, and the interval after it counts from that start, so
-   * missed slots are never replayed. A dedicated round that fails throws, so the caller can replace
-   * the connection; a borrowing round that fails is skipped.
+   * Runs rounds until no member remains, and returns {@code true} then. A regular round falls due
+   * one shortest member interval after the previous regular round started. A round that ends after
+   * its next slot starts one overdue round at once, and the interval after it counts from that
+   * start, so missed slots are never replayed. A dedicated round that fails throws, so the caller
+   * can replace the connection; a borrowing round that fails is skipped.
    *
    * <p>A round sends one statement for each worker and each {@link #ROUND_LIMIT} leases ({@link
    * #batches}). On the dedicated connection, all of them share one deadline: the round start plus
@@ -233,10 +287,16 @@ public final class Heartbeat {
    * slow statement cannot delay another renewal past it. Each round starts with the next batch, so
    * a batch that is always slow cannot keep a later batch from its turn. A borrowing round has no
    * deadline, and sends every batch.
+   *
+   * <p>Between two regular slots, a busy retry sends only the members that the latest round
+   * reported busy ({@link #takeBusyRetry}). It is a round of this one thread, so it never overlaps
+   * another round, and it does not move the regular schedule. Its deadline is {@link
+   * #retryDeadline}. A round that throws schedules no retry.
    */
   private boolean rounds(Round round) throws SQLException {
     while (true) {
       List<Member> due;
+      boolean retry;
       long interval = Long.MAX_VALUE;
       lock.lock();
       try {
@@ -244,30 +304,114 @@ public final class Heartbeat {
           interval = Math.min(interval, member.intervalNanos());
         }
         if (stopIfIdleLocked()) {
+          busyRetry = null;
           return true;
         }
-        long remaining = previous + interval - System.nanoTime();
-        if (remaining > 0) {
-          changed.awaitNanos(remaining);
-          continue;
+        long now = System.nanoTime();
+        long slot = previous + interval;
+        List<Member> selection = null;
+        if (busyRetry != null && slot - now > 0) {
+          if (busyRetryAt - now > 0) {
+            changed.awaitNanos(Math.min(busyRetryAt - now, slot - now));
+            continue;
+          }
+          selection = takeBusyRetry(now);
         }
-        due = new ArrayList<>(members.values());
+        // At or after the regular slot the retry is dropped, and the regular round takes every
+        // member. A retry that has nothing left to send waits for the regular slot.
+        busyRetry = null;
+        if (selection != null && !selection.isEmpty()) {
+          due = selection;
+          retry = true;
+        } else {
+          if (slot - now > 0) {
+            changed.awaitNanos(slot - now);
+            continue;
+          }
+          due = new ArrayList<>(members.values());
+          retry = false;
+        }
       } catch (InterruptedException interrupted) {
         Thread.currentThread().interrupt();
         return true;
       } finally {
         lock.unlock();
       }
-      previous = System.nanoTime();
-      // The deadline starts before the payloads are built, so serialization counts against it.
-      long deadline = previous + roundBoundNanos(interval);
-      List<Batch> batches = batches(due);
-      sendBatches(batches, nextFirstBatch(batches.size()), deadline, round);
+      long start = System.nanoTime();
+      long deadline;
+      int first;
+      List<Batch> batches;
+      if (retry) {
+        deadline = retryDeadline(start, interval, previous + interval, due);
+        batches = batches(due);
+        // A retry starts with its first batch, so it does not move the rotation of regular rounds.
+        first = 0;
+      } else {
+        previous = start;
+        // The deadline starts before the payloads are built, so serialization counts against it.
+        deadline = start + roundBoundNanos(interval);
+        batches = batches(due);
+        first = nextFirstBatch(batches.size());
+      }
+      List<Member> busy = sendBatches(batches, first, deadline, round);
+      if (!busy.isEmpty()) {
+        busyRetry = busy;
+        busyRetryAt = System.nanoTime() + busyRetryDelayNanos(interval);
+      }
     }
   }
 
   /**
-   * One {@code heartbeat_many_v1} statement: the leases of one worker, at most {@link
+   * The busy members that a retry can still renew at {@code now}: each is registered as the same
+   * member, so a completed, replaced, or removed member is gone, and its local lease window has not
+   * ended. The caller holds {@link #lock}.
+   */
+  private List<Member> takeBusyRetry(long now) {
+    List<Member> selection = new ArrayList<>();
+    List<Member> pending = busyRetry;
+    if (pending == null) {
+      return selection;
+    }
+    for (Member member : pending) {
+      if (member.equals(members.get(List.of(member.workerId(), member.taskId())))
+          && member.leaseEndsAt() - now > 0) {
+        selection.add(member);
+      }
+    }
+    return selection;
+  }
+
+  /**
+   * The delay before a busy retry for the shortest member interval {@code intervalNanos}: {@code
+   * base × (1 + random)}, with {@code base = min(100 ms, interval / 8)}. The jitter keeps two
+   * workers from meeting the same lock holder in step.
+   */
+  static long busyRetryDelayNanos(long intervalNanos) {
+    long base = Math.min(TimeUnit.MILLISECONDS.toNanos(BUSY_RETRY_BASE_MS), intervalNanos / 8);
+    return base + (long) (base * ThreadLocalRandom.current().nextDouble());
+  }
+
+  /**
+   * The deadline of a busy retry that starts at {@code start}: the round bound, the next regular
+   * slot {@code slot}, and the earliest local lease window end of {@code selection}, whichever
+   * comes first. So a retry never renews a lease that the worker has already given up.
+   */
+  static long retryDeadline(long start, long intervalNanos, long slot, List<Member> selection) {
+    long deadline = start + roundBoundNanos(intervalNanos);
+    if (slot - deadline < 0) {
+      deadline = slot;
+    }
+    for (Member member : selection) {
+      long endsAt = member.leaseEndsAt();
+      if (endsAt - deadline < 0) {
+        deadline = endsAt;
+      }
+    }
+    return deadline;
+  }
+
+  /**
+   * One {@code heartbeat_many_v2} statement: the leases of one worker, at most {@link
    * #ROUND_LIMIT}.
    */
   record Batch(String workerId, List<Member> members) {}
@@ -304,22 +448,25 @@ public final class Heartbeat {
   }
 
   /**
-   * Sends {@code batches} in order from {@code first}. On the dedicated connection a batch that
-   * would start after {@code deadline} is not sent, and a failed batch throws. A borrowing round
-   * sends every batch and skips a failed one.
+   * Sends {@code batches} in order from {@code first}, and returns the registered members that came
+   * back {@code busy}. On the dedicated connection a batch that would start after {@code deadline}
+   * is not sent, and a failed batch throws. A borrowing round sends every batch and skips a failed
+   * one.
    */
-  void sendBatches(List<Batch> batches, int first, long deadline, Round round) throws SQLException {
+  List<Member> sendBatches(List<Batch> batches, int first, long deadline, Round round)
+      throws SQLException {
+    List<Member> busy = new ArrayList<>();
     for (int index = 0; index < batches.size(); index++) {
       Batch batch = batches.get((first + index) % batches.size());
       long sentAt = System.nanoTime();
       if (dedicated && deadline - sentAt <= 0) {
-        return;
+        return busy;
       }
       List<Row> rows;
       try {
         String payload = leases(batch.members());
         long remaining = deadline - System.nanoTime();
-        rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V1, batch.workerId(), payload);
+        rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V2, batch.workerId(), payload);
       } catch (SQLException | RuntimeException error) {
         if (dedicated) {
           throw error;
@@ -330,8 +477,9 @@ public final class Heartbeat {
       for (Row row : rows) {
         statuses.put(row.requiredText("task_id"), row.requiredText("status"));
       }
-      settle(batch.members(), statuses, sentAt);
+      settle(batch.members(), statuses, sentAt, busy);
     }
+    return busy;
   }
 
   /**
@@ -387,12 +535,21 @@ public final class Heartbeat {
     return Json.write(leases);
   }
 
-  private void settle(List<Member> chunk, Map<String, String> statuses, long sentAt) {
+  /**
+   * Hands each status to its member. A result counts only for the member that the round sent, so a
+   * member that left or was replaced while the round ran gets nothing from it. Only {@code
+   * accepted} renews; a {@code busy} member is added to {@code busy}.
+   */
+  private void settle(
+      List<Member> chunk, Map<String, String> statuses, long sentAt, List<Member> busy) {
     for (Member member : chunk) {
       if (!registered(member)) {
         continue;
       }
       String status = statuses.getOrDefault(member.taskId().toString(), "stale");
+      if (status.equals("busy")) {
+        busy.add(member);
+      }
       try {
         if (status.equals("accepted")) {
           member.renew(sentAt);

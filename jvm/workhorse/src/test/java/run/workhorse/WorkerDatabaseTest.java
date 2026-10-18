@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
@@ -566,11 +567,12 @@ class WorkerDatabaseTest {
 
   /**
    * SM-1442: closing a connection does not stop its statement, so each round that timed out used to
-   * leave one more backend waiting on the same row lock. PostgreSQL now ends the round's
-   * transaction by the round's deadline.
+   * leave one more backend waiting on the same lock. PostgreSQL now ends the round's transaction by
+   * the round's deadline. {@code heartbeat_many_v2} skips a locked row, so the test holds a table
+   * lock that the heartbeat waits on ({@link #blockHeartbeats}).
    */
   @Test
-  void endsAHeartbeatStatementThatWaitsOnARowLockOnTheServerByItsDeadline() throws Exception {
+  void endsAHeartbeatStatementThatWaitsOnALockOnTheServerByItsDeadline() throws Exception {
     long intervalMs = 200;
     UUID taskId = enqueue("bounded", Map.of());
     CountDownLatch started = new CountDownLatch(1);
@@ -594,20 +596,14 @@ class WorkerDatabaseTest {
         Connection observer = ScratchDatabase.connect()) {
       var run = runner.submit(worker::runOnce);
       assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
-      blocker.setAutoCommit(false);
-      try (PreparedStatement lock =
-          blocker.prepareStatement(
-              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
-        lock.setString(1, taskId.toString());
-        lock.execute();
-      }
+      blockHeartbeats(blocker);
       long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(8 * intervalMs);
       try (PreparedStatement active =
           observer.prepareStatement(
               "SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000"
                   + " FROM pg_stat_activity WHERE datname = current_database()"
                   + " AND pid <> pg_backend_pid() AND state = 'active'"
-                  + " AND query LIKE '%workhorse.heartbeat_many_v1%'")) {
+                  + " AND query LIKE '%workhorse.heartbeat_many_v2%'")) {
         while (System.nanoTime() < until) {
           List<Double> sample = new ArrayList<>();
           try (ResultSet result = active.executeQuery()) {
@@ -640,10 +636,10 @@ class WorkerDatabaseTest {
   /**
    * SM-1444: a round falls due one interval after the previous round started, also after a failed
    * round replaces the connection. So one timed-out round does not move the next round toward the
-   * end of the lease. The lease is 2.3 intervals, shorter than the default of 3. The row lock makes
-   * the first round end on the server at about 1.4 intervals. The fixed schedule sends the next
-   * round at 2 intervals, inside the lease. A schedule that starts again after the failed round
-   * sends it at about 2.5 intervals, after the lease.
+   * end of the lease. The lease is 2.3 intervals, shorter than the default of 3. The table lock
+   * makes the first round end on the server at about 1.4 intervals. The fixed schedule sends the
+   * next round at 2 intervals, inside the lease. A schedule that starts again after the failed
+   * round sends it at about 2.5 intervals, after the lease.
    */
   @Test
   void keepsARenewalMarginAfterOneTimedOutHeartbeatRound() throws Exception {
@@ -672,13 +668,7 @@ class WorkerDatabaseTest {
       var run = runner.submit(worker::runOnce);
       assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
       long handlerStarted = System.nanoTime();
-      blocker.setAutoCommit(false);
-      try (PreparedStatement lock =
-          blocker.prepareStatement(
-              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
-        lock.setString(1, taskId.toString());
-        lock.execute();
-      }
+      blockHeartbeats(blocker);
       sleepUntil(handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 16 / 10));
       blocker.commit();
       blocker.setAutoCommit(true);
@@ -750,6 +740,84 @@ class WorkerDatabaseTest {
   }
 
   /**
+   * SM-1443: a busy round renews nothing and gives no verdict. While another transaction holds the
+   * task's row, every round is busy, so the lease watchdog ends the attempt with a lost lease at
+   * the end of its local window, and not earlier. The lock comes after one accepted round, which
+   * sent at most one interval before it.
+   */
+  @Test
+  void endsAnAttemptWhoseLeaseStaysBusyAtTheEndOfItsLeaseWindow() throws Exception {
+    long leaseMs = 800;
+    long intervalMs = 100;
+    UUID taskId = enqueue("held", Map.of());
+    CountDownLatch started = new CountDownLatch(1);
+    AtomicLong cancelledAt = new AtomicLong();
+    AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
+    Worker worker =
+        worker()
+            .lease(Duration.ofMillis(leaseMs))
+            .heartbeat(Duration.ofMillis(intervalMs))
+            .handle(
+                "held",
+                Object.class,
+                (ctx, payload) -> {
+                  started.countDown();
+                  ctx.cancellation().await(WAIT);
+                  cancelledAt.set(System.nanoTime());
+                  reason.set(ctx.cancellation().reason());
+                  return Map.of();
+                })
+            .build();
+    ExecutorService runner = Executors.newSingleThreadExecutor();
+    long[] lockedAt = new long[1];
+    try (Connection blocker = ScratchDatabase.connect()) {
+      var run = runner.submit(worker::runOnce);
+      assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
+      Instant claimed = expiresAt(taskId);
+      waitUntil("a round renewed the lease", () -> expiresAt(taskId).isAfter(claimed));
+      blocker.setAutoCommit(false);
+      try (PreparedStatement lock =
+          blocker.prepareStatement(
+              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
+        lock.setString(1, taskId.toString());
+        lock.execute();
+      }
+      lockedAt[0] = System.nanoTime();
+      Instant locked = expiresAt(taskId);
+      waitUntil("the handler was cancelled", () -> cancelledAt.get() != 0);
+      Instant busy = expiresAt(taskId);
+      blocker.commit();
+      assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
+      assertEquals(locked, busy, "a busy round renewed the stored lease");
+    } finally {
+      runner.shutdownNow();
+    }
+    assertEquals(CancellationReason.LEASE_LOST, reason.get());
+    // The window ends one lease after the last accepted round left, which is at most about one
+    // interval before the lock. The slack allows for a slow host.
+    double elapsedMs = (cancelledAt.get() - lockedAt[0]) / 1e6;
+    assertTrue(
+        elapsedMs > leaseMs - 2 * intervalMs,
+        "the attempt ended " + elapsedMs + " ms after the lock");
+    assertTrue(elapsedMs < leaseMs + 400, "the attempt ended " + elapsedMs + " ms after the lock");
+  }
+
+  private static Instant expiresAt(UUID taskId) {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = ?::uuid")) {
+      statement.setString(1, taskId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        assertTrue(result.next(), "the task holds a lease");
+        return result.getTimestamp(1).toInstant();
+      }
+    } catch (SQLException error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  /**
    * A source over {@code source} whose first {@code COMMIT} after a heartbeat statement returns
    * {@code delayMs} late, so that heartbeat round ends after its deadline.
    */
@@ -776,7 +844,7 @@ class WorkerDatabaseTest {
                   new Class<?>[] {Connection.class},
                   (inner, call, values) -> {
                     if (call.getName().equals("prepareStatement")
-                        && String.valueOf(values[0]).contains("heartbeat_many_v1")) {
+                        && String.valueOf(values[0]).contains("heartbeat_many_v2")) {
                       heartbeat.set(true);
                     }
                     boolean delay =
@@ -796,6 +864,20 @@ class WorkerDatabaseTest {
                     return answer;
                   });
             });
+  }
+
+  /**
+   * Makes every heartbeat statement wait until {@code blocker} commits. {@code heartbeat_many_v2}
+   * skips a locked row and reports it busy, so a row lock no longer slows it. It always locks its
+   * fast-tier rows first, so an {@code EXCLUSIVE} lock on {@code fast_task_runtime} makes it wait
+   * on that table. Enqueue and claim of full-tier tasks do not need that lock.
+   */
+  private static void blockHeartbeats(Connection blocker) throws SQLException {
+    blocker.setAutoCommit(false);
+    try (PreparedStatement lock =
+        blocker.prepareStatement("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")) {
+      lock.execute();
+    }
   }
 
   private static void sleepUntil(long nanoTime) throws InterruptedException {

@@ -2,7 +2,7 @@ import type {
   ClaimedTask,
   CompletionClaim,
   CompletionClaimResult,
-  HeartbeatStatus,
+  HeartbeatBatchStatus,
   Json,
 } from "./types.js";
 
@@ -40,7 +40,7 @@ export interface WorkerHeartbeatChannel {
     workerId: string,
     leaseMs: number,
     timeoutMs: number,
-  ): Promise<Map<string, HeartbeatStatus>>;
+  ): Promise<Map<string, HeartbeatBatchStatus>>;
   close(): Promise<void>;
 }
 

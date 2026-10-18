@@ -125,6 +125,7 @@ class HandlerReplayError
 interface HandlerReplayNames
 interface HandlerReplayProblem
 interface HandlerReplayReport
+type HeartbeatBatchStatus
 type HeartbeatStatus
 interface HumanWait
 class HumanWaitAlreadyWaitingError
@@ -3503,6 +3504,8 @@ interface HandlerReplayReport<TResult extends Json = Json> extends HandlerReplay
   };
 }
 
+type HeartbeatBatchStatus = HeartbeatStatus | "busy";
+
 type HeartbeatStatus = "accepted" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
 
 interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
@@ -3612,7 +3615,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 71;
+const MAXIMUM_SCHEMA_VERSION = 72;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3690,7 +3693,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 69;
+const MINIMUM_SCHEMA_VERSION = 72;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -5326,7 +5329,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 71;
+const WORKHORSE_SCHEMA_VERSION = 72;
 
 const WORKHORSE_VERSION = "0.8.0";
 
@@ -5429,7 +5432,7 @@ interface WorkerClientProtocol {
 interface WorkerHeartbeatChannel {
   /** Take the connection now, ahead of any handler that could exhaust the pool. */
   reserve(): void;
-  heartbeatMany(tasks: readonly ClaimedTask[], workerId: string, leaseMs: number, timeoutMs: number): Promise<Map<string, HeartbeatStatus>>;
+  heartbeatMany(tasks: readonly ClaimedTask[], workerId: string, leaseMs: number, timeoutMs: number): Promise<Map<string, HeartbeatBatchStatus>>;
   close(): Promise<void>;
 }
 
@@ -5597,7 +5600,7 @@ interface WorkerQueueApi {
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
-  heartbeatMany?(tasks: readonly ClaimedTask[], workerId: string, leaseMs?: number): Promise<Map<string, HeartbeatStatus>>;
+  heartbeatMany?(tasks: readonly ClaimedTask[], workerId: string, leaseMs?: number): Promise<Map<string, HeartbeatBatchStatus>>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
   releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;

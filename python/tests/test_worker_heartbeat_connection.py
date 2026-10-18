@@ -18,8 +18,10 @@ from workhorse import (
     EnqueueOptions,
     HandlerContext,
     Queue,
+    StaleLeaseError,
     Worker,
 )
+import workhorse.worker as worker_module
 from workhorse._drivers import SyncExecutor
 
 worker_pool: Any
@@ -315,7 +317,7 @@ class FailingHeartbeatExecutor:
 
     def rows(self, statement: Any, parameters: Any = ()) -> Any:
         # The round also sends its transaction settings through rows; only the heartbeat fails.
-        if "heartbeat_many_v1" in statement.psycopg and self._failing():
+        if "heartbeat_many_v2" in statement.psycopg and self._failing():
             self._failed.set()
             raise RuntimeError("heartbeat round failed")
         return self._executor.rows(statement, parameters)
@@ -443,6 +445,79 @@ def test_a_handler_is_aborted_when_no_heartbeat_is_accepted_within_the_lease(
     assert not any("fail_v1" in statement for statement in log.statements()), log.statements()
 
 
+# The first round leaves at about 0.5 s, and the local window from the claim ends at about 1 s. The
+# answer arrives at about 1.25 s, while the lease that PostgreSQL renewed still runs to about 1.5 s,
+# so only the local check can end the attempt.
+LATE_ANSWER_LEASE_MS = 1_000
+LATE_ANSWER_HEARTBEAT_MS = 500
+
+
+def test_an_accepted_answer_after_the_lease_window_ended_does_not_renew_it(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A late answer cannot open a window that ended, even while the watchdog thread is delayed.
+
+    The first round's answer arrives after the local lease window ended. The watchdog thread is
+    held, so only the heartbeat thread can see the ended window. It must not renew, and the
+    attempt must end with lease loss before the watchdog runs.
+    """
+    enqueue(database_url, "heartbeat.late-answer", "heartbeat-late-answer")
+    watchdog_release = Event()
+    started = Event()
+    reasons: list[BaseException | None] = []
+    cancelled_while_watchdog_held: list[bool] = []
+    original_earliest = worker_module._earliest_expiration
+
+    def held_watchdog(task: Any) -> Any:
+        # The watchdog thread reads the expiration first, so this holds it before its first check.
+        assert watchdog_release.wait(30)
+        return original_earliest(task)
+
+    monkeypatch.setattr(worker_module, "_earliest_expiration", held_watchdog)
+
+    def handler(_payload: Any, context: HandlerContext) -> dict[str, bool]:
+        started.set()
+        assert context.cancellation.wait(timeout=5), "the late answer did not end the attempt"
+        cancelled_while_watchdog_held.append(not watchdog_release.is_set())
+        reasons.append(context.cancellation.reason)
+        watchdog_release.set()
+        return {"ok": True}
+
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-late-answer",
+        worker_id="python-heartbeat-late-answer",
+        lease_ms=LATE_ANSWER_LEASE_MS,
+        heartbeat_ms=LATE_ANSWER_HEARTBEAT_MS,
+    ).handle("heartbeat.late-answer", handler)
+    original_rows = worker._heartbeat_rows
+    answered: list[list[str]] = []
+
+    def late_rows(parameters: Any, deadline: float) -> Any:
+        rows = original_rows(parameters, deadline)
+        if not answered:
+            # PostgreSQL renewed the lease, but the answer arrives after the local window ended.
+            sleep(0.75)
+        answered.append([str(row["status"]) for row in rows])
+        return rows
+
+    worker._heartbeat_rows = late_rows  # type: ignore[method-assign]
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        assert started.wait(30)
+        run.join(30)
+    finally:
+        watchdog_release.set()
+        run.join(30)
+
+    assert processed == [True]
+    assert answered[0] == ["accepted"]
+    assert cancelled_while_watchdog_held == [True]
+    assert len(reasons) == 1 and isinstance(reasons[0], StaleLeaseError)
+
+
 # PostgreSQL may end the reserved heartbeat connection while the worker idles between tasks. The
 # lease outlives the whole test, so only a lost reconnect could end an attempt.
 TERMINATION_LEASE_MS = 10_000
@@ -484,7 +559,7 @@ def heartbeat_backends(database_url: str) -> list[int]:
         rows = observer.execute(
             "SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
             "AND pid <> pg_backend_pid() "
-            "AND (query LIKE '%workhorse.heartbeat_many_v1%' OR query = 'COMMIT')"
+            "AND (query LIKE '%workhorse.heartbeat_many_v2%' OR query = 'COMMIT')"
         ).fetchall()
     return [int(row[0]) for row in rows]
 
@@ -631,8 +706,19 @@ async def test_a_terminated_idle_async_heartbeat_connection_is_replaced_on_the_n
 
 
 # SM-1442: a round on the dedicated connection has one deadline, and PostgreSQL ends its statement
-# by that deadline. Before, a round that waited on a row lock kept waiting until the lock was gone.
+# by that deadline. Before, a round that waited on a lock kept waiting until the lock was gone.
 BOUND_HEARTBEAT_MS = 200
+
+
+def lock_the_fast_tier_table(blocker: psycopg.Connection[Any]) -> None:
+    """Open a transaction that makes every heartbeat statement wait until it commits.
+
+    heartbeat_many_v2 skips a locked row and reports it busy, so a row lock no longer makes a round
+    wait. The function always locks rows of workhorse.fast_task_runtime first, and that step needs a
+    table lock that EXCLUSIVE mode refuses. The full-tier table stays free, so enqueue and claim of a
+    full-tier task do not wait.
+    """
+    blocker.execute("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")
 
 
 def active_heartbeats(observer: psycopg.Connection[Any]) -> list[float]:
@@ -641,21 +727,19 @@ def active_heartbeats(observer: psycopg.Connection[Any]) -> list[float]:
         """SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000
              FROM pg_stat_activity
             WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-              AND query LIKE '%%workhorse.heartbeat_many_v1%%'"""
+              AND query LIKE '%%workhorse.heartbeat_many_v2%%'"""
     ).fetchall()
     return [float(row[0]) for row in rows]
 
 
-def sample_heartbeats_while_locked(database_url: str, task_id: str) -> list[list[float]]:
-    """Hold the task's row lock for eight intervals, and sample the heartbeat statements."""
+def sample_heartbeats_while_locked(database_url: str) -> list[list[float]]:
+    """Hold the fast-tier table lock for eight intervals, and sample the heartbeat statements."""
     samples: list[list[float]] = []
     with (
         psycopg.connect(database_url) as blocker,
         psycopg.connect(database_url, autocommit=True) as observer,
     ):
-        blocker.execute(
-            "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
-        )
+        lock_the_fast_tier_table(blocker)
         until = monotonic() + 8 * BOUND_HEARTBEAT_MS / 1000
         while monotonic() < until:
             samples.append(active_heartbeats(observer))
@@ -665,7 +749,7 @@ def sample_heartbeats_while_locked(database_url: str, task_id: str) -> list[list
 
 
 def assert_one_bounded_statement(samples: list[list[float]]) -> None:
-    assert any(samples), "no heartbeat statement waited on the locked row"
+    assert any(samples), "no heartbeat statement waited on the table lock"
     assert max(len(sample) for sample in samples) <= 1, samples
     # A statement ends by its round's deadline. The slack allows for a slow host, and stays far
     # below the 1.6 s that the lock was held.
@@ -689,7 +773,7 @@ def test_a_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_by_its_deadli
     run.start()
     try:
         assert task.started.wait(30)
-        samples = sample_heartbeats_while_locked(database_url, task_id)
+        samples = sample_heartbeats_while_locked(database_url)
     finally:
         task.release.set()
         run.join(30)
@@ -722,7 +806,7 @@ async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_
     run = asyncio.create_task(worker.run_once())
     try:
         assert await asyncio.to_thread(task.started.wait, 30)
-        samples = await asyncio.to_thread(sample_heartbeats_while_locked, database_url, task_id)
+        samples = await asyncio.to_thread(sample_heartbeats_while_locked, database_url)
     finally:
         task.release.set()
         processed = await asyncio.wait_for(run, timeout=30)
@@ -735,7 +819,7 @@ async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_
 
 # The fixed schedule (SM-1444): a round falls due one interval after the previous round started, so
 # one timed-out round does not move the next round toward the end of the lease. The lease is 2.3
-# intervals, shorter than the default of 3. The row lock makes the first round end on the server at
+# intervals, shorter than the default of 3. The table lock makes the first round end on the server at
 # about 1.4 intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A
 # schedule that waits one interval after the failed round ends sends it at about 2.4 intervals,
 # after the lease.
@@ -743,15 +827,13 @@ MARGIN_HEARTBEAT_MS = 1_000
 MARGIN_LEASE_MS = 2_300
 
 
-def time_out_one_round(database_url: str, task_id: str, task: BlockingTask) -> None:
-    """Hold the row lock through the first round, then release the handler after the lease."""
+def time_out_one_round(database_url: str, task: BlockingTask) -> None:
+    """Hold the table lock through the first round, then release the handler after the lease."""
     assert task.started.wait(30)
     started = monotonic()
     interval = MARGIN_HEARTBEAT_MS / 1000
     with psycopg.connect(database_url) as blocker:
-        blocker.execute(
-            "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
-        )
+        lock_the_fast_tier_table(blocker)
         sleep(max(0.0, started + 1.6 * interval - monotonic()))
         blocker.commit()
     # Run past the end of the lease from the claim, so only a renewal keeps the task.
@@ -773,7 +855,7 @@ def test_one_timed_out_heartbeat_round_leaves_a_renewal_margin(database_url: str
     run = Thread(target=lambda: processed.append(worker.run_once()))
     run.start()
     try:
-        time_out_one_round(database_url, task_id, task)
+        time_out_one_round(database_url, task)
     finally:
         task.release.set()
         run.join(30)
@@ -804,7 +886,7 @@ async def test_one_timed_out_async_heartbeat_round_leaves_a_renewal_margin(
     worker.handle("heartbeat.margin", task.async_handler)
     run = asyncio.create_task(worker.run_once())
     try:
-        await asyncio.to_thread(time_out_one_round, database_url, task_id, task)
+        await asyncio.to_thread(time_out_one_round, database_url, task)
     finally:
         task.release.set()
         processed = await asyncio.wait_for(run, timeout=30)
@@ -869,3 +951,188 @@ def test_a_failed_heartbeat_round_opens_its_replacement_before_the_next_round(
     assert processed == [True]
     assert not task.cancelled
     assert outcome(database_url, task_id) == ("succeeded",)
+
+
+# SM-1443: heartbeat_many_v2 skips a row that another transaction locks and reports the lease busy.
+# A busy lease gets no renewal and no ownership verdict, and the worker retries it soon.
+BUSY_HEARTBEAT_MS = 400
+
+
+class RecordedRounds:
+    """Record when each heartbeat round of a worker started and ended, and its statuses."""
+
+    def __init__(self, worker: Worker) -> None:
+        self._lock = Lock()
+        self.entries: list[tuple[float, float, list[str]]] = []
+        original = worker._heartbeat_rows
+
+        def recorded(parameters: Any, deadline: float) -> Any:
+            started = monotonic()
+            rows = original(parameters, deadline)
+            with self._lock:
+                self.entries.append((started, monotonic(), [str(row["status"]) for row in rows]))
+            return rows
+
+        worker._heartbeat_rows = recorded  # type: ignore[method-assign]
+
+    def after(self, index: int) -> list[tuple[float, float, list[str]]]:
+        with self._lock:
+            return self.entries[index:]
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self.entries)
+
+
+def wait_for_round(rounds: RecordedRounds, since: int, status: str) -> tuple[float, float]:
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        for started, ended, statuses in rounds.after(since):
+            if statuses == [status]:
+                return started, ended
+        sleep(0.005)
+    raise AssertionError(f"no heartbeat round reported {status}")
+
+
+def observe_a_busy_round(
+    database_url: str, task_id: str, task: BlockingTask, rounds: RecordedRounds
+) -> None:
+    """Lock the task's row, see one round report it busy at once, then see a round renew it."""
+    assert task.started.wait(30)
+    with psycopg.connect(database_url) as blocker:
+        blocker.execute(
+            "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
+        )
+        locked_from = rounds.count()
+        held_expiry = lease_expiry(database_url, task_id)
+        started, ended = wait_for_round(rounds, locked_from, "busy")
+        # A busy round does not wait on the row lock, so it ends long before its round bound.
+        assert ended - started < BUSY_HEARTBEAT_MS * 3 / 4 / 1000 / 2, ended - started
+        assert lease_expiry(database_url, task_id) == held_expiry
+        released_from = rounds.count()
+        blocker.commit()
+    wait_for_round(rounds, released_from, "accepted")
+    wait_for_lease_renewal(database_url, task_id, held_expiry)
+    task.release.set()
+
+
+def test_a_heartbeat_round_reports_a_locked_row_busy_without_waiting(database_url: str) -> None:
+    task_id = enqueue(database_url, "heartbeat.busy", "heartbeat-busy")
+    task = BlockingTask()
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-busy",
+        worker_id="python-heartbeat-busy",
+        lease_ms=30_000,
+        heartbeat_ms=BUSY_HEARTBEAT_MS,
+    ).handle("heartbeat.busy", task.handler)
+    rounds = RecordedRounds(worker)
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        observe_a_busy_round(database_url, task_id, task, rounds)
+    finally:
+        task.release.set()
+        run.join(30)
+
+    assert processed == [True]
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+async def test_an_async_heartbeat_round_reports_a_locked_row_busy_without_waiting(
+    database_url: str, driver: str, async_psycopg_pool, asyncpg_pool
+) -> None:
+    queue = f"heartbeat-busy-{driver}"
+    task_id = enqueue(database_url, "heartbeat.busy", queue)
+    task = BlockingTask()
+    options: dict[str, Any] = {
+        "queue": queue,
+        "worker_id": f"python-async-heartbeat-busy-{driver}",
+        "lease_ms": 30_000,
+        "heartbeat_ms": BUSY_HEARTBEAT_MS,
+    }
+    if driver == "psycopg":
+        worker = AsyncWorker.from_psycopg(async_psycopg_pool, **options)
+    else:
+        worker = AsyncWorker.from_asyncpg(asyncpg_pool, **options)
+    worker.handle("heartbeat.busy", task.async_handler)
+    rounds = RecordedRounds(worker._inner)
+    run = asyncio.create_task(worker.run_once())
+    try:
+        await asyncio.to_thread(observe_a_busy_round, database_url, task_id, task, rounds)
+    finally:
+        task.release.set()
+        processed = await asyncio.wait_for(run, timeout=30)
+
+    assert processed is True
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)
+
+
+# A row that stays locked keeps every round busy. Busy is no verdict, so the attempt runs until its
+# lease watchdog ends it, one lease after the last accepted renewal.
+CONTINUOUS_BUSY_LEASE_MS = 1_000
+CONTINUOUS_BUSY_HEARTBEAT_MS = 200
+
+
+def test_a_lease_that_stays_busy_is_lost_when_the_watchdog_ends_it(database_url: str) -> None:
+    task_id = enqueue(database_url, "heartbeat.always-busy", "heartbeat-always-busy")
+    started = Event()
+    locked = Event()
+    started_at: list[float] = []
+    reasons: list[BaseException | None] = []
+    cancelled_at: list[float] = []
+
+    def handler(_payload: Any, context: HandlerContext) -> dict[str, bool]:
+        started_at.append(monotonic())
+        started.set()
+        assert locked.wait(30)
+        assert context.cancellation.wait(timeout=30), "the watchdog never aborted the handler"
+        cancelled_at.append(monotonic())
+        reasons.append(context.cancellation.reason)
+        return {"ok": True}
+
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-always-busy",
+        worker_id="python-heartbeat-always-busy",
+        lease_ms=CONTINUOUS_BUSY_LEASE_MS,
+        heartbeat_ms=CONTINUOUS_BUSY_HEARTBEAT_MS,
+    ).handle("heartbeat.always-busy", handler)
+    rounds = RecordedRounds(worker)
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        assert started.wait(30)
+        with psycopg.connect(database_url) as blocker:
+            blocker.execute(
+                "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
+            )
+            locked_at = monotonic()
+            locked.set()
+            deadline = monotonic() + 30
+            while not cancelled_at and monotonic() < deadline:
+                sleep(0.01)
+            recorded = rounds.after(0)
+            blocker.commit()
+    finally:
+        locked.set()
+        run.join(30)
+
+    assert processed == [True]
+    assert len(reasons) == 1 and isinstance(reasons[0], StaleLeaseError)
+    # Every round sent while the row was locked reported it busy, and retries ran between the slots.
+    held = [entry for entry in recorded if entry[0] >= locked_at]
+    assert held and all(statuses == ["busy"] for _, _, statuses in held), held
+    assert len(held) > CONTINUOUS_BUSY_LEASE_MS // CONTINUOUS_BUSY_HEARTBEAT_MS, held
+    # The watchdog measures one lease from the last accepted renewal, or from the claim request,
+    # which left before the handler started.
+    accepted = [entry[0] for entry in recorded if entry[2] == ["accepted"]]
+    renewed_at = max([started_at[0] - 0.3, *accepted])
+    assert cancelled_at[0] >= renewed_at + CONTINUOUS_BUSY_LEASE_MS / 1000 - 0.01
+    assert cancelled_at[0] <= max([started_at[0], *accepted]) + 2 * CONTINUOUS_BUSY_LEASE_MS / 1000

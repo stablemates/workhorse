@@ -1070,7 +1070,9 @@ class QueryPressureProbe implements Queryable {
       }
     }
     const heartbeat =
-      text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_many_v1");
+      text.includes("workhorse.heartbeat_v1") ||
+      text.includes("workhorse.heartbeat_many_v1") ||
+      text.includes("workhorse.heartbeat_many_v2");
     if (heartbeat) {
       this.heartbeatCalls += 1;
     }

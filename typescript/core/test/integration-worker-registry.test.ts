@@ -33,7 +33,7 @@ const heartbeatBackends = async (): Promise<number[]> => {
     `SELECT pid
        FROM pg_stat_activity
       WHERE datname = current_database()
-        AND (query LIKE '%workhorse.heartbeat_many_v1%' OR query = 'COMMIT')
+        AND (query LIKE '%workhorse.heartbeat_many_v2%' OR query = 'COMMIT')
         AND query NOT LIKE '%pg_stat_activity%'`,
   );
   return backends.rows.map((row) => row.pid);

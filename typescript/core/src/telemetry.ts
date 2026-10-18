@@ -1,7 +1,7 @@
 import type {
   CancelStatus,
   ClaimedTask,
-  HeartbeatStatus,
+  HeartbeatBatchStatus,
   RedriveStatus,
   TraceContext,
 } from "./types.js";
@@ -432,7 +432,7 @@ export function recordScheduleFired(namespace: string, name: string, occurrenceA
   );
 }
 
-export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepted">): void {
+export function recordHeartbeatFailure(status: Exclude<HeartbeatBatchStatus, "accepted">): void {
   telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
 }
 

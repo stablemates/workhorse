@@ -100,6 +100,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"oversized-result":         executeWorkerOversizedResultFixture,
 		"shutdown-cancellation":    executeWorkerShutdownCancellationFixture,
 		"heartbeat-failure":        executeWorkerHeartbeatFailureFixture,
+		"heartbeat-busy":           executeWorkerHeartbeatBusyFixture,
 		"maintenance-phase-error":  executeWorkerMaintenancePhaseErrorFixture,
 	}
 	coverage := make(map[string]struct{}, len(manifest.RuntimeCoverage))
@@ -1192,6 +1193,170 @@ func executeWorkerHeartbeatFailureFixture(t *testing.T, fixture workerRuntimeFix
 	}
 	if len(cancellations) != fixture.ExpectedCancellations {
 		t.Fatalf("a failed heartbeat round cancelled %d handlers", len(cancellations))
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
+}
+
+// withInjectedFunctionBody replaces one installed function with the fixture's body for the
+// duration of observe. It restores the definition the database reports afterwards, and then runs
+// the fixture's teardown, whatever observe does.
+func withInjectedFunctionBody(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	injection workerFixtureInjection,
+	observe func(),
+) {
+	t.Helper()
+	var original string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT pg_get_functiondef($1::regprocedure)",
+		injection.Function,
+	).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, statement := range injection.Teardown {
+			if _, err := pool.Exec(context.WithoutCancel(ctx), statement); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	for _, statement := range injection.Setup {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, fmt.Sprintf(
+		"CREATE OR REPLACE FUNCTION %s LANGUAGE plpgsql AS $injected$ %s $injected$",
+		injection.Header, injection.Body,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(context.WithoutCancel(ctx), original); err != nil {
+			t.Error(err)
+		}
+	}()
+	observe()
+}
+
+// heartbeatBusyRound is one row of the fixture's roundsQuery: when an injected busy round ran and
+// how many leases it named.
+type heartbeatBusyRound struct {
+	roundAtMS  float64
+	leaseCount int
+}
+
+func readHeartbeatBusyRounds(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string) []heartbeatBusyRound {
+	t.Helper()
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (heartbeatBusyRound, error) {
+		var round heartbeatBusyRound
+		err := row.Scan(&round.roundAtMS, &round.leaseCount)
+		return round, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rounds
+}
+
+func executeWorkerHeartbeatBusyFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-busy-fixture")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+		PollInterval:      5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release, closeRelease := releaseOnce(t)
+	cancellations := make(chan struct{}, 1)
+	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		if handlerContext.Err() != nil {
+			cancellations <- struct{}{}
+		}
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("the worker did not process the heartbeat-busy task")
+		}
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		closeRelease()
+		t.Fatal("the worker did not start the handler")
+	}
+	within := time.Duration(fixture.RenewalTimeoutMS) * time.Millisecond
+	var rounds []heartbeatBusyRound
+	func() {
+		defer closeRelease()
+		waitForLeaseRenewal(t, ctx, observer, taskID, leaseExpiry(t, ctx, observer, taskID), within)
+		withInjectedFunctionBody(t, ctx, pool, fixture.Injection, func() {
+			deadline := time.Now().Add(within)
+			for {
+				rounds = readHeartbeatBusyRounds(t, ctx, pool, fixture.Injection.RoundsQuery)
+				if len(rounds) >= fixture.ExpectedBusyRounds {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%s saw %d busy heartbeat rounds", fixture.ID, len(rounds))
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			// The busy rounds renewed nothing. The next round reaches the real function and renews.
+			waitForLeaseRenewal(t, ctx, observer, taskID, leaseExpiry(t, ctx, observer, taskID), within)
+		})
+	}()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+
+	busy := rounds[:fixture.ExpectedBusyRounds]
+	// Each retry sent only the busy lease, and came sooner than the next regular round.
+	for index, round := range busy {
+		if round.leaseCount != 1 {
+			t.Fatalf("busy round %d named %d leases; want 1", index+1, round.leaseCount)
+		}
+		if index > 0 {
+			if gap := round.roundAtMS - busy[index-1].roundAtMS; gap >= fixture.MaximumRetryGapMS {
+				t.Fatalf("busy round %d came %.0f ms after the previous one; want less than %.0f ms",
+					index+1, gap, fixture.MaximumRetryGapMS)
+			}
+		}
+	}
+	if len(cancellations) != fixture.ExpectedCancellations {
+		t.Fatalf("busy heartbeat rounds cancelled %d handlers", len(cancellations))
 	}
 	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})

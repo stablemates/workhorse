@@ -20,6 +20,7 @@ import type {
   CompletionClaim,
   CompletionClaimResult,
   ExpireOwnedStatus,
+  HeartbeatBatchStatus,
   HeartbeatStatus,
   Json,
   ReleaseOwnedStatus,
@@ -367,7 +368,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs = 30_000,
-  ): Promise<Map<string, HeartbeatStatus>> {
+  ): Promise<Map<string, HeartbeatBatchStatus>> {
     const leases = tasks.map((task) => ({
       taskId: task.id,
       fenceToken: task.fenceToken.toString(),
@@ -375,8 +376,8 @@ export class ClaimLeaseFenceModule extends QueueModule {
     }));
     const result = await queryFencedWrite<{
       task_id: string;
-      status: HeartbeatStatus;
-    }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v1"], [
+      status: HeartbeatBatchStatus;
+    }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v2"], [
       workerId,
       JSON.stringify(leases),
     ]);

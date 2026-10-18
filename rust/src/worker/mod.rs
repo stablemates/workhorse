@@ -1346,7 +1346,11 @@ mod tests {
         let worker = Worker::new(silent_pool_on(port), options).unwrap();
         let permit = Arc::clone(&worker.0.run_permit).acquire_owned().await.unwrap();
         let scope = RunScope::new(&worker.0, permit);
-        let membership = worker.0.register_heartbeat(Uuid::new_v4(), 1);
+        let membership = worker.0.register_heartbeat(
+            Uuid::new_v4(),
+            1,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+        );
         // The round is in flight once the server holds the connection it asked for.
         tokio::time::timeout(Duration::from_secs(5), accepted.recv())
             .await

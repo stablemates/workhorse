@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,10 +6,46 @@ import { checkRelease } from "./check-release.js";
 import { corePackage } from "./packages.js";
 
 const current = (await corePackage()).version;
+const repositoryRoot = path.resolve(import.meta.dirname, "..");
+const schemaVersion = Number(
+  /WORKHORSE_SCHEMA_VERSION = (\d+);/.exec(
+    await readFile(
+      path.join(repositoryRoot, "typescript/core/src/queue/sql-catalogue.generated.ts"),
+      "utf8",
+    ),
+  )![1],
+);
+const newestFrozen = Math.max(
+  ...(await readdir(path.join(repositoryRoot, "sql/releases")))
+    .map((file) => /^(\d{4})\.sql$/.exec(file)?.[1])
+    .filter((digits) => digits !== undefined)
+    .map(Number),
+);
+
+// After an x.y.0 release, main can carry a schema that the next minor freezes. The tree then is no
+// longer that release, so the only expected problem is the freeze error for the newer schema. A real
+// x.y.0 tag commit has its artifact, and the fixture test below checks that a missing one fails.
+const expectedProblem =
+  schemaVersion > newestFrozen && current.endsWith(".0")
+    ? `sql/releases/${String(schemaVersion).padStart(4, "0")}.sql is missing, but release ${current} must freeze schema version ${schemaVersion}`
+    : undefined;
+
+/** The problems that `checkRelease` reports for `tag`, or undefined when it accepts the tag. */
+async function releaseProblems(
+  line: Parameters<typeof checkRelease>[0],
+  tag: string,
+): Promise<string | undefined> {
+  try {
+    await checkRelease(line, tag);
+    return undefined;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
 
 describe("checkRelease against this repository", () => {
   it("accepts the lockstep npm package versions when the root changelog documents them", async () => {
-    await expect(checkRelease("npm", `v${current}`)).resolves.toBeUndefined();
+    expect(await releaseProblems("npm", `v${current}`)).toBe(expectedProblem);
   });
 
   it("rejects an npm tag that disagrees with the package manifests", async () => {
@@ -23,7 +59,7 @@ describe("checkRelease against this repository", () => {
   });
 
   it("accepts the Python manifest version when its changelog documents the release", async () => {
-    await expect(checkRelease("python", `python/v${current}`)).resolves.toBeUndefined();
+    expect(await releaseProblems("python", `python/v${current}`)).toBe(expectedProblem);
   });
 
   it("rejects a Python tag that disagrees with the package manifest", async () => {
@@ -33,7 +69,7 @@ describe("checkRelease against this repository", () => {
   });
 
   it("accepts a Go module tag when its changelog documents the release", async () => {
-    await expect(checkRelease("go", `go/v${current}`)).resolves.toBeUndefined();
+    expect(await releaseProblems("go", `go/v${current}`)).toBe(expectedProblem);
   });
 
   it("rejects malformed and undocumented Go module tags", async () => {

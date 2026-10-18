@@ -45,6 +45,7 @@ import type {
   ExpirationRuntimeFixture,
   GracefulDrainRuntimeFixture,
   HeartbeatCadenceRuntimeFixture,
+  HeartbeatBusyRuntimeFixture,
   HeartbeatFailureRuntimeFixture,
   JsonRoundTripRuntimeFixture,
   JsonValue,
@@ -168,19 +169,6 @@ function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } 
     resolve = settle;
   });
   return { promise, resolve };
-}
-
-// After an attempt settles, heartbeat statements that waited on the task row can still hold its
-// row lock, and a claim skips a locked row. A later pass takes the task. The 5 s bound is more than
-// 3 times the longest drain of abandoned heartbeat statements seen in the fault-injection check,
-// and shorter than the test timeout (docs/architecture/lifecycle.md, "A renewal that waits on a
-// settlement").
-async function runOnceUntilHandled(worker: Worker): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!(await worker.runOnce())) {
-    if (Date.now() >= deadline) throw new Error("no pass ran a handler within 5 s");
-    await sleep(10);
-  }
 }
 
 async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
@@ -405,10 +393,9 @@ async function executeExpirationRuntimeFixture(
     throw reason;
   });
 
-  for (const [run, expected] of fixture.expectedAfterRuns.entries()) {
-    // The first pass claims a new task, so it must run the handler.
-    if (run === 0) await expect(worker.runOnce()).resolves.toBe(true);
-    else await runOnceUntilHandled(worker);
+  for (const expected of fixture.expectedAfterRuns) {
+    // Each pass claims the task at once: no heartbeat holds the row of the settled attempt.
+    await expect(worker.runOnce()).resolves.toBe(true);
     await expect(admin.getTask(id)).resolves.toMatchObject({
       state: expected.state,
       currentAttempt: expected.attempt,
@@ -1112,6 +1099,102 @@ async function withInjectedFunctionFailure<T>(
   }
 }
 
+/**
+ * Replaces one installed function with the fixture's body for the duration of `observe`, and
+ * restores the definition the database reports afterwards, whatever `observe` does.
+ */
+async function withInjectedFunctionBody<T>(
+  database: Queryable,
+  injection: HeartbeatBusyRuntimeFixture["injection"],
+  observe: () => Promise<T>,
+): Promise<T> {
+  const definition = await database.query<{ source: string }>(
+    "SELECT pg_get_functiondef($1::regprocedure) AS source",
+    [injection.function],
+  );
+  const original = definition.rows[0]!.source;
+  for (const statement of injection.setup) await database.query(statement);
+  try {
+    await database.query(
+      `CREATE OR REPLACE FUNCTION ${injection.header} LANGUAGE plpgsql AS $injected$ ${injection.body} $injected$`,
+    );
+    try {
+      return await observe();
+    } finally {
+      await database.query(original);
+    }
+  } finally {
+    for (const statement of injection.teardown) await database.query(statement);
+  }
+}
+
+async function executeHeartbeatBusyRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: HeartbeatBusyRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
+  const started = deferred();
+  const release = deferred();
+  let cancellations = 0;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    started.resolve();
+    await release.promise;
+    if (context.signal.aborted) cancellations += 1;
+    return null;
+  });
+
+  const execution = worker.runOnce();
+  let rounds: { round_at_ms: number; lease_count: number }[] = [];
+  try {
+    await started.promise;
+    const claimed = await leaseExpiry(database, id);
+    await waitForRenewal(database, id, claimed, fixture.renewalTimeoutMs);
+    await withInjectedFunctionBody(database, fixture.injection, async () => {
+      const deadline = Date.now() + fixture.renewalTimeoutMs;
+      for (;;) {
+        rounds = (
+          await database.query<{ round_at_ms: number; lease_count: number }>(
+            fixture.injection.roundsQuery,
+          )
+        ).rows;
+        if (rounds.length >= fixture.expectedBusyRounds) break;
+        if (Date.now() >= deadline)
+          throw new Error(`${fixture.id} saw ${rounds.length} busy heartbeat rounds`);
+        await sleep(5);
+      }
+      // The busy rounds renewed nothing. The next round reaches the real function and renews.
+      await waitForRenewal(database, id, await leaseExpiry(database, id), fixture.renewalTimeoutMs);
+    });
+  } finally {
+    release.resolve();
+  }
+  await expect(execution).resolves.toBe(true);
+
+  const busy = rounds.slice(0, fixture.expectedBusyRounds);
+  // Each retry sent only the busy lease, and came sooner than the next regular round.
+  expect(busy.map((round) => Number(round.lease_count))).toEqual(busy.map(() => 1));
+  for (let index = 1; index < busy.length; index += 1) {
+    expect(Number(busy[index]!.round_at_ms) - Number(busy[index - 1]!.round_at_ms)).toBeLessThan(
+      fixture.maximumRetryGapMs,
+    );
+  }
+  expect(cancellations).toBe(fixture.expectedCancellations);
+  await expect(admin.getTask(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
 async function leaseExpiry(database: Queryable, taskId: string): Promise<Date> {
   const runtime = await database.query<{ expires_at: Date }>(
     "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1",
@@ -1412,6 +1495,9 @@ async function executeRuntimeFixture(
     case "heartbeat-failure":
       await executeHeartbeatFailureRuntimeFixture(queue, admin, database, fixture);
       break;
+    case "heartbeat-busy":
+      await executeHeartbeatBusyRuntimeFixture(queue, admin, database, fixture);
+      break;
     case "maintenance-phase-error":
       await executeMaintenancePhaseErrorRuntimeFixture(queue, admin, database, fixture);
       break;
@@ -1496,7 +1582,7 @@ describe("SQL protocol conformance fixtures", () => {
     expect(fixtures.compatibility).toContainEqual(
       expect.objectContaining({ id: "current", compatible: true }),
     );
-    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(15);
+    expect(fixtures.compatibility.filter((fixture) => !fixture.compatible)).toHaveLength(16);
   });
 
   // Recreating the compatibility database mid-test waits on the same cluster-wide checkpoint

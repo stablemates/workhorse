@@ -612,9 +612,10 @@ A claim moves admissible ready work to active under a new fence.
 - On a fast-tier queue, `claim_many_v1` branches to `fast_claim_v1` instead ([Fast
   claim](fast-tier.md#fast-claim)).
 
-A claim skips a ready row that another transaction locks. A heartbeat that raced the row's
-settlement can hold that lock for a short time ([A renewal that waits on a
-settlement](#a-renewal-that-waits-on-a-settlement)).
+A claim skips a ready row that another transaction locks. `heartbeat_many_v2` does not wait for the
+lock of a settlement, so it does not hold the row of a settled task. A `heartbeat_many_v1` call of an
+old worker can still hold that lock for a short time ([A renewal that meets a
+lock](#a-renewal-that-meets-a-lock)).
 
 One runtime update changes the selected row to active. It writes the worker, global fence,
 acquisition, heartbeat, and expiry data. The same transaction appends the claim event before it
@@ -1071,54 +1072,128 @@ The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeo
 
 #### Batched renewal
 
-`heartbeat_many_v1(p_worker_id, p_leases jsonb)` accepts 1 through 100
-`{ taskId, fenceToken, leaseMs }` entries.
+`heartbeat_many_v2(p_worker_id, p_leases jsonb)` accepts 1 through 100
+`{ taskId, fenceToken, leaseMs }` entries. Since migration 0073 (schema version 72), every SDK
+worker sends its rounds through it ([ADR 0105](../decisions/0105-skip-a-locked-row-in-a-heartbeat-and-report-the-lease-as-busy.md)).
 
-1. On the full tier it locks the worker's named rows in `task_id` order.
-2. It reads `clock_timestamp()` after those locks.
-3. One `UPDATE ... FROM` then renews every matching generation.
+1. It locks the worker's named rows on both tiers with `FOR NO KEY UPDATE SKIP LOCKED`: first
+   `fast_task_runtime`, then `task_runtime`, each in `task_id` order. It does not wait for a row
+   that another transaction locks.
+2. It reads `clock_timestamp()` after both lock steps.
+3. One `UPDATE ... FROM` for each tier renews only the rows that it locked. Each `UPDATE` keeps the
+   task, worker, fence, and `state = 'active'` filters.
 
-The function returns `(ordinal, task_id, status)` in input order. It reports a missing or mismatched
-generation as `stale`.
+The function returns `(ordinal, task_id, status)` in input order. The statuses are the statuses of
+`heartbeat_v1`, and `busy`:
 
-Each TypeScript, Python, Go, and Rust worker runs one heartbeat round at a time. It sends every
-active lease through this function. Per-task deadline timers and abort signals stay independent.
+| Status  | Condition                                                                                                    | Changes |
+| ------- | ------------------------------------------------------------------------------------------------------------ | ------- |
+| `busy`  | The function did not lock the row, and a plain read in the same statement still shows the generation active. | nothing |
+| `stale` | No `UPDATE` matched, and the lease is not `busy`. This includes a missing or replaced generation.            | nothing |
 
-#### A renewal that waits on a settlement
+`busy` means no renewal and no ownership verdict. It does not mean that the worker still owns the
+lease: a settlement can have changed the row in a transaction that has not committed yet. A
+`FOR KEY SHARE` lock, as a foreign-key check takes, does not conflict with the lock step, so it
+does not cause `busy`. A mixed batch, which names tasks of both tiers, uses the same steps. It calls
+no single-lease function.
 
-A heartbeat round can start before an attempt settles. Then `heartbeat_many_v1` waits for the row
-lock that the settlement holds, for example the `FOR UPDATE` lock of `expire_owned_v1`.
+`heartbeat_many_v1` has the same input. It locks with `FOR NO KEY UPDATE` and waits for a locked
+row. A mixed batch goes through `heartbeat_v1` one lease at a time, in task ID order. It never
+returns `busy`. It stays for workers that do not know the status.
 
-1. The settlement moves the row to `ready` with no worker, and commits.
-2. In read committed isolation, PostgreSQL gives the waiting heartbeat a lock on the new row
-   version. Then it checks the heartbeat's `worker_id` filter again.
-3. The row does not match, so the heartbeat reports `stale` for that task. It keeps the row lock
-   until its transaction ends. The worker sends each heartbeat as one statement with no explicit
-   transaction, so the transaction ends with that statement.
-4. A claim selects ready rows with `FOR NO KEY UPDATE OF runtime SKIP LOCKED`. Thus it skips the
-   row until the last heartbeat statement that waits on the row ends.
-5. Then a later claim takes the task. The skip does not change the row, so the task is not lost.
+Each worker runs one heartbeat round at a time. It sends every active lease in one round, and Ruby
+and JVM send one statement for each worker on the pool. Per-task deadline timers and abort signals
+stay independent.
 
-Each bounded heartbeat round has one deadline, and server timeouts end the heartbeat statement by
-that deadline ([Heartbeat round deadline](#heartbeat-round-deadline)). Thus a heartbeat statement waits on the row
-for at most the rest of its round, and at most one heartbeat statement of a worker waits at a time.
-The skip then lasts until that statement ends. A round that reaches its deadline rolls back, so it
-renews no lease in it.
+#### A renewal that meets a lock
 
-Before SM-1442, a round that passed its bound only closed its connection. PostgreSQL does not stop
-a statement when its client closes the connection: with `client_connection_check_interval` at 0,
-which is the default, it does not check for a closed client while a statement runs. The abandoned
-statements then waited on the row lock and held it in turn. In the SM-1434 fault-injection check,
-each heartbeat statement took 300 ms longer, with a `heartbeatMs` of 50 ms. Up to 5 statements were
-active at the same time, and the queue took about 1.5 s to drain.
+A heartbeat round can start while another transaction holds a task row. For example, a settlement
+such as `expire_owned_v1` holds the row with `FOR UPDATE`.
 
-A settlement can be an execution timeout, a failure that retries with no delay, a release through
-`release_owned_v1`, or lease recovery through `recover_expired_v1`. Each can leave the row `ready`
-while the heartbeat of the old owner waits for it.
+1. `heartbeat_many_v2` skips the row and reports the lease `busy` at once. It holds no lock on the
+   row.
+2. The settlement moves the row to `ready` with no worker, and commits.
+3. A claim selects ready rows with `FOR NO KEY UPDATE OF runtime SKIP LOCKED`. No heartbeat holds the
+   row, so the claim takes the task.
+4. The next round of the old owner reports `stale` for that lease.
 
-The worker does not wait for a heartbeat round that is in flight when an attempt ends. Thus
-`runOnce()` can return before that heartbeat commits, and the next `runOnce()` can claim no task
-(SM-1434). SM-1443 changes the heartbeat so that it does not wait for the row lock of a settlement.
+Before migration 0073, `heartbeat_many_v1` waited for the settlement in step 1. After the commit,
+PostgreSQL locked the new row version for the heartbeat, which then reported `stale` and kept the
+lock until its transaction ended. A claim skipped the ready row during that time (SM-1434). An old
+worker that still calls `heartbeat_many_v1` keeps that behavior.
+
+`SKIP LOCKED` does not stop every wait. If another transaction updates and commits the row between
+the snapshot of the lock step and the lock, PostgreSQL follows the update chain to the new row
+version. That walk waits for a transaction that locks the new version, as
+[ADR 0081](../decisions/0081-release-a-fused-claim-lock-before-it-can-deadlock.md) records for a
+claim. In a test on PostgreSQL 18, the heartbeat waited until that transaction committed, and it
+reported `stale`. The round's server timeouts bound such a wait
+([Heartbeat round deadline](#heartbeat-round-deadline)), so a bounded round never holds the row past
+its deadline.
+
+**Healthy operations that make a lease busy.** These functions lock the task row for the time of
+their transaction:
+
+- `update_progress_v1`, `save_checkpoint_v2`, and the durable sleep and wait functions, which a
+  handler calls;
+- `cancel_v1`;
+- each settlement: `complete_v1`, `fail_v1`, `release_owned_v1`, `expire_owned_v1`, and
+  `recover_expired_v1`.
+
+The tick locks only a lease that has already expired. A short lock makes only the round that meets
+it busy. `SKIP LOCKED` gives no fairness: if a handler takes the row lock again and again, each round
+can meet it. A lock that stays held, for example a progress update in a long transaction of the
+caller (`forTransaction`), blocks every renewal until that transaction commits. If it commits after
+the watchdog end, the attempt loses its lease.
+
+#### Busy retry
+
+A busy lease renews nothing. So the worker retries it soon, not only at the next regular round. A
+busy retry is a round that sends only the leases that the latest round reported busy. The same rules
+apply in every SDK:
+
+1. A busy answer never moves the watchdog. Only `accepted` moves it. The lease stays in the
+   heartbeat set, and the handler continues.
+2. A result counts only for the membership that the round sent: the same registered lease, with the
+   same task and fence token. A lease that left or was replaced while the round ran gets nothing
+   from that result. A late answer never revives a watchdog that has ended.
+3. After a round with a busy lease, the scheduler records the busy leases and schedules one busy
+   retry. It falls due after `base × (1 + random)`, with `base = min(100 ms, interval / 8)`.
+4. Regular rounds and busy retries share one scheduler and one in-flight rule. A busy retry does not
+   move the regular slot ([Heartbeat schedule](#heartbeat-schedule)).
+5. When the retry falls due, it keeps only the leases that are still registered with the same
+   membership and whose watchdog has not ended. If none remains, nothing runs before the regular
+   slot. At or after the regular slot, the scheduler drops the selection, and the regular round
+   sends every registered lease, busy ones too.
+6. A bounded busy retry ends by `min(retry start + round bound, next regular slot, earliest watchdog
+   end of its leases)`. It uses the same transaction and server timeouts as a regular round. A round
+   without a client deadline, under shared heartbeats, retries with no deadline.
+7. Each round, regular or retry, replaces the recorded selection. A busy retry that fails schedules
+   no other retry, and the next regular round tries again.
+
+A busy retry is an opportunity to renew, not a guarantee.
+
+| SDK        | Base constant        | Where the retry runs                                                                         |
+| ---------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| TypeScript | `BUSY_RETRY_BASE_MS` | `scheduleHeartbeatBatch` and `takeBusyRetry` in `worker.ts`                                  |
+| Python     | `BUSY_RETRY_BASE_MS` | `_run_heartbeats` and `_take_busy_retry` in `worker.py`, for every Python worker             |
+| Go         | `busyRetryBase`      | `runHeartbeats` and `busyRetrySelection` in `worker.go`                                      |
+| Rust       | `BUSY_RETRY_BASE`    | `run_heartbeats` and `State::retry_selection` in `worker/heartbeat.rs`                       |
+| Ruby       | `BUSY_RETRY_BASE`    | `rounds` and `take_busy_retry` in `worker/heartbeat.rb`, on the heartbeat thread of the pool |
+| JVM        | `BUSY_RETRY_BASE_MS` | `rounds` and `takeBusyRetry` in `Heartbeat.java`, on the heartbeat thread of the pool        |
+
+**Lease margin with the defaults.** The lease is 30,000 ms and the interval 10,000 ms. After an
+accepted round sent at 0 s, the watchdog ends at 30 s. The regular rounds at 10 s and 20 s can both
+be busy, and the regular round at 30 s comes at the watchdog end. So a lease can have two busy
+regular rounds in sequence. Between them, busy retries start about every 100 ms to 200 ms, plus the
+time of each round. If no round locks the row by 30 s, the watchdog ends the attempt, as
+[Lease watchdog](#lease-watchdog) describes. Settlement then records `lease_lost`.
+
+**Paths outside the busy retry.** `heartbeat_v1`, which TypeScript `Queue.heartbeat()` and
+`Queue.heartbeatStatus()` call, renews one lease and still waits for a row lock. A TypeScript
+`Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` renews each lease through
+`heartbeatStatus`. That path never reports `busy`, and it can wait. The built-in `Queue` always has
+`heartbeatMany`. SM-1461 owns a successor for the single-lease path.
 
 #### Lease watchdog
 
@@ -1136,7 +1211,7 @@ Each attempt instead keeps a local lease watchdog:
 | Rust       | the `watchdog` timer in `Inner::execute`, which cancels the `CancellationToken` with `CancelReason::LeaseLost` |
 
 The watchdog measures from the time when the claim request left. Every `accepted` heartbeat moves
-the start to the time when the request of that round left. Both times are earlier than the renewal
+the start to the time when the request of that round left. A `busy` answer does not move it. Both times are earlier than the renewal
 in the database. Thus the local window never lasts longer than the stored `expires_at`.
 
 The TypeScript worker reads both times from `monotonicNow()` in `timers.ts`, which is
@@ -1273,7 +1348,7 @@ Each bounded round does these steps, all before one deadline:
 3. Sends `BEGIN`.
 4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
    as its own statement, so that both values apply to the statements after it.
-5. Sends the unchanged `heartbeat_many_v1` statement.
+5. Sends the `heartbeat_many_v2` statement, or a busy retry's selection of it.
 6. Sends `COMMIT`. The worker counts the renewals only after `COMMIT` succeeds.
 
 PostgreSQL measures `statement_timeout` for each statement and
@@ -1387,7 +1462,9 @@ The scheduler follows these rules in every SDK:
 6. When no lease remains, the scheduler stops. The next lease starts a new schedule. In TypeScript,
    a lease that registers while the round of an earlier lease is in flight gets its slot one
    interval after it registers.
-7. The schedule uses a monotonic clock: `monotonicNow()` in TypeScript, the monotonic reading of
+7. A busy retry runs between two regular slots and does not move them ([Busy
+   retry](#busy-retry)). It shares the in-flight rule of rule 2.
+8. The schedule uses a monotonic clock: `monotonicNow()` in TypeScript, the monotonic reading of
    `time.Now()` in Go, `time.monotonic()` in Python, `tokio::time::Instant` in Rust,
    `CLOCK_MONOTONIC` in Ruby, and `System.nanoTime()` in JVM.
 

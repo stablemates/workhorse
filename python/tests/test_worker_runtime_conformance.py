@@ -52,6 +52,7 @@ ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
     {
         "cooperative-cancellation",
         "graceful-drain",
+        "heartbeat-busy",
         "heartbeat-failure",
         "json-round-trip",
         "maintenance-phase-error",
@@ -137,6 +138,7 @@ def execute_runtime_fixture(
         "oversized-result": execute_oversized_result_fixture,
         "shutdown-cancellation": execute_shutdown_cancellation_fixture,
         "heartbeat-failure": execute_heartbeat_failure_fixture,
+        "heartbeat-busy": execute_heartbeat_busy_fixture,
         "maintenance-phase-error": execute_maintenance_phase_error_fixture,
     }
     assert fixture["kind"] in executors, f"Unsupported runtime fixture kind: {fixture['kind']}"
@@ -1373,6 +1375,105 @@ def execute_heartbeat_failure_fixture(
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
 
 
+def injected_function_body(
+    connection: psycopg.Connection[Any], injection: Mapping[str, Any]
+) -> AbstractContextManager[None]:
+    """Replaces one installed function with the fixture's body, and restores it afterwards.
+
+    The setup statements run first and the teardown statements run last, whatever the body does.
+    """
+
+    @contextmanager
+    def replaced() -> Iterator[None]:
+        row = connection.execute(
+            "SELECT pg_get_functiondef(%s::regprocedure)", (injection["function"],)
+        ).fetchone()
+        assert row is not None
+        original = row[0]
+        try:
+            for statement in injection["setup"]:
+                connection.execute(statement)
+            connection.execute(
+                f"CREATE OR REPLACE FUNCTION {injection['header']} LANGUAGE plpgsql "
+                f"AS $injected$ {injection['body']} $injected$"
+            )
+            try:
+                yield
+            finally:
+                connection.execute(original)
+        finally:
+            for statement in injection["teardown"]:
+                connection.execute(statement)
+
+    return replaced()
+
+
+def busy_rounds(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> list[tuple[float, int]]:
+    rows = connection.execute(fixture["injection"]["roundsQuery"]).fetchall()
+    return [(float(row[0]), int(row[1])) for row in rows]
+
+
+def assert_busy_rounds(rounds: list[tuple[float, int]], fixture: Mapping[str, Any]) -> None:
+    busy = rounds[: fixture["expectedBusyRounds"]]
+    assert len(busy) == fixture["expectedBusyRounds"], rounds
+    # Each retry sent only the busy lease, and came sooner than the next regular round.
+    assert [lease_count for _, lease_count in busy] == [1] * len(busy), rounds
+    gaps = [later[0] - earlier[0] for earlier, later in zip(busy, busy[1:])]
+    assert all(gap < fixture["maximumRetryGapMs"] for gap in gaps), gaps
+
+
+def execute_heartbeat_busy_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
+    started = Event()
+    release = Event()
+    cancellations: list[str] = []
+    errors: list[BaseException] = []
+
+    def handler(_payload: object, context: HandlerContext) -> None:
+        started.set()
+        assert release.wait(timeout=20)
+        if context.cancellation.cancelled:
+            cancellations.append(task_id)
+
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ).handle(fixture["taskType"], handler)
+    results: list[bool] = []
+    thread = run_in_thread(lambda: results.append(worker.run_once()), errors)
+    timeout_ms = fixture["renewalTimeoutMs"]
+    rounds: list[tuple[float, int]] = []
+    try:
+        assert started.wait(timeout=5)
+        wait_for_lease_renewal(connection, task_id, lease_expiry(connection, task_id), timeout_ms)
+        with injected_function_body(connection, fixture["injection"]):
+            deadline = monotonic() + timeout_ms / 1000
+            while len(rounds := busy_rounds(connection, fixture)) < fixture["expectedBusyRounds"]:
+                assert monotonic() < deadline, f"only {len(rounds)} heartbeat rounds were busy"
+                sleep(0.005)
+            # The busy rounds renewed nothing. The next round reaches the real function and renews.
+            wait_for_lease_renewal(
+                connection, task_id, lease_expiry(connection, task_id), timeout_ms
+            )
+    finally:
+        release.set()
+    join(thread)
+    assert errors == []
+    assert results == [True]
+    assert_busy_rounds(rounds, fixture)
+    assert len(cancellations) == fixture["expectedCancellations"]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
 def execute_maintenance_phase_error_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
@@ -1407,6 +1508,7 @@ async def execute_async_runtime_fixture(
     executors: dict[str, Any] = {
         "cooperative-cancellation": execute_async_cancellation_fixture,
         "graceful-drain": execute_async_graceful_drain_fixture,
+        "heartbeat-busy": execute_async_heartbeat_busy_fixture,
         "heartbeat-failure": execute_async_heartbeat_failure_fixture,
         "json-round-trip": execute_async_json_round_trip_fixture,
         "maintenance-phase-error": execute_async_maintenance_phase_error_fixture,
@@ -1700,6 +1802,58 @@ async def execute_async_heartbeat_failure_fixture(
         finally:
             release.set()
         assert await execution is True
+    assert len(cancellations) == fixture["expectedCancellations"]
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
+
+
+async def execute_async_heartbeat_busy_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"], {}, EnqueueOptions(queue=runtime_queue(fixture))
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancellations: list[str] = []
+
+    async def handler(_payload: object, context: AsyncHandlerContext) -> None:
+        started.set()
+        await asyncio.wait_for(release.wait(), timeout=20)
+        if context.cancellation.cancelled:
+            cancellations.append(task_id)
+
+    timeout_ms = fixture["renewalTimeoutMs"]
+    rounds: list[tuple[float, int]] = []
+    async with async_worker(
+        database_url,
+        fixture,
+        lease_ms=fixture["leaseMs"],
+        heartbeat_ms=fixture["heartbeatMs"],
+    ) as worker:
+        worker.handle(fixture["taskType"], handler)
+        execution = asyncio.create_task(worker.run_once())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=10)
+            await async_wait_for_lease_renewal(
+                connection, task_id, await async_lease_expiry(connection, task_id), timeout_ms
+            )
+            with injected_function_body(connection, fixture["injection"]):
+                deadline = monotonic() + timeout_ms / 1000
+                while True:
+                    rounds = await asyncio.to_thread(busy_rounds, connection, fixture)
+                    if len(rounds) >= fixture["expectedBusyRounds"]:
+                        break
+                    assert monotonic() < deadline, f"only {len(rounds)} heartbeat rounds were busy"
+                    await asyncio.sleep(0.005)
+                # The busy rounds renewed nothing. The next round reaches the real function.
+                await async_wait_for_lease_renewal(
+                    connection, task_id, await async_lease_expiry(connection, task_id), timeout_ms
+                )
+        finally:
+            release.set()
+        assert await execution is True
+    assert_busy_rounds(rounds, fixture)
     assert len(cancellations) == fixture["expectedCancellations"]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
     assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])

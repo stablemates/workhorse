@@ -62,6 +62,7 @@ import type {
   TaskCheckpoint,
   TaskProgress,
   TaskWait,
+  HeartbeatBatchStatus,
   HeartbeatStatus,
   Json,
   WorkerRegistration,
@@ -102,6 +103,17 @@ export function dispatchRefillBatch(concurrency: number): number {
  * A tier change reaches a running worker within this interval.
  */
 const TIER_PROBE_INTERVAL_MS = 30_000;
+// The longest base delay before a busy retry. The retry waits base × (1 + random), with
+// base = min(BUSY_RETRY_BASE_MS, heartbeatMs / 8).
+const BUSY_RETRY_BASE_MS = 100;
+
+/** One registered lease in the heartbeat batch. Each attempt registers its own object. */
+interface HeartbeatLease {
+  task: ClaimedTask;
+  status: (status: HeartbeatBatchStatus, sentAt: number) => void;
+  /** The end of the attempt's local lease window, or undefined once the window is closed. */
+  leaseEndsAt: () => number | undefined;
+}
 
 /**
  * Slot cohorts a worker without a `cohorts` option uses (ADR 0076, SM-919 addendum). With a known
@@ -309,7 +321,7 @@ export interface WorkerQueueApi {
     tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs?: number,
-  ): Promise<Map<string, HeartbeatStatus>>;
+  ): Promise<Map<string, HeartbeatBatchStatus>>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
   releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
   acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
@@ -649,14 +661,14 @@ export class Worker {
   private reserveCompletionClaim:
     | ((task: ClaimedTask) => CompletionReservation | undefined)
     | undefined;
-  private readonly heartbeatLeases = new Map<
-    string,
-    {
-      task: ClaimedTask;
-      status: (status: HeartbeatStatus, sentAt: number) => void;
-    }
-  >();
+  private readonly heartbeatLeases = new Map<string, HeartbeatLease>();
   private heartbeatTimer: NodeJS.Timeout | undefined;
+  // True while heartbeatTimer waits for a busy retry, not for the next regular slot.
+  private heartbeatTimerIsRetry = false;
+  // The busy leases of the latest round, which a retry renews before the next regular slot, and the
+  // monotonic time when that retry falls due. A round of either kind replaces both.
+  private busyRetryLeases: HeartbeatLease[] | undefined;
+  private busyRetryAt = 0;
   // True from the start of a round until it settles. A lease that registers during a round must
   // not start a second round.
   private heartbeatInFlight = false;
@@ -688,7 +700,9 @@ export class Worker {
 
   // A round falls due one heartbeatMs after the previous round started. A round that ends after
   // its next slot starts one overdue round at once, and the interval after it counts from that
-  // start, so missed slots are never replayed.
+  // start, so missed slots are never replayed. Between two slots, a busy retry renews only the
+  // leases that the latest round reported busy. It shares the one-round-in-flight rule and never
+  // moves the regular slot.
   private scheduleHeartbeatBatch(): void {
     if (this.heartbeatTimer !== undefined || this.heartbeatLeases.size === 0) return;
     const now = monotonicNow();
@@ -696,32 +710,88 @@ export class Worker {
     // that round does not move it.
     this.nextHeartbeatAt ??= now + this.heartbeatMs;
     if (this.heartbeatInFlight) return;
+    const retry = this.busyRetryLeases !== undefined && this.busyRetryAt < this.nextHeartbeatAt;
+    const dueAt = retry ? this.busyRetryAt : this.nextHeartbeatAt;
+    this.heartbeatTimerIsRetry = retry;
     this.heartbeatTimer = setTimeout(
       () => {
         this.heartbeatTimer = undefined;
+        if (this.heartbeatTimerIsRetry) {
+          const selection = this.takeBusyRetry();
+          if (selection === undefined) {
+            this.scheduleHeartbeatBatch();
+            return;
+          }
+          this.heartbeatInFlight = true;
+          this.runHeartbeatBatch(selection);
+          return;
+        }
         this.heartbeatInFlight = true;
         this.runHeartbeatBatch();
       },
-      Math.max(0, this.nextHeartbeatAt - now),
+      Math.max(0, dueAt - now),
     );
     this.heartbeatTimer.unref();
   }
 
-  private runHeartbeatBatch(): void {
-    const leases = [...this.heartbeatLeases.values()];
+  // The busy leases that a retry can still renew: each is registered with the same lease object,
+  // so a completed, replaced, or accepted lease is gone, and its local window has not ended. At
+  // or after the next regular slot the retry is dropped, and the regular round takes every lease.
+  private takeBusyRetry(): HeartbeatLease[] | undefined {
+    const leases = this.busyRetryLeases;
+    this.busyRetryLeases = undefined;
+    const now = monotonicNow();
+    if (leases === undefined || this.nextHeartbeatAt === undefined || now >= this.nextHeartbeatAt) {
+      return undefined;
+    }
+    const selection = leases.filter((lease) => {
+      if (this.heartbeatLeases.get(lease.task.id) !== lease) return false;
+      const endsAt = lease.leaseEndsAt();
+      return endsAt !== undefined && endsAt > now;
+    });
+    return selection.length === 0 ? undefined : selection;
+  }
+
+  // A busy retry falls due after a short delay with jitter: base × (1 + random), with
+  // base = min(100 ms, heartbeatMs / 8). The jitter keeps two workers from meeting the same lock
+  // holder in step.
+  private busyRetryDelayMs(): number {
+    const base = Math.min(BUSY_RETRY_BASE_MS, this.heartbeatMs / 8);
+    return base * (1 + Math.random());
+  }
+
+  private runHeartbeatBatch(retrySelection?: readonly HeartbeatLease[]): void {
+    const leases = retrySelection ?? [...this.heartbeatLeases.values()];
     // A lease renewed by this round runs from the moment the request left, which can only be
     // earlier than the database's renewal, so local lease windows never outlast the real ones.
     const sentAt = monotonicNow();
-    this.nextHeartbeatAt = sentAt + this.heartbeatMs;
+    // A busy retry does not move the regular schedule.
+    if (retrySelection === undefined) this.nextHeartbeatAt = sentAt + this.heartbeatMs;
+    this.busyRetryLeases = undefined;
+    // A busy retry ends by the next regular slot and by the end of the earliest local lease window
+    // in it, so it never renews a lease that the worker has already given up.
+    const roundMs =
+      retrySelection === undefined
+        ? this.heartbeatRoundMs
+        : Math.max(
+            1,
+            Math.floor(
+              Math.min(
+                this.heartbeatRoundMs,
+                (this.nextHeartbeatAt ?? sentAt + this.heartbeatMs) - sentAt,
+                ...retrySelection.map((lease) => (lease.leaseEndsAt() ?? sentAt) - sentAt),
+              ),
+            ),
+          );
     const channel = this.reservedHeartbeatChannel();
     // A round on the reserved connection is bounded by heartbeatRoundMs, so a statement stuck on
     // it cannot hold back the next round.
-    const heartbeat = channel
+    const heartbeat: Promise<Map<string, HeartbeatBatchStatus>> = channel
       ? channel.heartbeatMany(
           leases.map((lease) => lease.task),
           this.workerId,
           this.leaseMs,
-          this.heartbeatRoundMs,
+          roundMs,
         )
       : this.queue.heartbeatMany
         ? this.queue.heartbeatMany(
@@ -729,7 +799,9 @@ export class Worker {
             this.workerId,
             this.leaseMs,
           )
-        : Promise.all(
+        : // A custom queue without heartbeatMany renews one lease at a time through heartbeatStatus.
+          // That path never reports busy, and it can wait on a row lock.
+          Promise.all(
             leases.map(
               async (lease) =>
                 [
@@ -737,19 +809,28 @@ export class Worker {
                   await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
                 ] as const,
             ),
-          ).then((statuses) => new Map(statuses));
+          ).then((statuses) => new Map<string, HeartbeatBatchStatus>(statuses));
     void heartbeat
       .then(
         (statuses) => {
+          const busy: HeartbeatLease[] = [];
           for (const lease of leases) {
+            // A result counts only for the lease object that the round sent. A lease that left or
+            // was replaced while the round ran gets nothing from it.
             if (this.heartbeatLeases.get(lease.task.id) !== lease) continue;
-            lease.status(statuses.get(lease.task.id) ?? "stale", sentAt);
+            const status = statuses.get(lease.task.id) ?? "stale";
+            if (status === "busy") busy.push(lease);
+            lease.status(status, sentAt);
+          }
+          if (busy.length > 0) {
+            this.busyRetryLeases = busy;
+            this.busyRetryAt = monotonicNow() + this.busyRetryDelayMs();
           }
         },
         () => {
           // A failed round proves nothing about ownership, so every task keeps running and the
-          // next round retries. Each attempt's lease watchdog aborts it once its last accepted
-          // renewal is a full lease old.
+          // next regular round retries. Each attempt's lease watchdog aborts it once its last
+          // accepted renewal is a full lease old.
         },
       )
       .finally(() => {
@@ -760,9 +841,10 @@ export class Worker {
 
   private addHeartbeatLease(
     task: ClaimedTask,
-    status: (status: HeartbeatStatus, sentAt: number) => void,
+    status: (status: HeartbeatBatchStatus, sentAt: number) => void,
+    leaseEndsAt: () => number | undefined,
   ): () => void {
-    const lease = { task, status };
+    const lease: HeartbeatLease = { task, status, leaseEndsAt };
     this.heartbeatLeases.set(task.id, lease);
     // Reserving before the handler starts queues this connect ahead of anything the handler takes.
     this.reservedHeartbeatChannel()?.reserve();
@@ -772,6 +854,7 @@ export class Worker {
       if (this.heartbeatLeases.size === 0) {
         clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = undefined;
+        this.busyRetryLeases = undefined;
         // The next first lease starts a new schedule.
         this.nextHeartbeatAt = undefined;
       }
@@ -1369,7 +1452,8 @@ export class Worker {
         leaseMs: this.leaseMs,
         acknowledgeCancel: (claimed, workerId) => this.queue.acknowledgeCancel(claimed, workerId),
         expireOwned: (claimed, workerId) => this.queue.expireOwned(claimed, workerId),
-        addHeartbeatLease: (claimed, status) => this.addHeartbeatLease(claimed, status),
+        addHeartbeatLease: (claimed, status, leaseEndsAt) =>
+          this.addHeartbeatLease(claimed, status, leaseEndsAt),
       },
       activation,
       this.claimSentAt.get(task) ?? monotonicNow(),

@@ -335,6 +335,38 @@ export interface HeartbeatFailureRuntimeFixture extends RuntimeFixtureBase {
   expectedAttemptOutcome: TaskAttemptOutcome;
 }
 
+/**
+ * Replaces one installed function with `body` while the fixture runs. `setup` runs before the
+ * replacement and `teardown` after the runner restores `function` from its own definition.
+ * `roundsQuery` returns one row for each injected busy round, as `round_at_ms` and `lease_count`.
+ */
+export interface RuntimeBusyInjection {
+  function: string;
+  header: string;
+  setup: string[];
+  body: string;
+  roundsQuery: string;
+  teardown: string[];
+}
+
+/**
+ * A busy heartbeat answer renews nothing and gives no ownership verdict. The attempt keeps
+ * running, the worker retries only the busy leases sooner than the next regular round, and a later
+ * round renews the lease.
+ */
+export interface HeartbeatBusyRuntimeFixture extends RuntimeFixtureBase {
+  kind: "heartbeat-busy";
+  leaseMs: number;
+  heartbeatMs: number;
+  injection: RuntimeBusyInjection;
+  expectedBusyRounds: number;
+  maximumRetryGapMs: number;
+  renewalTimeoutMs: number;
+  expectedCancellations: number;
+  expectedState: ExpectedRuntimeState;
+  expectedAttemptOutcome: TaskAttemptOutcome;
+}
+
 /** tick_v1 reports a failing phase as data, so one failing phase stops no worker in the fleet. */
 export interface MaintenancePhaseErrorRuntimeFixture extends RuntimeFixtureBase {
   kind: "maintenance-phase-error";
@@ -374,6 +406,7 @@ export type RuntimeFixture =
   | OversizedResultRuntimeFixture
   | ShutdownCancellationRuntimeFixture
   | HeartbeatFailureRuntimeFixture
+  | HeartbeatBusyRuntimeFixture
   | MaintenancePhaseErrorRuntimeFixture;
 
 export interface RequestFixture {

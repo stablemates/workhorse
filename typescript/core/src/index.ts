@@ -311,6 +311,7 @@ export type {
   TaskTimelinePage,
   TaskTimelineQuery,
   TaskWait,
+  HeartbeatBatchStatus,
   HeartbeatStatus,
   Json,
   MaintenancePolicy,

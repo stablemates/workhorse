@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 598" width="960" height="598" role="img" aria-labelledby="lease-recovery-dark-title lease-recovery-dark-desc">
 <title id="lease-recovery-dark-title">Recovery replaces the generation, so the late write of the old worker matches no row</title>
-<desc id="lease-recovery-dark-desc">Worker A calls claim_many_v1 and gets the task with attempt 1 and fence 41. Its heartbeat_many_v1 with fence 41 is accepted, and expires_at is extended. Then A stalls past its lease. Worker B calls tick_v1, which calls recover_expired_v1: the lease expires, and the task is ready with attempt 2. B calls claim_many_v1 and gets attempt 2 with fence 42. The late complete_v1 of A with fence 41 returns false, because no generation matches. The complete_v1 of B with fence 42 returns true: the runtime row is deleted, and the outcome is inserted.</desc>
+<desc id="lease-recovery-dark-desc">Worker A calls claim_many_v1 and gets the task with attempt 1 and fence 41. Its heartbeat_many_v2 with fence 41 is accepted, and expires_at is extended. Then A stalls past its lease. Worker B calls tick_v1, which calls recover_expired_v1: the lease expires, and the task is ready with attempt 2. B calls claim_many_v1 and gets attempt 2 with fence 42. The late complete_v1 of A with fence 41 returns false, because no generation matches. The complete_v1 of B with fence 42 returns true: the runtime row is deleted, and the outcome is inserted.</desc>
 <defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
 <rect width="960" height="598" fill="#04080e"/>
 <rect x="139" y="76" width="2" height="474" rx="0.5" fill="#04080e"/>
@@ -26,7 +26,7 @@
 <text x="310" y="137" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">task, attempt 1, fence 41</text>
 <path d="M 140,176 H 476" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
 <rect x="226" y="162" width="168" height="12" rx="2" fill="#04080e"/>
-<text x="310" y="171" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">heartbeat_many_v1 (fence 41)</text>
+<text x="310" y="171" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">heartbeat_many_v2 (fence 41)</text>
 <path d="M 480,210 H 144" fill="none" stroke="#ced1d4" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-dark)"/>
 <rect x="224" y="196" width="172" height="12" rx="2" fill="#04080e"/>
 <text x="310" y="205" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">accepted, expires_at extended</text>
