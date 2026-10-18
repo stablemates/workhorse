@@ -7,8 +7,10 @@ import dev.stablemates.workhorse.Queue;
 import dev.stablemates.workhorse.QueueOptions;
 import dev.stablemates.workhorse.TaskHandler;
 import dev.stablemates.workhorse.Worker;
+import dev.stablemates.workhorse.WorkhorseTelemetry;
 import dev.stablemates.workhorse.dashboard.Dashboard;
 import dev.stablemates.workhorse.dashboard.DashboardAuthorizer;
+import io.opentelemetry.api.OpenTelemetry;
 import jakarta.servlet.Filter;
 import java.util.List;
 import javax.sql.DataSource;
@@ -40,6 +42,9 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>A {@link TransactionAwareConnectionSource}, and {@link Queue} and {@link Admin} beans on
  *       it, so an enqueue inside {@code @Transactional} joins that transaction.
  *   <li>A {@link JacksonJsonCodec} on the application's {@code JsonMapper} when Jackson is present.
+ *   <li>A {@link WorkhorseTelemetry} on the application's {@code OpenTelemetry} bean when the
+ *       OpenTelemetry API is present. The queue and the worker report to it. Without that bean,
+ *       they read {@code GlobalOpenTelemetry}.
  *   <li>Only when {@code workhorse.worker.enabled=true}: a {@link Worker} with every {@link
  *       TaskHandler} bean, its {@link WorkerLifecycle}, and a health indicator when Actuator is
  *       present.
@@ -52,7 +57,8 @@ import tools.jackson.databind.json.JsonMapper;
 @AutoConfiguration(
     afterName = {
       "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
-      "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration"
+      "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
+      "org.springframework.boot.opentelemetry.autoconfigure.OpenTelemetrySdkAutoConfiguration"
     })
 @ConditionalOnSingleCandidate(DataSource.class)
 @EnableConfigurationProperties(WorkhorseProperties.class)
@@ -69,19 +75,23 @@ public final class WorkhorseAutoConfiguration {
     return new TransactionAwareConnectionSource(dataSource);
   }
 
-  /** The queue. Its codec is the {@code JsonCodec} bean, or the core's default codec. */
+  /**
+   * The queue. Its codec is the {@code JsonCodec} bean, or the core's default codec. Its telemetry
+   * is the {@code WorkhorseTelemetry} bean, or the core's default telemetry.
+   */
   @Bean
   @ConditionalOnMissingBean
   public Queue workhorseQueue(
       ConnectionSource connections,
       WorkhorseProperties properties,
-      ObjectProvider<JsonCodec> codec) {
-    return new Queue(
-        connections,
+      ObjectProvider<JsonCodec> codec,
+      ObjectProvider<WorkhorseTelemetry> telemetry) {
+    QueueOptions.Builder options =
         QueueOptions.builder()
             .defaultQueue(properties.getQueue().getDefaultQueue())
-            .codec(codec.getIfAvailable(JsonCodec::standard))
-            .build());
+            .codec(codec.getIfAvailable(JsonCodec::standard));
+    telemetry.ifAvailable(options::telemetry);
+    return new Queue(connections, options.build());
   }
 
   /** The operator API. */
@@ -103,6 +113,23 @@ public final class WorkhorseAutoConfiguration {
     }
   }
 
+  /**
+   * The telemetry on the application's {@code OpenTelemetry} bean (ADR 0103, "Telemetry"). If the
+   * context has no single {@code OpenTelemetry} bean, the starter defines no telemetry bean, and
+   * the core's default telemetry applies. If the API is absent, the starter loads no OpenTelemetry
+   * class.
+   */
+  @Configuration(proxyBeanMethods = false)
+  @ConditionalOnClass(OpenTelemetry.class)
+  @ConditionalOnSingleCandidate(OpenTelemetry.class)
+  static class OpenTelemetryConfiguration {
+    @Bean
+    @ConditionalOnMissingBean
+    WorkhorseTelemetry workhorseTelemetry(OpenTelemetry openTelemetry) {
+      return WorkhorseTelemetry.of(openTelemetry);
+    }
+  }
+
   /** The worker. Only {@code workhorse.worker.enabled=true} builds it. */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnBooleanProperty("workhorse.worker.enabled")
@@ -115,6 +142,7 @@ public final class WorkhorseAutoConfiguration {
         DataSource dataSource,
         WorkhorseProperties properties,
         ObjectProvider<JsonCodec> codec,
+        ObjectProvider<WorkhorseTelemetry> telemetry,
         ObjectProvider<TaskHandler<?>> handlers,
         ObjectProvider<WorkerCustomizer> customizers) {
       WorkhorseProperties.WorkerProperties options = properties.getWorker();
@@ -145,6 +173,7 @@ public final class WorkhorseAutoConfiguration {
       if (pollInterval != null) {
         builder.pollInterval(pollInterval);
       }
+      telemetry.ifAvailable(builder::telemetry);
       handlers.orderedStream().forEach(builder::handle);
       customizers.orderedStream().forEach(customizer -> customizer.customize(builder));
       return builder.build();

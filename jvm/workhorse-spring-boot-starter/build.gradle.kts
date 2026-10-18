@@ -30,14 +30,15 @@ dependencies {
   api(libs.spring.boot.autoconfigure)
   api(libs.spring.boot.jdbc)
 
-  // Jackson, Actuator health, and the servlet registration are optional (ADR 0103). Each
-  // configuration that uses one is conditional on its classes.
+  // Jackson, Actuator health, the servlet registration, and OpenTelemetry are optional (ADR 0103).
+  // Each configuration that uses one is conditional on its classes.
   compileOnly(platform(libs.spring.boot.dependencies))
   compileOnly(libs.spring.boot.jackson)
   compileOnly(libs.jackson.databind)
   compileOnly(libs.spring.boot.health)
   compileOnly(libs.spring.web)
   compileOnly(libs.jakarta.servlet.api)
+  compileOnly(libs.opentelemetry.api)
 
   // Writes META-INF/spring-configuration-metadata.json from the property classes.
   annotationProcessor(libs.spring.boot.configuration.processor)
@@ -50,11 +51,33 @@ dependencies {
   testImplementation(libs.spring.boot.health)
   testImplementation(libs.spring.web)
   testImplementation(libs.jakarta.servlet.api)
+  testImplementation(libs.opentelemetry.api)
+  testImplementation(libs.opentelemetry.sdk.testing)
+  testImplementation(libs.spring.boot.opentelemetry)
 }
 
 tasks.jar { manifest { attributes("Automatic-Module-Name" to "dev.stablemates.workhorse.spring") } }
 
-tasks.test { systemProperty("workhorse.springBoot", springBootLine) }
+// `WithoutOpenTelemetryTest`, tagged `without-opentelemetry`, runs on a class path with no
+// OpenTelemetry jar, so it proves that the starter starts its context without the optional API. The
+// other test classes can name OpenTelemetry types and cannot load there. `test` depends on this task.
+val testSources = the<SourceSetContainer>()["test"]
+val withoutOpenTelemetry =
+  tasks.register<Test>("testWithoutOpenTelemetry") {
+    description = "Runs the tests tagged without-opentelemetry with no OpenTelemetry jar."
+    group = "verification"
+    testClassesDirs = testSources.output.classesDirs
+    classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
+    filter { includeTestsMatching("dev.stablemates.workhorse.spring.WithoutOpenTelemetryTest") }
+    useJUnitPlatform { includeTags("without-opentelemetry") }
+    systemProperty("workhorse.springBoot", springBootLine)
+  }
+
+tasks.test {
+  systemProperty("workhorse.springBoot", springBootLine)
+  useJUnitPlatform { excludeTags("without-opentelemetry") }
+  dependsOn(withoutOpenTelemetry)
+}
 
 // The configuration processor claims no annotation, so javac's `processing` lint would warn on
 // every Spring annotation. Every other lint stays an error.
