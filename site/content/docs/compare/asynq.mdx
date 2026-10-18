@@ -1,0 +1,129 @@
+---
+title: "Workhorse compared with Asynq"
+description: "Asynq vs Workhorse: a Go task queue on Redis, and a PostgreSQL task queue with a Go SDK. Compare their features, find when Asynq is the better choice, and move a task to Workhorse."
+---
+
+Asynq is a task queue for Go that keeps its work in Redis. Workhorse is a durable task queue for
+PostgreSQL, with workers in Go and four other languages. This page compares the two products, row by
+row, and tells you when Asynq is the better choice.
+
+## Compare Workhorse and Asynq
+
+The two products share many features. These include delays, cron schedules, deduplication by key,
+retries with backoff, recovery from a stopped worker, and queue pause. Both also keep failed tasks
+to run them again, set a time limit for each attempt, store a task result, and have a free
+dashboard. They differ in six areas:
+
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Asynq writes its tasks to Redis, outside the application's transaction. Thus, an
+  Asynq task is added before or after the data commits.
+- **Limits across workers.** Workhorse limits concurrency and rate for a queue and for each key,
+  across all workers. `Config.Concurrency` in Asynq limits one server process. The Asynq `x/rate`
+  semaphore limits each key across all servers, but the handler must call it. Asynq has no rate
+  limit.
+- **Checkpoints and waits.** A checkpoint is a named piece of handler code whose result Workhorse
+  stores. When the task runs again, the handler gets the stored result and does not run that code
+  again. A Workhorse task can also wait for a signal or for other tasks. An Asynq retry runs the
+  whole handler again, and a running task cannot wait.
+- **Priorities.** A Workhorse task has its own priority. In Asynq, priority comes from the queue. A
+  server reads its queues by weight, or in strict order.
+- **Telemetry.** Workhorse gives OpenTelemetry traces and metrics. Asynq exports queue metrics to
+  Prometheus and has no OpenTelemetry integration.
+- **Languages.** Asynq is a Go library. Workhorse has workers in TypeScript, Python, Go, Rust, and
+  Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="asynq" />
+
+## When Asynq is the better choice
+
+Asynq is the better choice in these cases:
+
+- You already run Redis, all your workers are in Go, and your application has no PostgreSQL
+  database.
+- Your tasks are short, and a retry can run the whole handler again.
+- You want a server to read its queues by weight, so that a low-priority queue still gets a part of
+  the work.
+- Your application does not need the task and its data to commit together.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- Your workers need rate limits, or concurrency limits for each key that the worker applies before
+  the task starts.
+- A task has parts that are slow or costly to repeat, or a task waits for a signal or for other
+  tasks.
+- You use OpenTelemetry, or some of your workers are not in Go.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Asynq
+
+Move one queue at a time. Keep the Asynq servers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** A Go application enqueues an `email:welcome` task after it creates a user. The task
+starts after 10 minutes and has five attempts.
+
+1. In Asynq, the application creates the user, then calls `client.Enqueue`. If the process stops
+   between the two calls, the user has no task.
+2. In Workhorse, the application wraps the `pgx.Tx` that creates the user in `NewPGXExecutor` and
+   calls `Enqueue`.
+3. Asynq sets `MaxRetry(4)`, which gives four retries after the first attempt. Workhorse sets
+   `MaxAttempts: 5`, which counts every attempt.
+
+Before the move, with Asynq:
+
+```go
+payload, err := json.Marshal(map[string]string{"userId": userID})
+if err != nil {
+	return err
+}
+_, err = client.Enqueue(
+	asynq.NewTask("email:welcome", payload),
+	asynq.MaxRetry(4),
+	asynq.ProcessIn(10*time.Minute),
+)
+
+mux := asynq.NewServeMux()
+mux.HandleFunc("email:welcome", func(ctx context.Context, t *asynq.Task) error {
+	var p struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return err
+	}
+	return sendWelcomeEmail(ctx, p.UserID)
+})
+```
+
+After the move, with Workhorse:
+
+```go
+runAt := time.Now().Add(10 * time.Minute)
+queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+_, err = queue.Enqueue(ctx, "email:welcome", map[string]any{"userId": userID},
+	workhorse.EnqueueOptions{MaxAttempts: 5, RunAt: &runAt})
+
+worker.Handle("email:welcome", func(
+	ctx context.Context,
+	payload any,
+	_ *workhorse.HandlerContext,
+) (any, error) {
+	userID := payload.(map[string]any)["userId"].(string)
+	return nil, sendWelcomeEmail(ctx, userID)
+})
+```
+
+`tx` is the `pgx.Tx` of your open transaction. An Asynq task type becomes a Workhorse task type, and
+the payload bytes become a JSON payload. Asynq retries with exponential backoff by default. Set
+`RetryPolicy` in Workhorse to choose a delay. [Retries](/docs/retries) gives the Workhorse defaults.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Enqueue a task](/docs/enqueue) explains enqueue inside your transaction.

@@ -2253,8 +2253,7 @@
       "name": "Asynq",
       "aliases": ["asynq"],
       "category": "broker-queue",
-      "page": "planned",
-      "issue": "SM-1379",
+      "page": "published",
       "version": "0.26.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/hibiken/asynq",
@@ -2267,12 +2266,68 @@
           "version": "0.26.0",
           "evidence": "README: \"It's backed by Redis\". The client writes tasks to Redis (asynq.NewClient(asynq.RedisClientOpt{...})), so a task cannot join an application database transaction."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "ProcessAt takes a start time. ProcessIn takes a delay.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L176-L195",
+          "version": "0.26.0",
+          "evidence": "\"ProcessAt returns an option to specify when to process the given task.\" \"ProcessIn returns an option to specify when to process the given task relative to the current time.\""
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "A Scheduler enqueues a task on a cron schedule.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/scheduler.go#L206-L208",
+          "version": "0.26.0",
+          "evidence": "\"Register registers a task to be enqueued on the given schedule specified by the cronspec.\" func (s *Scheduler) Register(cronspec string, task *Task, opts ...Option). periodic_task_manager.go#L17: \"PeriodicTaskManager manages scheduling of periodic tasks.\""
+        },
+        "priorities": {
+          "status": "Partial",
+          "note": "Priority comes from the queue. A server reads its queues by weight, or in strict order with StrictPriority. A task has no priority.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/server.go#L134-L159",
+          "version": "0.26.0",
+          "evidence": "\"Priority is treated as follows to avoid starving low priority queues... the tasks in \\\"critical\\\", \\\"default\\\", \\\"low\\\" should be processed 60%, 30%, 10% of the time respectively.\" \"StrictPriority indicates whether the queue priority should be treated strictly.\" The Option list in client.go has no priority option for a task."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "The TaskID option refuses a task whose ID exists. The Unique option refuses a task with the same type, payload, and queue until that task succeeds or the TTL ends.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L220-L228",
+          "version": "0.26.0",
+          "evidence": "\"ErrDuplicateTask indicates that the given task could not be enqueued since it's a duplicate of another task.\" \"ErrTaskIDConflict indicates that the given task could not be enqueued since its task ID already exists.\" client.go#L156-L169: \"Uniqueness of a task is based on the following properties: - Task Type - Task Payload - Queue Name\"."
+        },
         "debounce-throttle": {
           "status": "Partial",
           "note": "The Unique option refuses a duplicate task until the task succeeds or its TTL ends. The match uses task type, payload, and queue. Group aggregation waits a grace period for each group key, and a new task extends it. The application writes the function that merges the tasks.",
           "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L156-L169",
           "version": "0.26.0",
           "evidence": "client.go#L156-L169: \"Task enqueued with this option is guaranteed to be unique within the given ttl. Once the task gets processed successfully or once the TTL has expired, another task with the same uniqueness may be enqueued. ... Uniqueness of a task is based on the following properties: - Task Type - Task Payload - Queue Name\". server.go#L219-L243: \"If an incoming task is received within this period, the server will wait for another period of the same length, up to GroupMaxDelay if specified.\" \"GroupAggregator specifies the aggregation function used to aggregate multiple tasks in a group into one task.\""
+        },
+        "task-dependencies": {
+          "status": "Not supported",
+          "note": "No enqueue option makes a task wait for other tasks. A handler can enqueue the next task itself.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L50-L63",
+          "version": "0.26.0",
+          "evidence": "The OptionType list is MaxRetryOpt, QueueOpt, TimeoutOpt, DeadlineOpt, UniqueOpt, ProcessAtOpt, ProcessInOpt, TaskIDOpt, RetentionOpt, and GroupOpt. No option names another task to wait for. The README feature list (README.md#L25-L43) also names no dependency between tasks."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Exponential backoff by default. Config.RetryDelayFunc sets a custom delay.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/server.go#L118-L122",
+          "version": "0.26.0",
+          "evidence": "\"Function to calculate retry delay for a failed task. By default, it uses exponential backoff algorithm to calculate the delay.\" client.go#L307: defaultMaxRetry = 25. client.go#L90-L94: \"MaxRetry returns an option to specify the max number of times the task will be retried.\""
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "A worker extends a lease with heartbeats. If the lease expires, the recoverer retries the task, or archives it when its retries are used.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/recoverer.go#L80-L102",
+          "version": "0.26.0",
+          "evidence": "\"ErrLeaseExpired error indicates that the task failed because the worker working on the task could not extend its lease due to missing heartbeats. The worker may have crashed or got cutoff from the network.\" recoverLeaseExpiredTasks retries the task, or archives it when its retries are used."
+        },
+        "cancellation": {
+          "status": "Partial",
+          "note": "CancelProcessing cancels the context of the handler. Asynq does not guarantee that the task stops.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/inspector.go#L760-L766",
+          "version": "0.26.0",
+          "evidence": "\"CancelProcessing sends a signal to cancel processing of the task given a task id. ... it does not guarantee that the task with the given id will be canceled.\" processor.go#L205-L206 stores a cancel function for the context of each active task."
         },
         "concurrency-limits": {
           "status": "Partial",
@@ -2295,12 +2350,39 @@
           "version": "0.26.0",
           "evidence": "server.go: `type Handler interface { ProcessTask(context.Context, *Task) error }`. A task is one handler call; the README feature list names no steps or stored step results."
         },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running task cannot suspend. ProcessIn delays a task before it starts.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/server.go#L628-L640",
+          "version": "0.26.0",
+          "evidence": "type Handler interface { ProcessTask(context.Context, *Task) error }. The handler returns an error, SkipRetry, or RevokeTask; no return value or API suspends a running task. ProcessAt and ProcessIn (client.go#L176-L195) delay a task before it starts."
+        },
         "dashboard": {
           "status": "Supported",
-          "note": "Free. Asynqmon is a separate repository; its latest release is v0.7.1 from 2022.",
+          "note": "Free. Asynqmon is a web UI in a separate repository.",
           "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L270-L272",
           "version": "0.26.0",
           "evidence": "README: \"Asynqmon is a web based tool for monitoring and administrating Asynq queues and tasks.\" Feature list: \"Web UI to inspect and remote-control queues and tasks\"."
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A task that uses all its retries moves to the archived state. The Inspector runs archived tasks again.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/inspector.go#L654-L690",
+          "version": "0.26.0",
+          "evidence": "RunAllArchivedTasks(queue string) and RunTask(queue, id string) move archived tasks to the pending state. processor.go#L342-L345 archives a task when its retries are used. internal/rdb/rdb.go#L840-L841: maxArchiveSize = 10000, archivedExpirationInDays = 90."
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/inspector.go#L768-L784",
+          "version": "0.26.0",
+          "evidence": "\"PauseQueue pauses task processing on the specified queue.\" \"UnpauseQueue resumes task processing on the specified queue.\""
+        },
+        "opentelemetry": {
+          "status": "Not supported",
+          "note": "The x module exports queue metrics with the Prometheus client. No Asynq module depends on OpenTelemetry.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/x/go.mod#L5-L25",
+          "version": "0.26.0",
+          "evidence": "x/go.mod requires github.com/prometheus/client_golang and no go.opentelemetry.io module. The root go.mod (go.mod#L5-L20) also requires no go.opentelemetry.io module. x/metrics/metrics.go#L1: \"Package metrics provides implementations of prometheus.Collector to collect Asynq queue metrics.\" README.md#L41: \"Integration with Prometheus to collect and visualize queue metrics\". opentelemetry-go-contrib has no asynq instrumentation."
         },
         "worker-languages": {
           "value": "Go",
@@ -2308,12 +2390,19 @@
           "version": "0.26.0",
           "evidence": "README: \"Asynq is a Go library for queueing tasks and processing them asynchronously with workers.\""
         },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "The README documents no client for another language.",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L11",
+          "version": "0.26.0",
+          "evidence": "\"Asynq is a Go library for queueing tasks and processing them asynchronously with workers.\" The README documents no client for another language."
+        },
         "infrastructure": {
           "value": "Redis",
           "note": "Redis 4.0 or later. Some Lua scripts may not work with Redis Cluster.",
-          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L67",
+          "source": "https://github.com/hibiken/asynq/blob/v0.26.0/README.md#L51-L67",
           "version": "0.26.0",
-          "evidence": "README: \"Make sure you're running a Redis server locally or from a Docker container. Version `4.0` or higher is required.\""
+          "evidence": "README.md#L51-L53: \"Redis Cluster Compatibility: Some of the lua scripts in this library may not be compatible with Redis Cluster.\" README.md#L67: \"Make sure you're running a Redis server locally or from a Docker container. Version `4.0` or higher is required.\""
         },
         "license": {
           "value": "MIT",
@@ -2322,7 +2411,75 @@
           "version": "0.26.0",
           "evidence": "LICENSE: \"MIT License / Copyright (c) 2019 Kentaro Hibino\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "batch-delivery",
+          "group": "executing",
+          "label": "Process many items in one handler call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Batch handler delivery"
+            },
+            "page": "/docs/batch-handlers",
+            "note": "Each task in a batch has its own outcome."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Tasks with the same Group option become one task. The application writes the function that merges them. The merged task has one outcome.",
+            "source": "https://github.com/hibiken/asynq/blob/v0.26.0/server.go#L257-L266",
+            "version": "0.26.0",
+            "evidence": "\"GroupAggregator aggregates a group of tasks into one before the tasks are passed to the Handler.\" Aggregate(group string, tasks []*Task) *Task. client.go#L210-L214: \"Tasks in a given queue with the same group will be aggregated into one task before passed to Handler.\""
+          }
+        },
+        {
+          "id": "time-limits",
+          "group": "executing",
+          "label": "Time limit for each attempt",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Per-attempt execution timeouts"
+            },
+            "page": "/docs/deadlines",
+            "note": "An absolute deadline for the whole task is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Timeout limits each run. Deadline sets an absolute time. When the limit passes, the task is retried.",
+            "source": "https://github.com/hibiken/asynq/blob/v0.26.0/client.go#L124-L146",
+            "version": "0.26.0",
+            "evidence": "\"Timeout returns an option to specify how long a task may run. If the timeout elapses before the Handler returns, then the task will be retried.\" \"Deadline returns an option to specify the deadline for the given task. If it reaches the deadline before the Handler returns, then the task will be retried.\""
+          }
+        },
+        {
+          "id": "task-results",
+          "group": "operating",
+          "label": "Store and read the task result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Terminal result inspection"
+            },
+            "page": "/docs/queries",
+            "note": "The result is in the same PostgreSQL database."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The handler writes bytes with ResultWriter. A completed task and its result stay only for the Retention period.",
+            "source": "https://github.com/hibiken/asynq/blob/v0.26.0/asynq.go#L145-L154",
+            "version": "0.26.0",
+            "evidence": "\"Retention is duration of the retention period after the task is successfully processed.\" \"Result holds the result data associated with the task. Use ResultWriter to write result data from the Handler.\" client.go#L199-L204: \"If this option is provided, the task will be stored as a completed task after successful processing.\""
+          }
+        }
+      ]
     },
     {
       "slug": "temporal",
