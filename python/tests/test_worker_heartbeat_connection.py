@@ -731,3 +731,141 @@ async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_
     assert processed is True
     assert not task.cancelled
     assert outcome(database_url, task_id) == ("succeeded",)
+
+
+# The fixed schedule (SM-1444): a round falls due one interval after the previous round started, so
+# one timed-out round does not move the next round toward the end of the lease. The lease is 2.3
+# intervals, shorter than the default of 3. The row lock makes the first round end on the server at
+# about 1.4 intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A
+# schedule that waits one interval after the failed round ends sends it at about 2.4 intervals,
+# after the lease.
+MARGIN_HEARTBEAT_MS = 1_000
+MARGIN_LEASE_MS = 2_300
+
+
+def time_out_one_round(database_url: str, task_id: str, task: BlockingTask) -> None:
+    """Hold the row lock through the first round, then release the handler after the lease."""
+    assert task.started.wait(30)
+    started = monotonic()
+    interval = MARGIN_HEARTBEAT_MS / 1000
+    with psycopg.connect(database_url) as blocker:
+        blocker.execute(
+            "SELECT FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE", (task_id,)
+        )
+        sleep(max(0.0, started + 1.6 * interval - monotonic()))
+        blocker.commit()
+    # Run past the end of the lease from the claim, so only a renewal keeps the task.
+    sleep(max(0.0, started + 2.6 * interval - monotonic()))
+    task.release.set()
+
+
+def test_one_timed_out_heartbeat_round_leaves_a_renewal_margin(database_url: str) -> None:
+    task_id = enqueue(database_url, "heartbeat.margin", "heartbeat-margin")
+    task = BlockingTask()
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-margin",
+        worker_id="python-heartbeat-margin",
+        lease_ms=MARGIN_LEASE_MS,
+        heartbeat_ms=MARGIN_HEARTBEAT_MS,
+    ).handle("heartbeat.margin", task.handler)
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        time_out_one_round(database_url, task_id, task)
+    finally:
+        task.release.set()
+        run.join(30)
+
+    assert processed == [True]
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
+async def test_one_timed_out_async_heartbeat_round_leaves_a_renewal_margin(
+    database_url: str, driver: str, async_psycopg_pool, asyncpg_pool
+) -> None:
+    queue = f"heartbeat-margin-{driver}"
+    task_id = enqueue(database_url, "heartbeat.margin", queue)
+    task = BlockingTask()
+    options: dict[str, Any] = {
+        "queue": queue,
+        "worker_id": f"python-async-heartbeat-margin-{driver}",
+        "lease_ms": MARGIN_LEASE_MS,
+        "heartbeat_ms": MARGIN_HEARTBEAT_MS,
+    }
+    if driver == "psycopg":
+        worker = AsyncWorker.from_psycopg(async_psycopg_pool, **options)
+    else:
+        worker = AsyncWorker.from_asyncpg(asyncpg_pool, **options)
+    worker.handle("heartbeat.margin", task.async_handler)
+    run = asyncio.create_task(worker.run_once())
+    try:
+        await asyncio.to_thread(time_out_one_round, database_url, task_id, task)
+    finally:
+        task.release.set()
+        processed = await asyncio.wait_for(run, timeout=30)
+
+    assert processed is True
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)
+
+
+def test_a_failed_heartbeat_round_opens_its_replacement_before_the_next_round(
+    database_url: str,
+) -> None:
+    # SM-1444: rounds start on a fixed schedule, so the next round can start soon after a failed
+    # one. The failed round opens the replacement as it ends, so the connect starts before the
+    # next round.
+    heartbeat_ms = 2_000
+    task_id = enqueue(database_url, "heartbeat.replacement", "heartbeat-replacement")
+    task = BlockingTask()
+    failed = Event()
+    opens: list[float] = []
+    rounds = Lock()
+    round_count = 0
+
+    def failing() -> bool:
+        nonlocal round_count
+        with rounds:
+            round_count += 1
+            return round_count == 2
+
+    open_failing = heartbeat_executor_factory(failing, failed)
+
+    def counted() -> tuple[Any, Any]:
+        opens.append(monotonic())
+        return open_failing()
+
+    worker = Worker(
+        worker_pool,
+        queue="heartbeat-replacement",
+        worker_id="python-heartbeat-replacement",
+        lease_ms=30_000,
+        heartbeat_ms=heartbeat_ms,
+        _heartbeat_executor_factory=counted,
+    ).handle("heartbeat.replacement", task.handler)
+    processed: list[bool] = []
+    run = Thread(target=lambda: processed.append(worker.run_once()))
+    run.start()
+    try:
+        assert task.started.wait(30)
+        assert failed.wait(30)
+        failed_at = monotonic()
+        # The first round opened one connection and kept it. The failed round discarded it, and
+        # opened the next one long before the next round falls due.
+        deadline = failed_at + heartbeat_ms / 1000 / 2
+        while len(opens) < 2 and monotonic() < deadline:
+            sleep(0.01)
+        assert len(opens) == 2, opens
+        assert opens[1] - failed_at < heartbeat_ms / 1000 / 2
+    finally:
+        task.release.set()
+        run.join(30)
+
+    assert processed == [True]
+    assert not task.cancelled
+    assert outcome(database_url, task_id) == ("succeeded",)

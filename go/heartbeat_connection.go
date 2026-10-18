@@ -116,8 +116,9 @@ func runBoundedOnPool(
 // because the heartbeat never waits for the shared pool. A round that outlives its bound closes the
 // connection, so the pool discards it instead of lending it again, and server timeouts end its
 // heartbeat and its idle waits by the same deadline (serverBoundedExecutor). The bound covers the wait for the slot,
-// the checkout, and the transaction. The next round takes a fresh connection. The timeouts are
-// transaction-scoped, so the connection stays safe behind a transaction-mode pooler.
+// the checkout, and the transaction. A failed round acquires the replacement when it ends (replace),
+// so the checkout starts before the next round. The timeouts are transaction-scoped, so the
+// connection stays safe behind a transaction-mode pooler.
 type heartbeatConnection struct {
 	pool *pgxpool.Pool
 	// slot serializes rounds, because one PostgreSQL session runs one transaction at a time and
@@ -127,6 +128,8 @@ type heartbeatConnection struct {
 	conn   *pgxpool.Conn
 	rounds int
 	closed bool
+	// replacing is true while a replacement that a failed round started is still acquiring.
+	replacing bool
 }
 
 func newHeartbeatConnection(pool *pgxpool.Pool) *heartbeatConnection {
@@ -162,13 +165,35 @@ func (connection *heartbeatConnection) run(
 	defer connection.finishRound()
 	held, err := connection.acquire(roundContext)
 	if err != nil {
+		connection.replace(ctx, bound)
 		return err
 	}
 	if err := round(roundContext, serverBoundedExecutor{conn: held.Conn()}); err != nil {
 		connection.discard(held)
+		connection.replace(ctx, bound)
 		return err
 	}
 	return nil
+}
+
+// replace acquires the connection for the next round after a failed round. Rounds start on a fixed
+// schedule, so the next round can start soon after a failed one. Acquiring now starts the checkout
+// before that round, which waits for it only if it is still pending. One replacement runs at a time,
+// and each waits at most bound.
+func (connection *heartbeatConnection) replace(ctx context.Context, bound time.Duration) {
+	connection.mu.Lock()
+	if connection.replacing || connection.conn != nil || connection.closed {
+		connection.mu.Unlock()
+		return
+	}
+	connection.replacing = true
+	connection.mu.Unlock()
+	go func() {
+		connection.reserve(context.WithoutCancel(ctx), bound)
+		connection.mu.Lock()
+		connection.replacing = false
+		connection.mu.Unlock()
+	}()
 }
 
 // release stops reserving. A round still in flight owns the connection until it returns, so

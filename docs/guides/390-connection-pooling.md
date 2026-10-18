@@ -272,9 +272,11 @@ below 3. Ruby raises unless the pool size is an integer of at least 3.
 | Ruby       | `shared_heartbeats` |
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
-`heartbeatMs`. The round sends `heartbeat_many_v1` in its own transaction, and transaction-local
-server timeouts make PostgreSQL end the heartbeat by the same deadline. A round that passes the
-deadline, or fails, destroys the connection. The next round connects a new one.
+`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v1` in its
+own transaction, and transaction-local server timeouts make PostgreSQL end the heartbeat by the same
+deadline. A round that fails destroys the connection, and asks the pool for a new one when it ends.
+The connect thus starts before the next round. If it is still pending when the next round starts,
+that round waits for it, and the rest of the wait counts against the deadline of that round.
 
 More detail: [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection) and [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline).
 

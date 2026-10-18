@@ -985,3 +985,107 @@ func TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline(t *testing.T)
 		t.Fatalf("the round's statement_timeout %s outlived its transaction", timeout)
 	}
 }
+
+// TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound pins the fixed schedule: a round falls
+// due one interval after the previous round started, so one timed-out round does not move the next
+// round toward the end of the lease (SM-1444). The lease is 2.3 intervals, shorter than the default
+// of 3. The row lock makes the first round end on the server at about 1.4 intervals. The fixed
+// schedule sends the next round at 2 intervals, inside the lease. A schedule that waits one interval
+// after the failed round ends sends it at about 2.4 intervals, after the lease.
+func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-margin")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+	blocker := observeDatabase(t, ctx, databaseURL)
+
+	const interval = time.Second
+	const queueName = "go-worker-heartbeat-margin"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, "heartbeat-margin", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "heartbeat-margin-worker",
+		LeaseDuration:       2300 * time.Millisecond,
+		HeartbeatInterval:   interval,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerErr := make(chan error, 1)
+	worker.Handle("heartbeat-margin", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		started := time.Now()
+		handlerErr <- func() error {
+			if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
+				return err
+			}
+			if _, err := blocker.Exec(
+				ctx, "SELECT FROM workhorse.task_runtime WHERE task_id = $1::uuid FOR UPDATE", taskID,
+			); err != nil {
+				return err
+			}
+			time.Sleep(interval * 16 / 10)
+			if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
+				return err
+			}
+			// Run past the end of the lease from the claim, so only a renewal keeps the task.
+			time.Sleep(time.Until(started.Add(interval * 26 / 10)))
+			return handlerContext.Err()
+		}()
+		return nil, nil
+	})
+	processed, err := worker.RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processed {
+		t.Fatal("worker did not process the heartbeat-margin task")
+	}
+	if err := <-handlerErr; err != nil {
+		t.Fatalf("the handler lost its lease: %v", err)
+	}
+	var state string
+	if err := observer.QueryRow(
+		ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid", taskID,
+	).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "succeeded" {
+		t.Fatalf("task state %q; want succeeded", state)
+	}
+}
+
+// TestAFailedHeartbeatRoundAcquiresItsReplacementBeforeTheNextRound pins SM-1444: rounds start on
+// a fixed schedule, so the next round can start soon after a failed one. The failed round acquires
+// the replacement as it ends, so the checkout starts before the next round.
+func TestAFailedHeartbeatRoundAcquiresItsReplacementBeforeTheNextRound(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "heartbeat-replacement")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	connection := workhorse.NewHeartbeatConnectionForTest(pool)
+	t.Cleanup(connection.Release)
+
+	if err := connection.FailRound(ctx, time.Second); err == nil {
+		t.Fatal("the failing round reported no error")
+	}
+	until := time.Now().Add(5 * time.Second)
+	for !connection.Held() {
+		if time.Now().After(until) {
+			t.Fatal("the failed round acquired no replacement connection")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

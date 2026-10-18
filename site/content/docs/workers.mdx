@@ -195,11 +195,13 @@ first. If a heartbeat waits for a lock until after the expiry, PostgreSQL does n
 A late heartbeat or completion cannot bring back an expired lease. An accepted heartbeat extends the
 lease from that clock reading.
 
-A round on the reserved connection also has a deadline of one heartbeat interval. If the heartbeat
-waits too long, PostgreSQL ends it before the deadline. The round then renews no lease, and its
-heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has already started
-can still finish later. The next round
-tries again.
+Each round falls due one heartbeat interval after the previous round started, not after it ended.
+Thus a slow or failed round does not move the next round toward the end of the lease.
+
+A round on the reserved connection also has a deadline that is shorter than one heartbeat interval.
+If the heartbeat waits too long, PostgreSQL ends it before the deadline. The round then renews no
+lease, and its heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has
+already started can still finish later. The next round tries again.
 
 The worker also renews the lease while it checks the result of a handler and writes the completion.
 In TypeScript, Python, and Go, a slow final write thus cannot give finished work to recovery. For
@@ -250,7 +252,7 @@ Both moments come before the database renews, so the local countdown never ends 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round returns, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat) and [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline).
+More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 
