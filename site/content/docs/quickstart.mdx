@@ -7,8 +7,9 @@ This quickstart shows the main property of Workhorse: a task continues after its
 about five minutes, you enqueue a task and run it. Then you stop the worker while a task runs, and
 another run finishes the task.
 
-Choose TypeScript, Python, Go, Rust, or Ruby for the application code. The schema installation uses
-the Workhorse CLI, which runs on Node.js. Each language also needs a PostgreSQL connection string.
+Choose TypeScript, Python, Go, Rust, Ruby, Java, or Kotlin for the application code. The schema
+installation uses the Workhorse CLI, which runs on Node.js. Each language also needs a PostgreSQL
+connection string.
 
 ## 1. Install the SDK
 
@@ -79,14 +80,14 @@ A TypeScript project runs the binary that it already has as a dependency:
 npm exec --no -- workhorse schema install
 ```
 
-A Python, Go, Rust, or Ruby project has no `node_modules` that holds the binary. Thus, the command
-gives the version. Use the same version as the SDK that you installed in step 1:
+A Python, Go, Rust, Ruby, Java, or Kotlin project has no `node_modules` that holds the binary. Thus,
+the command gives the version. Use the same version as the SDK that you installed in step 1:
 
 ```bash
 npx --package @stablemates/workhorse@0.8.0 workhorse schema install
 ```
 
-This step runs on Node.js, also when the application uses Python, Go, Rust, or Ruby.
+This step runs on Node.js, also when the application uses Python, Go, Rust, Ruby, Java, or Kotlin.
 [Installation](/docs/installation) tells why the two commands are different.
 [Compatibility](/docs/compatibility) gives the supported versions.
 

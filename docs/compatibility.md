@@ -420,8 +420,8 @@ dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemate
 from the minor line to the major line; see [Retention and removal](#retention-and-removal).
 
 The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, or JVM
-host supplies its own published version when it renders the application, so the dashboard reports
-the package that serves it and a version-only release does not change the bundle.
+host supplies its own published version when it renders the application. Thus the dashboard reports
+the package that serves it. A version-only release does not change the bundle.
 
 While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
 not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
@@ -538,9 +538,9 @@ The release notes announce a `dashboard/v2` transition and give its upgrade step
 backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
 and `Sunset` response headers do not apply.
 
-The six language lines float independently, and each is governed on its own surfaces: a Go `/v2`
-does not move the TypeScript, Python, Rust, Ruby, or JVM major. Only a protocol break moves all six
-at once.
+The six language lines float independently, and each line has its own governed surfaces. For
+example, a Go `/v2` does not move the TypeScript, Python, Rust, Ruby, or JVM major. Only a protocol
+break moves all six at once.
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
@@ -683,10 +683,10 @@ Six gates hold the tag, and each is met with evidence rather than with an assert
    starts the same way at `api/ruby.txt`, and both minors must publish the gem to RubyGems. The gem
    first publishes in 0.6.0, so 0.6.0 and 0.7.0 are the earliest pair, and both precede 1.0.0
    ([ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)).
-3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
-   against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
-   registries of all six SDKs, Rust from crates.io, Ruby from RubyGems, and the JVM artifacts from
-   Maven Central included ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
+3. The migration rehearsals ADR 0055 placed have run. The recovery procedure has run against a
+   deliberate mid-migration failure. A fresh host has installed the candidate from the registries of
+   all six SDKs. These include Rust from crates.io, Ruby from RubyGems, and the JVM artifacts from
+   Maven Central ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
    [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
    [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across

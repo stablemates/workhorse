@@ -320,7 +320,7 @@ script from a different site change queue state.
 
 The `auditActor` and `requestedBy` fields record who acted. They do not decide who can act. To
 send a mutation through a service of your application, use the controller options in TypeScript.
-In Python, Go, Rust, or Ruby, use the procedure extensions of the host.
+In Python, Go, Rust, Ruby, Java, or Kotlin, use the procedure extensions of the host.
 
 <details>
 <summary>Reference: mutations and attribution</summary>
@@ -373,7 +373,7 @@ const host = createDashboardHost({
 
 Each workspace entry can override the host options, such as `environment`, `operator`, and the
 controllers. The host does not own the pool size, the shutdown order, the reconnection, or the TLS
-of any connection. The Python, Go, Rust, and Ruby hosts serve one database for each host.
+of any connection. The Python, Go, Rust, Ruby, and Java hosts serve one database for each host.
 
 The standalone command serves workspaces too. Repeat `--workspace name=url`, or give a JSON file
 to `--config`. Each file entry names a `url`, or a `urlEnv` environment variable. Use `urlEnv` to
@@ -395,7 +395,7 @@ keep credentials out of the file.
   host-level option.
 - `databaseHost` and `databaseName` are optional labels for the workspace switcher. The host never
   derives them from the connection.
-- The Go, Python, Rust, and Ruby hosts serve one workspace each.
+- The Go, Python, Rust, Ruby, and Java hosts serve one workspace each.
 - The standalone command takes repeated `--workspace name=url`, or `--config` with entries that
   name `url` or `urlEnv`. A `--workspace` entry overrides a file entry with the same name.
   Workspaces cannot be combined with `--database-url`.
