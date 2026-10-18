@@ -1,0 +1,213 @@
+---
+title: "Workhorse compared with Hatchet"
+description: "Hatchet vs Workhorse: a workflow platform with its own engine, and a task queue in PostgreSQL. Compare their features, find when Hatchet is the better choice, and move a workflow to Workhorse."
+---
+
+Hatchet and Workhorse are in different categories. Hatchet is a workflow platform. You run the
+[Hatchet engine, its API server, and its PostgreSQL database](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/architecture-and-guarantees.mdx#L13-L19),
+or you use Hatchet Cloud. Your workers connect to the
+[engine over gRPC](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/architecture-and-guarantees.mdx#L69).
+
+Workhorse is a durable task queue in your PostgreSQL database. Your application enqueues a task in
+its own database, and your worker processes claim it there. A handler can store the result of each
+named checkpoint and wait for a timer or a signal. Workhorse has no server and no workflow runtime. This
+page compares the two products, row by row, and tells you when Hatchet is the better choice.
+
+## Compare Workhorse and Hatchet
+
+The two products share many features. These include delays, cron schedules, priorities, idempotency
+keys, task dependencies, and retries with backoff. They also include recovery from a stopped
+worker, cooperative cancellation, timers, waits that release the worker, child work, and a
+dashboard. They differ in five areas:
+
+- **The model of a step.** Hatchet has two workflow models. A directed acyclic graph (DAG) workflow declares
+  its tasks and their parents before it runs. A durable task replays its event log, so its code between checkpoints
+  must be deterministic. A Workhorse handler starts again from its entry, and each named checkpoint
+  returns its stored result. The handler does not have to be deterministic.
+- **Services.** Hatchet needs its engine and API server beside your application, and a PostgreSQL
+  database for their state. Workhorse needs only PostgreSQL.
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. An application triggers a Hatchet run through the Hatchet API, so the trigger is not
+  part of your database transaction.
+- **Limits for a queue.** Hatchet limits concurrency and rate for each key, across all workers. A
+  Workhorse policy can also limit a whole queue.
+- **Languages.** Hatchet has SDKs for Python, TypeScript, Go, and Ruby. Workhorse has workers in
+  TypeScript, Python, Go, Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature. A Hatchet
+cell describes the open source release that you host yourself.
+
+<ComparisonTable product="hatchet" />
+
+## When Hatchet is the better choice
+
+Hatchet is the better choice in these cases:
+
+- You do not want to operate the workflow service. With Hatchet Cloud,
+  [Hatchet operates the control plane](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/cloud-vs-oss.mdx#L13-L17),
+  and [you bring your workers](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/cloud-vs-oss.mdx#L34-L40). You can also host the open source release yourself. Workhorse uses
+  your PostgreSQL database, and you operate that database.
+- You want to declare a whole workflow as a graph before it runs. A Hatchet DAG
+  [runs independent tasks in parallel](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/directed-acyclic-graphs.mdx#L14-L20)
+  and gives the outputs of parent tasks to their children. It has branches, or groups, and a view
+  of the graph in the dashboard. In Workhorse, the application gives the dependencies of each task
+  when it enqueues the task.
+- One event must start or wake many runs. A Hatchet event that you push
+  [runs each task that has a trigger for its key](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/events.mdx#L57-L59).
+  A durable task can
+  [wait for an event](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/durable-event-waits.mdx#L17-L48)
+  and match its payload with a CEL expression.
+  [CEL](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/cel-expressions.mdx#L11) is the Common Expression Language, and the Hatchet engine
+  evaluates it.
+  [Incoming webhooks](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/webhooks.mdx#L10)
+  also start workflows. A Workhorse signal goes to one task, by its task ID.
+- You want to choose what happens when a concurrency key is full. Hatchet
+  [strategies](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/concurrency.mdx#L41-L47)
+  can queue the new run in round-robin order, or cancel the running run, the new run, or queued
+  runs. When a Workhorse key is full, the new task stays ready until the key has room.
+- Your tasks need workers with special resources, such as a loaded model. Hatchet
+  [worker affinity](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/advanced-assignment/worker-affinity.mdx#L13-L23)
+  sends a task to workers whose labels match. This feature is in beta.
+- Your frontend shows the output of a model while the task runs. A Hatchet task can
+  [stream data to a consumer](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/streaming.mdx#L13).
+  A Workhorse task stores only its latest progress value.
+- Several people operate the dashboard with different permissions. Hatchet gives each user of a
+  tenant a
+  [role](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/user-roles.mdx#L9-L18),
+  from viewer to owner. The Workhorse dashboard has no single sign-on and no role-based access
+  control.
+- You must cancel or replay many runs at one time. Hatchet
+  [cancels or replays runs in bulk](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/bulk-retries-and-cancellations.mdx#L12-L17),
+  by their IDs or by filters such as a task, a status, and a time range.
+
+Workhorse is the better choice in these cases:
+
+- Your application uses PostgreSQL, and you do not want to run a second service.
+- A task must commit in the same transaction as your data.
+- You need a concurrency limit or a rate limit for a whole queue, across all workers.
+- Your workers use Rust.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent: a second run must give the same result as the first run. A Hatchet task has the same
+rule. The
+[Hatchet guarantees](https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/architecture-and-guarantees.mdx#L103-L105)
+say that a task can run more than once, so task code must be idempotent.
+
+## Move from Hatchet
+
+Move one workflow at a time. Let the running Hatchet runs of that workflow finish in Hatchet. Start
+new work in Workhorse. The [migration guide](/docs/migrate) gives the full procedure and the
+equivalent parts of a workflow platform.
+
+Some words have a different meaning in the two products:
+
+| Hatchet         | Workhorse                         | Difference                                                                                                           |
+| --------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Durable task    | Task with a handler               | A Workhorse handler runs again from its entry. Its code does not have to be deterministic.                           |
+| Child task      | `ctx.checkpoint`, `ctx.runChild`  | A checkpoint runs in the handler and stores its result. A child is a separate task.                                  |
+| Checkpoint      | Checkpoint                        | A Hatchet checkpoint records a wait or a child run. A Workhorse checkpoint stores the result of its own code.        |
+| Event           | `ctx.waitForSignal`, `sendSignal` | A Hatchet event goes to each run that matches its key. A Workhorse signal goes to one task, and only while it waits. |
+| Idempotency key | `idempotency` on `enqueue`        | Workhorse keeps the key for a time-to-live, 24 hours by default. The application gives the key, not an expression.   |
+
+**Example.** An order workflow charges a card, waits for an approval, and then ships the order.
+
+1. In Hatchet, a durable task runs a child task for each external call, and waits for an event.
+2. In Workhorse, the handler wraps each call in a named checkpoint.
+3. The handler calls `ctx.waitForSignal("approval")`. The task releases its worker until the
+   signal arrives.
+4. When the signal arrives, a worker runs the handler again. The `charge` checkpoint returns its
+   stored result, and the card is not charged again.
+
+Before the move, with Hatchet. The task module:
+
+```ts
+// tasks.ts
+import { HatchetClient } from "@hatchet-dev/typescript-sdk/v1";
+
+export const hatchet = HatchetClient.init();
+
+type OrderInput = { orderId: string };
+
+export const chargeOrder = hatchet.task({
+  name: "charge-order",
+  retries: 3,
+  fn: async (input: OrderInput) => ({ chargeId: await chargeCard(input.orderId) }),
+});
+
+export const shipOrder = hatchet.task({
+  name: "ship-order",
+  retries: 3,
+  fn: async (input: OrderInput) => ({ shipmentId: await ship(input.orderId) }),
+});
+
+export const processOrder = hatchet.durableTask({
+  name: "process-order",
+  executionTimeout: "24h",
+  fn: async (input: OrderInput, ctx) => {
+    await chargeOrder.run(input);
+    // The order ID must not contain a quote, because the filter is a CEL expression.
+    // The scope and the lookback window find an event that arrived before the wait.
+    await ctx.waitForEvent(
+      "order:approved",
+      `input.orderId == '${input.orderId}'`,
+      undefined,
+      `order:${input.orderId}`,
+      "24h",
+    );
+    return shipOrder.run(input);
+  },
+});
+```
+
+The application starts the run and later pushes the event:
+
+```ts
+import { hatchet, processOrder } from "./tasks";
+
+await processOrder.runNoWait({ orderId });
+await hatchet.events.push("order:approved", { orderId }, { scope: `order:${orderId}` });
+```
+
+After the move, with Workhorse:
+
+```ts
+const worker = new Worker(queue, { queue: "orders" }).handle(
+  "order.process",
+  async (payload: { orderId: string }, ctx) => {
+    await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
+    await ctx.waitForSignal("approval");
+    await ctx.checkpoint("ship", () => ship(payload.orderId));
+    return null;
+  },
+);
+
+// The application enqueues the task and later sends the signal.
+const taskId = await queue.enqueue(
+  "order.process",
+  { orderId },
+  { queue: "orders", maxAttempts: 4, idempotency: { key: `order-${orderId}` } },
+);
+await queue.sendSignal(
+  taskId,
+  "approval",
+  { approved: true },
+  {
+    idempotencyKey: `approval-${orderId}`,
+    requestedBy: "review-service",
+  },
+);
+```
+
+`chargeCard` and `ship` must return JSON, because Workhorse stores each checkpoint result as JSON.
+In Hatchet, each child task has its own retries. In Workhorse, the task has one retry policy, and a
+retry runs the handler again from its entry. A Hatchet event goes to each waiting run that matches
+it. A Workhorse signal needs the task ID, so keep the ID that `enqueue` returns. If the status in
+the result of `sendSignal` is `not_waiting`, the handler has not called `waitForSignal` yet. Send
+the signal again later.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
