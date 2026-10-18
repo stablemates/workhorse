@@ -9,7 +9,30 @@ dependencies {
   api(libs.jspecify)
   // The dashboard filter needs the Servlet API, which the servlet container supplies.
   compileOnly(libs.jakarta.servlet.api)
+  // OpenTelemetry is optional (ADR 0103, "Telemetry"): the caller's class path supplies the API.
+  compileOnly(libs.opentelemetry.api)
   testImplementation(libs.tomcat.embed.core)
+  testImplementation(libs.opentelemetry.api)
+  testImplementation(libs.opentelemetry.sdk.testing)
+}
+
+// `WithoutOpenTelemetryTest`, tagged `without-opentelemetry`, runs on a class path with no
+// OpenTelemetry jar, so it proves that the SDK loads and runs without the optional API. The other
+// test classes name OpenTelemetry types and cannot load there. `test` depends on this task.
+val testSources = the<SourceSetContainer>()["test"]
+val withoutOpenTelemetry =
+  tasks.register<Test>("testWithoutOpenTelemetry") {
+    description = "Runs the tests tagged without-opentelemetry with no OpenTelemetry jar."
+    group = "verification"
+    testClassesDirs = testSources.output.classesDirs
+    classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
+    filter { includeTestsMatching("dev.stablemates.workhorse.WithoutOpenTelemetryTest") }
+    useJUnitPlatform { includeTags("without-opentelemetry") }
+  }
+
+tasks.test {
+  useJUnitPlatform { excludeTags("without-opentelemetry") }
+  dependsOn(withoutOpenTelemetry)
 }
 
 // The SDK version as a class path resource, so the dashboard reports `project.version` on the class

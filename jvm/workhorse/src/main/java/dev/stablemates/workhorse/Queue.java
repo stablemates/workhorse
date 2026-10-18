@@ -10,6 +10,9 @@ import dev.stablemates.workhorse.internal.Row;
 import dev.stablemates.workhorse.internal.Sql;
 import dev.stablemates.workhorse.internal.SqlCatalogue;
 import dev.stablemates.workhorse.internal.Values;
+import dev.stablemates.workhorse.internal.telemetry.Names;
+import dev.stablemates.workhorse.internal.telemetry.Telemetry;
+import dev.stablemates.workhorse.internal.telemetry.TelemetrySpan;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -76,6 +79,7 @@ public final class Queue {
   private final ConnectionSource connections;
   private final String defaultQueue;
   private final JsonCodec codec;
+  private final Telemetry telemetry;
   private final ReentrantLock lock = new ReentrantLock();
   private boolean sourceChecked;
   private CompatibilityException.@Nullable Code sourceCompatibility;
@@ -100,6 +104,7 @@ public final class Queue {
     this.connections = Objects.requireNonNull(connections, "connections");
     this.defaultQueue = options.defaultQueue();
     this.codec = options.codec();
+    this.telemetry = options.telemetry().telemetry();
   }
 
   /** The queue of a request that names none. */
@@ -195,12 +200,37 @@ public final class Queue {
     if (requests.size() > SqlCatalogue.MAX_ENQUEUE_BATCH_SIZE) {
       throw new IllegalArgumentException("enqueue batch exceeds the shared limit");
     }
-    List<Row> rows =
-        submitRequests(
-            call,
-            requests,
-            document -> Sql.rows(call.connection, SqlCatalogue.ENQUEUE_MANY_V1, document));
-    return enqueueResults(rows, requests.size());
+    TelemetrySpan span = telemetry.span(Names.SPAN_ENQUEUE, enqueueAttributes(requests));
+    try {
+      List<Row> rows =
+          submitRequests(
+              call,
+              requests,
+              document -> Sql.rows(call.connection, SqlCatalogue.ENQUEUE_MANY_V1, document));
+      List<EnqueueResult> results = enqueueResults(rows, requests.size());
+      if (results.size() == 1) {
+        span.setAttribute(Names.TASK_ID, results.get(0).taskId());
+        span.setAttribute(
+            Names.ENQUEUE_OUTCOME, results.get(0).outcome().name().toLowerCase(Locale.ROOT));
+      }
+      return results;
+    } catch (RuntimeException error) {
+      span.recordError(error.getClass().getSimpleName());
+      throw error;
+    } finally {
+      span.close();
+    }
+  }
+
+  private Map<String, @Nullable Object> enqueueAttributes(List<EnqueueRequest> requests) {
+    List<String> queues = new ArrayList<>();
+    List<String> taskTypes = new ArrayList<>();
+    for (EnqueueRequest request : requests) {
+      String named = request.options().queue();
+      queues.add(named == null || named.isEmpty() ? defaultQueue : named);
+      taskTypes.add(request.taskType());
+    }
+    return Names.enqueue(queues, taskTypes);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1363,11 +1393,12 @@ public final class Queue {
   }
 
   /**
-   * The trace context that each enqueued task carries, or {@code null}. SM-1392 replaces this seam
-   * with the W3C trace context of the current span. Until then the queue sends none.
+   * The W3C trace context of the current span, which each enqueued task carries, or {@code null}
+   * without OpenTelemetry or without a valid current span.
    */
   @Nullable Map<String, @Nullable Object> traceContext() {
-    return null;
+    Map<String, String> carrier = telemetry.injectTraceContext();
+    return carrier == null ? null : new LinkedHashMap<>(carrier);
   }
 
   private Map<String, @Nullable Object> serializeRequest(EnqueueRequest request, Instant now) {

@@ -37,7 +37,7 @@ describe("JVM parity evidence", () => {
 
   it("reads the declared fixtures, the expected-unsupported list, and the test methods", () => {
     expect(state.declared.has("scenarios/fast-tier")).toBe(true);
-    expect(state.unsupported.get("runtime/enqueue-trace-context-reaches-handler")).toBe("SM-1392");
+    expect(state.unsupported).toEqual(new Map());
     expect(state.tests.get(test.file)?.has(test.test)).toBe(true);
     expect(
       state.tests
