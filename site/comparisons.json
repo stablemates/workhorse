@@ -1909,9 +1909,9 @@
     {
       "slug": "hangfire",
       "name": "Hangfire",
+      "aliases": ["hangfire"],
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1380",
+      "page": "published",
       "version": "1.8.25",
       "checked": "2026-10-17",
       "repository": "https://github.com/HangfireIO/Hangfire",
@@ -1924,6 +1924,34 @@
           "version": "1.8.25",
           "evidence": "UseTransaction: `#if FEATURE_TRANSACTIONSCOPE if (IsRunningOnWindows() && !_options.DisableTransactionScope) { using (var transaction = CreateTransaction(...)) ... connection.EnlistTransaction(Transaction.Current);` else `connection.BeginTransaction(...)`. The csproj sets the flag only for net451."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "BackgroundJob.Schedule takes a delay or a time.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L68-L74",
+          "version": "1.8.25",
+          "evidence": "README: \"Scheduled background jobs are executed only after a given amount of time.\" BackgroundJob.Schedule(() => Console.WriteLine(\"Reliable!\"), TimeSpan.FromDays(7)); src/Hangfire.Core/BackgroundJob.cs#L222-L226: Schedule(methodCall, TimeSpan delay); #L286-L291: Schedule(methodCall, DateTimeOffset enqueueAt)."
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "RecurringJob.AddOrUpdate takes a cron expression.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L76-L82",
+          "version": "1.8.25",
+          "evidence": "README: \"just call the following method to perform any kind of recurring task using the CRON expressions.\" RecurringJob.AddOrUpdate(() => Console.WriteLine(\"Transparent!\"), Cron.Daily);"
+        },
+        "priorities": {
+          "status": "Partial",
+          "note": "Priority comes from the queue. With SQL Server storage, a server reads its queues in alphanumeric order. A job has no priority.",
+          "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/configuring-queues.rst#L33-L38",
+          "version": "1.8.25",
+          "evidence": "\"Queues are run in the order that depends on the concrete storage implementation. For example, when we are using *Hangfire.SqlServer* the order is defined by alphanumeric order and array index is ignored. When using *Hangfire.Pro.Redis* package, array index is important and queues with a lower index will be processed first.\" Line 4: \"If you want to prioritize your jobs ... you can tell Hangfire about your decisions\" through queues. EnqueuedState (src/Hangfire.Core/States/EnqueuedState.cs) has a Queue property and no priority."
+        },
+        "enqueue-deduplication": {
+          "status": "Not supported",
+          "note": "No enqueue option takes a key that refuses a duplicate job. A recurring job ID names a schedule, not a job.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/IBackgroundJobClient.cs#L94",
+          "version": "1.8.25",
+          "evidence": "string Create([NotNull] Job job, [NotNull] IState state); The client takes a job and a state, and no key. RecurringJob.AddOrUpdate takes a recurringJobId, which names the schedule (src/Hangfire.Core/RecurringJob.cs)."
+        },
         "debounce-throttle": {
           "status": "Not supported",
           "paid": {
@@ -1934,6 +1962,38 @@
           "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/IBackgroundJobClient.cs#L94",
           "version": "1.8.25",
           "evidence": "string Create([NotNull] Job job, [NotNull] IState state); Hangfire Ace: https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/throttling.rst#L388-L414 \"Dynamic window counter allows us to create sliding window counters dynamically depending on background job arguments.\""
+        },
+        "task-dependencies": {
+          "status": "Partial",
+          "paid": {
+            "edition": "Hangfire Pro",
+            "status": "Supported"
+          },
+          "note": "ContinueJobWith starts a job after one parent job finishes. Batch continuations in Hangfire Pro, a paid package, wait for all jobs of a batch.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/BackgroundJob.cs#L606-L618",
+          "version": "1.8.25",
+          "evidence": "\"Creates a new background job that will wait for a successful completion of another background job to be enqueued.\" ContinueJobWith([NotNull] string parentId, ...). JobContinuationOptions (src/Hangfire.Core/JobContinuationOptions.cs#L21-L26): OnAnyFinishedState, OnlyOnSucceededState, OnlyOnDeletedState. Hangfire Pro: https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-methods/using-batches.rst#L68-L79 \"Continuations allow you to chain multiple batches together. They will be executed once *all background jobs* of a parent batch finished.\""
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "AutomaticRetry gives 10 retries by default. The delay grows with the fourth power of the attempt number, plus a random part.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/AutomaticRetryAttribute.cs#L80-L93",
+          "version": "1.8.25",
+          "evidence": "/// The value of this field is <c>10</c>. public static readonly int DefaultRetryAttempts = 10; DefaultDelayInSecondsByAttemptFunc = attempt => (int)Math.Round(Math.Pow(attempt - 1, 4) + 15 + random.Next(30) * attempt);"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "With SQL Server storage, a server refreshes the fetch time of each running job. If the server stops, another server fetches the job after the sliding invisibility timeout, 5 minutes by default.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.SqlServer/SqlServerJobQueue.cs#L206-L214",
+          "version": "1.8.25",
+          "evidence": "update top (1) JQ set FetchedAt = GETUTCDATE() ... where Queue in @queues and (FetchedAt is null or FetchedAt < DATEADD(second, @timeoutSs, GETUTCDATE())); src/Hangfire.SqlServer/SqlServerStorageOptions.cs#L38: SlidingInvisibilityTimeout = TimeSpan.FromMinutes(5); src/Hangfire.SqlServer/SqlServerTimeoutJob.cs#L143-L174 runs a keep-alive query that refreshes FetchedAt."
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "If the state of a running job changes, the server cancels the CancellationToken of the job. The server checks every 5 seconds by default. Cancellation is cooperative.",
+          "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-methods/using-cancellation-tokens.rst#L23-L38",
+          "version": "1.8.25",
+          "evidence": "\"Dedicated background process is watching for all the current background jobs that have a cancellation token parameter in a method and polls the storage to watch their current states. When state change is detected or when shutdown is requested, the corresponding cancellation token is canceled.\" CancellationCheckInterval = TimeSpan.FromSeconds(5) // Default value"
         },
         "concurrency-limits": {
           "status": "Partial",
@@ -1960,6 +2020,13 @@
           "version": "1.8.25",
           "evidence": "AutomaticRetryAttribute: \"changing the candidate state from FailedState to the ScheduledState when another retry should be attempted\". A job is one method call (BackgroundJob.Enqueue(() => ...)); no step results are stored."
         },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running job cannot suspend. A continuation waits for its parent job before it starts.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/States/AwaitingState.cs#L25-L35",
+          "version": "1.8.25",
+          "evidence": "\"Defines the *intermediate* state of a background job when it is waiting for a parent background job to be finished before it is moved to the EnqueuedState\". A job is one method call; src/Hangfire.Core has no API that suspends a running job until a timer or a signal."
+        },
         "dashboard": {
           "status": "Supported",
           "note": "Free. The dashboard is built into Hangfire.Core and runs inside the application.",
@@ -1967,18 +2034,46 @@
           "version": "1.8.25",
           "evidence": "README quick start: `app.UseHangfireServer(); app.UseHangfireDashboard();` and the image \"Hangfire Dashboard\". The dashboard is part of Hangfire.Core."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "After the last retry, the job stays in the Failed state until someone deletes it. The dashboard and BackgroundJob.Requeue run it again.",
+          "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-processing/dealing-with-exceptions.rst#L8-L14",
+          "version": "1.8.25",
+          "evidence": "\"you always can find this job in the Monitor UI (it will not be expired unless you delete it explicitly).\" \"If retry attempts exceeded their maximum, the job will be move to the ``Failed`` state (with an error log message), and you will be able to retry it manually.\" BackgroundJob.Requeue (src/Hangfire.Core/BackgroundJob.cs#L513)."
+        },
+        "queue-pause": {
+          "status": "Not supported",
+          "note": "No API or dashboard action pauses a queue. Each server processes the queues in its Queues option.",
+          "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/Storage/IMonitoringApi.cs#L22-L51",
+          "version": "1.8.25",
+          "evidence": "IMonitoringApi has Queues(), EnqueuedJobs, FetchedJobs, and counts, and no pause method. BackgroundJobServerOptions.Queues (src/Hangfire.Core/BackgroundJobServerOptions.cs#L78) lists the queues of a server. A search of src/ for \"pause\" finds no queue API."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The OpenTelemetry project publishes the instrumentation package, not the Hangfire project. The package is a beta release.",
+          "source": "https://github.com/open-telemetry/opentelemetry-dotnet-contrib/blob/a4fe0d9a951bf6fdca53f5df04e8e0805f42bc80/src/OpenTelemetry.Instrumentation.Hangfire/README.md#L12-L16",
+          "version": "1.8.25",
+          "evidence": "\"This is an Instrumentation Library, which instruments Hangfire and collects traces and metrics about BackgroundJob executions.\" Tag Instrumentation.Hangfire-1.20.0-beta.1. README.md#L267-L283 lists workflow.execution.outcome, workflow.execution.duration, workflow.execution.status, and workflow.execution.errors. The csproj references Hangfire.Core [1.7.0,)."
+        },
         "worker-languages": {
           "value": ".NET (C#)",
           "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L14",
           "version": "1.8.25",
           "evidence": "README: \"Incredibly easy way to perform fire-and-forget, delayed and recurring jobs in .NET applications.\""
         },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "A job is a serialized .NET method call. The docs document no client for another language.",
+          "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/getting-started/index.rst#L30",
+          "version": "1.8.25",
+          "evidence": "\"Hangfire serializes the type (``System.Console``), method name (``WriteLine``, with all the parameter types to identify it later), and all the given arguments, and places it to Storage.\" The docs document no client for another language."
+        },
         "infrastructure": {
           "value": "A job storage database: SQL Server, or Redis with Hangfire Pro",
-          "note": "Redis storage is the paid Hangfire.Pro.Redis package. Community packages add other databases, such as PostgreSQL.",
+          "note": "Redis storage is the paid Hangfire.Pro.Redis package. The storage is an abstraction, so other packages can implement it.",
           "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/README.md#L14",
           "version": "1.8.25",
-          "evidence": "README: \"No Windows Service / Task Scheduler required. Backed by Redis, SQL Server, SQL Azure and MSMQ.\" The repository ships src/Hangfire.SqlServer and src/Hangfire.SqlServer.Msmq only."
+          "evidence": "README: \"No Windows Service / Task Scheduler required. Backed by Redis, SQL Server, SQL Azure and MSMQ.\" The repository ships src/Hangfire.SqlServer and src/Hangfire.SqlServer.Msmq only. https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/getting-started/index.rst#L12: \"The storage subsystem is abstracted in Hangfire well enough to be implemented for RDBMS and NoSQL solutions.\""
         },
         "license": {
           "value": "LGPL-3.0-or-later",
@@ -1987,7 +2082,83 @@
           "version": "1.8.25",
           "evidence": "LICENSE.md: \"multi-licensed ... LGPL v3 License ... either version 3 of the License, or (at your option) any later version\" and \"Commercial License ... Subject to the purchase of a corresponding subscription\"."
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "batch-enqueue",
+          "group": "producing",
+          "label": "Enqueue many tasks in one call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Atomic batch enqueue"
+            },
+            "page": "/docs/enqueue",
+            "note": "Up to 1,000 tasks commit or roll back together."
+          },
+          "cell": {
+            "status": "Not supported",
+            "paid": {
+              "edition": "Hangfire Pro",
+              "status": "Supported"
+            },
+            "note": "The open source client creates one job in each call. Batches in Hangfire Pro, a paid package, create many jobs atomically.",
+            "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-methods/using-batches.rst#L4-L9",
+            "version": "1.8.25",
+            "evidence": "\".. admonition:: Pro Only ... This feature is a part of Hangfire Pro package set\" \"Batches allow you to create a bunch of background jobs *atomically*. This means that if there was an exception during the creation of background jobs, none of them will be processed.\" The open source IBackgroundJobClient.Create takes one job (src/Hangfire.Core/IBackgroundJobClient.cs#L94)."
+          }
+        },
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Not supported",
+            "paid": {
+              "edition": "Hangfire Pro",
+              "status": "Supported"
+            },
+            "note": "The open source edition has none. Batch continuations in Hangfire Pro, a paid package, start after all jobs of a batch finish.",
+            "source": "https://github.com/HangfireIO/Hangfire.Documentation/blob/e28fd858af4f684b98c9b71c6198c809cdd3cdea/background-methods/using-batches.rst#L68-L79",
+            "version": "1.8.25",
+            "evidence": "\"Continuations allow you to chain multiple batches together. They will be executed once *all background jobs* of a parent batch finished.\" BatchJob.ContinueBatchWith(id1, x => { x.Enqueue(() => MarkCampaignFinished()); ... }); Lines 4-7: \"Pro Only ... This feature is a part of Hangfire Pro package set\"."
+          }
+        },
+        {
+          "id": "task-results",
+          "group": "operating",
+          "label": "Store and read the task result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Terminal result inspection"
+            },
+            "page": "/docs/queries",
+            "note": "The result is in the same PostgreSQL database."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The Succeeded state stores the value that the job method returns.",
+            "source": "https://github.com/HangfireIO/Hangfire/blob/v1.8.25/src/Hangfire.Core/States/SucceededState.cs#L67-L70",
+            "version": "1.8.25",
+            "evidence": "/// Gets the value returned by a job method. public object Result { get; } SucceededState.cs#L150-L159: the Result key is serialized into the state data, and \"may be missing from the dictionary, when the return value was null\"."
+          }
+        }
+      ]
     },
     {
       "slug": "bullmq",
