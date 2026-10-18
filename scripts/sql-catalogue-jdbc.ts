@@ -4,9 +4,19 @@
  * binds its value twice. PgJDBC reads a bare `?` as a parameter, so a `?` operator becomes `??`.
  * Literals, escape strings, quoted identifiers, nested comments, and dollar quotes stay as they
  * are, because PgJDBC skips them too.
+ *
+ * `uncast` lists the 1-based JDBC index of each `?` that no `::` cast follows. Only whitespace can
+ * come between the `?` and its cast. The list is conservative: it also names a `?` in
+ * `CAST(? AS type)` or a `?` with a comment before its cast. The JVM `Sql` runner binds text as an
+ * untyped parameter. PostgreSQL then infers the type of each uncast `?` from its context alone.
  */
-export function jdbcStatement(sql: string): { sql: string; parameters: number[] } {
+export function jdbcStatement(sql: string): {
+  sql: string;
+  parameters: number[];
+  uncast: number[];
+} {
   const parameters: number[] = [];
+  const uncast: number[] = [];
   let output = "";
   let index = 0;
   const copyUntil = (end: number) => {
@@ -58,6 +68,7 @@ export function jdbcStatement(sql: string): { sql: string; parameters: number[] 
       parameters.push(Number(placeholder[1]));
       output += "?";
       index += placeholder[0].length;
+      if (!/^\s*::/.test(sql.slice(index))) uncast.push(parameters.length);
     } else if (dollar) {
       const close = sql.indexOf(dollar[0], index + dollar[0].length);
       if (close < 0) throw unterminated("dollar quote");
@@ -69,5 +80,5 @@ export function jdbcStatement(sql: string): { sql: string; parameters: number[] 
       copyUntil(index + 1);
     }
   }
-  return { sql: output, parameters };
+  return { sql: output, parameters, uncast };
 }
