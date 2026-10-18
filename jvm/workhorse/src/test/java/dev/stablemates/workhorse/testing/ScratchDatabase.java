@@ -67,6 +67,84 @@ public final class ScratchDatabase implements BeforeAllCallback {
     }
   }
 
+  /**
+   * A second scratch database for a test that counts rows across the whole database, as the shared
+   * {@code dashboard/v1} fixture does. The counterpart of Ruby's {@code ScratchDatabase.extra}.
+   *
+   * <p>The name is {@code <source>_jvm_<digest>} with a digest of the purpose and the process, so
+   * {@code pnpm db:sweep} recognizes it if the drop never runs. The caller closes the handle, which
+   * drops the database.
+   */
+  public static Extra extra(String purpose) throws Exception {
+    Database main;
+    synchronized (LOCK) {
+      main = database;
+    }
+    if (main == null || main.url == null || main.adminUrl == null) {
+      throw new IllegalStateException("Extend the test class with ScratchDatabase");
+    }
+    String source = main.name.substring(0, main.name.lastIndexOf("_jvm_"));
+    byte[] hash =
+        MessageDigest.getInstance("SHA-256")
+            .digest(
+                ("jvm:" + purpose + ":" + ProcessHandle.current().pid())
+                    .getBytes(StandardCharsets.UTF_8));
+    String name =
+        source.substring(0, Math.min(source.length(), 43))
+            + "_jvm_"
+            + HexFormat.of().formatHex(hash).substring(0, 10);
+    String url = main.url.replaceFirst("/" + main.name + "(?=\\?|$)", "/" + name);
+    Extra extra = new Extra(url, main.adminUrl, main.credentials, name);
+    try (Connection admin = DriverManager.getConnection(main.adminUrl, main.credentials)) {
+      dropDatabase(admin, name);
+      try (Statement statement = admin.createStatement()) {
+        statement.execute("CREATE DATABASE " + quoteIdentifier(name));
+      }
+    }
+    try (Connection connection = extra.connect();
+        Statement statement = connection.createStatement()) {
+      statement.execute(Files.readString(schema()));
+    } catch (Exception error) {
+      extra.close();
+      throw error;
+    }
+    report("running against extra scratch database " + name);
+    return extra;
+  }
+
+  /** An extra scratch database. {@link #close} drops it. */
+  public static final class Extra implements AutoCloseable {
+    private final String url;
+    private final String adminUrl;
+    private final Properties credentials;
+    private final String name;
+
+    private Extra(String url, String adminUrl, Properties credentials, String name) {
+      this.url = url;
+      this.adminUrl = adminUrl;
+      this.credentials = credentials;
+      this.name = name;
+    }
+
+    /** The database name. */
+    public String name() {
+      return name;
+    }
+
+    /** A new connection to the extra database. The caller closes it. */
+    public Connection connect() throws SQLException {
+      return DriverManager.getConnection(url, credentials);
+    }
+
+    @Override
+    public void close() throws SQLException {
+      try (Connection admin = DriverManager.getConnection(adminUrl, credentials)) {
+        dropDatabase(admin, name);
+        report("dropped extra scratch database " + name);
+      }
+    }
+  }
+
   private static Database create() throws Exception {
     String source = System.getenv().getOrDefault("DATABASE_URL_TEST", "");
     if (source.isEmpty()) {
