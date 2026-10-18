@@ -30,3 +30,6 @@ pluginManagement {
 }
 
 include("workhorse", "workhorse-kotlin", "workhorse-spring-boot-starter")
+
+// The reader behind `api/java.txt` and `api/kotlin.txt`. It is a build tool, not an artifact.
+include("api-snapshot")

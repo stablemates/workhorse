@@ -475,34 +475,39 @@ tag, and pushes that tag to `origin`.
 ## What SemVer governs
 
 SemVer says a major release may break the public API. It does not say which artifact is the public
-API, and Workhorse ships nine of them. Each surface below is governed, and each states in one
+API, and Workhorse ships eleven of them. Each surface below is governed, and each states in one
 sentence what a breaking change is for it. Anything not on this list is internal and may change in
 any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision, and
-[ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md) and
-[ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md) add the Rust and Ruby APIs.
+[ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
+[ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md), and
+[ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+add the Rust, Ruby, Java, and Kotlin APIs.
 
-| Governed surface                                    | A breaking change is                                                                                                                                                                                                       | Enforced by                                                 |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                     | `sql-catalogues:check`, which classifies the change         |
-| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                          | `typescript-api:check`, against `api/typescript.txt`        |
-| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                          | `python-api:check`, against `api/python.txt`                |
-| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                 | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
-| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking. | `rust-api:check`, against `api/rust.txt`                    |
-| Ruby API                                            | The same for code that runs rather than compiles, across the public constants under `Stablemates::Workhorse` and the Active Job adapter, with their `Data` members and method signatures. A `:nodoc:` constant is private. | `ruby-api:check`, against `api/ruby.txt`                    |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                              | `cli-surface:check`, against `api/cli.txt`                  |
-| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                             | `dashboard-spec:check`, which classifies the change         |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                          | `telemetry-surface:check`, against `api/telemetry.txt`      |
+| Governed surface                                    | A breaking change is                                                                                                                                                                                                                                                                             | Enforced by                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                                                                                           | `sql-catalogues:check`, which classifies the change         |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                                                                                                | `typescript-api:check`, against `api/typescript.txt`        |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                                                                                                | `python-api:check`, against `api/python.txt`                |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                                                                                       | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
+| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking.                                                                       | `rust-api:check`, against `api/rust.txt`                    |
+| Ruby API                                            | The same for code that runs rather than compiles, across the public constants under `Stablemates::Workhorse` and the Active Job adapter, with their `Data` members and method signatures. A `:nodoc:` constant is private.                                                                       | `ruby-api:check`, against `api/ruby.txt`                    |
+| Java API                                            | The same, across every public and protected declaration in an exported package of `workhorse` and `workhorse-spring-boot-starter`, with its signature and nullness. It also covers every `workhorse.*` property with its type and default. `dev.stablemates.workhorse.internal` is not exported. | `java-api:check`, against `api/java.txt`                    |
+| Kotlin API                                          | The same, across every public declaration of `workhorse-kotlin`, with its default arguments, `suspend` modifiers, and reified type parameters.                                                                                                                                                   | `kotlin-api:check`, against `api/kotlin.txt`                |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                                                                                                    | `cli-surface:check`, against `api/cli.txt`                  |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                                                                                                   | `dashboard-spec:check`, which classifies the change         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                                                                                                | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` task, so no promise rests on review alone. Seven of them read the committed
+check in the CI `required` task, so no promise rests on review alone. Nine of them read the committed
 snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
 generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
 `pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm rust-api:generate`,
-`pnpm ruby-api:generate`, `pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
+`pnpm ruby-api:generate`, `pnpm java-api:generate`, `pnpm kotlin-api:generate`,
+`pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
 
-A snapshot is only as good as where it reads from, so neither of the two newest reads a table kept
-beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself
+A snapshot is only as good as where it reads from, so neither `api/cli.txt` nor `api/telemetry.txt`
+reads a table kept beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself
 dispatches, parses, and serializes through, so renaming a command or dropping a flag stops the CLI
 from accepting it. `api/telemetry.txt` reads the emitting source directly, so renaming an instrument
 or an attribute changes the snapshot on the same commit.
@@ -658,7 +663,7 @@ dashboard release inside a major line.
 Six gates hold the tag, and each is met with evidence rather than with an assertion
 ([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
 
-1. Every governed surface above has a mechanical check in the CI `required` task. Nine checks, one
+1. Every governed surface above has a mechanical check in the CI `required` task. Eleven checks, one
    per surface.
 2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
    surface from the tag, and no outside-filed defect against a governed surface is open and

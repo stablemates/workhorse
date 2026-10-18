@@ -50,23 +50,18 @@ function report(label: string, lines: readonly string[]): string {
 }
 
 /**
- * Compare against or replace the committed file the contract names.
+ * The failure message for a committed snapshot that differs from a fresh reading, or `undefined`
+ * when the two are the same.
  *
- * The failure names the generator, so the fix for a legitimate change is one command, and quotes
+ * The message names the generator, so the fix for a legitimate change is one command, and quotes
  * the changed lines, so a reviewer can tell a break from an addition without running anything.
  */
-export async function writeOrCheck(
+export function snapshotDrift(
   contract: SnapshotContract,
+  current: string,
   contents: string,
-  check: boolean,
-): Promise<void> {
-  const filename = path.join(repositoryRoot, contract.path);
-  if (!check) {
-    await writeFile(filename, contents);
-    return;
-  }
-  const current = await readFile(filename, "utf8").catch(() => "");
-  if (current === contents) return;
+): string | undefined {
+  if (current === contents) return undefined;
   const before = current.split("\n").filter((line) => line.trim() !== "");
   const after = contents.split("\n").filter((line) => line.trim() !== "");
   const gone = missing(before, after);
@@ -78,8 +73,24 @@ export async function writeOrCheck(
     gone.length === 0 && arrived.length === 0
       ? "\nEvery line is still present, so only their order or spacing moved; that generator owes a stable ordering."
       : report(contract.goneLabel, gone) + report(contract.arrivedLabel, arrived);
-  throw new Error(
+  return (
     `${contract.path} no longer describes this surface; run ${contract.generateCommand}.` +
-      ` ${contract.meaning}${difference}`,
+    ` ${contract.meaning}${difference}`
   );
+}
+
+/** Compare against or replace the committed file the contract names. */
+export async function writeOrCheck(
+  contract: SnapshotContract,
+  contents: string,
+  check: boolean,
+): Promise<void> {
+  const filename = path.join(repositoryRoot, contract.path);
+  if (!check) {
+    await writeFile(filename, contents);
+    return;
+  }
+  const current = await readFile(filename, "utf8").catch(() => "");
+  const drift = snapshotDrift(contract, current, contents);
+  if (drift !== undefined) throw new Error(drift);
 }
