@@ -3823,8 +3823,7 @@
       "slug": "hatchet",
       "name": "Hatchet",
       "category": "workflow-platform",
-      "page": "planned",
-      "issue": "SM-1376",
+      "page": "published",
       "version": "0.110.8",
       "checked": "2026-10-17",
       "repository": "https://github.com/hatchet-dev/hatchet",
@@ -3832,10 +3831,38 @@
       "cells": {
         "transactional-enqueue": {
           "status": "Not supported",
-          "note": "The application triggers runs through the engine API, outside its own database transaction.",
-          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L13-L15",
+          "note": "The application triggers a workflow through the Hatchet API server, not in its own database transaction.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/architecture-and-guarantees.mdx#L50-L54",
           "version": "0.110.8",
-          "evidence": "Self-hosting: the Engine exposes a \"gRPC API for core workflow orchestration and task scheduling\" and stores state in its own PostgreSQL. The run docs trigger tasks through SDK client calls; I found no transactional enqueue in the docs at the tag."
+          "evidence": "Architecture: \"The API server is the front door to Hatchet. It’s what your application and the Hatchet UI talk to in order to: trigger workflows with input data\"."
+        },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "A scheduled run starts a task at a time in the future. The scheduled time is when Hatchet enqueues the run, not when it starts.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/scheduled-runs.mdx#L12-L27",
+          "version": "0.110.8",
+          "evidence": "Scheduled runs allow you to trigger a task at a specific time in the future. ... The scheduled time is when Hatchet **enqueues** the task, not when the run starts."
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Cron expressions with 5 or 6 fields. Set them in the task definition, in code, or in the dashboard.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/cron-runs.mdx#L20-L35",
+          "version": "0.110.8",
+          "evidence": "Task Definitions: Define a cron expression in your task definition ... Dynamic Programmatically ... Hatchet Dashboard ... Hatchet supports both 5-field and 6-field expressions."
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "Three levels, from 1 to 3. Level 3 runs first. Priority orders the runs of one workflow only.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/priority.mdx#L12-L18",
+          "version": "0.110.8",
+          "evidence": "`priority` can be set to either `1`, `2`, or `3`, (`low`, `medium`, and `high`, respectively) with relatively higher values resulting in that task being picked up before others of the same type. ... Priority only affects multiple runs of a _single_ workflow."
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "A CEL expression gives the idempotency key. The key holds for a TTL, or until the run that holds it ends.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/idempotency.mdx#L16-L23",
+          "version": "0.110.8",
+          "evidence": "TTL-based idempotency, which says that there can only be one run for a given idempotency key within a specified amount of time ... Status-based idempotency, which clears the idempotency key when the run that claimed it reaches a terminal status ... Every idempotency configuration ... requires an expression, which is a CEL expression"
         },
         "debounce-throttle": {
           "status": "Partial",
@@ -3843,6 +3870,34 @@
           "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/idempotency.mdx#L29-L50",
           "version": "0.110.8",
           "evidence": "Only one run for a given key will occur in the time window from when the first trigger comes in until the TTL expires."
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "In a DAG workflow, a task runs after its parent tasks complete. The outputs of the parents go to the task.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/directed-acyclic-graphs.mdx#L76",
+          "version": "0.110.8",
+          "evidence": "A task can declare one or more parent tasks, meaning that those parent tasks must complete successfully before the child task is allowed to run. ... the outputs of its parents are available on its context object"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "A task sets a retry count. Exponential backoff increases the delay between retries.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/retry-policies.mdx#L21-L78",
+          "version": "0.110.8",
+          "evidence": "When a task fails ... Hatchet can automatically retry the task based on the `retries` configuration defined in the task object. ... Hatchet also supports exponential backoff for retries ... Exponential backoff increases the delay between retries exponentially"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "Workers send heartbeats. If the heartbeats of a worker stop, the engine re-queues its tasks for other workers.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/faq.mdx#L36-L38",
+          "version": "0.110.8",
+          "evidence": "Hatchet uses heartbeats to monitor worker health. ... If the engine does not receive a heartbeat for **30 seconds**, the engine considers the worker to be inactive, and re-queues its in-flight tasks for other workers to pick up."
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "Hatchet sends a cancellation signal to the task. The task checks for the signal and stops. Cancellation is cooperative.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/cancellation.mdx#L12-L14",
+          "version": "0.110.8",
+          "evidence": "When a task is canceled, Hatchet sends a cancellation signal to the task. The task can then check for the cancellation signal and take appropriate action"
         },
         "concurrency-limits": {
           "status": "Partial",
@@ -3865,6 +3920,13 @@
           "version": "0.110.8",
           "evidence": "Durable tasks: \"Every time one of those happens, Hatchet writes a checkpoint to the durable event log. On retries, Hatchet can replay from that checkpoint instead of re-running completed application logic\"."
         },
+        "durable-waits": {
+          "status": "Supported",
+          "note": "A durable task that waits for a sleep, an event, or a child run can leave its worker slot. A task that is not durable keeps its slot.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/task-eviction.mdx#L12-L19",
+          "version": "0.110.8",
+          "evidence": "Hatchet has the option to **evict** durable tasks from workers when they're in one of these waiting states, in order to free up slots on the worker. ... Only durable tasks can be evicted from and restored on workers, as opposed to non-durable tasks, which will hold slots throughout the entirety of their execution"
+        },
         "dashboard": {
           "status": "Supported",
           "note": "Free in the open source release. Hatchet Cloud includes it too.",
@@ -3872,27 +3934,120 @@
           "version": "0.110.8",
           "evidence": "Self-hosting: \"Dashboard - Web UI for monitoring workflows and debugging\". README: \"Real-time web UI with alerting, monitoring, and logging\"."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "No dead letter queue. Failed runs stay in the dashboard. A replay runs a failed task again with the same input.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/bulk-retries-and-cancellations.mdx#L167-L175",
+          "version": "0.110.8",
+          "evidence": "click the \"Replay\" button. This will create a new instance of the task, starting from the failed task, and using the same input data as the original run. ... While Hatchet does not have a built-in dead letter queue feature, the persistence of failed task instances in the dashboard serves a similar purpose."
+        },
+        "queue-pause": {
+          "status": "Partial",
+          "note": "A pause holds new runs of one workflow across all workers. Runs in progress continue. No setting pauses a whole queue.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/pausing-workflows.mdx#L12-L24",
+          "version": "0.110.8",
+          "evidence": "Pausing a workflow stops new runs of that workflow from starting. ... Pausing a workflow applies to one workflow across every worker. ... In-flight runs keep running."
+        },
+        "opentelemetry": {
+          "status": "Supported",
+          "note": "The SDKs trace task code. A self-hosted engine and API server also export their own traces and OpenTelemetry metrics.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/opentelemetry.mdx#L7-L40",
+          "version": "0.110.8",
+          "evidence": "This page describes how to export traces emitted by Hatchet's own services, including the engine and the API server ... This is different from the OpenTelemetry page in the guide, which covers tracing your own application, task, and workflow code ... `SERVER_OTEL_METRICS_ENABLED` (`otel.metricsEnabled`), enables OpenTelemetry metrics export over the same collector URL."
+        },
         "worker-languages": {
           "value": "Python, TypeScript, Go, Ruby",
           "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/README.md#L31",
           "version": "0.110.8",
           "evidence": "README: \"It supports applications written in Python, TypeScript, Go and Ruby\"."
         },
+        "enqueue-languages": {
+          "value": "Any language, through the REST API",
+          "note": "The REST API triggers a workflow run.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/api-contracts/openapi/paths/v1/workflow-runs/workflow_run.yaml#L469-L472",
+          "version": "0.110.8",
+          "evidence": "trigger: post: ... description: Trigger a new workflow run"
+        },
         "infrastructure": {
           "value": "The Hatchet engine and API server, and PostgreSQL",
-          "note": "RabbitMQ is optional. Hatchet Lite bundles the engine and API in one image. Hatchet Cloud is paid.",
-          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L11-L17",
+          "note": "RabbitMQ is optional. Hatchet Lite bundles the engine and API in one image.",
+          "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/self-hosting/index.mdx#L11-L35",
           "version": "0.110.8",
-          "evidence": "Self-hosting: \"API Server - REST APIs\", \"Engine - gRPC API for core workflow orchestration\", \"Database - PostgreSQL for storing workflow state and metadata\", \"Message Queue (optional) - RabbitMQ\", \"Dashboard - Web UI\"."
+          "evidence": "Self-hosting: \"API Server - REST APIs\", \"Engine - gRPC API for core workflow orchestration\", \"Database - PostgreSQL for storing workflow state and metadata\", \"Message Queue (optional) - RabbitMQ\", \"Dashboard - Web UI\". \"Hatchet Lite - Single docker image with bundled engine and API\"."
         },
         "license": {
           "value": "MIT",
-          "note": "Hatchet Cloud is the paid managed service.",
+          "note": "Hatchet Cloud is the managed service.",
           "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/LICENSE#L1-L3",
           "version": "0.110.8",
-          "evidence": "LICENSE: \"MIT License / Copyright (c) 2023-present Hatchet Technologies Inc.\" Docs: \"we're open-source and 100% MIT-licensed\"."
+          "evidence": "LICENSE: \"MIT License / Copyright (c) 2023-present Hatchet Technologies Inc.\" README.md#L31: \"can be used as a service through Hatchet Cloud or self-hosting\"."
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "deterministic-replay",
+          "group": "executing",
+          "label": "Replay workflow code from an event history",
+          "kind": "status",
+          "workhorse": {
+            "status": "Partial",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Signals and workflow DAGs"
+            },
+            "page": "/docs/durable-execution",
+            "note": "A handler starts again from its entry and reuses named checkpoints. No deterministic workflow runtime."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Durable tasks only. The code between checkpoints must be deterministic, because Hatchet replays the durable event log.",
+            "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/durable-tasks.mdx#L27-L29",
+            "version": "0.110.8",
+            "evidence": "the code between checkpoints must be deterministic. When a task is evicted and resumed, Hatchet replays the durable event log to rebuild state — it doesn't re-execute completed operations, but it does re-run the code path that led to each checkpoint."
+          }
+        },
+        {
+          "id": "child-workflows",
+          "group": "executing",
+          "label": "Start child work and wait for its result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Linked child fan-out and result join"
+            },
+            "page": "/docs/child-tasks",
+            "note": "The parent waits without a worker slot."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Any task can spawn child tasks, durable tasks, or DAG workflows. The parent can wait for their results.",
+            "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/child-spawning.mdx#L12",
+            "version": "0.110.8",
+            "evidence": "A task can spawn child tasks at runtime — including other durable tasks or entire DAG workflows. Children run independently on any available worker, and the parent can wait for their results before continuing."
+          }
+        },
+        {
+          "id": "code-versioning",
+          "group": "operating",
+          "label": "Keep running work on the code that started it",
+          "kind": "text",
+          "workhorse": {
+            "value": "Application patterns",
+            "source": "docs/guides/132-handler-changes.md",
+            "page": "/docs/handler-changes",
+            "note": "A version checkpoint, or one queue for each version."
+          },
+          "cell": {
+            "value": "New task definition",
+            "note": "Hatchet has no patching API. For a breaking change to a durable task, the docs recommend a new definition, and the old runs drain.",
+            "source": "https://github.com/hatchet-dev/hatchet/blob/v0.110.8/frontend/docs/content/docs/v1/from-temporal-to-hatchet.mdx#L962-L964",
+            "version": "0.110.8",
+            "evidence": "Hatchet has no equivalent: for breaking changes to durable tasks, we recommend deploying a new durable task definition and letting the old work drain."
+          }
+        }
+      ]
     }
   ]
 }
