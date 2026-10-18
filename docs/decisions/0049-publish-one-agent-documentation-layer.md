@@ -44,9 +44,10 @@ prerendered HTML carries no sidebar.
 **The Markdown twin is the agent's form of every page.** The generator expands each `<Tab>` inline
 under a bold language label and de-indents its fenced block, so the twin's heading outline still
 matches the page's. Twins carry `title`, `description`, and `canonical` frontmatter and no version.
-`llms-full.txt` embeds the body without frontmatter. The origin serves `.md` as `text/markdown`, and
-a canonical HTML URL does not negotiate on `Accept`. The generator throws on any MDX tag its
-transform does not know.
+`llms-full.txt` embeds the body without frontmatter and without table alignment padding, and is
+otherwise the same as the twin (SM-1411). The origin serves `.md` as `text/markdown`, and a
+canonical HTML URL does not negotiate on `Accept`. The generator throws on any MDX tag its transform
+does not know.
 
 **No document states a package version.** One install command per language and one schema command,
 all unpinned, held as an `install` catalog in `support.json` and swept across every governed surface

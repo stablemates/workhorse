@@ -8,6 +8,7 @@ import {
 import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
 import {
+  compactMarkdownTables,
   renderCliSection,
   renderMachineReadable,
   renderNotFoundJson,
@@ -777,8 +778,9 @@ const llmsSection = (group: Group, depth = 2): string => {
 
 /**
  * `/llms-full.txt`, every page in sidebar order. The separator and canonical
- * URL identify each page, and the document that follows is the same body the
- * standalone twin carries, without the twin's frontmatter.
+ * URL identify each page. The document that follows is the body of the twin
+ * without its frontmatter. `compactMarkdownTables` also removes the table
+ * alignment padding. Each cell keeps its text.
  *
  * It is built before `llms.txt` is written, because the router states this
  * file's size and reads the number from the string as written rather than
@@ -790,7 +792,7 @@ const llmsFullSection = (group: Group, depth = 2): string => {
     const page = pages.get(slug);
     const document = markdownDocuments.get(slug);
     if (!page || !document) throw new Error(`The sidebar page "${slug}" has no Markdown twin`);
-    return `---\n\nCanonical source: ${base}${page.url}\n\n${document}`;
+    return `---\n\nCanonical source: ${base}${page.url}\n\n${compactMarkdownTables(document)}`;
   });
   const nested = (group.groups ?? []).map((child) => llmsFullSection(child, depth + 1));
   return [`${heading} ${group.title}`, "", ...documents, "", ...nested].join("\n");

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CLI_COMMANDS } from "../../typescript/core/src/cli/surface.js";
 import {
+  compactMarkdownTables,
   renderCliSection,
   renderMachineReadable,
   renderNotFoundJson,
@@ -116,5 +117,75 @@ describe("the llms.txt sections", () => {
     ]) {
       expect(section).toContain(token);
     }
+  });
+});
+
+describe("the llms-full.txt table compaction", () => {
+  it("removes the alignment padding and keeps every cell", () => {
+    const table = [
+      "| Option    | Default | Rule                 |",
+      "| --------- | ------: | :------------------: |",
+      "| `retries` | 3       | Counts `a \\|   b` too |",
+      "|    `ttl` |    none | Right-aligned        |",
+    ].join("\n");
+    expect(compactMarkdownTables(table)).toBe(
+      [
+        "| Option | Default | Rule |",
+        "| --- | ---: | :---: |",
+        "| `retries` | 3 | Counts `a \\|   b` too |",
+        "| `ttl` | none | Right-aligned |",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves a table inside a fence and every non-table line unchanged", () => {
+    const body = [
+      "Prose with  two spaces  |  a pipe.",
+      "```rust",
+      "|    items: Vec<Item>    | async move {",
+      "```",
+      "```markdown",
+      "| Option    | Default |",
+      "| --------- | ------- |",
+      "```",
+      "  | psql    | indented",
+    ].join("\n");
+    expect(compactMarkdownTables(body)).toBe(body);
+  });
+
+  it("keeps a data row of dashes after the separator row", () => {
+    const table = ["| Pattern |", "| ------- |", "| ---------- |"].join("\n");
+    expect(compactMarkdownTables(table)).toBe(
+      ["| Pattern |", "| --- |", "| ---------- |"].join("\n"),
+    );
+  });
+
+  it("leaves tilde fences and longer backtick fences unchanged", () => {
+    const body = [
+      "~~~md",
+      "| a    | b    |",
+      "| ---- | ---- |",
+      "```",
+      "| c    | d    |",
+      "| ---- | ---- |",
+      "~~~",
+      "````markdown",
+      "```",
+      "| e    | f    |",
+      "| ---- | ---- |",
+      "```",
+      "| g    | h    |",
+      "| ---- | ---- |",
+      "````",
+    ].join("\n");
+    expect(compactMarkdownTables(body)).toBe(body);
+    const after = `${body}\n| i    | j    |\n| ---- | ---- |`;
+    expect(compactMarkdownTables(after)).toBe(`${body}\n| i | j |\n| --- | --- |`);
+  });
+
+  it("leaves a block that has no separator row unchanged", () => {
+    const body = ["|  Keep this  |  literal text.", "|  And this   |  too."].join("\n");
+    expect(compactMarkdownTables(body)).toBe(body);
+    expect(compactMarkdownTables("|  One line  |")).toBe("|  One line  |");
   });
 });

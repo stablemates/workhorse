@@ -219,13 +219,19 @@ try {
   // each twin included once.
   // The fixed 1265000-byte bound sits about a quarter above that, because a generator that starts
   // repeating content roughly doubles the file while a new page adds a few KB.
+  // By SM-1411 the corpus had grown to 72 pages and 1260147 bytes. The generator then removed
+  // table alignment padding from the file, which gave 1192543 bytes and kept every cell.
   // Site smoke is skipped on main pushes, so raise this deliberately rather than
   // to clear whichever pull request happens to add the page that crosses it.
+  // To raise the bound, do these steps in a separate commit:
+  // 1. Measure the file.
+  // 2. Record the page count and the measured size here.
+  // 3. Set the bound to the measured size times 1.25.
   const llmsFullText = await (await fetch(`${baseUrl}/llms-full.txt`)).text();
   const llmsFullBytes = Buffer.byteLength(llmsFullText, "utf8");
   if (llmsFullBytes > 1_265_000) {
     throw new Error(
-      `llms-full.txt grew to ${llmsFullBytes} bytes, well past its 1011823-byte shape`,
+      `llms-full.txt grew to ${llmsFullBytes} bytes, well past its 1192543-byte shape`,
     );
   }
   // ADR 0104 keeps the comparison pages out of the full file. Each comparison page adds tables
