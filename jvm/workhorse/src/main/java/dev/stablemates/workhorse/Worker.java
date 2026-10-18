@@ -9,6 +9,7 @@ import dev.stablemates.workhorse.internal.PgjdbcVersion;
 import dev.stablemates.workhorse.internal.Row;
 import dev.stablemates.workhorse.internal.Sql;
 import dev.stablemates.workhorse.internal.SqlCatalogue;
+import dev.stablemates.workhorse.internal.Suspension;
 import dev.stablemates.workhorse.internal.Values;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -89,7 +90,7 @@ public final class Worker implements AutoCloseable {
   private static final Pattern EXPONENT_NUMBER = Pattern.compile("\\d[eE]");
 
   /** How the worker settled one attempt. The first submission wins. */
-  private enum Outcome {
+  enum Outcome {
     COMPLETED,
     FAILED,
     RETRY,
@@ -97,7 +98,9 @@ public final class Worker implements AutoCloseable {
     RELEASED,
     DEADLINE_EXCEEDED,
     ATTEMPT_TIMEOUT,
-    CANCELLED
+    CANCELLED,
+    SUSPENDED_FOR_WAIT,
+    SUSPENDED_FOR_CHILD
   }
 
   private final DataSource dataSource;
@@ -144,6 +147,13 @@ public final class Worker implements AutoCloseable {
   private final Set<Active> active = ConcurrentHashMap.newKeySet();
   private final Map<List<String>, ContractSchema> resultContracts = new ConcurrentHashMap<>();
   private final ReentrantLock runLock = new ReentrantLock();
+
+  /**
+   * The runs in progress. {@link #close} also takes {@link #runLock}, so the lock state cannot show
+   * a run.
+   */
+  private final AtomicInteger runs = new AtomicInteger();
+
   private final AtomicReference<@Nullable Thread> started = new AtomicReference<>();
   private final AtomicReference<@Nullable Throwable> startedFailure = new AtomicReference<>();
   private volatile long lastRegistryAt = NEVER;
@@ -234,6 +244,16 @@ public final class Worker implements AutoCloseable {
     return new Builder(dataSource);
   }
 
+  /** The queue that the durable context writes child requests and group adds through. */
+  Queue queue() {
+    return queue;
+  }
+
+  /** The codec of payloads, results, and durable values. */
+  JsonCodec codec() {
+    return codec;
+  }
+
   /** The worker's ID in the fleet registry. */
   public String workerId() {
     return workerId;
@@ -271,9 +291,11 @@ public final class Worker implements AutoCloseable {
   public boolean runOnce() {
     long version = stopVersion.get();
     runLock.lock();
+    runs.incrementAndGet();
     try {
       return runLoop(false, version);
     } finally {
+      runs.decrementAndGet();
       runLock.unlock();
     }
   }
@@ -373,6 +395,16 @@ public final class Worker implements AutoCloseable {
     return locallyPaused.get() || remotelyPaused.get();
   }
 
+  /**
+   * Whether a run of this worker is in progress: from {@link #start} until its thread ends, or from
+   * the start of {@link #run} or {@link #runOnce} until it returns or throws, including the drain.
+   * The worker counts the runs in progress. A {@link #close} that waits for a run is not a run.
+   */
+  public boolean isRunning() {
+    Thread thread = started.get();
+    return (thread != null && thread.isAlive()) || runs.get() > 0;
+  }
+
   /** The stop version that {@link #runFrom} compares with. {@link WorkerProcess} reads it. */
   long stopVersion() {
     return stopVersion.get();
@@ -385,9 +417,11 @@ public final class Worker implements AutoCloseable {
    */
   void runFrom(long version) {
     runLock.lock();
+    runs.incrementAndGet();
     try {
       runLoop(true, version);
     } finally {
+      runs.decrementAndGet();
       runLock.unlock();
     }
   }
@@ -430,7 +464,43 @@ public final class Worker implements AutoCloseable {
       int limit, List<Claimed> claimed, long wakeVersion, @Nullable RuntimeException error) {}
 
   /** One claimed task with its payload text and the monotonic time its claim left. */
-  private record Claimed(ClaimedTask task, String payload, long startedAt) {}
+  private record Claimed(ClaimedTask task, String payload, long startedAt, TierRead tier) {}
+
+  /**
+   * One shared, deferred read of whether a queue is on the fast tier, for the tasks of one claim.
+   * {@code claim_many_v1} claims a fast-tier queue through {@code fast_claim_v1}, so its tasks
+   * carry no tier marker. A handler's first durable call runs the read, once the heartbeat renews
+   * the lease, and not the claim, where a slow read would spend leases that nothing renews yet. The
+   * tier cannot change while the queue has live tasks, so one read holds for every task of the
+   * claim. A failed read is not kept, so the next durable call reads again.
+   */
+  private final class TierRead {
+    private final String queueName;
+    private final ReentrantLock lock = new ReentrantLock();
+    private @Nullable Boolean fast;
+
+    TierRead(String queueName) {
+      this.queueName = queueName;
+    }
+
+    boolean fast() {
+      lock.lock();
+      try {
+        if (fast == null) {
+          boolean found = false;
+          for (Row control : rows(SqlCatalogue.QUEUE_CONTROL)) {
+            if (queueName.equals(control.text("queue_name"))) {
+              found = "fast".equals(control.text("tier"));
+            }
+          }
+          fast = found;
+        }
+        return fast;
+      } finally {
+        lock.unlock();
+      }
+    }
+  }
 
   /**
    * An empty-claim wait. A {@code null} version marks a release wait, which a wake does not end.
@@ -765,6 +835,7 @@ public final class Worker implements AutoCloseable {
     for (int offset = 0; offset < size && claimed.size() < limit; offset++) {
       String name = queueNames.get((start + offset) % size);
       long startedAt = System.nanoTime();
+      TierRead tier = new TierRead(name);
       List<Row> rows =
           withConnection(
               connection ->
@@ -778,7 +849,7 @@ public final class Worker implements AutoCloseable {
       for (Row row : rows) {
         ClaimedTask task = claimedTask(row, name);
         String payload = row.text("payload");
-        claimed.add(new Claimed(task, payload == null ? "null" : payload, startedAt));
+        claimed.add(new Claimed(task, payload == null ? "null" : payload, startedAt, tier));
         log(
             System.Logger.Level.DEBUG,
             "workhorse.task.claimed",
@@ -1345,17 +1416,26 @@ public final class Worker implements AutoCloseable {
         runHandler(task, registration, arbiter);
       }
     } finally {
-      Outcome outcome = arbiter.outcome();
+      Outcome outcome = arbiter.reportedOutcome();
       Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
-      finished.put(
-          "workhorse.handler.outcome",
-          outcome == null ? "unknown" : outcome.name().toLowerCase(java.util.Locale.ROOT));
+      finished.put("workhorse.handler.outcome", outcomeLabel(outcome));
       log(
           System.Logger.Level.INFO,
           "workhorse.task.execution_finished",
           "Task execution finished",
           finished);
     }
+  }
+
+  /** The outcome label of the execution log. Both suspensions read as {@code suspended}. */
+  private static String outcomeLabel(@Nullable Outcome outcome) {
+    if (outcome == null) {
+      return "unknown";
+    }
+    return switch (outcome) {
+      case SUSPENDED_FOR_WAIT, SUSPENDED_FOR_CHILD -> "suspended";
+      default -> outcome.name().toLowerCase(java.util.Locale.ROOT);
+    };
   }
 
   private void runHandler(Active task, Registration registration, Arbiter arbiter) {
@@ -1379,7 +1459,9 @@ public final class Worker implements AutoCloseable {
       task.enterHandler();
       try {
         Object payload = codec.decode(task.claimed.payload, registration.payloadType);
-        result = handler.handle(new TaskContext(claimed, cancellation), payload);
+        TaskContext context =
+            new TaskContext(this, claimed, cancellation, arbiter, task.claimed.tier::fast);
+        result = handler.handle(context, payload);
       } finally {
         task.leaveHandler();
       }
@@ -1388,8 +1470,13 @@ public final class Worker implements AutoCloseable {
       checkStorable(claimed, tree);
       validateResult(claimed, tree);
       checkResultSize(claimed, encoded);
-    } catch (Exception error) {
+    } catch (Suspension suspension) {
       if (finishOwnership(claimed, ownership, arbiter)) {
+        return;
+      }
+      throw new WorkhorseException("Durable wait suspension was not accepted by the arbiter");
+    } catch (Exception error) {
+      if (finishSuspended(claimed, ownership, arbiter)) {
         return;
       }
       // A handler that stopped for shutdown returns the task to the queue without an attempt.
@@ -1402,7 +1489,7 @@ public final class Worker implements AutoCloseable {
     } finally {
       ownership.release();
     }
-    if (finishOwnership(claimed, ownership, arbiter)) {
+    if (finishSuspended(claimed, ownership, arbiter)) {
       return;
     }
     complete(claimed, encoded, arbiter);
@@ -1620,16 +1707,49 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  /** Decides one attempt's outcome. The first submission wins. */
-  private static final class Arbiter {
+  /**
+   * Decides one attempt's outcome. The first submission wins, whether it comes from the handler,
+   * the heartbeat, or the worker.
+   */
+  static final class Arbiter {
     private final AtomicReference<@Nullable Outcome> outcome = new AtomicReference<>();
+    private final AtomicReference<@Nullable Outcome> released = new AtomicReference<>();
 
     @Nullable Outcome outcome() {
       return outcome.get();
     }
 
-    void submit(Outcome submitted) {
-      outcome.compareAndSet(null, submitted);
+    /**
+     * The outcome the attempt reports: the suspension that a durable write released the task for,
+     * when one did, because the heartbeat reports that release as a lost lease.
+     */
+    @Nullable Outcome reportedOutcome() {
+      Outcome suspension = released.get();
+      return suspension != null ? suspension : outcome.get();
+    }
+
+    /** Submits an outcome. Returns whether it won. */
+    boolean submit(Outcome submitted) {
+      return outcome.compareAndSet(null, submitted);
+    }
+
+    /**
+     * Records that a fenced durable write released the task for the suspension {@code suspension}.
+     * The attempt then suspends whichever outcome won.
+     */
+    void release(Outcome suspension) {
+      released.compareAndSet(null, suspension);
+    }
+
+    boolean released() {
+      return released.get() != null;
+    }
+
+    boolean suspended() {
+      Outcome current = outcome.get();
+      return released()
+          || current == Outcome.SUSPENDED_FOR_WAIT
+          || current == Outcome.SUSPENDED_FOR_CHILD;
     }
   }
 
@@ -1881,10 +2001,15 @@ public final class Worker implements AutoCloseable {
    */
   private boolean finishOwnership(ClaimedTask task, Ownership ownership, Arbiter arbiter) {
     ownership.release();
+    // A task that a durable write released needs nothing more from the worker, whichever outcome
+    // won.
+    if (arbiter.released()) {
+      return true;
+    }
     Outcome outcome = arbiter.outcome();
     if (outcome != null) {
       switch (outcome) {
-        case DEADLINE_EXCEEDED, ATTEMPT_TIMEOUT -> {
+        case SUSPENDED_FOR_WAIT, SUSPENDED_FOR_CHILD, DEADLINE_EXCEEDED, ATTEMPT_TIMEOUT -> {
           return true;
         }
         case CANCELLED -> {
@@ -1901,6 +2026,27 @@ public final class Worker implements AutoCloseable {
       throw unchecked(ownership.errors.get(0));
     }
     return false;
+  }
+
+  /**
+   * Like {@link #finishOwnership}, for a handler that returned or threw an exception. A handler
+   * that did either after a durable call suspended it kept the suspension; the attempt still
+   * suspends, and the worker logs a warning.
+   */
+  private boolean finishSuspended(ClaimedTask task, Ownership ownership, Arbiter arbiter) {
+    if (!finishOwnership(task, ownership, arbiter)) {
+      return false;
+    }
+    if (arbiter.suspended()) {
+      Map<String, @Nullable Object> attributes = taskAttributes(task);
+      attributes.put("workhorse.handler.outcome", "suspended");
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.handler.signal_swallowed",
+          "Task handler swallowed its suspension signal",
+          attributes);
+    }
+    return true;
   }
 
   private boolean acknowledgeCancel(ClaimedTask task) {
@@ -1953,9 +2099,14 @@ public final class Worker implements AutoCloseable {
    * carries no part of the result, so the failure envelope that reports it stays storable.
    */
   private static void checkStorable(ClaimedTask task, @Nullable Object value) {
+    checkStorable(task.type() + " result", value);
+  }
+
+  /** Throws for a value whose {@code jsonb} PostgreSQL cannot store. */
+  static void checkStorable(String label, @Nullable Object value) {
     if (holdsNul(value, 0)) {
       throw new IllegalArgumentException(
-          task.type() + " result contains a NUL character, which PostgreSQL jsonb cannot store");
+          label + " contains a NUL character, which PostgreSQL jsonb cannot store");
     }
   }
 
@@ -2004,12 +2155,12 @@ public final class Worker implements AutoCloseable {
   // ---------------------------------------------------------------------------------------------
   // Statements
 
-  private interface SqlBody<T extends @Nullable Object> {
+  interface SqlBody<T extends @Nullable Object> {
     T run(Connection connection);
   }
 
   /** Runs {@code body} on a connection from the pool, in autocommit. */
-  private <T extends @Nullable Object> T withConnection(SqlBody<T> body) {
+  <T extends @Nullable Object> T withConnection(SqlBody<T> body) {
     Connection connection;
     try {
       connection = connections.acquire();
@@ -2035,9 +2186,13 @@ public final class Worker implements AutoCloseable {
     return result;
   }
 
+  /** The rows of a read on a connection from the pool. */
+  List<Row> rows(SqlCatalogue.Statement statement, @Nullable Object... parameters) {
+    return withConnection(connection -> Sql.rows(connection, statement, parameters));
+  }
+
   /** A lifecycle write returns exactly one row; anything else means the protocol changed. */
-  private Row fencedRow(
-      SqlCatalogue.Statement statement, ClaimedTask task, @Nullable Object... rest) {
+  Row fencedRow(SqlCatalogue.Statement statement, ClaimedTask task, @Nullable Object... rest) {
     Object[] parameters = new Object[3 + rest.length];
     parameters[0] = task.id().toString();
     parameters[1] = workerId;
@@ -2055,7 +2210,7 @@ public final class Worker implements AutoCloseable {
   // ---------------------------------------------------------------------------------------------
   // Support
 
-  private Map<String, @Nullable Object> taskAttributes(ClaimedTask task) {
+  Map<String, @Nullable Object> taskAttributes(ClaimedTask task) {
     Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
     attributes.put("workhorse.queue.name", task.queue());
     attributes.put("workhorse.task.id", task.id().toString());
@@ -2064,8 +2219,7 @@ public final class Worker implements AutoCloseable {
     return attributes;
   }
 
-  private void log(
-      System.Logger.Level level, String event, String body, Map<String, ?> attributes) {
+  void log(System.Logger.Level level, String event, String body, Map<String, ?> attributes) {
     if (!logger.isLoggable(level)) {
       return;
     }

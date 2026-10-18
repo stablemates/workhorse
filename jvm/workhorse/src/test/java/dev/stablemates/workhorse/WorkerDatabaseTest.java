@@ -154,6 +154,79 @@ class WorkerDatabaseTest {
     return text == null ? null : Json.parse(text);
   }
 
+  // The run state.
+
+  @Test
+  void isRunningCoversAStartedRunAndItsDrain() throws Exception {
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Worker worker =
+        worker()
+            .shutdownGrace(Duration.ofSeconds(30))
+            .handle(
+                "held",
+                Object.class,
+                (ctx, payload) -> {
+                  entered.countDown();
+                  release.await();
+                  return null;
+                })
+            .build();
+    assertFalse(worker.isRunning(), "a worker that never started does not run");
+    worker.start();
+    assertTrue(worker.isRunning(), "a started worker runs");
+    enqueue("held", null);
+    await(entered, "the handler");
+    worker.stop();
+    assertTrue(worker.isRunning(), "a stopped worker runs until its drain ends");
+    release.countDown();
+    worker.close();
+    assertFalse(worker.isRunning(), "a closed worker does not run");
+  }
+
+  @Test
+  void isRunningIsFalseAfterARunThatEndsWithAnError() throws Exception {
+    Worker worker =
+        worker()
+            .executor(
+                new java.util.concurrent.AbstractExecutorService() {
+                  @Override
+                  public void execute(Runnable command) {
+                    throw new java.util.concurrent.RejectedExecutionException("refused");
+                  }
+
+                  @Override
+                  public void shutdown() {}
+
+                  @Override
+                  public List<Runnable> shutdownNow() {
+                    return List.of();
+                  }
+
+                  @Override
+                  public boolean isShutdown() {
+                    return false;
+                  }
+
+                  @Override
+                  public boolean isTerminated() {
+                    return false;
+                  }
+
+                  @Override
+                  public boolean awaitTermination(long timeout, TimeUnit unit) {
+                    return false;
+                  }
+                })
+            .handle("refused", Object.class, (ctx, payload) -> null)
+            .build();
+    worker.start();
+    enqueue("refused", null);
+    waitUntil("the run ends", () -> !worker.isRunning());
+    assertThrows(RuntimeException.class, worker::close);
+    assertFalse(worker.isRunning());
+  }
+
   // Claiming and handler execution.
 
   @Test
