@@ -5,6 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,27 @@ def promote(database_url: str) -> None:
             "WHERE state = 'scheduled'"
         )
         connection.execute("SELECT * FROM workhorse.tick_v1(100, 100)")
+
+
+def recover_expired_lease(database_url: str, task_id: str) -> None:
+    """End the lease of `task_id` now, and tick until Workhorse recovers it."""
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(
+            "UPDATE workhorse.task_runtime "
+            "SET expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE task_id = %s",
+            (task_id,),
+        )
+        # An exited worker stays a live registration, and its own tick can have run the
+        # expired-lease scan. A tick skips that scan within half the shortest live maintenance
+        # interval, so one tick can leave the lease active.
+        recovered_by = time.monotonic() + 10
+        while connection.execute(
+            "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
+        ).fetchone() == ("active",):
+            assert time.monotonic() < recovered_by, "the expired lease was not recovered"
+            connection.execute("SELECT * FROM workhorse.tick_v1(100, 100)")
+            time.sleep(0.05)
 
 
 def worker(database_url: str, pool: Any, **options: Any) -> AsyncWorker:
@@ -396,14 +418,7 @@ asyncio.run(run())
     assert exited.returncode == 73, exited.stderr
     assert credit(database_url) == 7
     assert row(database_url, task_id)["result"] is None
-    with psycopg.connect(database_url, autocommit=True) as connection:
-        connection.execute(
-            "UPDATE workhorse.task_runtime "
-            "SET expires_at = clock_timestamp() - interval '1 second' "
-            "WHERE task_id = %s",
-            (task_id,),
-        )
-        connection.execute("SELECT * FROM workhorse.tick_v1(100, 100)")
+    recover_expired_lease(database_url, task_id)
     promote(database_url)
     resumed = await asyncio.to_thread(
         subprocess.run,
@@ -615,11 +630,17 @@ async def test_active_framework_run_stops_with_queue_authority(
                 canceled.set()
                 raise
 
-    running = AsyncWorker.from_psycopg(async_psycopg_pool, heartbeat_ms=10).handle(
+    # The stop reaches the handler only through an accepted heartbeat round. At a 10 ms interval
+    # the round bound is 10 ms. A loaded host cannot finish a round in that time, so no round is
+    # accepted. At 100 ms the bound is 75 ms. No test runs a live worker at a 10 ms interval.
+    # test_heartbeat_round.py checks only the bound formula at 10 ms. The shortest interval in
+    # test_worker_heartbeat_connection.py is 50 ms. SM-1468 decides the smallest interval that
+    # Workhorse must serve.
+    running = AsyncWorker.from_psycopg(async_psycopg_pool, heartbeat_ms=100).handle(
         recipe.TASK_TYPE, recipe.make_handler(database_url, hook=blocking)
     )
     activation = asyncio.create_task(running.run_once())
-    await asyncio.wait_for(entered.wait(), timeout=5)
+    await asyncio.wait_for(entered.wait(), timeout=30)
     if stop == "cancel":
         with psycopg.connect(database_url) as connection:
             assert Queue(connection).cancel(task_id).status == "cancel_requested"
@@ -633,7 +654,7 @@ async def test_active_framework_run_stops_with_queue_authority(
                 (task_id,),
             )
             assert updated.rowcount == 1
-    assert await asyncio.wait_for(activation, timeout=5)
+    assert await asyncio.wait_for(activation, timeout=30)
     assert canceled.is_set()
     settled = outcome(database_url, task_id)
     assert settled is not None
