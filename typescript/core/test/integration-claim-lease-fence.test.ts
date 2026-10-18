@@ -17,6 +17,19 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
 
+// After an attempt settles, heartbeat statements that waited on the task row can still hold its
+// row lock, and a claim skips a locked row. A later pass takes the task. The 5 s bound is more than
+// 3 times the longest drain of abandoned heartbeat statements seen in the fault-injection check,
+// and shorter than the test timeout (docs/architecture/lifecycle.md, "A renewal that waits on a
+// settlement").
+async function runOnceUntilHandled(worker: Worker): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!(await worker.runOnce())) {
+    if (Date.now() >= deadline) throw new Error("no pass ran a handler within 5 s");
+    await sleep(10);
+  }
+}
+
 describe("claim lease fence", () => {
   it("heartbeats every owned lease in one HOT batch update", async () => {
     const workerId = `heartbeat-batch-${randomUUID()}`;
@@ -779,6 +792,7 @@ describe("claim lease fence", () => {
 
   it("retries timed-out attempts with remaining budget and terminally distinguishes exhaustion", async () => {
     const reasons: unknown[] = [];
+    const handled: { id: string; attempt: number }[] = [];
     const id = await queue.enqueue("attempt-timeout", null, {
       executionTimeoutMs: 100,
       maxAttempts: 2,
@@ -788,6 +802,7 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 50,
     }).handle("attempt-timeout", async (_payload, context) => {
+      handled.push({ id: context.task.id, attempt: context.task.attempt });
       await new Promise<void>((_resolve, reject) => {
         context.signal.addEventListener(
           "abort",
@@ -803,7 +818,11 @@ describe("claim lease fence", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
-    expect(await worker.runOnce()).toBe(true);
+    await runOnceUntilHandled(worker);
+    expect(handled).toEqual([
+      { id, attempt: 1 },
+      { id, attempt: 2 },
+    ]);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
     await waitForDatabaseCondition(async () => (await admin.getTask(id))?.state === "failed");
@@ -852,11 +871,13 @@ describe("claim lease fence", () => {
       maxAttempts: 2,
     });
     const reasons: unknown[] = [];
+    const handled: { id: string; attempt: number }[] = [];
     const worker = new Worker(earlyTimerQueue, {
       workerId: "early-timer-worker",
       leaseMs: 5_000,
       heartbeatMs: 50,
     }).handle("early-timer-timeout", async (_payload, context) => {
+      handled.push({ id: context.task.id, attempt: context.task.attempt });
       await new Promise<void>((_resolve, reject) => {
         context.signal.addEventListener(
           "abort",
@@ -872,7 +893,11 @@ describe("claim lease fence", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
-    expect(await worker.runOnce()).toBe(true);
+    await runOnceUntilHandled(worker);
+    expect(handled).toEqual([
+      { id, attempt: 1 },
+      { id, attempt: 2 },
+    ]);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
     expect(await admin.getTask(id)).toMatchObject({

@@ -612,6 +612,10 @@ A claim moves admissible ready work to active under a new fence.
 - On a fast-tier queue, `claim_many_v1` branches to `fast_claim_v1` instead ([Fast
   claim](fast-tier.md#fast-claim)).
 
+A claim skips a ready row that another transaction locks. A heartbeat that raced the row's
+settlement can hold that lock for a short time ([A renewal that waits on a
+settlement](#a-renewal-that-waits-on-a-settlement)).
+
 One runtime update changes the selected row to active. It writes the worker, global fence,
 acquisition, heartbeat, and expiry data. The same transaction appends the claim event before it
 returns these values:
@@ -1079,6 +1083,43 @@ generation as `stale`.
 
 Each TypeScript, Python, Go, and Rust worker runs one heartbeat round at a time. It sends every
 active lease through this function. Per-task deadline timers and abort signals stay independent.
+
+#### A renewal that waits on a settlement
+
+A heartbeat round can start before an attempt settles. Then `heartbeat_many_v1` waits for the row
+lock that the settlement holds, for example the `FOR UPDATE` lock of `expire_owned_v1`.
+
+1. The settlement moves the row to `ready` with no worker, and commits.
+2. In read committed isolation, PostgreSQL gives the waiting heartbeat a lock on the new row
+   version. Then it checks the heartbeat's `worker_id` filter again.
+3. The row does not match, so the heartbeat reports `stale` for that task. It keeps the row lock
+   until its transaction ends. The worker sends each heartbeat as one statement with no explicit
+   transaction, so the transaction ends with that statement.
+4. A claim selects ready rows with `FOR NO KEY UPDATE OF runtime SKIP LOCKED`. Thus it skips the
+   row until the last heartbeat statement that waits on the row ends.
+5. Then a later claim takes the task. The skip does not change the row, so the task is not lost.
+
+More than one heartbeat statement can wait on the row. A TypeScript round on the reserved
+connection can take longer than `heartbeatMs`. Then the worker destroys that connection
+([Heartbeat connection](#heartbeat-connection)). The next round runs on another pooled connection.
+
+PostgreSQL does not stop the abandoned statement. With `client_connection_check_interval` at 0,
+which is the default, it does not check for a closed client while a statement runs. The abandoned
+statements wait on the row lock and hold it in turn. Thus, if heartbeat statements are slower than
+`heartbeatMs`, the skip lasts until that queue drains.
+
+In the SM-1434 fault-injection check, each heartbeat statement took 300 ms longer, with a
+`heartbeatMs` of 50 ms. Up to 5 statements were active at the same time. The queue took about
+1.5 s to drain.
+
+A settlement can be an execution timeout, a failure that retries with no delay, a release through
+`release_owned_v1`, or lease recovery through `recover_expired_v1`. Each can leave the row `ready`
+while the heartbeat of the old owner waits for it.
+
+The worker does not wait for a heartbeat round that is in flight when an attempt ends. Thus
+`runOnce()` can return before that heartbeat commits, and the next `runOnce()` can claim no task
+(SM-1434). Whether a heartbeat may wait for the row lock of a settlement is an open decision
+(SM-1439).
 
 #### Lease watchdog
 
