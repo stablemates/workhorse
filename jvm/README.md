@@ -102,6 +102,10 @@ Handlers receive at-least-once delivery. Use stable provider idempotency keys ar
 effects. In production, run the worker with `WorkerProcess.runWorkerProcess(worker)`, or with the
 Spring Boot starter.
 
+`jvm/examples/` holds each Java and Kotlin snippet of the documentation. It also holds a JDBC
+transaction, a Spring `@Transactional` service, the dashboard filter, and a worker process. Its
+tests run every snippet against PostgreSQL. It is not an artifact and is never published.
+
 ## Package boundary
 
 The core is the named Java module `run.workhorse`. Every package is `@NullMarked`, so

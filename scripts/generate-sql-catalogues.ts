@@ -7,6 +7,7 @@ import {
   findPythonStatementAccesses,
   type PythonSource,
 } from "./sql-catalogue-python-bindings.js";
+import { findInlineJavaSql } from "./sql-catalogue-java-inline.js";
 import { jdbcStatement } from "./sql-catalogue-jdbc.js";
 import { parseSqlSchema } from "./sql-surface.js";
 import {
@@ -445,34 +446,9 @@ async function assertNoInlineTypeScriptSql(): Promise<void> {
   }
 }
 
-/**
- * No JVM class writes protocol SQL by hand (ADR 0103). A JDBC call whose SQL argument starts with
- * a string literal is SQL written in place, so the check refuses it.
- */
+/** No JVM class writes protocol SQL by hand (ADR 0103). `findInlineJavaSql` names each place. */
 async function assertNoInlineJavaSql(): Promise<void> {
-  const sourceRoot = path.join(repository, "jvm");
-  const call =
-    /\b(?:prepareStatement|prepareCall|execute|executeQuery|executeUpdate|executeLargeUpdate|addBatch)\(\s*"/g;
-  const violations: string[] = [];
-
-  async function inspect(directory: string): Promise<void> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "build" && entry.name !== ".gradle" && entry.name !== "test")
-          await inspect(filename);
-        continue;
-      }
-      if (!/\.(?:java|kt)$/.test(entry.name)) continue;
-      const source = await readFile(filename, "utf8");
-      for (const match of source.matchAll(call)) {
-        const line = source.slice(0, match.index).split("\n").length;
-        violations.push(`${path.relative(repository, filename)}:${line}`);
-      }
-    }
-  }
-
-  await inspect(sourceRoot);
+  const violations = await findInlineJavaSql(repository);
   if (violations.length > 0) {
     throw new Error(`JVM SQL must come from SqlCatalogue:\n${violations.join("\n")}`);
   }

@@ -62,6 +62,9 @@ function isExampleFile(language: string, relativePath: string): boolean {
       !["docs.rb", "landing.rb", "agent_playbook.rb", "active_job.rb"].includes(name)
     );
   }
+  // Every file in jvm/examples holds the regions that the documentation embeds, as docs.rs and
+  // docs.rb do. None is a scenario the other languages mirror.
+  if (language === "jvm") return false;
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&

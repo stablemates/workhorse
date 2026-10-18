@@ -1,5 +1,5 @@
 {
-  "languages": ["typescript", "python", "go", "rust", "ruby"],
+  "languages": ["typescript", "python", "go", "rust", "ruby", "jvm"],
   "scenarios": {
     "objection-transaction": {
       "typescript": { "file": "typescript/examples/objection.ts" },
@@ -21,6 +21,11 @@
       "ruby": {
         "exclusion": {
           "reason": "Objection and Knex are JavaScript libraries; Ruby transactional enqueue uses its own PostgreSQL or ORM executor."
+        }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; JVM transactional enqueue passes a JDBC connection to the queue."
         }
       }
     },
@@ -45,6 +50,11 @@
         "exclusion": {
           "reason": "GORM is a Go ORM; this recipe uses the existing Go SQL executor."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; the JVM uses JDBC connections, not Go executors."
+        }
       }
     },
     "bun": {
@@ -62,7 +72,8 @@
       },
       "ruby": {
         "exclusion": { "reason": "Bun is a Go ORM and exposes no Ruby transaction handle." }
-      }
+      },
+      "jvm": { "exclusion": { "reason": "Bun is a Go ORM and exposes no JDBC connection." } }
     },
     "stripe-invoice-paid": {
       "typescript": { "file": "typescript/examples/stripe-invoice-paid.ts" },
@@ -85,6 +96,11 @@
         "exclusion": {
           "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
       }
     },
     "quickstart": {
@@ -92,14 +108,24 @@
       "python": { "file": "python/examples/quickstart.py" },
       "go": { "file": "go/examples/quickstart/main.go" },
       "rust": { "file": "rust/examples/quickstart.rs" },
-      "ruby": { "file": "ruby/examples/quickstart.rb" }
+      "ruby": { "file": "ruby/examples/quickstart.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no quickstart scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
+      }
     },
     "transaction": {
       "typescript": { "file": "typescript/examples/transaction.mjs" },
       "python": { "file": "python/examples/async_enqueue.py" },
       "go": { "file": "go/examples/transaction/main.go" },
       "rust": { "file": "rust/examples/transaction.rs" },
-      "ruby": { "file": "ruby/examples/transaction.rb" }
+      "ruby": { "file": "ruby/examples/transaction.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no transaction scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
+      }
     },
     "sqlx-transaction": {
       "typescript": {
@@ -121,6 +147,11 @@
       "ruby": {
         "exclusion": {
           "reason": "SQLx is a Rust PostgreSQL driver; Ruby uses its own transaction executors."
+        }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "SQLx is a Rust PostgreSQL driver; the JVM uses JDBC connections."
         }
       }
     },
@@ -145,7 +176,12 @@
           "reason": "Sequel is a Ruby ORM; this native pg transaction recipe does not apply to Rust."
         }
       },
-      "ruby": { "file": "ruby/examples/sequel.rb" }
+      "ruby": { "file": "ruby/examples/sequel.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby database library; the JVM uses JDBC connections."
+        }
+      }
     },
     "sqlalchemy-async-transaction": {
       "typescript": {
@@ -168,6 +204,11 @@
         "exclusion": {
           "reason": "SQLAlchemy is a Python ORM; Ruby enqueues through its own driver connection."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; the JVM enqueues through a JDBC connection."
+        }
       }
     },
     "dedicated-worker": {
@@ -175,14 +216,24 @@
       "python": { "file": "python/examples/dedicated_worker.py" },
       "go": { "file": "go/examples/dedicated-worker/main.go" },
       "rust": { "file": "rust/examples/dedicated_worker.rs" },
-      "ruby": { "file": "ruby/examples/dedicated_worker.rb" }
+      "ruby": { "file": "ruby/examples/dedicated_worker.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no dedicated-worker scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
+      }
     },
     "orchestration": {
       "typescript": { "file": "typescript/examples/orchestration.mjs" },
       "python": { "file": "python/examples/lifecycle.py" },
       "go": { "file": "go/examples/orchestration/main.go" },
       "rust": { "file": "rust/examples/orchestration.rs" },
-      "ruby": { "file": "ruby/examples/orchestration.rb" }
+      "ruby": { "file": "ruby/examples/orchestration.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no orchestration scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
+      }
     },
     "demo-worker": {
       "typescript": { "file": "typescript/examples/demo-worker.mjs" },
@@ -193,7 +244,12 @@
           "reason": "The demo runs no Rust worker, so there is no Rust demo-worker example."
         }
       },
-      "ruby": { "file": "ruby/examples/demo_worker.rb" }
+      "ruby": { "file": "ruby/examples/demo_worker.rb" },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no demo-worker scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
+      }
     },
     "agentic-flow": {
       "typescript": { "file": "typescript/examples/agentic-flow.mjs" },
@@ -216,6 +272,11 @@
         "exclusion": {
           "reason": "Ruby has no agentic-flow example; the TypeScript file is the current composition."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM has no agentic-flow scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
+        }
       }
     },
     "slack-approvals": {
@@ -236,6 +297,11 @@
         }
       },
       "ruby": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      },
+      "jvm": {
         "exclusion": {
           "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
         }
@@ -262,6 +328,11 @@
         "exclusion": {
           "reason": "Django is a Python framework; this framework-specific transaction recipe has no Ruby counterpart."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no JVM counterpart."
+        }
       }
     },
     "django-tasks": {
@@ -284,6 +355,11 @@
       "ruby": {
         "exclusion": {
           "reason": "Django Tasks is a Python-only framework interface, not an Active Job adapter."
+        }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not a JVM interface."
         }
       }
     },
@@ -308,6 +384,11 @@
         "exclusion": {
           "reason": "This scenario tests sqlc's Go pgx/v5 generation; Ruby's transactional enqueue example remains separate."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation; the JVM uses JDBC connections."
+        }
       }
     },
     "sqlx": {
@@ -330,6 +411,11 @@
       "ruby": {
         "exclusion": {
           "reason": "github.com/jmoiron/sqlx is a Go library; Ruby uses its existing transaction example."
+        }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "github.com/jmoiron/sqlx is a Go library; the JVM uses JDBC connections."
         }
       }
     },
@@ -356,6 +442,11 @@
         "exclusion": {
           "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no Ruby receiver is maintained."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no JVM receiver is maintained."
+        }
       }
     },
     "pydanticai-approval": {
@@ -376,6 +467,11 @@
         }
       },
       "ruby": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      },
+      "jvm": {
         "exclusion": {
           "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
         }
@@ -402,6 +498,11 @@
         "exclusion": {
           "reason": "Ruby Worker runs each slot on its own thread, so there is no separate async-worker example."
         }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "The JVM Worker runs each handler on its own virtual thread, and Kotlin suspend handlers run on the same Worker, so there is no separate async-worker example."
+        }
       }
     },
     "langgraph-approval": {
@@ -424,6 +525,11 @@
       "ruby": {
         "exclusion": {
           "reason": "LangGraph's Python checkpointer is not a Ruby graph runtime; this recipe does not claim a Ruby bridge."
+        }
+      },
+      "jvm": {
+        "exclusion": {
+          "reason": "LangGraph's Python checkpointer is not a JVM graph runtime; this recipe does not claim a JVM bridge."
         }
       }
     }

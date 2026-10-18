@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -226,7 +226,7 @@ for (const guidePath of crossSdkGuidePaths) {
   const source = readFileSync(resolve(siteRoot, "content/docs", guidePath), "utf8");
   const languageTabs = [
     ...source.matchAll(
-      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?(?:, "Ruby")?\]\}>([\s\S]*?)<\/Tabs>/g,
+      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?(?:, "Ruby")?(?:, "Java", "Kotlin")?\]\}>([\s\S]*?)<\/Tabs>/g,
     ),
   ];
   if (languageTabs.length === 0) throw new Error(`${guidePath} has no cross-SDK feature examples`);
@@ -347,12 +347,14 @@ for (const pattern of examplePatterns) {
   }
 }
 
-// Rust and Ruby examples live as `docs:start <name>` regions in `rust/examples/` and
-// `ruby/examples/`. `cargo clippy --all-targets` compiles the Rust regions in CI, and a documentation
-// spec runs the Ruby regions against PostgreSQL. Every `rust` or `ruby` fence in the documentation
-// and every landing snippet in either language must equal one region after both lose their common
-// indentation, and every region must appear somewhere, so a page cannot carry code that no compiler
-// or spec saw.
+// Rust, Ruby, Java, and Kotlin examples live as `docs:start <name>` regions in `rust/examples/`,
+// `ruby/examples/`, and `jvm/examples/src/main/`. `cargo clippy --all-targets` compiles the Rust
+// regions in CI, and a documentation spec runs the Ruby regions against PostgreSQL. `pnpm jvm:build`
+// compiles the Java and Kotlin regions, and `pnpm jvm:test` runs them against PostgreSQL. Every
+// fence in one of these languages and every landing snippet in Rust or Ruby must equal one region
+// after both lose their common indentation, and every region must appear somewhere, so a page
+// cannot carry code that no compiler or test saw. A formatter can leave blank lines before
+// `docs:end`, and the region does not include them.
 function dedent(code: string): string {
   const lines = code.split("\n");
   const indent = Math.min(
@@ -361,20 +363,51 @@ function dedent(code: string): string {
   return lines.map((line) => (line.trim() === "" ? "" : line.slice(indent))).join("\n");
 }
 
+function sourceFiles(directory: string, extension: string): string[] {
+  return readdirSync(resolve(repositoryRoot, directory), { recursive: true })
+    .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(extension))
+    .map((entry) => resolve(repositoryRoot, directory, entry))
+    .toSorted();
+}
+
+// The Java and Kotlin fences also appear in the architecture pages and the READMEs. The scan skips
+// `docs/decisions/`, because a decision record keeps the design at the time of its decision.
+const jvmFencePaths = [
+  ...new Set([
+    ...goFencePaths,
+    ...readdirSync(resolve(repositoryRoot, "docs"), { recursive: true })
+      .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(".md"))
+      .map((entry) => `docs/${entry}`)
+      .filter((path) => !path.startsWith("docs/decisions/")),
+    "README.md",
+    ...readdirSync(repositoryRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
+      .map((entry) => `${entry.name}/README.md`)
+      .filter((path) => existsSync(resolve(repositoryRoot, path))),
+  ]),
+].toSorted();
+
+const languageAliases = {
+  rust: ["rs"],
+  ruby: ["rb"],
+  java: [],
+  kotlin: ["kt", "kts"],
+} as const satisfies Record<string, readonly string[]>;
+
 function assertDocumentationRegions(
-  language: "rust" | "ruby",
+  language: "rust" | "ruby" | "java" | "kotlin",
   label: string,
+  examplesDirectory: string,
   extension: string,
   comment: string,
+  fencePaths: readonly string[],
 ) {
-  const examplesDirectory = `${language}/examples`;
-  const examplesRoot = resolve(repositoryRoot, examplesDirectory);
   const regions = new Map<string, string>();
-  for (const name of readdirSync(examplesRoot).filter((entry) => entry.endsWith(extension))) {
-    const source = readFileSync(resolve(examplesRoot, name), "utf8");
+  for (const path of sourceFiles(examplesDirectory, extension)) {
+    const source = readFileSync(path, "utf8");
     for (const region of source.matchAll(
       new RegExp(
-        `^[ \\t]*${comment} docs:start (\\S+)[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*${comment} docs:end[ \\t]*$`,
+        `^[ \\t]*${comment} docs:start (\\S+)[ \\t]*\\n([\\s\\S]*?)\\n+[ \\t]*${comment} docs:end[ \\t]*$`,
         "gm",
       ),
     )) {
@@ -387,11 +420,16 @@ function assertDocumentationRegions(
 
   const used = new Set<string>();
   const regionBySource = new Map([...regions].map(([name, code]) => [code, name]));
-  for (const fencePath of goFencePaths) {
+  // A fence of four or more backticks, a tilde fence, an info string after the language, or a
+  // short language name also opens a code block. The check reads only a bare three-backtick fence,
+  // so it refuses every other opening rather than skip that block.
+  const names = [language, ...languageAliases[language]].join("|");
+  for (const fencePath of fencePaths) {
     const source = readFileSync(resolve(repositoryRoot, fencePath), "utf8");
     const backticks = "`".repeat(3);
-    const declared = [...source.matchAll(new RegExp(`^[ \\t]*${backticks}${language}\\b`, "gm"))]
-      .length;
+    const declared = [
+      ...source.matchAll(new RegExp(`^[ \\t]*(?:\`{3,}|~{3,})[ \\t]*(?:${names})\\b`, "gm")),
+    ].length;
     const fences = [
       ...source.matchAll(
         new RegExp(
@@ -428,8 +466,10 @@ function assertDocumentationRegions(
   }
 }
 
-assertDocumentationRegions("rust", "Rust", ".rs", "//");
-assertDocumentationRegions("ruby", "Ruby", ".rb", "#");
+assertDocumentationRegions("rust", "Rust", "rust/examples", ".rs", "//", goFencePaths);
+assertDocumentationRegions("ruby", "Ruby", "ruby/examples", ".rb", "#", goFencePaths);
+assertDocumentationRegions("java", "Java", "jvm/examples/src/main", ".java", "//", jvmFencePaths);
+assertDocumentationRegions("kotlin", "Kotlin", "jvm/examples/src/main", ".kt", "//", jvmFencePaths);
 
 // Go fences stay gofmt-checked fragments, so a Go fence need not match a region. A Go example whose
 // error handling is the point lives instead as a `docs:start <name>` region in a tested example
@@ -469,13 +509,47 @@ for (const name of goRegions.keys()) {
   if (!(name in goRegionPages)) throw new Error(`Go docs region ${name} names no page`);
 }
 
-// Every tab group that carries Go carries Rust and then Ruby, except where the API the example needs
-// has not landed in that SDK. Each exclusion names the Issue that removes it, and an exclusion a page
-// no longer needs fails the check.
+// Every tab group that carries Go carries Rust, Ruby, Java, and Kotlin in that order, except where
+// that SDK has no example on the page yet. Each exclusion names the Issue that removes it, and an
+// exclusion a page no longer needs fails the check.
 const rustPendingPages: Record<string, string> = {};
 const rustPendingExamples: Record<string, string> = {};
 const rubyPendingPages: Record<string, string> = {};
 const rubyPendingExamples: Record<string, string> = {};
+// SM-1464 adds the Java and Kotlin tabs of these pages and of the examples page.
+const jvmPendingPages: Record<string, string> = Object.fromEntries(
+  [
+    "agentic-flow.mdx",
+    "batch-handlers.mdx",
+    "cancellation.mdx",
+    "child-tasks.mdx",
+    "concurrency-policies.mdx",
+    "contracts.mdx",
+    "dead-letters.mdx",
+    "deadlines.mdx",
+    "debounce.mdx",
+    "durable-execution.mdx",
+    "for-ai-agents.mdx",
+    "human-waits.mdx",
+    "idempotency.mdx",
+    "multi-tenancy.mdx",
+    "operations.mdx",
+    "priority.mdx",
+    "progress.mdx",
+    "queue-health.mdx",
+    "quickstart.mdx",
+    "rate-limits.mdx",
+    "retries.mdx",
+    "schedules.mdx",
+    "signals.mdx",
+    "task-dependencies.mdx",
+    "task-groups.mdx",
+    "throttle.mdx",
+  ].map((page) => [page, "SM-1464"]),
+);
+const jvmPendingExamples: Record<string, string> = Object.fromEntries(
+  examplePatterns.map((section) => [section.match(/^## (.+)$/m)![1]!, "SM-1464"]),
+);
 for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
   entry.endsWith(".mdx"),
 )) {
@@ -483,17 +557,28 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
   const sections = name === "examples.mdx" ? examplePatterns : [source];
   for (const section of sections) {
     const title = name === "examples.mdx" ? section.match(/^## (.+)$/m)![1]! : undefined;
-    const groups = [...section.matchAll(/<Tabs items=\{\[([^\]]*)\]\}>/g)].map(
-      (match) => match[1]!,
+    // Each group is its item list and its body, so a tab that sits in the wrong group fails.
+    const groups = [...section.matchAll(/<Tabs items=\{\[([^\]]*)\]\}>([\s\S]*?)<\/Tabs>/g)].map(
+      (match) => ({ items: match[1]!, body: match[2]! }),
     );
-    const goGroups = groups.filter((items) => items.includes('"Go"'));
+    if (groups.length !== section.split("<Tabs ").length - 1) {
+      throw new Error(`${name} has a tab group this check could not read`);
+    }
+    const goGroups = groups.filter((group) => group.items.includes('"Go"'));
     const label = title === undefined ? name : `${name} ${title}`;
     for (const [tab, suffix, pendingPages, pendingExamples] of [
-      ["Rust", /"Go", "Rust"(?:, "Ruby")?$/, rustPendingPages, rustPendingExamples],
-      ["Ruby", /"Rust", "Ruby"$/, rubyPendingPages, rubyPendingExamples],
+      [
+        "Rust",
+        /"Go", "Rust"(?:, "Ruby")?(?:, "Java", "Kotlin")?$/,
+        rustPendingPages,
+        rustPendingExamples,
+      ],
+      ["Ruby", /"Rust", "Ruby"(?:, "Java", "Kotlin")?$/, rubyPendingPages, rubyPendingExamples],
+      ["Java", /"Ruby", "Java", "Kotlin"$/, jvmPendingPages, jvmPendingExamples],
+      ["Kotlin", /"Ruby", "Java", "Kotlin"$/, jvmPendingPages, jvmPendingExamples],
     ] as const) {
       const pending = title === undefined ? pendingPages[name] : pendingExamples[title];
-      const tabGroups = goGroups.filter((items) => suffix.test(items));
+      const tabGroups = goGroups.filter((group) => suffix.test(group.items));
       if (pending !== undefined) {
         if (goGroups.length === 0 || tabGroups.length === goGroups.length) {
           throw new Error(`${label} no longer needs its pending-${tab} exclusion (${pending})`);
@@ -501,8 +586,13 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
       } else if (tabGroups.length !== goGroups.length) {
         throw new Error(`${label} has a tab group with Go but no ${tab}`);
       }
-      if (section.split(`<Tab value="${tab}">`).length - 1 !== tabGroups.length) {
-        throw new Error(`${label} lists ${tab} in a tab group without a ${tab} tab`);
+      for (const [index, group] of groups.entries()) {
+        const listed = group.items.includes(`"${tab}"`) ? 1 : 0;
+        if (group.body.split(`<Tab value="${tab}">`).length - 1 !== listed) {
+          throw new Error(
+            `${label} tab group ${index + 1} ${listed ? "needs exactly one" : "lists no"} ${tab} tab`,
+          );
+        }
       }
     }
   }
