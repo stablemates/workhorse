@@ -4,6 +4,8 @@ import {
   bundleFiles,
   group,
   jvmTrainVersion,
+  manifestAttributes,
+  manifestProblems,
   moduleProblems,
   pomProblems,
   publishedArtifacts,
@@ -344,6 +346,62 @@ describe("the starter's Gradle module metadata", () => {
     expect(moduleProblems(starter, JSON.stringify(metadata), version)).toEqual([
       "the workhorse-spring-boot-starter module metadata has no java-runtime variant of workhorse-spring-boot-starter-servlet",
     ]);
+  });
+});
+
+/** A jar manifest with the two entries the release check reads. */
+function manifest(title: string, implementationVersion: string): string {
+  return `Manifest-Version: 1.0\r\nImplementation-Title: ${title}\r\nImplementation-Version: ${implementationVersion}\r\n\r\n`;
+}
+
+describe("the jar manifests", () => {
+  it("accepts a manifest that names the artifact and the train version", () => {
+    for (const artifact of publishedArtifacts) {
+      expect(
+        manifestProblems(
+          artifact,
+          `${artifact}-${version}.jar`,
+          manifest(artifact, version),
+          version,
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("refuses a manifest without the two entries", () => {
+    expect(
+      manifestProblems(
+        "workhorse",
+        "workhorse-0.8.0.jar",
+        "Manifest-Version: 1.0\r\n\r\n",
+        version,
+      ),
+    ).toEqual([
+      "the workhorse-0.8.0.jar manifest has Implementation-Title undefined, not workhorse",
+      "the workhorse-0.8.0.jar manifest has Implementation-Version undefined, not 0.8.0",
+    ]);
+  });
+
+  it("refuses a manifest with another artifact or another version", () => {
+    expect(
+      manifestProblems(
+        "workhorse-kotlin",
+        "workhorse-kotlin-0.8.0-sources.jar",
+        manifest("workhorse", "0.7.1"),
+        version,
+      ),
+    ).toEqual([
+      "the workhorse-kotlin-0.8.0-sources.jar manifest has Implementation-Title workhorse, not workhorse-kotlin",
+      "the workhorse-kotlin-0.8.0-sources.jar manifest has Implementation-Version 0.7.1, not 0.8.0",
+    ]);
+  });
+
+  it("joins a wrapped line and reads only the main section", () => {
+    const attributes = manifestAttributes(
+      "Manifest-Version: 1.0\nImplementation-Title: workhorse-spring-b\n oot-starter\n\nName: run/workhorse/\nImplementation-Version: 9.9.9\n",
+    );
+    expect(attributes.get("Implementation-Title")).toBe("workhorse-spring-boot-starter");
+    expect(attributes.has("Implementation-Version")).toBe(false);
   });
 });
 

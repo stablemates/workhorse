@@ -48,6 +48,7 @@ import run.workhorse.internal.JsonbSize;
 import run.workhorse.internal.Listener;
 import run.workhorse.internal.PgjdbcVersion;
 import run.workhorse.internal.Row;
+import run.workhorse.internal.SdkVersion;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.Suspension;
@@ -300,7 +301,7 @@ public final class Worker implements AutoCloseable {
         builder.sharedHeartbeats
             ? Heartbeat.borrowing(dataSource)
             : Heartbeat.dedicated(dataSource);
-    this.sdkVersion = Worker.class.getPackage().getImplementationVersion();
+    this.sdkVersion = SdkVersion.current();
     this.hostname = localHostname();
   }
 

@@ -1063,6 +1063,43 @@ class WorkerDatabaseTest {
   }
 
   @Test
+  void registersTheTrainVersionAsItsSdkVersion() throws Exception {
+    String train = System.getProperty("workhorse.version");
+    assertNotNull(train, "the build sets the workhorse.version system property");
+    Worker worker =
+        worker().disableRegistry(false).registryInterval(Duration.ofMillis(100)).build();
+    worker.start();
+    try {
+      waitUntil(
+          "the worker registers",
+          () -> {
+            try {
+              return count(
+                      "SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = ?",
+                      worker.workerId())
+                  == 1;
+            } catch (SQLException error) {
+              throw new IllegalStateException(error);
+            }
+          });
+      try (Connection connection = ScratchDatabase.connect();
+          PreparedStatement statement =
+              connection.prepareStatement(
+                  "SELECT sdk_language, sdk_version FROM workhorse.worker_registry"
+                      + " WHERE worker_id = ?")) {
+        statement.setString(1, worker.workerId());
+        try (ResultSet result = statement.executeQuery()) {
+          assertTrue(result.next(), "the worker has a registry row");
+          assertEquals("java", result.getString("sdk_language"));
+          assertEquals(train, result.getString("sdk_version"));
+        }
+      }
+    } finally {
+      worker.close();
+    }
+  }
+
+  @Test
   void pausesAndResumesLocally() throws Exception {
     Worker worker = worker().handle("echo", Object.class, (ctx, payload) -> payload).build();
     worker.pause();
