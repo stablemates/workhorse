@@ -829,8 +829,10 @@ mod tests {
         assert_eq!(calls[0].tasks, sorted(vec![busy, accepted]));
         assert_eq!(calls[1].tasks, [busy], "the retry sent a lease that was not busy");
         let delay = calls[1].at - calls[0].at;
+        // The delay is below 200 ms. Tokio timers have a granularity of 1 ms and round a wait up.
+        // Thus, a delay of 199.4 ms fires at 200 ms.
         assert!(
-            (Duration::from_millis(100)..Duration::from_millis(200)).contains(&delay),
+            (Duration::from_millis(100)..=Duration::from_millis(200)).contains(&delay),
             "the retry came {delay:?} after the busy round"
         );
         // The retry ends by its round bound, which comes before the next slot here.
