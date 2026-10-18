@@ -69,6 +69,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "oversized-result" => oversized_result(database, fixture).await,
             "shutdown-cancellation" => shutdown_cancellation(database, fixture).await,
             "heartbeat-failure" => heartbeat_failure(database, fixture).await,
+            "heartbeat-busy" => heartbeat_busy(database, fixture).await,
             "maintenance-phase-error" => maintenance_phase_error(database, fixture).await,
             other => Err(format!("the Rust runner does not know runtime kind {other}")),
         }
@@ -615,11 +616,11 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
     let heartbeat = number(fixture, "heartbeatMs");
     client
         .batch_execute(&format!(
-            "ALTER FUNCTION workhorse.heartbeat_many_v1(text, jsonb) RENAME TO heartbeat_many_v1_inner;
+            "ALTER FUNCTION workhorse.heartbeat_many_v2(text, jsonb) RENAME TO heartbeat_many_v2_inner;
              CREATE SEQUENCE workhorse.runtime_heartbeat_calls;
              CREATE SEQUENCE workhorse.runtime_heartbeat_overlaps;
              CREATE SEQUENCE workhorse.runtime_heartbeat_released;
-             CREATE FUNCTION workhorse.heartbeat_many_v1(p_worker_id text, p_leases jsonb)
+             CREATE FUNCTION workhorse.heartbeat_many_v2(p_worker_id text, p_leases jsonb)
                RETURNS TABLE (ordinal bigint, task_id uuid, status text)
                LANGUAGE plpgsql AS $$
              DECLARE
@@ -635,7 +636,7 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
                ELSE
                  PERFORM pg_sleep({seconds});
                END IF;
-               RETURN QUERY SELECT * FROM workhorse.heartbeat_many_v1_inner(p_worker_id, p_leases);
+               RETURN QUERY SELECT * FROM workhorse.heartbeat_many_v2_inner(p_worker_id, p_leases);
              END
              $$;",
             seconds = 3.0 * heartbeat as f64 / 1000.0
@@ -1572,8 +1573,9 @@ async fn wait_for_renewal(
     client: &Client,
     task: Uuid,
     after: chrono::DateTime<chrono::Utc>,
+    within: Duration,
 ) -> Checked<chrono::DateTime<chrono::Utc>> {
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + within;
     while Instant::now() < deadline {
         let expiry = lease_expiry(client, task).await?;
         if expiry > after {
@@ -1612,7 +1614,7 @@ async fn heartbeat_failure(database: &ScratchDatabase, fixture: &Value) -> Check
         tokio::spawn(async move { worker.run_once().await })
     };
     handler_started.recv().await.ok_or("the handler never started")?;
-    let renewed = wait_for_renewal(&client, task, lease_expiry(&client, task).await?).await?;
+    let renewed = wait_for_renewal(&client, task, lease_expiry(&client, task).await?, WAIT).await?;
     let injection = &fixture["injection"];
     let original = inject_failure(&client, injection).await?;
     let sequence = text(injection, "counterSequence");
@@ -1630,7 +1632,7 @@ async fn heartbeat_failure(database: &ScratchDatabase, fixture: &Value) -> Check
     client.batch_execute(&format!("DROP SEQUENCE {sequence}")).await.map_err(sql)?;
     failed?;
     // Once the rounds answer again the lease renews, so the failures cost the attempt nothing.
-    wait_for_renewal(&client, task, renewed).await?;
+    wait_for_renewal(&client, task, renewed, WAIT).await?;
     let _ = release.send(true);
     let processed = running.await.map_err(|error| error.to_string())?.map_err(driver)?;
     check(processed, || "run_once() processed nothing".into())?;
@@ -1641,6 +1643,146 @@ async fn heartbeat_failure(database: &ScratchDatabase, fixture: &Value) -> Check
     })?;
     assert_state(&client, task, &fixture["expectedState"]).await?;
     assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
+}
+
+/// Replaces the heartbeat function with the fixture's body, which answers the first rounds `busy`.
+/// The busy retries must send only the busy lease, sooner than the next regular round, and the
+/// attempt must keep running until a later round renews its lease.
+async fn heartbeat_busy(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let task = queue.enqueue(task_type, &json!({}), Default::default()).await.map_err(driver)?;
+    let task = task.task_id;
+    let worker = worker(database, 4, lease_options(fixture))?;
+    let (started, mut handler_started) = mpsc::unbounded_channel();
+    let (release, released) = watch::channel(false);
+    let cancellations = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&cancellations);
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let (started, mut released, counted) =
+            (started.clone(), released.clone(), Arc::clone(&counted));
+        async move {
+            let _ = started.send(());
+            let _ = released.wait_for(|released| *released).await;
+            if context.cancellation().is_cancelled() {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(Value::Null)
+        }
+    });
+    let running = {
+        let worker = worker.clone();
+        tokio::spawn(async move { worker.run_once().await })
+    };
+    let observed = async {
+        handler_started.recv().await.ok_or("the handler never started")?;
+        let within = millis(fixture, "renewalTimeoutMs");
+        wait_for_renewal(&client, task, lease_expiry(&client, task).await?, within).await?;
+        with_injected_body(&client, &fixture["injection"], busy_rounds(&client, task, fixture))
+            .await
+    }
+    .await;
+    let _ = release.send(true);
+    let rounds = observed?;
+    let processed = running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    check(processed, || "run_once() processed nothing".into())?;
+
+    let expected = usize::try_from(number(fixture, "expectedBusyRounds")).expect("a count");
+    let busy = &rounds[..expected];
+    // Each retry sent only the busy lease, and came sooner than the next regular round.
+    check(busy.iter().all(|(_, leases)| *leases == 1), || {
+        format!("busy rounds sent {busy:?} leases, want 1 each")
+    })?;
+    let maximum = number(fixture, "maximumRetryGapMs") as f64;
+    for pair in busy.windows(2) {
+        let gap = pair[1].0 - pair[0].0;
+        check(gap < maximum, || format!("a busy retry came {gap} ms later, want < {maximum}"))?;
+    }
+    let cancelled = cancellations.load(Ordering::SeqCst) as i64;
+    let expected = number(fixture, "expectedCancellations");
+    check(cancelled == expected, || {
+        format!("busy heartbeat rounds cancelled {cancelled} handlers")
+    })?;
+    assert_state(&client, task, &fixture["expectedState"]).await?;
+    assert_outcomes(&client, task, &[text(fixture, "expectedAttemptOutcome")]).await
+}
+
+/// Waits for the fixture's busy rounds, then for a later round to renew the lease. Returns each
+/// recorded round as its time in milliseconds and its lease count.
+async fn busy_rounds(client: &Client, task: Uuid, fixture: &Value) -> Checked<Vec<(f64, i32)>> {
+    let within = millis(fixture, "renewalTimeoutMs");
+    let expected = usize::try_from(number(fixture, "expectedBusyRounds")).expect("a count");
+    let query = text(&fixture["injection"], "roundsQuery");
+    let deadline = Instant::now() + within;
+    let rounds = loop {
+        let rows = client.query(query, &[]).await.map_err(sql)?;
+        let rounds: Vec<(f64, i32)> =
+            rows.iter().map(|row| (row.get("round_at_ms"), row.get("lease_count"))).collect();
+        if rounds.len() >= expected {
+            break rounds;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{} busy heartbeat rounds, want {expected}", rounds.len()));
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    // The busy rounds renewed nothing. The next round reaches the real function and renews.
+    wait_for_renewal(client, task, lease_expiry(client, task).await?, within).await?;
+    Ok(rounds)
+}
+
+/// Replaces one installed function with the fixture's body while `observe` runs. Afterwards it
+/// restores the definition PostgreSQL reported and runs the teardown statements, whatever
+/// `observe` returned.
+async fn with_injected_body<T>(
+    client: &Client,
+    injection: &Value,
+    observe: impl std::future::Future<Output = Checked<T>>,
+) -> Checked<T> {
+    let original: String = client
+        .query_one(
+            "SELECT pg_get_functiondef($1::text::regprocedure)",
+            &[&text(injection, "function")],
+        )
+        .await
+        .map_err(sql)?
+        .get(0);
+    let mut setup = Ok(());
+    for statement in strings(&injection["setup"]) {
+        setup = client.batch_execute(statement).await.map_err(sql);
+        if setup.is_err() {
+            break;
+        }
+    }
+    let observed = match setup {
+        Err(error) => Err(error),
+        Ok(()) => {
+            let replaced = client
+                .batch_execute(&format!(
+                    "CREATE OR REPLACE FUNCTION {header} LANGUAGE plpgsql AS $injected$ {body} $injected$",
+                    header = text(injection, "header"),
+                    body = text(injection, "body"),
+                ))
+                .await
+                .map_err(sql);
+            match replaced {
+                Ok(()) => observe.await,
+                Err(error) => Err(error),
+            }
+        }
+    };
+    let restored = client.batch_execute(&original).await.map_err(sql);
+    let mut torn_down = Ok(());
+    for statement in strings(&injection["teardown"]) {
+        if let Err(error) = client.batch_execute(statement).await.map_err(sql) {
+            torn_down = torn_down.and(Err(error));
+        }
+    }
+    let observed = observed?;
+    restored?;
+    torn_down?;
+    Ok(observed)
 }
 
 async fn attempt_count(client: &Client, task: Uuid) -> Checked<i64> {

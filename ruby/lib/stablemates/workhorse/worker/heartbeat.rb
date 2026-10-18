@@ -12,8 +12,11 @@ module Stablemates
       # the executor for each round instead.
       class Heartbeat # :nodoc:
         # One running attempt. +renew+ takes the monotonic send time of an accepted round;
-        # +settle+ takes a status other than +accepted+; +fail+ takes an error +settle+ raised.
-        Member = Data.define(:worker_id, :task, :lease_ms, :interval, :renew, :settle, :fail, :logger)
+        # +settle+ takes a status other than +accepted+ and +busy+; +fail+ takes an error +settle+
+        # raised. +lease_ends_at+ returns the monotonic end of the local lease window, or nil once
+        # the window is closed. A busy retry never runs past it.
+        Member = Data.define(:worker_id, :task, :lease_ms, :interval, :renew, :settle, :fail, :logger,
+          :lease_ends_at)
 
         # A round that did not finish by its deadline.
         class RoundTimeout < StandardError; end
@@ -26,7 +29,9 @@ module Stablemates
         # A round with less time than this left, in seconds, fails before it sends its heartbeat. At
         # this size every budget of +round_timeouts+ is at least 1 ms, and the budgets still fit.
         MINIMUM_REMAINING = 0.008
-        private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING
+        # The longest base delay before a busy retry, in seconds (Heartbeat.busy_retry_delay).
+        BUSY_RETRY_BASE = 0.1
+        private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :BUSY_RETRY_BASE
 
         # The deadline of one round, in seconds, for an +interval+ in seconds. It is three quarters
         # of the interval, so that one timed-out round leaves a renewal margin when 2 × interval +
@@ -36,6 +41,13 @@ module Stablemates
         def self.round_bound(interval)
           milliseconds = (interval * 1000).round
           [1, milliseconds * 3 / 4, [50, milliseconds].min].max / 1000.0
+        end
+
+        # The delay before a busy retry, in seconds, for the shortest member +interval+ in seconds:
+        # base × (1 + +random+), with base = min(100 ms, interval / 8). The jitter keeps two workers
+        # from meeting the same lock holder in step. Every SDK uses the same formula.
+        def self.busy_retry_delay(interval, random = rand)
+          [BUSY_RETRY_BASE, interval / 8.0].min * (1 + random)
         end
 
         @dedicated = {}.compare_by_identity
@@ -55,6 +67,11 @@ module Stablemates
           @thread = nil
           # The worker that the next dedicated round sends first. Only the heartbeat thread uses it.
           @rotation = 0
+          # The busy members of the latest round, which a retry renews before the next regular
+          # round, and the monotonic time when that retry falls due. A round of either kind
+          # replaces both. Only the heartbeat thread uses them.
+          @busy = nil
+          @busy_at = 0
         end
 
         # Adds +member+ and returns a callable that removes it. Removing twice is harmless. A member
@@ -86,6 +103,7 @@ module Stablemates
           # The start of the latest round, on the monotonic clock. A new connection keeps it, so a
           # failed round does not start a new schedule.
           @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          @busy = nil
           if @dedicated
             run_dedicated
           else
@@ -113,26 +131,36 @@ module Stablemates
         end
 
         # Runs rounds until no member remains, and returns true then. A round falls due one shortest
-        # member interval after the previous round started; a wake recomputes that from the current
-        # members. A round that ends after its next slot starts one overdue round at once, and the
-        # interval after it counts from that start, so missed slots are never replayed. A failed
-        # round raises only from a dedicated connection, so the caller can replace it.
+        # member interval after the previous regular round started; a wake recomputes that from the
+        # current members. A round that ends after its next slot starts one overdue round at once,
+        # and the interval after it counts from that start, so missed slots are never replayed. A
+        # failed round raises only from a dedicated connection, so the caller can replace it.
         #
-        # A round sends one statement for each worker. On the dedicated connection, all of them
-        # share one deadline: the round start plus +round_bound+. A statement that would start after
-        # it waits for the next round, so a slow statement of one worker cannot delay the renewal of
-        # another past it. Each round starts with the next worker (+ordered_groups+), so a worker
-        # whose statement is always slow cannot keep another from its turn. A borrowing heartbeat
-        # has no deadline, and sends every statement.
-        def rounds
+        # Between two regular rounds, a busy retry (+take_busy_retry+) sends only the members that
+        # the latest round reported busy. It runs on the same thread, so it is a round for the
+        # one-round-in-flight rule, and it never moves the regular slot.
+        def rounds(&)
           loop do
             interval = @lock.synchronize { @members.each_value.map(&:interval).min }
-            return true if interval.nil? && stop_if_idle
+            if interval.nil?
+              @busy = nil
+              return true if stop_if_idle
+            end
 
-            remaining = @previous + (interval || 0) - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            regular_at = @previous + (interval || 0)
+            retrying = !@busy.nil? && @busy_at < regular_at
+            remaining = (retrying ? @busy_at : regular_at) - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             if remaining.positive?
               @wake.wait(remaining)
               @wake.reset
+              next
+            end
+            if retrying
+              selection = take_busy_retry(regular_at)
+              # With nothing left to retry, the next regular round waits for its slot.
+              next if selection.nil?
+
+              send_round(selection, retry_deadline(selection, interval, regular_at), interval, rotate: false, &)
               next
             end
             @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -141,35 +169,81 @@ module Stablemates
             members = @lock.synchronize { @members.values }
             return true if members.empty? && stop_if_idle
 
-            ordered_groups(members).each do |worker_id, group|
-              sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              leases = group.map do |member|
-                {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
-              end
-              params = [worker_id, JSON.generate(leases)]
-              timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              break if @dedicated && !timeout.positive?
-
-              rows = begin
-                yield SqlCatalogue::HEARTBEAT_MANY_V1, params, timeout
-              rescue RoundTimeout, PG::Error
-                raise if @dedicated
-
-                next
-              rescue
-                # A skipped round is silent: the lease watchdog handles rounds that keep failing.
-                next
-              end
-              settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at)
-            end
+            send_round(members, deadline, interval, rotate: true, &)
           end
         end
 
+        # Sends one round for +members+. A round sends one statement for each worker. On the
+        # dedicated connection, all of them share one +deadline+. A statement that would start after
+        # it waits for the next round, so a slow statement of one worker cannot delay the renewal of
+        # another past it. Each regular round starts with the next worker (+ordered_groups+), so a
+        # worker whose statement is always slow cannot keep another from its turn. A borrowing
+        # heartbeat has no deadline, and sends every statement.
+        #
+        # A round replaces the pending busy retry. If one or more members are busy, it schedules one
+        # retry for them. A round that raises schedules none, and the next regular round tries again.
+        def send_round(members, deadline, interval, rotate:)
+          @busy = nil
+          busy = []
+          ordered_groups(members, rotate:).each do |worker_id, group|
+            sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            leases = group.map do |member|
+              {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
+            end
+            params = [worker_id, JSON.generate(leases)]
+            timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            break if @dedicated && !timeout.positive?
+
+            rows = begin
+              yield SqlCatalogue::HEARTBEAT_MANY_V2, params, timeout
+            rescue RoundTimeout, PG::Error
+              raise if @dedicated
+
+              next
+            rescue
+              # A skipped round is silent: the lease watchdog handles rounds that keep failing.
+              next
+            end
+            busy.concat(settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at))
+          end
+          return if busy.empty?
+
+          @busy = busy
+          @busy_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + Heartbeat.busy_retry_delay(interval)
+        end
+
+        # Takes the pending busy retry, and returns the members it can still renew, or nil. Each
+        # member must still be registered as the same object, so a member that completed, left, or
+        # was replaced is gone, and its local lease window must not have ended. At or after
+        # +regular_at+ the retry is dropped, and the regular round takes every member.
+        def take_busy_retry(regular_at)
+          busy = @busy
+          @busy = nil
+          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          return nil if busy.nil? || now >= regular_at
+
+          selection = busy.select do |member|
+            ends_at = member.lease_ends_at.call
+            ends_at && ends_at > now && registered?(member)
+          end
+          selection.empty? ? nil : selection
+        end
+
+        # A busy retry ends by its own round bound, by the next regular slot, and by the end of the
+        # earliest local lease window in it, so it never renews a lease that the worker has already
+        # given up. A borrowing heartbeat ignores the deadline, as in its regular rounds.
+        def retry_deadline(selection, interval, regular_at)
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          ends = selection.map { |member| member.lease_ends_at.call || started }
+          [started + round_bound(interval), regular_at, *ends].min
+        end
+
         # The statements of one round, one for each worker, as [worker_id, members] pairs. On the
-        # dedicated connection, each round starts one worker later than the round before it.
-        def ordered_groups(members)
+        # dedicated connection, each regular round starts one worker later than the round before
+        # it. A busy retry (+rotate+ false) keeps the order and does not move the rotation.
+        def ordered_groups(members, rotate: true)
           groups = members.group_by(&:worker_id).to_a
-          return groups unless @dedicated && groups.size > 1
+          return groups unless rotate && @dedicated && groups.size > 1
 
           first = @rotation % groups.size
           @rotation = first + 1
@@ -180,17 +254,26 @@ module Stablemates
         # (Heartbeat.round_bound).
         def round_bound(interval) = Heartbeat.round_bound(interval)
 
+        # Delivers each status to its member, and returns the busy members. A result counts only
+        # for the member object that the round sent, so a member that left or was replaced while
+        # the round ran gets nothing from it. A busy member got no renewal and no ownership verdict:
+        # its lease watchdog keeps its window, and the member stays registered.
         def settle(group, statuses, sent_at)
-          group.each do |member|
+          group.filter_map do |member|
             next unless registered?(member)
 
             status = statuses.fetch(member.task.id, "stale")
             begin
               report(member, status)
-              (status == "accepted") ? member.renew.call(sent_at) : member.settle.call(status)
+              case status
+              when "accepted" then member.renew.call(sent_at)
+              when "busy" then next member
+              else member.settle.call(status)
+              end
             rescue => e
               member.fail.call(e)
             end
+            nil
           end
         end
 

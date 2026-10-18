@@ -124,12 +124,12 @@ its limit, so the free slots are `concurrency` minus the running handlers minus 
 The shared runtime fixture pins, at concurrency 8, the claim limits 8, 1, and 2 with two claims in
 flight.
 
-**Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v1`.
-Rounds never overlap.
+**Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v2`.
+Rounds never overlap. A busy retry sends only the busy leases between two rounds.
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 
-More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Claim](../architecture/lifecycle.md#claim).
+More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](../architecture/lifecycle.md#claim), and [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry).
 
 </details>
 

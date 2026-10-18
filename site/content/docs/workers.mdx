@@ -149,7 +149,7 @@ A shorter lease gives faster recovery after a crash. A longer lease accepts long
 | Step    | Function             | Effect on `task_runtime`                                          |
 | ------- | -------------------- | ----------------------------------------------------------------- |
 | Claim   | `claim_many_v1`      | Sets `worker_id`, `expires_at`, and a new `fence_token`.          |
-| Renew   | `heartbeat_many_v1`  | Moves `expires_at` for each accepted lease.                       |
+| Renew   | `heartbeat_many_v2`  | Moves `expires_at` for each accepted lease.                       |
 | Recover | `recover_expired_v1` | Returns expired rows to `ready` or `scheduled`. Clears the owner. |
 
 **Fence tokens.** Every claim takes the next value of the sequence `fence_token_seq`. The sequence
@@ -191,7 +191,7 @@ Thus, one failed round does not change ownership. The next round tries again.
 
 A heartbeat renews only a lease that is still live when PostgreSQL checks it. PostgreSQL reads the
 clock only after the call holds the row locks that it needs, and a round can lock all its tasks
-first. If a heartbeat waits for a lock until after the expiry, PostgreSQL does not renew the lease.
+first. If a heartbeat finishes its locks after the expiry, PostgreSQL does not renew the lease.
 A late heartbeat or completion cannot bring back an expired lease. An accepted heartbeat extends the
 lease from that clock reading.
 
@@ -199,7 +199,7 @@ Each round falls due one heartbeat interval after the previous round started, no
 Thus a slow or failed round does not move the next round toward the end of the lease.
 
 A round on the reserved connection also has a deadline that is shorter than one heartbeat interval.
-If the heartbeat waits too long, PostgreSQL ends it before the deadline. The round then renews no
+If the heartbeat takes too long, PostgreSQL ends it before the deadline. The round then renews no
 lease, and its heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has
 already started can still finish later. The next round tries again.
 
@@ -211,34 +211,65 @@ its handler returns.
 The Rust worker matches each heartbeat response to the fence token that sent it. Thus, a delayed
 response from before a durable suspension cannot renew or cancel the resumed handler.
 
+Some operations lock the row of the task for a short time, for example a progress update or a
+checkpoint of your handler. The heartbeat does not wait for that lock. It reports the lease as busy
+and renews nothing. The worker then tries again soon, with only the busy leases.
+
+**Example.** The heartbeat at 10 s moved the expiry of the invoice task to 40 s. The handler saves
+a checkpoint at 20 s.
+
+1. At 20 s, worker A sends the next heartbeat round. The checkpoint holds the row lock.
+2. The heartbeat answers busy at once. It renews nothing, and the task continues to run.
+3. About 150 ms later, worker A sends a retry with only the invoice task.
+4. The checkpoint has committed, so PostgreSQL renews the lease. The expiry moves to about 50 s.
+5. At 30 s, worker A sends its next regular round, as planned.
+
+A busy answer is not a verdict about ownership. It does not prove that the worker still owns the
+task, and it does not extend the local countdown. If every round and every retry is busy until the
+lease ends, the worker stops the task as a lost lease. A retry is an opportunity to renew, not a
+guarantee. A transaction that holds the row for longer than the lease, such as a long transaction
+of your own code, can still cost the lease.
+
 <details>
 <summary>Reference: heartbeat functions and results</summary>
 
-**`heartbeat_many_v1(p_worker_id, p_leases jsonb)`**
+**`heartbeat_many_v2(p_worker_id, p_leases jsonb)`**
 
 - `p_leases` holds 1 to 100 entries of `{ taskId, fenceToken, leaseMs }`.
-- On the full tier, the function locks the rows of the worker in `task_id` order.
+- On both tiers, the function locks the rows of the worker in `task_id` order with `SKIP LOCKED`.
 - The function reads `clock_timestamp()` after those locks.
-- One `UPDATE ... FROM` renews every matching row.
+- One `UPDATE ... FROM` for each tier renews only the rows that it locked.
 - The function returns `(ordinal, task_id, status)` in input order.
 
-**Round deadline.** A round on the reserved connection sends `heartbeat_many_v1` in its own
+`heartbeat_many_v1` has the same input. It waits for a locked row and never returns `busy`.
+
+**Busy retry.** A busy retry sends only the busy leases after `base × (1 + random)`, with
+`base = min(100 ms, interval / 8)`. It ends by the earliest of the round deadline, the next regular
+slot, and the watchdog end. It does not move the regular rounds. With the defaults (30,000 ms lease,
+10,000 ms interval), the regular rounds at 10 s and 20 s can both be busy before the watchdog ends
+at 30 s. `SKIP LOCKED` does not stop every wait: an update-chain wait can still occur, and the round
+deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartbeatMany` still wait
+for a row lock and never report `busy`.
+
+**Round deadline.** A round on the reserved connection sends `heartbeat_many_v2` in its own
 transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
 before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
 the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 
-**Statuses** (`heartbeat_v1` and `heartbeat_many_v1`)
+**Statuses** (`heartbeat_v1` and `heartbeat_many_v2`)
 
 | Status              | Effect                                                      |
 | ------------------- | ----------------------------------------------------------- |
 | `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`. |
+| `busy`              | No change. Only `heartbeat_many_v2` returns it.             |
 | `cancel_requested`  | No change.                                                  |
 | `deadline_exceeded` | No change.                                                  |
 | `timeout_exceeded`  | No change.                                                  |
 | `stale`             | No change. The worker no longer owns this fence.            |
 
 **Lease watchdog.** Each attempt also keeps a local countdown. It starts when the claim request
-leaves. Every `accepted` heartbeat restarts it from the moment that the request of that round left.
+leaves. Every `accepted` heartbeat restarts it from the moment that the request of that round left. A
+`busy` answer does not restart it.
 Both moments come before the database renews, so the local countdown never ends after the stored
 `expires_at`.
 
@@ -252,7 +283,7 @@ Both moments come before the database renews, so the local countdown never ends 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round returns, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule).
+More detail: [Task lifecycle: Heartbeat](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat), [Task lifecycle: Busy retry](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#busy-retry), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 
@@ -297,12 +328,13 @@ Two results follow:
 These functions lock the exact active `task_id`, `worker_id`, and `fence_token` row before they
 write:
 
-- `heartbeat_v1` and `heartbeat_many_v1`;
+- `heartbeat_v1`, `heartbeat_many_v1`, and `heartbeat_many_v2`;
 - `complete_v1` and `fail_v1`;
 - `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`;
 - `update_progress_v1` and `save_checkpoint_v1`.
 
-A mismatch writes nothing. A heartbeat reports it as `stale`.
+A mismatch writes nothing. A heartbeat reports it as `stale`. `heartbeat_many_v2` does not wait for
+a row that another transaction locks. It reports that lease as `busy` and writes nothing.
 
 More detail: [Task lifecycle: Terminal transitions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#terminal-transitions).
 
@@ -366,8 +398,8 @@ its limit, so the free slots are `concurrency` minus the running handlers minus 
 The shared runtime fixture pins, at concurrency 8, the claim limits 8, 1, and 2 with two claims in
 flight.
 
-**Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v1`.
-Rounds never overlap.
+**Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v2`.
+Rounds never overlap. A busy retry sends only the busy leases between two rounds.
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 

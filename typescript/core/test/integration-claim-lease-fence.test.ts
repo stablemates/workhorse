@@ -17,19 +17,6 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { databaseUrl, deferred, pool, queue, waitForDatabaseCondition, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
 
-// After an attempt settles, heartbeat statements that waited on the task row can still hold its
-// row lock, and a claim skips a locked row. A later pass takes the task. The 5 s bound is more than
-// 3 times the longest drain of abandoned heartbeat statements seen in the fault-injection check,
-// and shorter than the test timeout (docs/architecture/lifecycle.md, "A renewal that waits on a
-// settlement").
-async function runOnceUntilHandled(worker: Worker): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!(await worker.runOnce())) {
-    if (Date.now() >= deadline) throw new Error("no pass ran a handler within 5 s");
-    await sleep(10);
-  }
-}
-
 describe("claim lease fence", () => {
   it("heartbeats every owned lease in one HOT batch update", async () => {
     const workerId = `heartbeat-batch-${randomUUID()}`;
@@ -818,7 +805,8 @@ describe("claim lease fence", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
-    await runOnceUntilHandled(worker);
+    // No heartbeat holds the row of the settled task, so the next pass claims it at once.
+    expect(await worker.runOnce()).toBe(true);
     expect(handled).toEqual([
       { id, attempt: 1 },
       { id, attempt: 2 },
@@ -893,7 +881,8 @@ describe("claim lease fence", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
-    await runOnceUntilHandled(worker);
+    // No heartbeat holds the row of the settled task, so the next pass claims it at once.
+    expect(await worker.runOnce()).toBe(true);
     expect(handled).toEqual([
       { id, attempt: 1 },
       { id, attempt: 2 },

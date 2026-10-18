@@ -628,7 +628,7 @@ The retried statements are:
 
 - `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`
 - `expire_owned_v1`, `expire_owned_telemetry_v1`
-- `heartbeat_v1`, `heartbeat_many_v1`
+- `heartbeat_v1`, `heartbeat_many_v1`, `heartbeat_many_v2`
 - `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`
 - `create_child_v2`, `create_children_v1`
 - `save_checkpoint_v1`, `update_progress_v1`

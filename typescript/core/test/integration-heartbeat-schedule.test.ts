@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { HeartbeatStatus } from "../src/index.js";
+import type { HeartbeatBatchStatus } from "../src/index.js";
 import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -17,14 +17,17 @@ interface Round {
   failed?: boolean;
 }
 
-/** Hold the row lock of `taskId` in an open transaction, and return the function that commits. */
-async function lockRow(taskId: string): Promise<() => Promise<void>> {
+/**
+ * Make every heartbeat statement wait, and return the function that commits. heartbeat_many_v2
+ * skips a locked row and reports it busy, so a row lock no longer slows it. It always locks its
+ * fast-tier rows first, so an EXCLUSIVE lock on fast_task_runtime makes it wait on that table.
+ * Enqueue and claim of full-tier tasks do not need that lock.
+ */
+async function blockHeartbeats(): Promise<() => Promise<void>> {
   const blocker = await pool.connect();
   try {
     await blocker.query("BEGIN");
-    await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
-      taskId,
-    ]);
+    await blocker.query("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE");
   } catch (error) {
     blocker.release(true);
     throw error;
@@ -44,7 +47,7 @@ async function lockRow(taskId: string): Promise<() => Promise<void>> {
  */
 function recordRounds(
   target: {
-    heartbeatMany: (...args: never[]) => Promise<Map<string, HeartbeatStatus>>;
+    heartbeatMany: (...args: never[]) => Promise<Map<string, HeartbeatBatchStatus>>;
   },
   firstDelayMs = 0,
   everyDelayMs = 0,
@@ -52,7 +55,7 @@ function recordRounds(
   const rounds: Round[] = [];
   const original = target.heartbeatMany.bind(target) as (
     ...args: unknown[]
-  ) => Promise<Map<string, HeartbeatStatus>>;
+  ) => Promise<Map<string, HeartbeatBatchStatus>>;
   vi.spyOn(target, "heartbeatMany").mockImplementation(async (...args: never[]) => {
     const round: Round = { startedAt: performance.now() };
     rounds.push(round);
@@ -80,7 +83,7 @@ async function outcomeState(taskId: string): Promise<string | undefined> {
 
 describe("heartbeat schedule", () => {
   it("keeps a renewal margin after one timed-out round", async () => {
-    // The lease is 2.3 heartbeat intervals, shorter than the default of 3. The row lock makes the
+    // The lease is 2.3 heartbeat intervals, shorter than the default of 3. The table lock makes the
     // first round time out on the server at about 1.4 intervals. The fixed schedule sends the next
     // round at 2 intervals, inside the lease. A schedule that waits one interval after the failed
     // round ends sends it at about 2.4 intervals, after the lease.
@@ -103,7 +106,7 @@ describe("heartbeat schedule", () => {
       registryIntervalMs: 0,
     }).handle("margin", async (_payload, context) => {
       const started = performance.now();
-      const commit = await lockRow(context.task.id);
+      const commit = await blockHeartbeats();
       try {
         await sleep(1.6 * heartbeatMs);
       } finally {
@@ -156,7 +159,7 @@ describe("heartbeat schedule", () => {
     try {
       const first = await queue.enqueue("flight", {}, { queue: "heartbeat-schedule-flight" });
       await vi.waitFor(() => expect(started).toEqual([first]), { timeout: 5_000, interval: 10 });
-      const commit = await lockRow(first);
+      const commit = await blockHeartbeats();
       try {
         await vi.waitFor(() => expect(rounds.length).toBe(1), { timeout: 5_000, interval: 5 });
         // A lease that registers during the round must not start a second round.

@@ -219,9 +219,10 @@ RSpec.describe "Worker runtime against PostgreSQL" do
   end
 
   # SM-1442: closing a connection does not stop its statement, so each round that timed out used to
-  # leave one more backend waiting on the same row lock. PostgreSQL now ends the round's transaction
-  # by the round's deadline.
-  it "ends a heartbeat statement that waits on a row lock on the server, by its round's deadline" do
+  # leave one more backend waiting on the same lock. PostgreSQL now ends the round's transaction by
+  # the round's deadline. A row lock now makes the round busy at once (SM-1443), so the blocker holds
+  # a table lock on the fast tier. heartbeat_many_v2 locks that table first, so the statement waits.
+  it "ends a heartbeat statement that waits on a lock on the server, by its round's deadline" do
     interval = 0.2
     task_id = queue.enqueue("bounded", {}).task_id
     release = Concurrent::Event.new
@@ -237,14 +238,14 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     running(subject) do
       expect(started.wait(10)).to be(true)
       blocker.exec("BEGIN")
-      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      blocker.exec("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 8 * interval
       while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
         samples << observer.exec(<<~SQL).column_values(0).map { |age| Float(age) }
           SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000
             FROM pg_stat_activity
            WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-             AND query LIKE '%workhorse.heartbeat_many_v1%'
+             AND query LIKE '%workhorse.heartbeat_many_v2%'
         SQL
         sleep 0.02
       end
@@ -266,10 +267,10 @@ RSpec.describe "Worker runtime against PostgreSQL" do
 
   # SM-1444: a round falls due one interval after the previous round started, also after a failed
   # round replaces the connection. So one timed-out round does not move the next round toward the end
-  # of the lease. The lease is 2.3 intervals, shorter than the default of 3. The row lock makes the
-  # first round end on the server at about 1.4 intervals. The fixed schedule sends the next round at
-  # 2 intervals, inside the lease. A schedule that starts again after the failed round sends it at
-  # about 2.4 intervals, after the lease.
+  # of the lease. The lease is 2.3 intervals, shorter than the default of 3. The table lock on the
+  # fast tier makes the first round wait, and the server ends it at about 1.4 intervals. The fixed
+  # schedule sends the next round at 2 intervals, inside the lease. A schedule that starts again
+  # after the failed round sends it at about 2.4 intervals, after the lease.
   it "keeps a renewal margin after one timed-out heartbeat round" do
     interval = 1.0
     task_id = queue.enqueue("margin", {}).task_id
@@ -288,7 +289,7 @@ RSpec.describe "Worker runtime against PostgreSQL" do
       expect(started.wait(10)).to be(true)
       handler_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       blocker.exec("BEGIN")
-      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      blocker.exec("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")
       sleep [0, handler_started + 1.6 * interval - Process.clock_gettime(Process::CLOCK_MONOTONIC)].max
       blocker.exec("COMMIT")
       # Run past the end of the lease from the claim, so only a renewal keeps the task. The stored
@@ -308,6 +309,94 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(lapsed.uniq).to eq(["f"])
     expect(cancelled).to be(false)
     expect(state(task_id)).to eq("succeeded")
+  ensure
+    blocker&.close
+  end
+
+  # SM-1443: a heartbeat that meets a row lock that another transaction holds does not wait for it.
+  # It reports the lease busy, renews nothing, and the next round renews the lease after the commit.
+  it "reports a lease busy at once while another transaction holds its row, and renews it after the commit" do
+    task_id = queue.enqueue("busy", {}).task_id
+    release = Concurrent::Event.new
+    started = Concurrent::Event.new
+    subject = worker(lease: 30, heartbeat: 0.2, shared_heartbeats: true).handle("busy") do
+      started.set
+      release.wait(30)
+      {}
+    end
+    results = Concurrent::Array.new
+    executor = subject.instance_variable_get(:@executor)
+    original = executor.method(:rows)
+    executor.define_singleton_method(:rows) do |sql, params = []|
+      sent = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      rows = original.call(sql, params)
+      if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
+        results << [rows.map { |row| row["status"] }, Process.clock_gettime(Process::CLOCK_MONOTONIC) - sent]
+      end
+      rows
+    end
+    blocker = ScratchDatabase.connect
+    expiry = lambda do
+      Float(@connection.exec_params("SELECT extract(epoch FROM expires_at)::float8 FROM workhorse.task_runtime " \
+        "WHERE task_id = $1", [task_id]).getvalue(0, 0))
+    end
+    running(subject) do
+      expect(started.wait(10)).to be(true)
+      wait_until { results.any? { |statuses, _| statuses == ["accepted"] } }
+      blocker.exec("BEGIN")
+      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      held = expiry.call
+      seen = results.size
+      wait_until { results.drop(seen).any? { |statuses, _| statuses == ["busy"] } }
+      busy = results.drop(seen).select { |statuses, _| statuses == ["busy"] }
+      sleep 0.3
+      expect(expiry.call).to eq(held)
+      blocker.exec("COMMIT")
+      seen = results.size
+      wait_until { results.drop(seen).any? { |statuses, _| statuses == ["accepted"] } }
+      wait_until { expiry.call > held }
+      # A heartbeat that waited on the row would take the whole time that the row was held.
+      expect(busy.map(&:last).max).to be < 0.1
+      release.set
+      wait_until { state(task_id) == "succeeded" }
+    ensure
+      release.set
+    end
+  ensure
+    blocker&.close
+  end
+
+  # SM-1443: a busy round renews nothing. If the row stays held, the watchdog ends the attempt with
+  # a lost lease at the end of its local window: not at the first busy round, and not later.
+  it "lets a lease that stays busy lapse at the end of its local window" do
+    lease = 0.8
+    interval = 0.2
+    task_id = queue.enqueue("held", {}).task_id
+    started = Concurrent::Event.new
+    cancelled = Concurrent::Event.new
+    reason = nil
+    cancelled_at = nil
+    subject = worker(lease: lease, heartbeat: interval).handle("held") do |_payload, context|
+      started.set
+      context.cancellation.wait(10)
+      cancelled_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      reason = context.cancellation.reason
+      cancelled.set
+      {}
+    end
+    blocker = ScratchDatabase.connect
+    running(subject) do
+      expect(started.wait(10)).to be(true)
+      sleep 2 * interval
+      blocker.exec("BEGIN")
+      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      held_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      expect(cancelled.wait(5)).to be(true)
+      blocker.exec("COMMIT")
+      expect(reason).to eq(:lease_lost)
+      # The last accepted round started at most one interval and one round before the lock.
+      expect(cancelled_at - held_at).to be_between(lease - interval - 0.1, lease + 0.2)
+    end
   ensure
     blocker&.close
   end

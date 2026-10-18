@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 69;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 71;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 72;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 72;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -134,8 +134,8 @@ pub const GET_PROGRESS: &str = r#"SELECT task_id::text task_id,progress_value,re
 /// `get_wait` (admin)
 pub const GET_WAIT: &str = r#"SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text"#;
 
-/// `heartbeat_many_v1` (protocol)
-pub const HEARTBEAT_MANY_V1: &str = r#"SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal"#;
+/// `heartbeat_many_v2` (protocol)
+pub const HEARTBEAT_MANY_V2: &str = r#"SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal"#;
 
 /// `heartbeat_v1` (protocol)
 pub const HEARTBEAT_V1: &str =

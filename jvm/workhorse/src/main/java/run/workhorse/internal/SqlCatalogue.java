@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 69;
-  public static final int MAXIMUM_SCHEMA_VERSION = 71;
+  public static final int MINIMUM_SCHEMA_VERSION = 72;
+  public static final int MAXIMUM_SCHEMA_VERSION = 72;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -261,11 +261,11 @@ public final class SqlCatalogue {
           2,
           new int[] {1, 2});
 
-  /** {@code heartbeat_many_v1} (protocol). */
-  public static final Statement HEARTBEAT_MANY_V1 =
+  /** {@code heartbeat_many_v2} (protocol). */
+  public static final Statement HEARTBEAT_MANY_V2 =
       new Statement(
-          "heartbeat_many_v1",
-          "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1(?::text, ?::jsonb) ORDER BY ordinal",
+          "heartbeat_many_v2",
+          "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2(?::text, ?::jsonb) ORDER BY ordinal",
           2,
           new int[] {1, 2});
 
@@ -1367,7 +1367,7 @@ public final class SqlCatalogue {
           GET_TASK,
           GET_PROGRESS,
           GET_WAIT,
-          HEARTBEAT_MANY_V1,
+          HEARTBEAT_MANY_V2,
           HEARTBEAT_V1,
           LIST_CHECKPOINT,
           LIST_CHECKPOINTS,

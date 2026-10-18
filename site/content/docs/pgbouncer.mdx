@@ -277,7 +277,7 @@ check, because a `DataSource` reports no pool size.
 | Java       | `sharedHeartbeats`  |
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
-`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v1` in its
+`heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v2` in its
 own transaction, and transaction-local server timeouts make PostgreSQL end the heartbeat by the same
 deadline. A round that fails destroys the connection, and asks the pool for a new one when it ends.
 The connect thus starts before the next round. If it is still pending when the next round starts,

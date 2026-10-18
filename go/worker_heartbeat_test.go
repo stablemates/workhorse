@@ -506,7 +506,7 @@ func terminateHeartbeatSession(t *testing.T, ctx context.Context, observer *pgx.
 			 FROM pg_stat_activity
 			 WHERE datname = current_database()
 			   AND pid <> pg_backend_pid()
-			   AND (query LIKE '%heartbeat_many_v1%' OR lower(query) = 'commit')
+			   AND (query LIKE '%heartbeat_many_v2%' OR lower(query) = 'commit')
 			 LIMIT 1`,
 		).Scan(&terminated)
 		if err == nil && terminated {
@@ -635,7 +635,7 @@ func heartbeatSessionPID(t *testing.T, ctx context.Context, observer *pgx.Conn, 
 			 WHERE datname = current_database()
 			   AND pid <> pg_backend_pid()
 			   AND pid <> $1
-			   AND (query LIKE '%heartbeat_many_v1%' OR lower(query) = 'commit')
+			   AND (query LIKE '%heartbeat_many_v2%' OR lower(query) = 'commit')
 			 LIMIT 1`,
 			previous,
 		).Scan(&pid)
@@ -840,8 +840,9 @@ func TestHeldConnectionFailureHelper(t *testing.T) {
 
 // TestWorkerEndsATimedOutHeartbeatStatementOnTheServer pins the server bound of a heartbeat round
 // (SM-1442). Closing a connection does not stop its statement, so each round that timed out used to
-// leave one more backend waiting on the same row lock. PostgreSQL now ends the transaction by the
-// round's deadline, on the reserved connection and on a shared round alike.
+// leave one more backend waiting on the same lock. PostgreSQL now ends the transaction by the
+// round's deadline, on the reserved connection and on a shared round alike. A row lock now makes
+// the round report the lease busy at once (SM-1443), so the test holds a table lock instead.
 func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 	for _, shared := range []bool{false, true} {
 		name := "reserved"
@@ -862,8 +863,7 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 			const interval = 200 * time.Millisecond
 			queueName := "go-worker-heartbeat-bound-" + name
 			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-			taskID, err := queue.Enqueue(ctx, "heartbeat-bound", nil)
-			if err != nil {
+			if _, err := queue.Enqueue(ctx, "heartbeat-bound", nil); err != nil {
 				t.Fatal(err)
 			}
 			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -900,15 +900,9 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 				t.Fatal("worker did not start the handler")
 			}
 
-			// Hold the task's row lock, so every heartbeat round waits until its deadline.
-			if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := blocker.Exec(
-				ctx, "SELECT FROM workhorse.task_runtime WHERE task_id = $1::uuid FOR UPDATE", taskID,
-			); err != nil {
-				t.Fatal(err)
-			}
+			// Hold a table lock that conflicts with the first lock step of heartbeat_many_v2, so
+			// every heartbeat round waits until its deadline.
+			lockFastRuntimeTable(t, ctx, blocker)
 			maxCount, maxAge, seen := 0, 0.0, false
 			until := time.Now().Add(8 * interval)
 			for time.Now().Before(until) {
@@ -920,7 +914,7 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 					        COALESCE(max(extract(epoch FROM clock_timestamp() - query_start) * 1000), 0)::float8
 					   FROM pg_stat_activity
 					  WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-					    AND query LIKE '%workhorse.heartbeat_many_v1%'`,
+					    AND query LIKE '%workhorse.heartbeat_many_v2%'`,
 				).Scan(&count, &age); err != nil {
 					t.Fatal(err)
 				}
@@ -936,7 +930,7 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !seen {
-				t.Fatal("no heartbeat statement waited on the locked row")
+				t.Fatal("no heartbeat statement waited on the locked table")
 			}
 			if maxCount > 1 {
 				t.Fatalf("%d heartbeat statements were active at once; want at most 1", maxCount)
@@ -947,6 +941,129 @@ func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
 				t.Fatalf("a heartbeat statement ran for %.0f ms; want less than %.0f ms", maxAge, limit)
 			}
 		})
+	}
+}
+
+// lockFastRuntimeTableStatement conflicts with the ROW SHARE lock that heartbeat_many_v2 takes on
+// workhorse.fast_task_runtime in its first lock step, for a task of either tier. A heartbeat thus
+// waits until the blocker commits or the server timeouts end it. Unlike a row lock, which the
+// heartbeat now skips, the table lock exercises the bound. It does not block a full-tier enqueue or
+// claim, which a lock on workhorse.task_runtime would.
+const lockFastRuntimeTableStatement = "LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE"
+
+// lockFastRuntimeTable opens a transaction on blocker that holds lockFastRuntimeTableStatement until
+// the test sends COMMIT.
+func lockFastRuntimeTable(t *testing.T, ctx context.Context, blocker *pgx.Conn) {
+	t.Helper()
+	if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(ctx, lockFastRuntimeTableStatement); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAHeartbeatRoundReportsALockedRowAsBusy pins SM-1443: a heartbeat round skips a task row that
+// another transaction holds. It reports the lease busy at once, well before the round bound, and
+// leaves the lease as it was. After the holder commits, the next round renews the lease.
+func TestAHeartbeatRoundReportsALockedRowAsBusy(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-busy")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+	blocker := observeDatabase(t, ctx, databaseURL)
+
+	const queueName = "go-worker-heartbeat-busy"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, "heartbeat-busy", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker's own rounds fall due long after the test ends, so only the test's rounds run.
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "heartbeat-busy-worker",
+		LeaseDuration:       time.Minute,
+		HeartbeatInterval:   30 * time.Second,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release, closeRelease := releaseOnce(t)
+	worker.Handle("heartbeat-busy", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("worker did not process the heartbeat-busy task")
+		}
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		closeRelease()
+		t.Fatal("worker did not start the handler")
+	}
+	var fenceToken int64
+	if err := observer.QueryRow(
+		ctx, "SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1::uuid", taskID,
+	).Scan(&fenceToken); err != nil {
+		t.Fatal(err)
+	}
+
+	const bound = 5 * time.Second
+	if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(
+		ctx, "SELECT FROM workhorse.task_runtime WHERE task_id = $1::uuid FOR UPDATE", taskID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	before := leaseExpiry(t, ctx, observer, taskID)
+	sentAt := time.Now()
+	status, err := worker.HeartbeatRoundForTest(taskID, fenceToken, bound)
+	elapsed := time.Since(sentAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "busy" {
+		t.Fatalf("a round over a locked row reported %q; want busy", status)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("a round over a locked row took %s; want an answer well before the %s bound", elapsed, bound)
+	}
+	if after := leaseExpiry(t, ctx, observer, taskID); !after.Equal(before) {
+		t.Fatalf("a busy round moved the lease expiry from %s to %s", before, after)
+	}
+	if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	status, err = worker.HeartbeatRoundForTest(taskID, fenceToken, bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" {
+		t.Fatalf("a round after the commit reported %q; want accepted", status)
+	}
+	if after := leaseExpiry(t, ctx, observer, taskID); !after.After(before) {
+		t.Fatal("an accepted round did not renew the lease")
+	}
+	closeRelease()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -989,7 +1106,7 @@ func TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline(t *testing.T)
 // TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound pins the fixed schedule: a round falls
 // due one interval after the previous round started, so one timed-out round does not move the next
 // round toward the end of the lease (SM-1444). The lease is 2.3 intervals, shorter than the default
-// of 3. The row lock makes the first round end on the server at about 1.4 intervals. The fixed
+// of 3. The table lock makes the first round end on the server at about 1.4 intervals. The fixed
 // schedule sends the next round at 2 intervals, inside the lease. A schedule that waits one interval
 // after the failed round ends sends it at about 2.4 intervals, after the lease.
 func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
@@ -1028,9 +1145,7 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 			if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
 				return err
 			}
-			if _, err := blocker.Exec(
-				ctx, "SELECT FROM workhorse.task_runtime WHERE task_id = $1::uuid FOR UPDATE", taskID,
-			); err != nil {
+			if _, err := blocker.Exec(ctx, lockFastRuntimeTableStatement); err != nil {
 				return err
 			}
 			time.Sleep(interval * 16 / 10)

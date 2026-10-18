@@ -77,6 +77,7 @@ module Conformance
       when "oversized-result" then oversized_result(fixture)
       when "shutdown-cancellation" then shutdown_cancellation(fixture)
       when "heartbeat-failure" then heartbeat_failure(fixture)
+      when "heartbeat-busy" then heartbeat_busy(fixture)
       when "maintenance-phase-error" then maintenance_phase_error(fixture)
       when "suspension-replay" then suspension_replay(fixture)
       when "lease-loss" then lease_loss(fixture)
@@ -265,7 +266,7 @@ module Conformance
           raise "the handler was never released" unless release_handler.wait(5)
         end
         wrap_rows(subject) do |original, sql, params|
-          next original.call(sql, params) unless sql == W::SqlCatalogue::HEARTBEAT_MANY_V1
+          next original.call(sql, params) unless sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
 
           call = lock.synchronize do
             counts[:calls] += 1
@@ -817,6 +818,52 @@ module Conformance
       expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
     end
 
+    # Makes the first heartbeat rounds report the lease busy, and checks that the worker retries
+    # only that lease, sooner than its interval, and keeps the attempt running.
+    def heartbeat_busy(fixture)
+      task_id = queue.enqueue(fixture["taskType"], {}, queue: queue_name(fixture)).task_id
+      started = Concurrent::Event.new
+      release = Concurrent::Event.new
+      cancellations = Concurrent::Array.new
+      timeout = fixture["renewalTimeoutMs"] / 1000.0
+      injection = fixture.fetch("injection")
+      rounds = []
+      with_pool do |pool|
+        subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0)
+          .handle(fixture["taskType"]) do |_payload, context|
+          started.set
+          raise "the handler was never released" unless release.wait(10)
+
+          cancellations << task_id if context.cancellation.cancelled?
+          nil
+        end
+        running(-> { subject.run_once }) do |result|
+          check(started.wait(5), "the handler never started")
+          renewal(task_id, expiry(task_id), timeout)
+          injected_body(injection) do
+            eventually("fewer than #{fixture["expectedBusyRounds"]} busy heartbeat rounds ran", timeout) do
+              (rounds = @connection.exec(injection["roundsQuery"]).to_a).size >= fixture["expectedBusyRounds"]
+            end
+            # The busy rounds renewed nothing. The next round reaches the real function and renews.
+            renewal(task_id, expiry(task_id), timeout)
+          end
+          release.set
+          check(result.call == true, "the worker did not run the task")
+        ensure
+          release.set
+        end
+      end
+      busy = rounds.first(fixture["expectedBusyRounds"])
+      counts = busy.map { |round| Integer(round["lease_count"], 10) }
+      check(counts.all?(1), "the busy rounds sent #{counts} leases, want 1 each")
+      gaps = busy.map { |round| Float(round["round_at_ms"]) }.each_cons(2).map { |earlier, later| later - earlier }
+      check(gaps.all? { |gap| gap < fixture["maximumRetryGapMs"] },
+        "busy retries came #{gaps} ms apart, want less than #{fixture["maximumRetryGapMs"]}")
+      check(cancellations.length == fixture["expectedCancellations"], "the handler saw a cancellation")
+      expect_state(task_id, fixture["expectedState"])
+      expect_outcomes(task_id, [fixture["expectedAttemptOutcome"]])
+    end
+
     def maintenance_phase_error(fixture)
       injection = fixture.fetch("injection")
       # tick_v1 returns a phase failure as data, so a raising promote_v1 models a lock timeout
@@ -953,13 +1000,13 @@ module Conformance
       pool&.shutdown(&:close)
     end
 
-    # Makes each heartbeat_many_v1 call on +connection+ wait until +released+ is set. The call
+    # Makes each heartbeat_many_v2 call on +connection+ wait until +released+ is set. The call
     # waits before it reaches PostgreSQL, so it holds no row lock while it waits. A dedicated
     # heartbeat sends with send_query_params, and a shared heartbeat with exec_params.
     def hold_heartbeats(connection, released)
       %i[exec_params send_query_params].each do |name|
         connection.define_singleton_method(name) do |sql, *rest|
-          raise "a held heartbeat was never released" if sql == W::SqlCatalogue::HEARTBEAT_MANY_V1 && !released.wait(5)
+          raise "a held heartbeat was never released" if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 && !released.wait(5)
 
           super(sql, *rest)
         end
@@ -1013,6 +1060,25 @@ module Conformance
     ensure
       @connection.exec(original) if original
       @connection.exec("DROP SEQUENCE IF EXISTS #{sequence}") if sequence
+    end
+
+    # Replaces one installed function with the fixture's body while the block runs. The original
+    # definition comes back first, then the teardown statements run, whatever the block does.
+    def injected_body(injection)
+      original = value("SELECT pg_get_functiondef($1::regprocedure)", injection["function"])
+      check(original, "#{injection["function"]} is not installed")
+      begin
+        injection["setup"].each { |statement| @connection.exec(statement) }
+        @connection.exec("CREATE OR REPLACE FUNCTION #{injection["header"]} LANGUAGE plpgsql AS " \
+          "$injected$ #{injection["body"]} $injected$")
+        yield
+      ensure
+        begin
+          @connection.exec(original)
+        ensure
+          injection["teardown"].each { |statement| @connection.exec(statement) }
+        end
+      end
     end
 
     def expiry(task_id)

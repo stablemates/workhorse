@@ -313,7 +313,9 @@ deadlock occurs in these steps:
 3. The recheck of `state = 'ready'` then rejects the row, but the claim keeps its lock on it until
    the transaction ends.
 4. The owning worker's `fast_complete_many_v1` pre-lock or its `fast_heartbeat_many_v1` round can
-   wait on that lock while the claim waits on the owner.
+   wait on that lock while the claim waits on the owner. `heartbeat_many_v2` skips that row and
+   reports the lease `busy`, so since migration 0073 a heartbeat round of a current worker does not
+   wait there.
 
 In that cycle, PostgreSQL rolled one statement back with SQLSTATE `40P01` (SM-934).
 
@@ -425,6 +427,10 @@ Completion and heartbeat lock rows in one shared order:
 - `fast_heartbeat_many_v1` takes `FOR NO KEY UPDATE` locks in the same order before its `UPDATE`.
 - The full-tier `heartbeat_many_v1` branch takes the same ordered `FOR NO KEY UPDATE` lock on
   `task_runtime` before its `UPDATE`.
+- `heartbeat_many_v2` locks in the same order on each tier, with `SKIP LOCKED`. It skips a row
+  that the completion already holds, and reports that lease `busy`. An update-chain wait can still
+  occur, and the server timeouts of a bounded round end it
+  ([A renewal that meets a lock](lifecycle.md#a-renewal-that-meets-a-lock)).
 
 The `DELETE` plan locks rows in input order. The heartbeat plan can lock them in
 `fast_task_runtime_active_due_idx` order. Without the shared order, a worker's completion and its
@@ -450,6 +456,7 @@ sample `clock_timestamp()` after every row lock of the call is held, not before 
 batch, if a lease expired while the call waited for a later row, the call rejects that lease. This
 is true also if the lease was live when the call locked its own row. A mixed-tier
 `heartbeat_many_v1` batch validates each lease separately, as the next section describes.
+`heartbeat_many_v2` samples the clock once, after the lock steps of both tiers.
 
 Since migration 0060 (schema version 59), `fast_complete_many_v1` samples the clock a second time.
 That sample follows the oversized failures and precedes the completion `DELETE`.
@@ -465,7 +472,12 @@ therefore still accepted.
 
 #### Heartbeat batch routing
 
-`heartbeat_many_v1` routes a batch by the tiers it names:
+`heartbeat_many_v2` does not route. It locks the named rows of both tiers with `SKIP LOCKED`, and one
+`UPDATE` for each tier renews only the rows that it locked
+([Batched renewal](lifecycle.md#batched-renewal)). A task that moved between the tiers is in neither
+locked set, and a mixed batch calls no single-lease function.
+
+`heartbeat_many_v1`, which old workers call, routes a batch by the tiers it names:
 
 | Batch names                                                    | Path                                                                         |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -522,7 +534,9 @@ as a second protection. It still covers:
 ### Retry, timeout, heartbeat, and release
 
 `fail_v1`, `timeout_owned_v1`, `expire_owned_v1`, `heartbeat_v1`, `heartbeat_many_v1`,
-`release_owned_v1`, and `acknowledge_cancel_v1` branch to their fast-tier helpers:
+`release_owned_v1`, and `acknowledge_cancel_v1` branch to their fast-tier helpers.
+`heartbeat_many_v2` updates `fast_task_runtime` itself, as `fast_heartbeat_many_v1` does, and calls
+no helper:
 
 - `fast_fail_v1(task, worker, fence, error, retry_delay_ms)` redacts the error and either retries
   through the PostgreSQL delay selector and `fast_retry_v1`, or closes the task `failed` with null
@@ -745,8 +759,8 @@ keeps one `complete_many_and_claim_v1` call in flight for each queue and cohort.
   most 100.
 - The fused claim limit is the free slots plus one, capped by the free slots of the completing
   task's cohort plus one.
-- The call names its tasks in task ID order, and `heartbeat_many_v1` names its leases in the same
-  order.
+- The call names its tasks in task ID order, and `heartbeat_many_v1` and `heartbeat_many_v2` lock
+  their leases in the same order.
 
 The fused claim releases a lock it would otherwise keep on a candidate another worker leased first
 ([Fast claim](#fast-claim)). When PostgreSQL still rolls a statement back with SQLSTATE `40P01`,

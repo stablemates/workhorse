@@ -6,21 +6,24 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 // A heartbeat round on the reserved connection has a bound of heartbeatMs. Destroying the
 // connection at the bound does not stop the statement on the server, so each round that times out
-// used to leave one more backend waiting on the same row lock. PostgreSQL now ends the statement at
+// used to leave one more backend waiting on the same lock. PostgreSQL now ends the statement at
 // the same bound (SM-1442).
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 const HEARTBEAT_MS = 200;
 
-/** Hold the row lock of `taskId` in an open transaction, and return the function that commits. */
-async function lockRow(taskId: string): Promise<() => Promise<void>> {
+/**
+ * Make every heartbeat statement wait, and return the function that commits. heartbeat_many_v2
+ * skips a locked row and reports it busy, so a row lock no longer slows it. It always locks its
+ * fast-tier rows first, so an EXCLUSIVE lock on fast_task_runtime makes it wait on that table.
+ * Enqueue and claim of full-tier tasks do not need that lock.
+ */
+async function blockHeartbeats(): Promise<() => Promise<void>> {
   const blocker = await pool.connect();
   try {
     await blocker.query("BEGIN");
-    await blocker.query("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
-      taskId,
-    ]);
+    await blocker.query("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE");
   } catch (error) {
     blocker.release(true);
     throw error;
@@ -40,7 +43,7 @@ async function activeHeartbeats(): Promise<number[]> {
     `SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000 AS age_ms
        FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-        AND query LIKE '%workhorse.heartbeat_many_v1%'`,
+        AND query LIKE '%workhorse.heartbeat_many_v2%'`,
   );
   return result.rows.map((row) => Number(row.age_ms));
 }
@@ -61,7 +64,7 @@ describe("heartbeat server bound", () => {
     const channel = queue[workerHeartbeatReservation]()!;
     try {
       const claimedUntil = await expiresAt(id);
-      const commit = await lockRow(id);
+      const commit = await blockHeartbeats();
       try {
         // PostgreSQL ends the statement first, at half of the round's time.
         const started = performance.now();
@@ -117,7 +120,7 @@ describe("heartbeat server bound", () => {
     const run = worker.runOnce();
     try {
       await handlerStarted;
-      const commit = await lockRow(id);
+      const commit = await blockHeartbeats();
       const samples: number[][] = [];
       try {
         // Several rounds fall due while the lock is held. Without the server bound, each one left a

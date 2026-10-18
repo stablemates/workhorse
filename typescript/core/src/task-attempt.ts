@@ -14,7 +14,7 @@ import { monotonicNow, setUnrefTimeoutAt } from "./timers.js";
 import type {
   ClaimedTask,
   ExpireOwnedStatus,
-  HeartbeatStatus,
+  HeartbeatBatchStatus,
   ReleaseOwnedStatus,
 } from "./types.js";
 
@@ -66,11 +66,13 @@ export interface TaskAttemptServices {
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
   /**
    * Registers the task for heartbeats. `sentAt` is when the reporting round's request left, read
-   * from `monotonicNow()`.
+   * from `monotonicNow()`. `leaseEndsAt` gives the end of the local lease window on the same clock,
+   * or undefined once the window is closed. A busy retry never runs past it.
    */
   addHeartbeatLease(
     task: ClaimedTask,
-    status: (status: HeartbeatStatus, sentAt: number) => void,
+    status: (status: HeartbeatBatchStatus, sentAt: number) => void,
+    leaseEndsAt: () => number | undefined,
   ): () => void;
 }
 
@@ -126,8 +128,10 @@ export class TaskAttempt {
       this.expirationDueAt = monotonicNow() + expirationAt.getTime() - databaseClaimedAt + 1;
       this.armExpirationTimer(this.expirationDueAt, EXPIRATION_RETRY_MIN_MS);
     }
-    this.removeHeartbeatLease = services.addHeartbeatLease(task, (status, sentAt) =>
-      this.refreshOwnership(status, sentAt),
+    this.removeHeartbeatLease = services.addHeartbeatLease(
+      task,
+      (status, sentAt) => this.refreshOwnership(status, sentAt),
+      () => this.leaseWindowEndsAt,
     );
     this.renewLease(claimSentAt);
   }
@@ -334,6 +338,12 @@ export class TaskAttempt {
 
   private renewLease(sentAt: number): void {
     if (this.heartbeatStopped) return;
+    // A window that has already ended stays ended, even if its watchdog timer has not fired yet.
+    // A late accepted answer never reopens it.
+    if (this.leaseWindowEndsAt !== undefined && monotonicNow() >= this.leaseWindowEndsAt) {
+      this.endLeaseWindow();
+      return;
+    }
     this.cancelLeaseWatchdog?.();
     this.cancelLeaseWatchdog = undefined;
     this.leaseWindowEndsAt = sentAt + this.services.leaseMs;
@@ -354,7 +364,9 @@ export class TaskAttempt {
     this.abort(new Error("No heartbeat was accepted within the task lease"));
   }
 
-  private refreshOwnership(status: HeartbeatStatus, sentAt: number): void {
+  private refreshOwnership(status: HeartbeatBatchStatus, sentAt: number): void {
+    // A busy lease got no renewal and no ownership verdict, so the watchdog keeps its window.
+    if (status === "busy") return;
     if (status === "accepted") {
       this.renewLease(sentAt);
     } else if (status === "cancel_requested") {

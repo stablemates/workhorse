@@ -138,7 +138,7 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
         raise "the tier read failed" if fail_first && reads.increment == 1
       end
       rows = original.call(sql, params)
-      renewals.increment if sql == W::SqlCatalogue::HEARTBEAT_MANY_V1 && rows.any? { |row| row["status"] == "accepted" }
+      renewals.increment if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 && rows.any? { |row| row["status"] == "accepted" }
       rows
     end
   end

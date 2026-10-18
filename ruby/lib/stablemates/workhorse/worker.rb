@@ -72,9 +72,25 @@ module Stablemates
           @watchdog = nil
         end
 
-        def renew(sent_at) = @renewal.synchronize { @renewed_at = [@renewed_at, sent_at].max }
+        # Moves the local lease window to start at +sent_at+, and returns true. If the window has
+        # already ended, it stays closed and this returns false: a late accepted heartbeat cannot
+        # reopen it. The check and the move hold the lock that +lease_remaining+ holds, so they
+        # cannot race the watchdog.
+        def renew(sent_at)
+          @renewal.synchronize do
+            return false unless Process.clock_gettime(Process::CLOCK_MONOTONIC) < @renewed_at + @lease_seconds
+
+            @renewed_at = [@renewed_at, sent_at].max
+            true
+          end
+        end
 
         def lease_deadline = @renewal.synchronize { @renewed_at + @lease_seconds }
+
+        # The seconds until the local lease window ends, zero or less once it has ended.
+        def lease_remaining
+          @renewal.synchronize { @renewed_at + @lease_seconds - Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+        end
 
         def start(unregister, watchdog)
           @unregister = unregister
@@ -1324,7 +1340,9 @@ module Stablemates
         end
         member = Heartbeat::Member.new(
           worker_id: @worker_id, task: task, lease_ms: @lease_ms, interval: @heartbeat_ms / 1000.0,
-          renew: ->(sent_at) { ownership.renew(sent_at) },
+          # An accepted heartbeat that arrives after the window ended ends the attempt, as the
+          # watchdog does.
+          renew: ->(sent_at) { ownership.renew(sent_at) || lose_lease(ownership, arbiter, cancellation) },
           settle: lambda do |status|
             ownership.settlement.synchronize do
               if %w[deadline_exceeded timeout_exceeded].include?(status)
@@ -1335,7 +1353,9 @@ module Stablemates
             end
           end,
           fail: fail_attempt,
-          logger: @logger
+          logger: @logger,
+          # The local lease window closes when the watchdog stops the attempt.
+          lease_ends_at: -> { ownership.lease_deadline unless ownership.stop.set? }
         )
         unregister = @heartbeat.register(member)
         watchdog = Thread.new { watch_expiration(task, ownership, arbiter, cancellation, parent, fail_attempt) }
@@ -1354,16 +1374,14 @@ module Stablemates
           elsif expiration_at
             expiration_at - Time.now
           end
-          lease_delay = ownership.lease_deadline - monotonic
+          lease_delay = ownership.lease_remaining
           if delay.nil? || lease_delay < delay
             if lease_delay.positive?
               return if ownership.stop.wait(lease_delay)
 
               next
             end
-            arbiter.submit(:lease_expired)
-            ownership.abandon
-            cancellation.cancel(:lease_lost)
+            lose_lease(ownership, arbiter, cancellation)
             return
           end
           return if ownership.stop.wait([0, delay].max)
@@ -1375,6 +1393,14 @@ module Stablemates
         end
       rescue => e
         fail_attempt.call(e)
+      end
+
+      # Ends an attempt whose local lease window ended: the lease counts as lost, the heartbeat stops,
+      # and the handler is cancelled. The watchdog and a late accepted heartbeat both end it here.
+      def lose_lease(ownership, arbiter, cancellation)
+        arbiter.submit(:lease_expired)
+        ownership.abandon
+        cancellation.cancel(:lease_lost)
       end
 
       def settle_expiration(task, arbiter, cancellation, parent)

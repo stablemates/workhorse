@@ -196,7 +196,7 @@ each claim. A later claim always gets a higher number.
 1. Worker A calls `claim_many_v1` with a limit of two. Workhorse gives it the tasks that the queue
    policies allow.
 2. On each `task_runtime` row, Workhorse records the worker ID of A, a lease expiry, and a fence
-   token. While the handlers run, `heartbeat_many_v1` renews each lease.
+   token. While the handlers run, `heartbeat_many_v2` renews each lease.
 3. The process of worker A stops, and its heartbeats stop too. The lease expires, and a worker makes
    the task available again.
 4. Worker B claims the task with a new, higher fence token.
@@ -213,7 +213,7 @@ full procedure.
 | Step    | Function             | Effect on `task_runtime`                                          |
 | ------- | -------------------- | ----------------------------------------------------------------- |
 | Claim   | `claim_many_v1`      | Sets `worker_id`, `expires_at`, and a new `fence_token`.          |
-| Renew   | `heartbeat_many_v1`  | Moves `expires_at` for each accepted lease.                       |
+| Renew   | `heartbeat_many_v2`  | Moves `expires_at` for each accepted lease.                       |
 | Recover | `recover_expired_v1` | Returns expired rows to `ready` or `scheduled`. Clears the owner. |
 
 Every claim takes the next value of the database-wide sequence `fence_token_seq`.

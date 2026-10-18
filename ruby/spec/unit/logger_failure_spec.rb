@@ -23,7 +23,7 @@ RSpec.describe "A logger that raises" do
       worker_id: "w", task: task, lease_ms: 30_000, interval: 10.0, logger: logger,
       renew: ->(sent_at) { calls << [:renew, sent_at] },
       settle: ->(status) { calls << [:settle, status] },
-      fail: ->(error) { calls << [:fail, error] }
+      fail: ->(error) { calls << [:fail, error] }, lease_ends_at: -> {}
     )
     heartbeat = W::Worker::Heartbeat.new(FakeExecutor.new, dedicated: false)
     heartbeat.instance_variable_get(:@members)[["w", task.id]] = member

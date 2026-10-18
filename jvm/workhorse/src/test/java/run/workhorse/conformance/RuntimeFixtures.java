@@ -132,6 +132,7 @@ final class RuntimeFixtures {
         case "oversized-result" -> oversizedResult(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);
         case "heartbeat-failure" -> heartbeatFailure(fixture);
+        case "heartbeat-busy" -> heartbeatBusy(fixture);
         case "maintenance-phase-error" -> maintenancePhaseError(fixture);
         case "slot-refill" -> slotRefill(fixture);
         case "batch" -> batch(fixture);
@@ -324,14 +325,14 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V1)) {
+            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
               heartbeats.incrementAndGet();
             }
           }
 
           @Override
           public void after(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V1)) {
+            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
               heartbeats.decrementAndGet();
             }
           }
@@ -407,7 +408,7 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) throws InterruptedException {
-            if (!call.is(SqlCatalogue.HEARTBEAT_MANY_V1)) {
+            if (!call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
               return;
             }
             int number = calls.incrementAndGet();
@@ -422,7 +423,7 @@ final class RuntimeFixtures {
 
           @Override
           public void after(Intercept.Call call) {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V1)) {
+            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)) {
               active.decrementAndGet();
             }
           }
@@ -908,7 +909,7 @@ final class RuntimeFixtures {
         new Intercept.Hook() {
           @Override
           public void before(Intercept.Call call) throws InterruptedException {
-            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V1)
+            if (call.is(SqlCatalogue.HEARTBEAT_MANY_V2)
                 && !recoveryEnded.await(5, TimeUnit.SECONDS)) {
               throw new IllegalStateException("a held heartbeat was never released");
             }
@@ -1659,6 +1660,90 @@ final class RuntimeFixtures {
     expectOutcomes(taskId, List.of(fixture.get("expectedAttemptOutcome")));
   }
 
+  /**
+   * Busy heartbeat rounds renew nothing, and the worker retries only the busy lease sooner than the
+   * next regular round. The injected function answers {@code busy} for its first calls and records
+   * each one, then hands every call to the real function, which renews the lease.
+   */
+  private void heartbeatBusy(Map<String, @Nullable Object> fixture) throws Exception {
+    UUID taskId = enqueue(taskType(fixture), Map.of(), options(queueName(fixture)));
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicInteger cancellations = new AtomicInteger();
+    long timeout = (Long) fixture.get("renewalTimeoutMs") / 1000;
+    long expected = (Long) fixture.get("expectedBusyRounds");
+    Map<String, @Nullable Object> injection = object(fixture, "injection");
+    List<Map<String, @Nullable Object>> rounds = new ArrayList<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          worker(pool, fixture)
+              .lease(millis(fixture, "leaseMs"))
+              .heartbeat(millis(fixture, "heartbeatMs"))
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    started.countDown();
+                    if (!release.await(30, TimeUnit.SECONDS)) {
+                      throw new IllegalStateException("the handler was never released");
+                    }
+                    if (ctx.isCancelled()) {
+                      cancellations.incrementAndGet();
+                    }
+                    return null;
+                  })
+              .build();
+      CompletableFuture<Boolean> result = running(subject, subject::runOnce);
+      try {
+        check(started.await(5, TimeUnit.SECONDS), "the handler never started");
+        renewal(taskId, expiry(taskId), timeout);
+        injectedBody(
+            injection,
+            () -> {
+              String query = (String) injection.get("roundsQuery");
+              eventually(
+                  "fewer than " + expected + " busy heartbeat rounds ran",
+                  timeout,
+                  () -> {
+                    List<Map<String, @Nullable Object>> current;
+                    synchronized (connection) {
+                      current = Runner.sql(connection, query);
+                    }
+                    rounds.clear();
+                    rounds.addAll(current);
+                    return rounds.size() >= expected;
+                  });
+              // The busy rounds renewed nothing. The next round reaches the real function.
+              renewal(taskId, expiry(taskId), timeout);
+            });
+        release.countDown();
+        check(join(result), "the worker did not run the task");
+      } finally {
+        release.countDown();
+        result.handle((value, error) -> value).get(10, TimeUnit.SECONDS);
+      }
+    }
+    List<Map<String, @Nullable Object>> busy = rounds.subList(0, (int) expected);
+    double maximumGap = ((Number) fixture.get("maximumRetryGapMs")).doubleValue();
+    for (int index = 0; index < busy.size(); index++) {
+      long leases = ((Number) busy.get(index).get("lease_count")).longValue();
+      check(leases == 1, "busy round " + index + " sent " + leases + " leases, want 1");
+      if (index > 0) {
+        double gap =
+            ((Number) busy.get(index).get("round_at_ms")).doubleValue()
+                - ((Number) busy.get(index - 1).get("round_at_ms")).doubleValue();
+        check(
+            gap < maximumGap,
+            "busy round " + index + " came " + gap + " ms after the previous one");
+      }
+    }
+    check(
+        cancellations.get() == (Long) fixture.get("expectedCancellations"),
+        "the handler saw a cancellation");
+    expectState(taskId, object(fixture, "expectedState"));
+    expectOutcomes(taskId, List.of(fixture.get("expectedAttemptOutcome")));
+  }
+
   private void maintenancePhaseError(Map<String, @Nullable Object> fixture) throws Exception {
     Map<String, @Nullable Object> injection = object(fixture, "injection");
     // tick_v1 returns a phase failure as data, so a raising promote_v1 models a lock timeout
@@ -1848,6 +1933,43 @@ final class RuntimeFixtures {
       update(original);
       if (sequence != null) {
         update("DROP SEQUENCE IF EXISTS " + sequence);
+      }
+    }
+  }
+
+  @FunctionalInterface
+  private interface Observation {
+    void run() throws Exception;
+  }
+
+  /**
+   * Replaces one installed function with the fixture's body while {@code body} runs. It runs every
+   * {@code setup} statement first, and afterwards restores the definition the database reported,
+   * then runs every {@code teardown} statement, whatever {@code body} does.
+   */
+  private void injectedBody(Map<String, @Nullable Object> injection, Observation body)
+      throws Exception {
+    String original =
+        value("SELECT pg_get_functiondef('" + injection.get("function") + "'::regprocedure)");
+    check(original != null, "the function " + injection.get("function") + " is not installed");
+    try {
+      for (Object statement : (List<?>) injection.get("setup")) {
+        update((String) statement);
+      }
+      update(
+          "CREATE OR REPLACE FUNCTION "
+              + injection.get("header")
+              + " LANGUAGE plpgsql AS $injected$ "
+              + injection.get("body")
+              + " $injected$");
+      try {
+        body.run();
+      } finally {
+        update(original);
+      }
+    } finally {
+      for (Object statement : (List<?>) injection.get("teardown")) {
+        update((String) statement);
       }
     }
   }

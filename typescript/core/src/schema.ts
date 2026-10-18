@@ -510,6 +510,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "purge a queue that holds a prerequisite of a live dependent",
     kind: "additive",
   },
+  {
+    fromVersion: 71,
+    toVersion: 72,
+    file: "0073-skip-a-locked-row-in-a-heartbeat.sql",
+    description: "skip a locked row in a heartbeat",
+    kind: "additive",
+  },
 ];
 
 /**

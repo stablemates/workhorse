@@ -289,6 +289,9 @@ type Worker struct {
 	heartbeatRunning           bool
 	heartbeatLease             *heartbeatConnectionLease
 	sharedHeartbeats           bool
+	// heartbeatRound sends one heartbeat statement and returns the status of each task ID. It is
+	// queryHeartbeatRound outside tests.
+	heartbeatRound func(members []*heartbeatMember, deadline time.Time) (map[string]ownershipStatus, error)
 	// completionClaims is the running dispatch loop's handle for fused completion claims. It is
 	// nil outside Run, so a completion from RunOnce claims nothing.
 	completionClaims atomic.Pointer[completionClaimer]
@@ -301,6 +304,16 @@ type heartbeatMember struct {
 	cancelHandler context.CancelCauseFunc
 	result        chan ownershipResult
 	renewed       chan time.Time
+	// leaseEnd is the end of the attempt's local lease window, which the supervising goroutine
+	// moves on each accepted renewal. A busy retry never runs past it. Write it only through
+	// publishLeaseEnd.
+	leaseEnd atomic.Pointer[time.Time]
+}
+
+// publishLeaseEnd stores a new copy of end for the heartbeat loop to read. A published value never
+// changes, so the loop can read it while the supervising goroutine applies a later renewal.
+func (member *heartbeatMember) publishLeaseEnd(end time.Time) {
+	member.leaseEnd.Store(&end)
 }
 
 // renew reports an accepted renewal to the supervising goroutine without blocking. The reported
@@ -472,7 +485,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if err != nil {
 		return nil, fmt.Errorf(workerMetricCreationErrorFormat, err)
 	}
-	return &Worker{
+	worker := &Worker{
 		pool:                       pool,
 		queues:                     uniqueQueues,
 		workerID:                   workerID,
@@ -503,7 +516,9 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		heartbeatMembers:           make(map[*heartbeatMember]struct{}),
 		heartbeatWake:              make(chan struct{}, 1),
 		sharedHeartbeats:           options.SharedHeartbeats,
-	}, nil
+	}
+	worker.heartbeatRound = worker.queryHeartbeatRound
+	return worker, nil
 }
 
 // Handle registers the handler for a task type and returns the worker for chaining.
@@ -2161,6 +2176,8 @@ func (worker *Worker) superviseOwnership(
 		ctx: ctx, task: task, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
 		renewed: make(chan time.Time, 1),
 	}
+	leaseEnd := worker.leaseEndFrom(task.claimSentAt)
+	member.publishLeaseEnd(leaseEnd)
 	worker.registerHeartbeat(member)
 	go func() {
 		defer close(exited)
@@ -2172,9 +2189,16 @@ func (worker *Worker) superviseOwnership(
 		// The lease watchdog ends this attempt once its last accepted renewal is a full lease old.
 		// A heartbeat that never answers cannot report the loss, and by then a peer may own the
 		// task, so the worker stops the handler on its own clock rather than on an answer.
-		watchdog := time.NewTimer(worker.leaseFrom(task.claimSentAt))
+		watchdog := time.NewTimer(untilLeaseEnd(leaseEnd))
 		defer watchdog.Stop()
 		handlerRunning := true
+		loseLease := func() {
+			worker.recordLeaseWatchdog(ctx, task)
+			if handlerRunning {
+				cancelHandler(&LeaseLostError{TaskID: task.ID})
+				done <- ownershipResult{status: workerOwnershipStale}
+			}
+		}
 		for {
 			var expiration <-chan time.Time
 			if expirationTimer != nil {
@@ -2201,13 +2225,16 @@ func (worker *Worker) superviseOwnership(
 				}
 				return
 			case sentAt := <-member.renewed:
-				resetTimer(watchdog, worker.leaseFrom(sentAt))
-			case <-watchdog.C:
-				worker.recordLeaseWatchdog(ctx, task)
-				if handlerRunning {
-					cancelHandler(&LeaseLostError{TaskID: task.ID})
-					done <- ownershipResult{status: workerOwnershipStale}
+				// A renewal that arrives after the local window closed does not open it again.
+				if !time.Now().Before(leaseEnd) {
+					loseLease()
+					return
 				}
+				leaseEnd = worker.leaseEndFrom(sentAt)
+				member.publishLeaseEnd(leaseEnd)
+				resetTimer(watchdog, untilLeaseEnd(leaseEnd))
+			case <-watchdog.C:
+				loseLease()
 				return
 			case <-expiration:
 				if !handlerRunning {
@@ -2235,13 +2262,18 @@ func (worker *Worker) superviseOwnership(
 	return handlerReturned, release
 }
 
-// leaseFrom reports how long one lease granted at sentAt still has to run. A task claimed before
-// this worker started measuring, such as one a caller built itself, gets a whole lease.
-func (worker *Worker) leaseFrom(sentAt time.Time) time.Duration {
+// leaseEndFrom reports when one lease granted at sentAt ends. A task claimed before this worker
+// started measuring, such as one a caller built itself, gets a whole lease from now.
+func (worker *Worker) leaseEndFrom(sentAt time.Time) time.Time {
 	if sentAt.IsZero() {
-		return worker.leaseDuration
+		return time.Now().Add(worker.leaseDuration)
 	}
-	return max(time.Millisecond, time.Until(sentAt.Add(worker.leaseDuration)))
+	return sentAt.Add(worker.leaseDuration)
+}
+
+// untilLeaseEnd is the watchdog delay for a lease that ends at end. It is at least 1 ms.
+func untilLeaseEnd(end time.Time) time.Duration {
+	return max(time.Millisecond, time.Until(end))
 }
 
 func (worker *Worker) recordLeaseWatchdog(ctx context.Context, task ClaimedTask) {
@@ -2339,13 +2371,30 @@ func heartbeatRoundBoundFor(interval time.Duration) time.Duration {
 	return max(time.Millisecond, threeQuarters, min(50*time.Millisecond, interval))
 }
 
-// runHeartbeats sends one round at a time. A round falls due one heartbeatInterval after the
-// previous round started, not after it ended. A round that ends after its next slot starts one
-// overdue round at once, and the interval after it counts from that start, so missed slots are
-// never replayed. A wake that finds members starts no early round. time.Now carries a monotonic
-// reading, so a wall clock step does not move the schedule.
+// busyRetryBase is the longest base delay before a busy retry. The retry waits base × (1 + random),
+// with base = min(busyRetryBase, heartbeatInterval / 8).
+const busyRetryBase = 100 * time.Millisecond
+
+// busyRetryDelay is the wait before a busy retry. The jitter keeps two workers from meeting the
+// same lock holder in step. Every SDK uses the same formula.
+func busyRetryDelay(interval time.Duration) time.Duration {
+	base := min(busyRetryBase, interval/8)
+	return base + time.Duration(pseudorand.Float64()*float64(base))
+}
+
+// runHeartbeats sends one round at a time. A regular round falls due one heartbeatInterval after
+// the previous regular round started, not after it ended. A round that ends after its next slot
+// starts one overdue round at once, and the interval after it counts from that start, so missed
+// slots are never replayed. A wake that finds members starts no early round. time.Now carries a
+// monotonic reading, so a wall clock step does not move the schedule.
+//
+// Between two slots, a busy retry renews only the leases that the latest round reported busy
+// (busyRetrySelection). It is a round for the one-round-in-flight rule, and it never moves the
+// regular slot. Each round replaces the pending retry, and a round that fails schedules none.
 func (worker *Worker) runHeartbeats() {
 	next := time.Now().Add(worker.heartbeatInterval)
+	var retry []*heartbeatMember
+	var retryAt time.Time
 	timer := time.NewTimer(worker.heartbeatInterval)
 	defer timer.Stop()
 	for {
@@ -2353,42 +2402,142 @@ func (worker *Worker) runHeartbeats() {
 		case <-worker.heartbeatWake:
 		case <-timer.C:
 		}
-		worker.heartbeatMu.Lock()
-		members := make([]*heartbeatMember, 0, len(worker.heartbeatMembers))
-		for member := range worker.heartbeatMembers {
-			members = append(members, member)
-		}
-		if len(members) == 0 {
-			worker.heartbeatRunning = false
-			worker.heartbeatMu.Unlock()
+		members := worker.heartbeatSnapshot()
+		if members == nil {
 			return
 		}
-		worker.heartbeatMu.Unlock()
-		if wait := time.Until(next); wait > 0 {
-			timer.Reset(wait)
-			continue
+		now := time.Now()
+		var round []*heartbeatMember
+		var deadline time.Time
+		switch {
+		case !now.Before(next):
+			// The regular round takes every lease, the busy ones too, and drops the pending retry.
+			next = now.Add(worker.heartbeatInterval)
+			round, deadline = members, now.Add(worker.heartbeatRoundBound)
+		case retry != nil && !now.Before(retryAt):
+			round, deadline = worker.busyRetrySelection(retry, now, next)
+			retry = nil
 		}
-		next = time.Now().Add(worker.heartbeatInterval)
-		worker.refreshOwnershipMany(members)
-		timer.Reset(max(0, time.Until(next)))
+		if round != nil {
+			retry = worker.refreshOwnershipMany(round, deadline)
+			if retry != nil {
+				retryAt = time.Now().Add(busyRetryDelay(worker.heartbeatInterval))
+			}
+		}
+		dueAt := next
+		if retry != nil && retryAt.Before(next) {
+			dueAt = retryAt
+		}
+		timer.Reset(max(0, time.Until(dueAt)))
 	}
 }
 
-func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
+// heartbeatSnapshot returns the registered members. With no member left it returns nil and ends
+// the heartbeat loop under the same lock, so the next registration starts a new schedule.
+func (worker *Worker) heartbeatSnapshot() []*heartbeatMember {
+	worker.heartbeatMu.Lock()
+	defer worker.heartbeatMu.Unlock()
+	if len(worker.heartbeatMembers) == 0 {
+		worker.heartbeatRunning = false
+		return nil
+	}
+	members := make([]*heartbeatMember, 0, len(worker.heartbeatMembers))
+	for member := range worker.heartbeatMembers {
+		members = append(members, member)
+	}
+	return members
+}
+
+// busyRetrySelection returns the busy members that a retry can still renew, and the retry's
+// deadline. Each member is still registered, so a completed, replaced, or abandoned attempt is
+// gone, and its local lease window has not ended. With no such member it returns nil, and the
+// loop waits for the regular slot. The deadline is the earliest of the round bound, the next
+// regular slot, and the end of each selected lease window, so a retry never renews a lease that
+// the worker has already given up.
+func (worker *Worker) busyRetrySelection(
+	busy []*heartbeatMember, now time.Time, next time.Time,
+) ([]*heartbeatMember, time.Time) {
+	registered := worker.registeredHeartbeats(busy)
+	deadline := now.Add(worker.heartbeatRoundBound)
+	if next.Before(deadline) {
+		deadline = next
+	}
+	var selection []*heartbeatMember
+	for _, member := range busy {
+		end := member.leaseEnd.Load()
+		if !registered[member] || end == nil || !end.After(now) {
+			continue
+		}
+		selection = append(selection, member)
+		if end.Before(deadline) {
+			deadline = *end
+		}
+	}
+	return selection, deadline
+}
+
+// refreshOwnershipMany sends one round for members, which must end by deadline, and applies each
+// status to the member that the round sent. It returns the members that the round reported busy.
+// A failed round returns nil: it proves nothing about ownership, so every attempt keeps running
+// and the next regular round tries again. Each attempt's watchdog decides when a renewal is too
+// old to trust.
+func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline time.Time) []*heartbeatMember {
+	// A lease renewed by this round runs from before the request left, which can only be earlier
+	// than the database's renewal, so a local lease window never outlasts the real one.
+	sentAt := time.Now()
+	statuses, err := worker.heartbeatRound(members, deadline)
+	if err != nil {
+		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
+		return nil
+	}
+	// A result counts only for the member that the round sent. A member that left or was
+	// replaced while the round ran gets nothing from it.
+	registered := worker.registeredHeartbeats(members)
+	var busy []*heartbeatMember
+	for _, member := range members {
+		if !registered[member] {
+			continue
+		}
+		status := statuses[member.task.ID]
+		if status == emptyString {
+			status = workerOwnershipStale
+		}
+		switch status {
+		case workerOwnershipAccepted:
+			member.renew(sentAt)
+		case workerOwnershipBusy:
+			// Another transaction holds the row. The lease got no renewal and no ownership
+			// verdict, so the watchdog keeps its window and the attempt keeps running.
+			worker.recordHeartbeatStatus(member.ctx, status)
+			busy = append(busy, member)
+		default:
+			member.cancelHandler(ownershipCause(member.task, status))
+			worker.recordRejectedHeartbeat(member.ctx, member.task, status)
+			member.deliver(ownershipResult{status: status})
+		}
+	}
+	return busy
+}
+
+// queryHeartbeatRound sends one heartbeat statement for members, in task ID order, and returns the
+// status of each task ID. The round ends by deadline, on the client and on the server, so a
+// statement that stalls cannot hold the batch past the next round.
+func (worker *Worker) queryHeartbeatRound(
+	members []*heartbeatMember, deadline time.Time,
+) (map[string]ownershipStatus, error) {
 	type lease struct {
 		TaskID     string `json:"taskId"`
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
-	// The round's deadline starts before the payload is built, so serialization counts against it.
-	roundStart := time.Now()
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	requests := make([]lease, 0, len(members))
 	// Task ID order matches the order a batched completion locks its rows in.
-	slices.SortFunc(members, func(left, right *heartbeatMember) int {
+	ordered := slices.Clone(members)
+	slices.SortFunc(ordered, func(left, right *heartbeatMember) int {
 		return strings.Compare(left.task.ID, right.task.ID)
 	})
-	for _, member := range members {
+	for _, member := range ordered {
 		requests = append(requests, lease{
 			TaskID: member.task.ID, FenceToken: strconv.FormatInt(member.task.FenceToken, 10),
 			LeaseMS: leaseMS,
@@ -2396,18 +2545,13 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	}
 	payload, err := json.Marshal(requests)
 	if err != nil {
-		worker.deliverHeartbeatError(members, err)
-		return
+		return nil, err
 	}
 	roundContext := context.WithoutCancel(members[0].ctx)
 	worker.heartbeatMu.Lock()
 	reserved := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
 	var rows []Row
-	// The round is bounded by heartbeatRoundBound, on the client and on the server, so a statement
-	// that stalls cannot hold the batch past the next round. Every attempt keeps running: its own watchdog decides when a
-	// renewal is too old to trust.
-	sentAt := time.Now()
 	round := func(ctx context.Context, executor Executor) error {
 		var roundError error
 		rows, roundError = queryFencedWrite(
@@ -2419,59 +2563,52 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		)
 		return roundError
 	}
-	bound := worker.heartbeatRoundBound - time.Since(roundStart)
+	// Serialization counts against the deadline.
+	bound := time.Until(deadline)
 	if reserved == nil {
-		queryContext, cancel := context.WithTimeout(roundContext, bound)
+		queryContext, cancel := context.WithDeadline(roundContext, deadline)
 		err = runBoundedOnPool(queryContext, worker.pool, round)
 		cancel()
 	} else {
 		err = reserved.run(roundContext, bound, round)
 	}
 	if err != nil {
-		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
-		return
+		return nil, err
 	}
 	statuses := make(map[string]ownershipStatus, len(rows))
 	for _, row := range rows {
-		status, parseErr := parseOwnershipStatusRow(row)
+		status, parseErr := parseHeartbeatStatusRow(row)
 		if parseErr != nil {
-			worker.deliverHeartbeatError(members, parseErr)
-			return
+			return nil, parseErr
 		}
 		statuses[stringValue(row[rowTaskIDField])] = status
 	}
-	registered := worker.registeredHeartbeats(members)
-	for _, member := range members {
-		if !registered[member] {
-			continue
-		}
-		status := statuses[member.task.ID]
-		if status == emptyString {
-			status = workerOwnershipStale
-		}
-		if status == workerOwnershipAccepted {
-			member.renew(sentAt)
-			continue
-		}
-		member.cancelHandler(ownershipCause(member.task, status))
-		worker.recordRejectedHeartbeat(member.ctx, member.task, status)
-		member.deliver(ownershipResult{status: status})
+	return statuses, nil
+}
+
+// parseHeartbeatStatusRow reads one heartbeat result. Only a heartbeat round reports busy, so the
+// single-lease statements keep the stricter parseOwnershipStatusRow.
+func parseHeartbeatStatusRow(row Row) (ownershipStatus, error) {
+	if value, ok := row[rowStatusField].(string); ok && ownershipStatus(value) == workerOwnershipBusy {
+		return workerOwnershipBusy, nil
 	}
+	return parseOwnershipStatusRow(row)
 }
 
-func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err error) {
-	worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
-}
-
-func (worker *Worker) recordRejectedHeartbeat(
-	ctx context.Context, task ClaimedTask, status ownershipStatus,
-) {
+// recordHeartbeatStatus counts one heartbeat status other than accepted.
+func (worker *Worker) recordHeartbeatStatus(ctx context.Context, status ownershipStatus) {
 	if worker.metrics.enabled {
 		worker.metrics.heartbeatFailures.Add(
 			ctx, 1,
 			metric.WithAttributes(attribute.String(heartbeatStatusAttribute, string(status))),
 		)
 	}
+}
+
+func (worker *Worker) recordRejectedHeartbeat(
+	ctx context.Context, task ClaimedTask, status ownershipStatus,
+) {
+	worker.recordHeartbeatStatus(ctx, status)
 	logWorkerEvent(
 		ctx, worker.logger, slog.LevelInfo, heartbeatRejectedEvent, heartbeatRejectedLogMessage,
 		func() []any {

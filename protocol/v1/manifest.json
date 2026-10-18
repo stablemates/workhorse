@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 71,
-    "minimumVersion": 69,
-    "maximumVersion": 71,
+    "installedVersion": 72,
+    "minimumVersion": 72,
+    "maximumVersion": 72,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -84,6 +84,7 @@
     "unrunnable-task-release-wait",
     "json-value-round-trip",
     "heartbeat-failure-tolerance",
+    "heartbeat-busy-retry",
     "maintenance-phase-resilience",
     "terminal-replay-conflict",
     "result-size-limit",
@@ -147,9 +148,9 @@
       "contract": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
     },
     {
-      "name": "heartbeat_many_v1",
+      "name": "heartbeat_many_v2",
       "arity": 2,
-      "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal"
+      "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal"
     },
     {
       "name": "expire_owned_telemetry_v1",
@@ -408,10 +409,10 @@
       "catalogues": ["admin"]
     },
     {
-      "name": "heartbeat_many_v1",
+      "name": "heartbeat_many_v2",
       "pythonBinding": "heartbeat_many",
       "arity": 2,
-      "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
+      "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
       "catalogues": ["protocol"]
     },
     {

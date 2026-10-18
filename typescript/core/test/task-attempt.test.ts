@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeadlineExceededError, ExecutionTimeoutError } from "../src/errors.js";
 import { TaskAttempt, type TaskAttemptServices } from "../src/task-attempt.js";
 import type { TaskExecutionOutcome } from "../src/telemetry.js";
-import type { ClaimedTask, ExpireOwnedStatus, HeartbeatStatus } from "../src/types.js";
+import type { ClaimedTask, ExpireOwnedStatus, HeartbeatBatchStatus } from "../src/types.js";
 
 function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
   return {
@@ -29,7 +29,7 @@ function claimedTask(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
 
 function fakeServices() {
   const heartbeat: {
-    status?: (status: HeartbeatStatus, sentAt: number) => void;
+    status?: (status: HeartbeatBatchStatus, sentAt: number) => void;
     removed: number;
   } = { removed: 0 };
   const services: TaskAttemptServices = {
@@ -417,6 +417,38 @@ describe("TaskAttempt", () => {
     heartbeat.status!("accepted", -1_000);
 
     expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("keeps the lease window when a heartbeat answers busy", () => {
+    vi.useFakeTimers({ now: 0 });
+    const { attempt, heartbeat } = startAttempt();
+
+    vi.advanceTimersByTime(20_000);
+    heartbeat.status!("busy", 15_000);
+    vi.advanceTimersByTime(9_999);
+    expect(attempt.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+
+    expect(attempt.arbiter.is("lease_expired")).toBe(true);
+  });
+
+  it("never reopens an ended window with a late accepted answer, even before its timer fires", () => {
+    // The window ended at 30,000 ms, but the watchdog timer has not run yet, for example because
+    // the event loop was busy. An accepted answer from a round sent at 20,000 ms arrives at
+    // 30,100 ms. It must end the window, not extend it to 50,000 ms.
+    const startedAt = performance.now();
+    const { attempt, heartbeat } = startAttempt(claimedTask(), startedAt - 30_000 + 50);
+    const now = vi.spyOn(performance, "now").mockReturnValue(startedAt + 100);
+    try {
+      heartbeat.status!("accepted", startedAt - 10_000);
+      expect(attempt.arbiter.is("lease_expired")).toBe(true);
+      expect(() => attempt.requireLease()).toThrow(
+        "No heartbeat was accepted within the task lease",
+      );
+    } finally {
+      now.mockRestore();
+      attempt.stop();
+    }
   });
 
   it("records the first execution outcome only", () => {

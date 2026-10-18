@@ -127,4 +127,51 @@ RSpec.describe W::Worker do
     expect(subject.handle_batch("b", max_size: 4, linger: Rational(3, 2)) { [] }).to be(subject)
     expect(pool.statements).to be_empty
   end
+
+  # SM-1443: a heartbeat round can answer after the local lease window ended, while the watchdog
+  # thread is still late. That accepted answer must not reopen the window.
+  describe "a late accepted heartbeat" do
+    ownership_class = described_class.const_get(:Ownership)
+    let(:task) do
+      W::ClaimedTask.new(
+        id: "00000000-0000-4000-8000-000000000001", queue: "default", type: "t", priority: 0, payload: {},
+        contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+        attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at: nil, execution_timeout_ms: nil,
+        attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+      )
+    end
+    let(:arbiter) { W::Arbiter.new }
+    let(:cancellation) { W::CancellationToken.new }
+
+    def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    # Registers +ownership+ with a heartbeat that only records the member, and with a watchdog
+    # that never runs, as when its thread is late. Returns the member.
+    def own(ownership)
+      subject = worker
+      members = []
+      heartbeat = Object.new
+      heartbeat.define_singleton_method(:register) { |member| (members << member) && -> {} }
+      subject.instance_variable_set(:@heartbeat, heartbeat)
+      allow(subject).to receive(:watch_expiration)
+      subject.send(:own, task, ownership, arbiter, cancellation)
+      members.first
+    end
+
+    it "does not renew a window that ended, and ends the attempt with a lost lease" do
+      ownership = ownership_class.new(monotonic - 1.0, 0.5)
+      deadline = ownership.lease_deadline
+      own(ownership).renew.call(monotonic - 0.1)
+      expect(ownership.lease_deadline).to eq(deadline)
+      expect([arbiter.outcome, cancellation.reason, ownership.stop.set?]).to eq([:lease_expired, :lease_lost, true])
+    end
+
+    it "renews a window that is still open" do
+      ownership = ownership_class.new(monotonic, 30.0)
+      sent_at = monotonic
+      own(ownership).renew.call(sent_at)
+      expect(ownership.lease_deadline).to eq(sent_at + 30.0)
+      expect([arbiter.outcome, cancellation.reason, ownership.stop.set?]).to eq([nil, nil, false])
+    end
+  end
 end

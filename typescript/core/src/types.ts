@@ -428,6 +428,12 @@ export type HeartbeatStatus =
   | "deadline_exceeded"
   | "timeout_exceeded"
   | "stale";
+/**
+ * Verdict on one lease of a batched heartbeat. `busy` means that another transaction held the
+ * task's row, so the round renewed nothing for it and gave no ownership verdict. Only `accepted`
+ * renews a lease.
+ */
+export type HeartbeatBatchStatus = HeartbeatStatus | "busy";
 export type ExpireOwnedStatus =
   | "not_due"
   | "cancel_requested"

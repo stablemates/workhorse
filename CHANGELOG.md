@@ -17,6 +17,38 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+Requires **schema v72**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
+process of this release starts, producers too. Migration 0073 moves the schema to version **72**.
+The SDK compatibility floor rises from 69 to **72**, because every SDK statement catalogue now names
+`heartbeat_many_v2`. An updated process refuses a schema below version 72 at startup. A 0.8 process
+keeps working on version 72, because a migration inside a major line only adds.
+
+### Heartbeats do not wait for a locked task row
+
+Before this release, a heartbeat waited for a task row that another transaction locked. If a
+settlement held the row, the heartbeat then kept the row locked after the settlement committed, and
+a claim skipped the ready task (SM-1434). The worker now renews leases through `heartbeat_many_v2`
+(SM-1443, ADR 0105). It skips a locked row and reports that lease as `busy`: no renewal and no
+ownership verdict. The worker keeps a busy lease, retries only the busy leases after a short delay
+with jitter, and does not move the regular heartbeat schedule. A busy answer never extends the local
+lease watchdog, so a lease that stays busy until the watchdog ends is lost, as before. Old and new
+workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
+
+**Breaking (TypeScript types).** A new type, `HeartbeatBatchStatus`, is `HeartbeatStatus | "busy"`.
+`WorkerQueueApi.heartbeatMany`, `WorkerHeartbeatChannel.heartbeatMany`, and `Queue.heartbeatMany`
+return it. This is a breaking return change in a 0.x minor. Code that implements
+`WorkerQueueApi.heartbeatMany` compiles unchanged. Code that reads its result and checks every
+status must handle `busy` as "not renewed, no verdict". The scalar `HeartbeatStatus`,
+`Queue.heartbeat()`, and `Queue.heartbeatStatus()` do not change, and they still wait for a row lock.
+A `Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` renews through
+`heartbeatStatus`, so it never sees `busy`.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

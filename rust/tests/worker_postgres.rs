@@ -25,6 +25,10 @@ use workhorse::{
 
 const QUEUE: &str = "rust-worker";
 const WAIT: Duration = Duration::from_secs(10);
+/// Holds every heartbeat statement until the transaction ends. `heartbeat_many_v2` locks the rows of
+/// both tiers with `SKIP LOCKED`, so a row lock only makes a lease busy. Its fast-tier step takes a
+/// table lock that conflicts with this one, so the statement waits on the table instead.
+const HOLD_HEARTBEATS: &str = "LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE";
 
 struct Harness {
     database: ScratchDatabase,
@@ -486,7 +490,7 @@ async fn a_dropped_run_once_stops_renewing_its_lease() {
 enum AfterWatchdog {
     /// The handler ignores its cancellation and never returns.
     KeepsRunning,
-    /// Rounds run without a client bound, so the round that the row lock held answers late.
+    /// Rounds run without a client bound, so the round that the table lock held answers late.
     AnswersLate,
     /// The handler ignores its cancellation, then returns a result.
     ReturnsLate,
@@ -494,7 +498,7 @@ enum AfterWatchdog {
 
 /// SM-1445: once the lease watchdog abandons an attempt, no later heartbeat round renews its lease.
 ///
-/// A row lock holds every round until the watchdog fires. Then a renewal commits, as a round that
+/// A table lock holds every round until the watchdog fires. Then a renewal commits, as a round that
 /// the worker abandoned can, so the lease is valid again in PostgreSQL. Only the watchdog can stop
 /// the renewals that follow, because the handler ignores its cancellation.
 async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
@@ -535,9 +539,7 @@ async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
     let (_stop, mut running) = run(&worker);
     started(&mut running_handlers, &mut running).await;
     let lock = observer.transaction().await.unwrap();
-    lock.execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
-        .await
-        .unwrap();
+    lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
     let reason =
         tokio::time::timeout(WAIT, reasons.recv()).await.expect("the watchdog never fired");
     assert_eq!(reason, Some(Some(CancelReason::LeaseLost)));
@@ -932,19 +934,20 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
     // The first heartbeat round waits on this lock for its whole interval.
     let mut locker = harness.database.connect().await;
     let lock = locker.transaction().await.unwrap();
-    let mut locked = 0;
-    for table in ["workhorse.task_runtime", "workhorse.fast_task_runtime"] {
-        let statement = format!("SELECT 1 FROM {table} WHERE task_id = $1 FOR UPDATE");
-        locked += lock.execute(statement.as_str(), &[&task]).await.unwrap();
-    }
+    let locked: i64 = lock
+        .query_one("SELECT count(*) FROM workhorse.task_runtime WHERE task_id = $1", &[&task])
+        .await
+        .unwrap()
+        .get(0);
     assert_eq!(locked, 1, "the task has no runtime row");
+    lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
     let observer = harness.database.connect().await;
     let waiting = tokio::time::Instant::now() + interval + Duration::from_secs(5);
     loop {
         let stalled: i64 = observer
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
-                 AND wait_event_type = 'Lock' AND query LIKE '%heartbeat_many_v1%'",
+                 AND wait_event_type = 'Lock' AND query LIKE '%heartbeat_many_v2%'",
                 &[],
             )
             .await
@@ -968,10 +971,10 @@ async fn shutdown_does_not_wait_for_a_stalled_heartbeat_round() {
 }
 
 // SM-1442: dropping a connection does not stop its statement, so each round that timed out used to
-// leave one more backend waiting on the same row lock. PostgreSQL now ends the round's transaction
-// by the round's deadline.
+// leave one more backend waiting on the same lock. PostgreSQL now ends the round's transaction by
+// the round's deadline.
 #[tokio::test]
-async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_its_deadline() {
+async fn a_heartbeat_statement_that_waits_on_a_lock_ends_on_the_server_by_its_deadline() {
     let Some(harness) = harness("worker_heartbeat_bound").await else { return };
     let task = harness.enqueue("rust.bounded", json!({}), EnqueueOptions::default()).await;
     let interval = Duration::from_millis(200);
@@ -997,11 +1000,13 @@ async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_it
 
     let mut locker = harness.database.connect().await;
     let lock = locker.transaction().await.unwrap();
-    let locked = lock
-        .execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
+    let locked: i64 = lock
+        .query_one("SELECT count(*) FROM workhorse.task_runtime WHERE task_id = $1", &[&task])
         .await
-        .unwrap();
+        .unwrap()
+        .get(0);
     assert_eq!(locked, 1, "the task has no runtime row");
+    lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
     let observer = harness.database.connect().await;
     let mut samples: Vec<Vec<f64>> = Vec::new();
     let until = tokio::time::Instant::now() + 8 * interval;
@@ -1011,7 +1016,7 @@ async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_it
                 "SELECT (extract(epoch FROM clock_timestamp() - query_start) * 1000)::float8 \
                  FROM pg_stat_activity WHERE datname = current_database() \
                  AND pid <> pg_backend_pid() AND state = 'active' \
-                 AND query LIKE '%workhorse.heartbeat_many_v1%'",
+                 AND query LIKE '%workhorse.heartbeat_many_v2%'",
                 &[],
             )
             .await
@@ -1037,7 +1042,7 @@ async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_it
 
 // SM-1444: a round falls due one interval after the previous round started, so one timed-out
 // round does not move the next round toward the end of the lease. The lease is 2.3 intervals,
-// shorter than the default of 3. The row lock makes the first round end on the server at about 1.4
+// shorter than the default of 3. The table lock makes the first round end on the server at about 1.4
 // intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A schedule
 // that waits one interval after the failed round ends sends it at about 2.4 intervals, after the
 // lease.
@@ -1070,9 +1075,7 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
 
     let mut locker = harness.database.connect().await;
     let lock = locker.transaction().await.unwrap();
-    lock.execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
-        .await
-        .unwrap();
+    lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
     tokio::time::sleep_until(handler_started + interval * 16 / 10).await;
     lock.commit().await.unwrap();
     // Run past the end of the lease from the claim, so only a renewal keeps the task.
@@ -1080,6 +1083,81 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     release.notify_one();
     assert_eq!(reason.recv().await, Some(None), "the handler lost its lease");
     harness.wait_for(task, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+/// One heartbeat round for `task` under `worker_id`, as the worker sends it, and its status.
+async fn heartbeat_status(observer: &Client, worker_id: &str, task: Uuid, lease_ms: u64) -> String {
+    let fence: i64 = observer
+        .query_one("SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1", &[&task])
+        .await
+        .unwrap()
+        .get(0);
+    let leases = json!([{"taskId": task, "fenceToken": fence.to_string(), "leaseMs": lease_ms}]);
+    let params: [&(dyn tokio_postgres::types::ToSql + Sync); 2] = [&worker_id, &leases];
+    let round = observer.query_one(
+        "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) \
+         ORDER BY ordinal",
+        &params,
+    );
+    let row = tokio::time::timeout(WAIT, round).await.expect("the round waited").unwrap();
+    assert_eq!(row.get::<_, String>("task_id"), task.to_string());
+    row.get("status")
+}
+
+// SM-1443: a heartbeat round skips a task row that another transaction holds. It answers `busy`
+// while the lock is held, renews nothing, and gives no ownership verdict, so the attempt keeps
+// running. Once the holder commits, a round renews the lease again.
+#[tokio::test]
+async fn a_heartbeat_round_reports_a_locked_row_as_busy() {
+    let Some(harness) = harness("worker_heartbeat_busy").await else { return };
+    let task = harness.enqueue("rust.busy", json!({}), EnqueueOptions::default()).await;
+    let lease = Duration::from_secs(3);
+    let options = WorkerOptions {
+        lease_duration: lease,
+        heartbeat_interval: Some(Duration::from_millis(200)),
+        ..options()
+    };
+    let worker_id = options.worker_id.clone().unwrap();
+    let worker = harness.worker(options);
+    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = release.clone();
+    worker.handle("rust.busy", move |_: Value, context: HandlerContext| {
+        let _ = started.send(());
+        let gate = gate.clone();
+        async move {
+            gate.notified().await;
+            Ok::<Value, HandlerError>(json!({"cancelled": context.cancellation().is_cancelled()}))
+        }
+    });
+    let (stop, running) = run(&worker);
+    running_handlers.recv().await.unwrap();
+
+    let observer = harness.database.connect().await;
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    let locked = lock
+        .execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
+        .await
+        .unwrap();
+    assert_eq!(locked, 1, "the task has no runtime row");
+    let held = lease_expiry(&observer, task).await;
+    // A round that waited on the row lock could not answer before the commit below.
+    let lease_ms = lease.as_millis() as u64;
+    assert_eq!(heartbeat_status(&observer, &worker_id, task, lease_ms).await, "busy");
+    // The worker's own rounds and busy retries renew nothing while the lock is held.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(lease_expiry(&observer, task).await, held, "a busy round renewed the lease");
+    lock.commit().await.unwrap();
+
+    assert_eq!(heartbeat_status(&observer, &worker_id, task, lease_ms).await, "accepted");
+    assert!(lease_expiry(&observer, task).await > held, "the accepted round renewed nothing");
+    release.notify_one();
+    harness.wait_for(task, TaskState::Succeeded).await;
+    let result = harness.admin.get_task(task).await.unwrap().unwrap().result;
+    assert_eq!(result, Some(json!({"cancelled": false})), "a busy round ended the attempt");
     stop.send(()).unwrap();
     running.await.unwrap().unwrap();
 }
@@ -1640,7 +1718,7 @@ async fn heartbeat_backend(observer: &Client, except: Option<i32>, idle: bool) -
                 .query_opt(
                     "SELECT pid FROM pg_stat_activity
                       WHERE datname = current_database() AND pid <> pg_backend_pid()
-                        AND (query LIKE '%heartbeat_many_v1%' OR query = 'COMMIT')
+                        AND (query LIKE '%heartbeat_many_v2%' OR query = 'COMMIT')
                         AND pid IS DISTINCT FROM $1
                         AND (NOT $2 OR state = 'idle')
                       LIMIT 1",

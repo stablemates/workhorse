@@ -47,6 +47,7 @@ from ._heartbeat_round import (
     ROUND_COMMIT as _ROUND_COMMIT,
     ROUND_ROLLBACK as _ROUND_ROLLBACK,
     ROUND_TIMEOUTS as _ROUND_TIMEOUTS,
+    busy_retry_delay_ms as _busy_retry_delay_ms,
     heartbeat_round_bound_ms as _heartbeat_round_bound_ms,
 )
 from ._notifications import (
@@ -275,7 +276,11 @@ class _HeartbeatMember:
     # Settles an expiration the round reported, then delivers the outcome to the attempt.
     settle_status: Callable[[object], None]
     # Moves the attempt's lease watchdog to the moment the accepting round's request was sent.
-    renew: Callable[[float], None]
+    # False when the local lease window had already ended. The attempt then ends with lease loss.
+    renew: Callable[[float], bool]
+    # The end of the attempt's local lease window on the monotonic clock. A busy retry never runs
+    # past it.
+    lease_ends_at: Callable[[], float]
     cancellation: CancellationToken
     errors: list[BaseException]
 
@@ -1481,11 +1486,12 @@ class Worker:
         self,
         task: ClaimedTask,
         settle_status: Callable[[object], None],
-        renew: Callable[[float], None],
+        renew: Callable[[float], bool],
+        lease_ends_at: Callable[[], float],
         cancellation: CancellationToken,
         errors: list[BaseException],
     ) -> Callable[[], None]:
-        member = _HeartbeatMember(task, settle_status, renew, cancellation, errors)
+        member = _HeartbeatMember(task, settle_status, renew, lease_ends_at, cancellation, errors)
         with self._heartbeat_lock:
             self._heartbeat_members[task.id] = member
             if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
@@ -1506,14 +1512,38 @@ class Worker:
 
         return unregister
 
+    def _heartbeat_registered(self, member: _HeartbeatMember) -> bool:
+        """True while `member` is the registered lease of its task."""
+        with self._heartbeat_lock:
+            return self._heartbeat_members.get(member.task.id) is member
+
+    def _take_busy_retry(self, busy: list[_HeartbeatMember], now: float) -> list[_HeartbeatMember]:
+        """The busy leases that a retry can still renew.
+
+        Each is still the registered lease of its task, so a completed, replaced, or accepted lease
+        is gone, and its local lease window has not ended.
+        """
+        return [
+            member
+            for member in busy
+            if self._heartbeat_registered(member) and member.lease_ends_at() > now
+        ]
+
     def _run_heartbeats(self) -> None:
-        # A round falls due one heartbeat_ms after the previous round started, not after it ended.
-        # A round that ends after its next slot starts one overdue round at once, and the interval
-        # after it counts from that start, so missed slots are never replayed. A wake that finds
-        # members starts no early round.
+        # A round falls due one heartbeat_ms after the previous regular round started, not after it
+        # ended. A round that ends after its next slot starts one overdue round at once, and the
+        # interval after it counts from that start, so missed slots are never replayed. A wake that
+        # finds members starts no early round. Between two slots, a busy retry renews only the
+        # leases that the latest round reported busy. This one thread runs both kinds of round, so
+        # never more than one round is in flight. A retry does not move the regular slot.
         next_at = monotonic() + self.heartbeat_ms / 1000
+        # The busy leases of the latest round and the time when their retry falls due. A round of
+        # either kind replaces both.
+        busy: list[_HeartbeatMember] = []
+        retry_at = 0.0
         while True:
-            wait = next_at - monotonic()
+            retry_due = bool(busy) and retry_at < next_at
+            wait = (retry_at if retry_due else next_at) - monotonic()
             if wait > 0 and self._heartbeat_wake.wait(wait):
                 self._heartbeat_wake.clear()
             with self._heartbeat_lock:
@@ -1521,8 +1551,19 @@ class Worker:
                 if not members:
                     self._heartbeat_thread = None
                     return
-            if monotonic() < next_at:
+            now = monotonic()
+            retry = now < next_at
+            if not retry:
+                # The regular round takes every lease, the busy ones too.
+                busy = []
+            elif not retry_due or now < retry_at:
                 continue
+            else:
+                members = self._take_busy_retry(busy, now)
+                busy = []
+                if not members:
+                    # Nothing is left to retry early. The regular slot renews the rest.
+                    continue
             leases = [
                 {
                     "taskId": task.id,
@@ -1532,27 +1573,37 @@ class Worker:
                 for task in (member.task for member in members)
             ]
             sent_at = monotonic()
-            next_at = sent_at + self.heartbeat_ms / 1000
+            deadline = sent_at + self._heartbeat_round_ms / 1000
+            if retry:
+                # A busy retry ends by the next regular slot and by the end of the earliest local
+                # lease window in it, so it never renews a lease that the worker already gave up.
+                deadline = min(deadline, next_at, *(member.lease_ends_at() for member in members))
+            else:
+                next_at = sent_at + self.heartbeat_ms / 1000
             try:
                 rows = self._heartbeat_rows(
-                    (self.worker_id, json.dumps(leases, separators=(",", ":"))),
-                    sent_at + self._heartbeat_round_ms / 1000,
+                    (self.worker_id, json.dumps(leases, separators=(",", ":"))), deadline
                 )
             except Exception:
                 # A failed round proves nothing about ownership, so every task keeps running and
-                # the next round retries. Each attempt's lease watchdog ends it once its last
-                # accepted renewal is a full lease old.
+                # the next regular round retries. Each attempt's lease watchdog ends it once its
+                # last accepted renewal is a full lease old.
                 continue
             try:
                 statuses = {str(row["task_id"]): row["status"] for row in rows}
+                round_busy: list[_HeartbeatMember] = []
                 for member in members:
                     task = member.task
-                    with self._heartbeat_lock:
-                        if self._heartbeat_members.get(task.id) is not member:
-                            continue
+                    # A result counts only for the lease object that the round sent. A lease that
+                    # left or was replaced while the round ran gets nothing from it.
+                    if not self._heartbeat_registered(member):
+                        continue
                     status = statuses.get(task.id, "stale")
                     if status == "accepted":
-                        member.renew(sent_at)
+                        if not member.renew(sent_at):
+                            # The answer came after the local lease window ended. The attempt
+                            # already ended with lease loss, so the answer renews nothing.
+                            continue
                         _emit_log(
                             "DEBUG",
                             "workhorse.task.heartbeat_accepted",
@@ -1571,13 +1622,19 @@ class Worker:
                                 "workhorse.worker.id": self.worker_id,
                             },
                         )
+                    if status == "busy":
+                        # Another transaction held the row. The round renewed nothing and gave no
+                        # ownership verdict, so the lease watchdog keeps its window.
+                        round_busy.append(member)
+                        continue
                     member.settle_status(status)
+                if round_busy:
+                    busy = round_busy
+                    retry_at = monotonic() + _busy_retry_delay_ms(self.heartbeat_ms) / 1000
             except BaseException as error:
                 for member in members:
-                    task = member.task
-                    with self._heartbeat_lock:
-                        if self._heartbeat_members.get(task.id) is not member:
-                            continue
+                    if not self._heartbeat_registered(member):
+                        continue
                     member.errors.append(error)
                     member.cancellation._cancel(error)
 
@@ -3131,13 +3188,37 @@ class Worker:
         # By then a peer may own the task, so the handler must stop even though no round rejected
         # it. It measures from when a request left, so a slow answer shortens the watchdog instead
         # of overrunning the lease PostgreSQL granted.
+        # The heartbeat thread and the watchdog both close the window under renewal_lock, so a
+        # late accepted answer cannot open a window that the watchdog found ended.
         renewal_lock = Lock()
         renewed_at = claim_sent_at
+        lease_closed = False
 
-        def renew_lease(sent_at: float) -> None:
+        def close_ended_lease() -> bool | None:
+            """Close the window if it ended. True if this call closed it, False if it was closed.
+
+            None if the window is still open. The caller holds renewal_lock.
+            """
+            nonlocal lease_closed
+            if lease_closed:
+                return False
+            if monotonic() < renewed_at + self.lease_ms / 1000:
+                return None
+            lease_closed = True
+            return True
+
+        def renew_lease(sent_at: float) -> bool:
             nonlocal renewed_at
             with renewal_lock:
-                renewed_at = max(renewed_at, sent_at)
+                closed = close_ended_lease()
+                if closed is None:
+                    renewed_at = max(renewed_at, sent_at)
+                    return True
+            # An answer that arrives after the window ended does not renew it. It ends the attempt
+            # as the watchdog does.
+            if closed:
+                expire_lease_locally()
+            return False
 
         def lease_deadline() -> float:
             with renewal_lock:
@@ -3197,7 +3278,13 @@ class Worker:
                             return
                         # An accepted round may have moved the deadline while this thread waited.
                         continue
-                    expire_lease_locally()
+                    with renewal_lock:
+                        closed = close_ended_lease()
+                    if closed is None:
+                        # An accepted round moved the deadline after this thread read it.
+                        continue
+                    if closed:
+                        expire_lease_locally()
                     return
                 wait_seconds = max(0.0, expiration_delay)
                 if heartbeat_stop.wait(wait_seconds):
@@ -3218,7 +3305,12 @@ class Worker:
                     return
 
         unregister_heartbeat = self._register_heartbeat(
-            task, settle_heartbeat_status, renew_lease, cancellation, heartbeat_error
+            task,
+            settle_heartbeat_status,
+            renew_lease,
+            lease_deadline,
+            cancellation,
+            heartbeat_error,
         )
         expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()

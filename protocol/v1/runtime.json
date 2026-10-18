@@ -271,13 +271,41 @@
     "leaseMs": 10000,
     "heartbeatMs": 20,
     "injection": {
-      "function": "workhorse.heartbeat_many_v1(text,jsonb)",
-      "header": "workhorse.heartbeat_many_v1(p_worker_id text, p_leases jsonb) RETURNS TABLE (ordinal bigint, task_id uuid, status text)",
+      "function": "workhorse.heartbeat_many_v2(text,jsonb)",
+      "header": "workhorse.heartbeat_many_v2(p_worker_id text, p_leases jsonb) RETURNS TABLE (ordinal bigint, task_id uuid, status text)",
       "errorCode": "55P03",
       "message": "injected heartbeat failure",
       "counterSequence": "workhorse.protocol_injected_heartbeat_rounds"
     },
     "expectedMinimumFailedRounds": 2,
+    "renewalTimeoutMs": 5000,
+    "expectedCancellations": 0,
+    "expectedState": { "state": "succeeded", "attempt": 1 },
+    "expectedAttemptOutcome": "succeeded"
+  },
+  {
+    "id": "busy-heartbeat-rounds-retry-and-keep-the-attempt-running",
+    "kind": "heartbeat-busy",
+    "covers": ["heartbeat-busy-retry"],
+    "taskType": "protocol.heartbeat-busy",
+    "leaseMs": 4000,
+    "heartbeatMs": 1000,
+    "injection": {
+      "function": "workhorse.heartbeat_many_v2(text,jsonb)",
+      "header": "workhorse.heartbeat_many_v2(p_worker_id text, p_leases jsonb) RETURNS TABLE (ordinal bigint, task_id uuid, status text)",
+      "setup": [
+        "CREATE SEQUENCE workhorse.protocol_injected_busy_calls MINVALUE 0 START 0",
+        "CREATE TABLE workhorse.protocol_injected_busy_rounds (round_at timestamptz NOT NULL DEFAULT clock_timestamp(), lease_count integer NOT NULL)"
+      ],
+      "body": "BEGIN IF nextval('workhorse.protocol_injected_busy_calls') <= 4 THEN INSERT INTO workhorse.protocol_injected_busy_rounds (lease_count) VALUES (jsonb_array_length(p_leases)); RETURN QUERY SELECT item.ordinality, (item.value->>'taskId')::uuid, 'busy'::text FROM jsonb_array_elements(p_leases) WITH ORDINALITY AS item(value, ordinality); ELSE RETURN QUERY SELECT * FROM workhorse.heartbeat_many_v1(p_worker_id, p_leases); END IF; END;",
+      "roundsQuery": "SELECT (extract(epoch FROM round_at) * 1000)::float8 AS round_at_ms, lease_count FROM workhorse.protocol_injected_busy_rounds ORDER BY round_at",
+      "teardown": [
+        "DROP TABLE IF EXISTS workhorse.protocol_injected_busy_rounds",
+        "DROP SEQUENCE IF EXISTS workhorse.protocol_injected_busy_calls"
+      ]
+    },
+    "expectedBusyRounds": 4,
+    "maximumRetryGapMs": 700,
     "renewalTimeoutMs": 5000,
     "expectedCancellations": 0,
     "expectedState": { "state": "succeeded", "attempt": 1 },

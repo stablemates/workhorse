@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 69
-      MAXIMUM_SCHEMA_VERSION = 71
+      MINIMUM_SCHEMA_VERSION = 72
+      MAXIMUM_SCHEMA_VERSION = 72
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -132,8 +132,8 @@ module Stablemates
       # `get_wait` (admin)
       GET_WAIT = 'SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text'
 
-      # `heartbeat_many_v1` (protocol)
-      HEARTBEAT_MANY_V1 = 'SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal'
+      # `heartbeat_many_v2` (protocol)
+      HEARTBEAT_MANY_V2 = 'SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal'
 
       # `heartbeat_v1` (protocol)
       HEARTBEAT_V1 = 'SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status'

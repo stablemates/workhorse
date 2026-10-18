@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" width="960" height="680" role="img" aria-labelledby="system-context-dark-title system-context-dark-desc">
 <title id="system-context-dark-title">Every component reaches the durable state through SQL functions in PostgreSQL</title>
-<desc id="system-context-dark-desc">The application transaction calls enqueue_v1 or enqueue_batch_v1. The deployment syncs schedules. The TypeScript Worker calls claim_many_v1, heartbeat_many_v1, acknowledge_cancel_v1, complete_v1, fail_v1, register_worker_v1, tick_v1, fire_due_schedules_v2, and the split maintenance routines, and gets the payload, attempt, fence, and operator pause flag. The operator layer calls cancel_v1 with attribution, list_dead_letters_v1, redrive_v1, and redrive_many_v1. The dashboard reads the read model and worker_registry and calls Admin.setWorkerPaused with attribution. Health and scenarios read runtime, outcome, and statistics. A process supervisor sends SIGINT or SIGTERM to the dedicated worker process, and the handler runs external effects outside the SQL transaction.</desc>
+<desc id="system-context-dark-desc">The application transaction calls enqueue_v1 or enqueue_batch_v1. The deployment syncs schedules. The TypeScript Worker calls claim_many_v1, heartbeat_many_v2, acknowledge_cancel_v1, complete_v1, fail_v1, register_worker_v1, tick_v1, fire_due_schedules_v2, and the split maintenance routines, and gets the payload, attempt, fence, and operator pause flag. The operator layer calls cancel_v1 with attribution, list_dead_letters_v1, redrive_v1, and redrive_many_v1. The dashboard reads the read model and worker_registry and calls Admin.setWorkerPaused with attribution. Health and scenarios read runtime, outcome, and statistics. A process supervisor sends SIGINT or SIGTERM to the dedicated worker process, and the handler runs external effects outside the SQL transaction.</desc>
 <defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
 <rect width="960" height="680" fill="#04080e"/>
 <path d="M 232,66 H 782" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
@@ -11,7 +11,7 @@
 <text x="508" y="117" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">schedule sync</text>
 <path d="M 232,162 H 782" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
 <rect x="346" y="156" width="324" height="12" rx="2" fill="#04080e"/>
-<text x="508" y="165" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">claim_many_v1 · heartbeat_many_v1 · acknowledge_cancel_v1</text>
+<text x="508" y="165" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">claim_many_v1 · heartbeat_many_v2 · acknowledge_cancel_v1</text>
 <path d="M 232,210 H 782" fill="none" stroke="#ced1d4" stroke-width="1.2" marker-end="url(#arrow-dark)"/>
 <rect x="444" y="204" width="128" height="12" rx="2" fill="#04080e"/>
 <text x="508" y="213" fill="#95999d" font-size="8" font-family="Geist Mono" text-anchor="middle" letter-spacing="0.06em">complete_v1 · fail_v1</text>

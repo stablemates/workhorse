@@ -2627,7 +2627,7 @@ public final class Worker implements AutoCloseable {
   // Leases
 
   /** One attempt's hold on its lease: the heartbeat membership and the lease watchdog. */
-  private static final class Ownership {
+  static final class Ownership {
     final AtomicLong renewedAt;
     final long leaseNanos;
     final CountDownLatch stop = new CountDownLatch(1);
@@ -2641,13 +2641,68 @@ public final class Worker implements AutoCloseable {
     private volatile @Nullable Runnable unregister;
     private volatile @Nullable Thread watchdog;
 
+    /**
+     * Guards the local lease window. A renewal and the watchdog check the window under it, so a
+     * renewal cannot move a window that has already ended.
+     */
+    private final ReentrantLock window = new ReentrantLock();
+
+    /** True once the window has ended. Only one caller closes it and ends the attempt. */
+    private boolean lapsed;
+
     Ownership(long renewedAt, long leaseNanos) {
       this.renewedAt = new AtomicLong(renewedAt);
       this.leaseNanos = leaseNanos;
     }
 
-    void renew(long sentAt) {
-      renewedAt.accumulateAndGet(sentAt, (current, sent) -> sent - current > 0 ? sent : current);
+    /**
+     * Applies an accepted round that left at {@code sentAt}. Returns {@code true} when the window
+     * had already ended: the round then renews nothing, this call closes the window, and the caller
+     * must end the attempt as the watchdog would. A late answer never opens the window again.
+     */
+    boolean renew(long sentAt) {
+      window.lock();
+      try {
+        if (lapsed || stop.getCount() == 0) {
+          return false;
+        }
+        if (leaseDeadline() - System.nanoTime() <= 0) {
+          lapsed = true;
+          return true;
+        }
+        renewedAt.accumulateAndGet(sentAt, (current, sent) -> sent - current > 0 ? sent : current);
+        return false;
+      } finally {
+        window.unlock();
+      }
+    }
+
+    /** The time left in the window at {@code now}, or at most zero once it has ended. */
+    long leaseRemaining(long now) {
+      window.lock();
+      try {
+        return lapsed ? 0 : leaseDeadline() - now;
+      } finally {
+        window.unlock();
+      }
+    }
+
+    /**
+     * Closes a window that has ended. Returns {@code true} for the one caller that closes it, which
+     * then ends the attempt. A window that has ended cannot be renewed, so this cannot race a
+     * renewal.
+     */
+    boolean lapse() {
+      window.lock();
+      try {
+        if (lapsed) {
+          return false;
+        }
+        lapsed = true;
+        return true;
+      } finally {
+        window.unlock();
+      }
     }
 
     long leaseDeadline() {
@@ -2764,8 +2819,13 @@ public final class Worker implements AutoCloseable {
           }
 
           @Override
+          public long leaseEndsAt() {
+            return ownership.leaseDeadline();
+          }
+
+          @Override
           public void renew(long sentAt) {
-            ownership.renew(sentAt);
+            acceptRenewal(ownership, arbiter, cancellation, sentAt);
           }
 
           @Override
@@ -2778,6 +2838,11 @@ public final class Worker implements AutoCloseable {
                 "workhorse.task.heartbeat_rejected",
                 "Task heartbeat rejected",
                 attributes);
+            // Another transaction held the task's row. The round renewed nothing and gave no
+            // ownership verdict, so the lease watchdog keeps its window and the heartbeat retries.
+            if (status.equals("busy")) {
+              return;
+            }
             // The settlement can wait for this attempt's lock and send a statement. The shared
             // heartbeat thread renews every other lease, so the settlement runs off it. A status
             // that arrives while one settlement is pending adds nothing, so it is dropped.
@@ -2841,7 +2906,7 @@ public final class Worker implements AutoCloseable {
         } else {
           delay = null;
         }
-        long leaseDelay = ownership.leaseDeadline() - System.nanoTime();
+        long leaseDelay = ownership.leaseRemaining(System.nanoTime());
         if (delay == null || leaseDelay < delay) {
           if (leaseDelay > 0) {
             if (ownership.stop.await(leaseDelay, TimeUnit.NANOSECONDS)) {
@@ -2849,9 +2914,10 @@ public final class Worker implements AutoCloseable {
             }
             continue;
           }
-          arbiter.submit(Outcome.LEASE_EXPIRED);
-          ownership.abandon();
-          cancellation.cancel(CancellationReason.LEASE_LOST);
+          // A late accepted answer can close the window first. It then ends the attempt itself.
+          if (ownership.lapse()) {
+            expireLease(ownership, arbiter, cancellation);
+          }
           return;
         }
         if (ownership.stop.await(Math.max(0, delay), TimeUnit.NANOSECONDS)) {
@@ -2874,6 +2940,26 @@ public final class Worker implements AutoCloseable {
     } catch (RuntimeException error) {
       failAttempt.accept(error);
     }
+  }
+
+  /**
+   * Applies an accepted heartbeat round that left at {@code sentAt}. An answer that arrives after
+   * the local window ended renews nothing, and ends the attempt with a lost lease, as the watchdog
+   * would.
+   */
+  static void acceptRenewal(
+      Ownership ownership, Arbiter arbiter, TaskCancellation cancellation, long sentAt) {
+    if (ownership.renew(sentAt)) {
+      expireLease(ownership, arbiter, cancellation);
+    }
+  }
+
+  /** Ends an attempt whose local lease window closed without an accepted renewal. */
+  private static void expireLease(
+      Ownership ownership, Arbiter arbiter, TaskCancellation cancellation) {
+    arbiter.submit(Outcome.LEASE_EXPIRED);
+    ownership.abandon();
+    cancellation.cancel(CancellationReason.LEASE_LOST);
   }
 
   private static @Nullable Instant earliest(@Nullable Instant first, @Nullable Instant second) {
