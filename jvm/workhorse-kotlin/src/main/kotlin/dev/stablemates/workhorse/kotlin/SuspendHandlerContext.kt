@@ -24,7 +24,11 @@ import kotlinx.coroutines.runBlocking
 
 /**
  * What a suspend handler receives beside its payload. It wraps the core's `HandlerContext`, and
- * each suspend method runs the matching Java method on a virtual thread in `runInterruptible`.
+ * each suspend method runs the matching Java method on a virtual thread.
+ *
+ * A cancellation of the handler's `Job` does not interrupt a durable call while the core reads or
+ * writes. The call runs to its end, so the core keeps a checkpoint or progress write, and then the
+ * method throws the cancellation. A cancellation interrupts only the operation of [checkpoint].
  *
  * A durable wait that is not yet done, and a child join whose children have not finished, suspend
  * the task, as in the core. The call unwinds the handler with an internal `Error`. A handler that
@@ -49,7 +53,7 @@ internal constructor(
     get() = java.isCancelled
 
   /** The checkpoint named [name] that this task saved, or `null` when it saved none. */
-  public suspend fun getCheckpoint(name: String): TaskCheckpoint? = blocking {
+  public suspend fun getCheckpoint(name: String): TaskCheckpoint? = durable {
     java.getCheckpoint(name).orElse(null)
   }
 
@@ -72,23 +76,24 @@ internal constructor(
     operation: suspend () -> T,
   ): T {
     // The operation runs inside the core's call, on its thread. It keeps the caller's context
-    // elements but not its Job: `runInterruptible` interrupts the thread on a cancellation, and
-    // `runBlocking` then cancels the operation.
+    // elements but not its Job: a cancellation interrupts the thread while the operation runs, and
+    // `runBlocking` then cancels the operation. The core's write after the operation is not
+    // interrupted.
     val context = currentCoroutineContext().minusKey(ContinuationInterceptor).minusKey(Job)
-    val callable = Callable { runBlocking(context) { operation() } }
-    return blocking {
+    return durable { call ->
+      val callable = Callable { call.interruptible { runBlocking(context) { operation() } } }
       if (options == null) java.checkpoint(name, type, callable)
       else java.checkpoint(name, type, options, callable)
     }
   }
 
   /** Suspends the task for [duration] under the durable timer [name]. */
-  public suspend fun sleep(name: String, duration: Duration): Unit = blocking {
+  public suspend fun sleep(name: String, duration: Duration): Unit = durable {
     java.sleep(name, duration)
   }
 
   /** Suspends the task until [time] under the durable timer [name]. */
-  public suspend fun sleepUntil(name: String, time: Instant): Unit = blocking {
+  public suspend fun sleepUntil(name: String, time: Instant): Unit = durable {
     java.sleepUntil(name, time)
   }
 
@@ -101,7 +106,7 @@ internal constructor(
 
   @PublishedApi
   internal suspend fun <T> waitForSignal(name: String, type: Type, timeout: Duration?): T =
-    blocking {
+    durable {
       java.waitForSignal(name, type, timeout)
     }
 
@@ -122,7 +127,7 @@ internal constructor(
     context: Any?,
     type: Type,
     timeout: Duration?,
-  ): T = blocking { java.waitForHuman(name, context, type, timeout) }
+  ): T = durable { java.waitForHuman(name, context, type, timeout) }
 
   /**
    * Returns the result of the child task [name], decoded as [T]. The call creates the child and
@@ -142,24 +147,24 @@ internal constructor(
     payload: Any?,
     options: EnqueueOptions,
     resultType: Type,
-  ): T = blocking { java.runChild(name, taskType, payload, options, resultType) }
+  ): T = durable { java.runChild(name, taskType, payload, options, resultType) }
 
   /** Creates [children] together, and returns the outcome of each one by child name. */
   public suspend fun runChildren(children: List<ChildRequest>): Map<String, ChildOutcome> =
-    blocking {
+    durable {
       java.runChildren(children)
     }
 
   /** Creates [children] together, and returns the result of each one by child name. */
-  public suspend fun runChildrenAll(children: List<ChildRequest>): Map<String, Any?> = blocking {
+  public suspend fun runChildrenAll(children: List<ChildRequest>): Map<String, Any?> = durable {
     java.runChildrenAll(children)
   }
 
   /** The progress that this task reported last, or `null`. */
-  public suspend fun getProgress(): TaskProgress? = blocking { java.progress.orElse(null) }
+  public suspend fun getProgress(): TaskProgress? = durable { java.progress.orElse(null) }
 
   /** Stores [progress], a JSON value, and returns the stored progress. */
-  public suspend fun setProgress(progress: Any?): TaskProgress = blocking {
+  public suspend fun setProgress(progress: Any?): TaskProgress = durable {
     java.setProgress(progress)
   }
 
@@ -175,10 +180,10 @@ internal constructor(
   public val java: TaskGroupContext,
 ) {
   /** The task's role, callback kind, and group, or `null` when the task is in no group. */
-  public suspend fun get(): TaskGroupLink? = blocking { java.get().orElse(null) }
+  public suspend fun get(): TaskGroupLink? = durable { java.get().orElse(null) }
 
   /** Adds [requests] to the task's group, under the task's lease and fence. */
-  public suspend fun add(requests: List<EnqueueRequest>): List<EnqueueResult> = blocking {
+  public suspend fun add(requests: List<EnqueueRequest>): List<EnqueueResult> = durable {
     java.add(requests)
   }
 }

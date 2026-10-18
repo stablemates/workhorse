@@ -1398,3 +1398,20 @@ Spring Boot floor, manages that version.
 
 The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
 SM-1392.
+
+## Amendment: a coroutine cancellation waits for a durable statement (2026-10-18)
+
+The Kotlin module section says that a blocking call inside the SDK runs in `runInterruptible`,
+which maps the cancellation to `Thread.interrupt()`. This amendment adds one exception to that
+sentence.
+
+A durable call of `SuspendHandlerContext` is the exception: the cancellation waits until the core's
+statement ends, and then reaches the handler. Only a checkpoint operation gets the interrupt.
+
+An interrupt closes the PostgreSQL socket of a virtual thread. If a cancellation interrupts a
+checkpoint or progress write, the worker loses the write. The Java worker defers the drain's
+interrupt during its own statements for the same reason (SM-1440). The `Queue` and `Admin` suspend
+wrappers keep `runInterruptible`.
+
+The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
+SM-1447.
