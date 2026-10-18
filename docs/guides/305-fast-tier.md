@@ -399,7 +399,7 @@ and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 | Rust       | `WorkerOptions::cohorts` | `Option<usize>`, 1 through `concurrency`                  |
 | Ruby       | `Worker.new(cohorts:)`   | 1 through `concurrency`                                   |
 | Java       | `Worker.Builder.cohorts` | 1 through `concurrency`; the default has no pool-size cap |
-| Kotlin     | `java { cohorts(n) }`    | 1 through `concurrency`                                   |
+| Kotlin     | `cohorts = n`            | 1 through `concurrency`                                   |
 
 An explicit count is never capped.
 

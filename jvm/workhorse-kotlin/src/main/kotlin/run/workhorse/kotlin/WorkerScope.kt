@@ -10,12 +10,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.future.asCompletableFuture
+import run.workhorse.BatchHandler
+import run.workhorse.BatchOptions
 import run.workhorse.CancelledException
 import run.workhorse.Handler
 import run.workhorse.HandlerContext
 import run.workhorse.JsonCodec
 import run.workhorse.RetryDelay
 import run.workhorse.Worker
+import run.workhorse.WorkhorseTelemetry
 
 /** Marks the worker DSL, so a nested block cannot call the outer block's members. */
 @DslMarker public annotation class WorkhorseDsl
@@ -59,11 +62,13 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   public var scheduleCatchupLimit: Int? = null
   public var shutdownGrace: Duration? = null
   public var sharedHeartbeats: Boolean? = null
+  public var cohorts: Int? = null
   public var retryDelay: RetryDelay? = null
   public var onRegistrationError: ((Throwable) -> Unit)? = null
   public var onNotificationError: ((Throwable) -> Unit)? = null
   public var logger: System.Logger? = null
   public var codec: JsonCodec? = null
+  public var telemetry: WorkhorseTelemetry? = null
 
   /**
    * Registers [handler] for [taskType]. The worker decodes each payload as [P]. Registering a task
@@ -71,6 +76,29 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
    */
   public inline fun <reified P> handle(taskType: String, handler: SuspendHandler<P>) {
     @Suppress("UNCHECKED_CAST") register(taskType, javaClassOf<P>() as Class<P>, handler)
+  }
+
+  /**
+   * Registers the blocking batch [handler] for [taskType], as `Worker.Builder.handleBatch` does.
+   * The worker decodes each payload as [P]. The module has no suspend batch handler.
+   */
+  public inline fun <reified P> handleBatch(
+    taskType: String,
+    options: BatchOptions,
+    handler: BatchHandler<P>,
+  ) {
+    @Suppress("UNCHECKED_CAST")
+    registerBatch(taskType, javaClassOf<P>() as Class<P>, options, handler)
+  }
+
+  @PublishedApi
+  internal fun <P> registerBatch(
+    taskType: String,
+    payloadType: Class<P>,
+    options: BatchOptions,
+    handler: BatchHandler<P>,
+  ) {
+    builder.handleBatch(taskType, payloadType, options, handler)
   }
 
   @PublishedApi
@@ -100,11 +128,13 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
     scheduleCatchupLimit?.let(builder::scheduleCatchupLimit)
     shutdownGrace?.let(builder::shutdownGrace)
     sharedHeartbeats?.let(builder::sharedHeartbeats)
+    cohorts?.let(builder::cohorts)
     retryDelay?.let(builder::retryDelay)
     onRegistrationError?.let { listener -> builder.onRegistrationError { listener(it) } }
     onNotificationError?.let { listener -> builder.onNotificationError { listener(it) } }
     logger?.let(builder::logger)
     codec?.let(builder::codec)
+    telemetry?.let(builder::telemetry)
     return builder.build()
   }
 }

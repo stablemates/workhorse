@@ -523,7 +523,7 @@ public final class Worker implements AutoCloseable {
   private static final class RunState {
     final long version;
     final List<Throwable> errors = new CopyOnWriteArrayList<>();
-    final List<RuntimeException> maintenanceErrors = new CopyOnWriteArrayList<>();
+    final List<Throwable> maintenanceErrors = new CopyOnWriteArrayList<>();
     final ConcurrentLinkedQueue<ClaimResult> results = new ConcurrentLinkedQueue<>();
 
     /** False once the stop abandons claims in flight. A late claim then releases its slots. */
@@ -773,7 +773,7 @@ public final class Worker implements AutoCloseable {
       throw new ShutdownIncompleteException(abandoned);
     }
     if (!run.maintenanceErrors.isEmpty()) {
-      throw run.maintenanceErrors.get(0);
+      throw unchecked(run.maintenanceErrors.get(0));
     }
     if (!run.errors.isEmpty()) {
       throw unchecked(run.errors.get(0));
@@ -1392,7 +1392,8 @@ public final class Worker implements AutoCloseable {
                 () -> {
                   try {
                     maintenanceStep(run);
-                  } catch (RuntimeException error) {
+                  } catch (Throwable error) {
+                    // ADR 0078: any failed pass ends the run, an Error too.
                     run.maintenanceErrors.add(error);
                   } finally {
                     wake.signal();

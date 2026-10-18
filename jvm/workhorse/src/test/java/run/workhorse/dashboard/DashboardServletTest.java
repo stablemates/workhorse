@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -124,6 +126,93 @@ class DashboardServletTest {
     try (TestServer server = new TestServer("", builder().auditActor("ops-bot").build())) {
       assertTrue(server.get("/workhorse/tasks").text().contains("\"auditActor\":\"operator\""));
     }
+  }
+
+  // SM-1458: as in Ruby and Python, the authorizer can give a complete response.
+  @Test
+  void sendsTheAuthorizersResponseAsIsAndDoesNoOtherWork() throws Exception {
+    ConnectionSource unreachable =
+        new ConnectionSource() {
+          @Override
+          public Connection acquire() throws SQLException {
+            throw new SQLException("the dashboard must not reach the database");
+          }
+
+          @Override
+          public void release(Connection connection, boolean transactional) {}
+        };
+    Dashboard redirecting =
+        Dashboard.builder(
+                unreachable,
+                request ->
+                    DashboardAuthorization.response(
+                        302, Map.of("Location", "/login?next=/workhorse"), new byte[0]))
+            .build();
+    try (TestServer server = new TestServer("", redirecting)) {
+      for (String path :
+          List.of("/workhorse", "/workhorse/tasks", "/workhorse/rpc/dashboard/meta")) {
+        TestServer.Response response = server.get(path);
+        assertEquals(302, response.status(), path);
+        assertEquals("/login?next=/workhorse", response.header("Location"), path);
+      }
+    }
+    Dashboard forbidding =
+        Dashboard.builder(
+                unreachable,
+                request ->
+                    DashboardAuthorization.response(
+                        403,
+                        Map.of("Content-Type", "text/plain; charset=utf-8"),
+                        "forbidden".getBytes(StandardCharsets.UTF_8)))
+            .build();
+    try (TestServer server = new TestServer("", forbidding)) {
+      TestServer.Response response = server.get("/workhorse/tasks");
+      assertEquals(403, response.status());
+      assertTrue(response.header("Content-Type").startsWith("text/plain"));
+      assertEquals("forbidden", response.text());
+    }
+  }
+
+  @Test
+  void keepsTheContentLengthOfTheAuthorizersResponse() throws Exception {
+    Dashboard dashboard =
+        builder(
+                request ->
+                    DashboardAuthorization.response(
+                        401, Map.of("content-length", "12"), new byte[0]))
+            .build();
+    try (TestServer server = new TestServer("", dashboard)) {
+      TestServer.Response head =
+          server.request("HEAD", "/workhorse/tasks", Map.of("Host", "localhost"), new byte[0]);
+      assertEquals(401, head.status());
+      assertEquals("12", head.header("Content-Length"));
+    }
+    Dashboard plain =
+        builder(
+                request ->
+                    DashboardAuthorization.response(
+                        403, Map.of(), "no".getBytes(StandardCharsets.UTF_8)))
+            .build();
+    try (TestServer server = new TestServer("", plain)) {
+      assertEquals("2", server.get("/workhorse/tasks").header("Content-Length"));
+    }
+  }
+
+  @Test
+  void validatesAndCopiesAnAuthorizationResponse() {
+    for (int status : new int[] {99, 600}) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> DashboardAuthorization.response(status, Map.of(), new byte[0]),
+          Integer.toString(status));
+    }
+    byte[] body = {1, 2};
+    DashboardAuthorization.Response response =
+        (DashboardAuthorization.Response) DashboardAuthorization.response(401, Map.of(), body);
+    body[0] = 9;
+    assertEquals(1, response.body()[0]);
+    response.body()[1] = 9;
+    assertEquals(2, response.body()[1]);
   }
 
   @Test

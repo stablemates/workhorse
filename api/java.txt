@@ -1570,10 +1570,11 @@ run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashbo
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder readOnly(boolean)
 run.workhorse.dashboard.Dashboard.Builder: public run.workhorse.dashboard.Dashboard.Builder setSchedulePaused(run.workhorse.dashboard.DashboardProcedure)
 
-@NullMarked public sealed interface run.workhorse.dashboard.DashboardAuthorization permits run.workhorse.dashboard.DashboardAuthorization.Allow, run.workhorse.dashboard.DashboardAuthorization.Deny, run.workhorse.dashboard.DashboardAuthorization.Principal
+@NullMarked public sealed interface run.workhorse.dashboard.DashboardAuthorization permits run.workhorse.dashboard.DashboardAuthorization.Allow, run.workhorse.dashboard.DashboardAuthorization.Deny, run.workhorse.dashboard.DashboardAuthorization.Principal, run.workhorse.dashboard.DashboardAuthorization.Response
 run.workhorse.dashboard.DashboardAuthorization: public static run.workhorse.dashboard.DashboardAuthorization allow()
 run.workhorse.dashboard.DashboardAuthorization: public static run.workhorse.dashboard.DashboardAuthorization deny()
 run.workhorse.dashboard.DashboardAuthorization: public static run.workhorse.dashboard.DashboardAuthorization principal(java.lang.String)
+run.workhorse.dashboard.DashboardAuthorization: public static run.workhorse.dashboard.DashboardAuthorization response(int, java.util.Map<java.lang.String, java.lang.String>, byte[])
 
 @NullMarked public record run.workhorse.dashboard.DashboardAuthorization.Allow() implements run.workhorse.dashboard.DashboardAuthorization
 run.workhorse.dashboard.DashboardAuthorization.Allow: public Allow()
@@ -1593,6 +1594,14 @@ run.workhorse.dashboard.DashboardAuthorization.Principal: public final boolean e
 run.workhorse.dashboard.DashboardAuthorization.Principal: public final int hashCode()
 run.workhorse.dashboard.DashboardAuthorization.Principal: public final java.lang.String toString()
 run.workhorse.dashboard.DashboardAuthorization.Principal: public java.lang.String actor()
+
+@NullMarked public static final class run.workhorse.dashboard.DashboardAuthorization.Response implements run.workhorse.dashboard.DashboardAuthorization
+run.workhorse.dashboard.DashboardAuthorization.Response: public boolean equals(@Nullable java.lang.Object)
+run.workhorse.dashboard.DashboardAuthorization.Response: public byte[] body()
+run.workhorse.dashboard.DashboardAuthorization.Response: public int hashCode()
+run.workhorse.dashboard.DashboardAuthorization.Response: public int status()
+run.workhorse.dashboard.DashboardAuthorization.Response: public java.lang.String toString()
+run.workhorse.dashboard.DashboardAuthorization.Response: public java.util.Map<java.lang.String, java.lang.String> headers()
 
 @NullMarked public interface run.workhorse.dashboard.DashboardAuthorizer
 run.workhorse.dashboard.DashboardAuthorizer: public abstract run.workhorse.dashboard.DashboardAuthorization authorize(jakarta.servlet.http.HttpServletRequest) throws java.lang.Exception

@@ -178,14 +178,14 @@ Do not configure the built-in login together with `authorize`. If you configure 
 <details>
 <summary>Reference: embedded hosts</summary>
 
-| Language   | Host                                                 | `authorize` returns                                                |
-| ---------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
-| TypeScript | `createDashboardHost`                                | A `DashboardPrincipal`, `true`, `false`, or a `Response`.          |
-| Python     | `workhorse.dashboard.DashboardHost` (WSGI)           | A `DashboardPrincipal`, `True`, `False`, or a `DashboardResponse`. |
-| Go         | `dashboard.NewHandler` (`net/http`)                  | A `dashboard.Authorization` with `Principal` or `Response`.        |
-| Rust       | `dashboard::handler` (`tower::Service`)              | `Authorization::Principal`, `Unauthenticated`, or `Response`.      |
-| Ruby       | `Stablemates::Workhorse::Dashboard` (Rack)           | A `Principal`, `true`, `false`, or a Rack response.                |
-| Java       | `run.workhorse.dashboard.Dashboard` (Servlet filter) | `DashboardAuthorization.principal(actor)`, `allow()`, or `deny()`. |
+| Language   | Host                                                 | `authorize` returns                                                                 |
+| ---------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| TypeScript | `createDashboardHost`                                | A `DashboardPrincipal`, `true`, `false`, or a `Response`.                           |
+| Python     | `workhorse.dashboard.DashboardHost` (WSGI)           | A `DashboardPrincipal`, `True`, `False`, or a `DashboardResponse`.                  |
+| Go         | `dashboard.NewHandler` (`net/http`)                  | A `dashboard.Authorization` with `Principal` or `Response`.                         |
+| Rust       | `dashboard::handler` (`tower::Service`)              | `Authorization::Principal`, `Unauthenticated`, or `Response`.                       |
+| Ruby       | `Stablemates::Workhorse::Dashboard` (Rack)           | A `Principal`, `true`, `false`, or a Rack response.                                 |
+| Java       | `run.workhorse.dashboard.Dashboard` (Servlet filter) | `DashboardAuthorization.principal(actor)`, `allow()`, `deny()`, or `response(...)`. |
 
 - `createDashboardHost` accepts exactly one of `authorize` and `singleAdmin`. It rejects both or
   neither.
@@ -196,8 +196,8 @@ Do not configure the built-in login together with `authorize`. If you configure 
 - In workspaces mode, TypeScript calls `authorize(request, workspace)` with the resolved workspace
   name. It passes null in single-workspace mode and outside every workspace.
 - The Python host rejects a connection without `autocommit=True`.
-- The Java host has no response result. `deny()` answers `401`. The filter passes each request
-  outside its path to `chain.doFilter`.
+- The Java `deny()` answers `401`. `response(status, headers, body)` sends that response as-is. The
+  filter passes each request outside its path to `chain.doFilter`.
 - A non-empty `allowedHosts` list answers `421` for any other host, before `authorize` runs.
 
 More detail: [Overview: Workspace routing](../architecture/overview.md#workspace-routing),
