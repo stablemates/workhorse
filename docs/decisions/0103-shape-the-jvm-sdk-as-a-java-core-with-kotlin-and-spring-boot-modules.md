@@ -1441,3 +1441,39 @@ prefix. The Java snapshot sorts its lines, so some lines also move.
 
 SM-1384 verifies the namespace `run.workhorse` on the domain `workhorse.run` before the first
 publish. SM-1455 makes the rename.
+
+## Amendment: a Kotlin suspend wrapper joins the caller's Spring transaction (2026-10-18)
+
+The Kotlin module section says that a blocking call inside the SDK runs in `runInterruptible`. The
+`Queue` and `Admin` suspend wrappers ran each Java call on a virtual thread. Spring binds a
+transaction to the calling thread, so a wrapper inside `@Transactional` did not join it. The
+Connection model section promises that an enqueue inside `@Transactional` commits and rolls back
+with the caller's transaction. This amendment keeps that promise for the suspend wrappers.
+
+This rule applies to a `Queue` or `Admin` wrapper call with no `connection`. If the calling thread
+is in a Spring transaction scope, the wrapper calls the Java method on the calling thread. The call
+then behaves as the Java method on that thread. It joins the transaction when one is active. With no
+active transaction, as under `NOT_SUPPORTED`, it runs in autocommit. Every other wrapper call runs
+on a virtual thread in `runInterruptible`, as before.
+
+On the calling thread, a cancellation does not interrupt the call. The statement ends, and then the
+caller gets the cancellation. The connection belongs to the caller's transaction. If the calling
+thread is a virtual thread, an interrupt closes its PostgreSQL socket. PostgreSQL then ends the
+caller's transaction. The amendment "a coroutine cancellation waits for a durable statement" gives
+the same reason.
+
+The module finds the scope with no dependency on Spring. The first wrapper call looks up
+`TransactionSynchronizationManager.isSynchronizationActive` by reflection. It uses the thread
+context class loader first and then the module's own loader, so the lookup works in a Spring Boot
+executable jar. If neither loader has the class, no thread is in a scope. No public signature
+changes, and `api/kotlin.txt` does not change.
+
+Spring has one limit that no wrapper can remove. With a JDBC transaction manager, such as
+`DataSourceTransactionManager`, Spring treats a `suspend` method with `@Transactional` as a blocking
+method. The method returns at its first suspension point, and Spring then ends the transaction. So
+a `suspend` method with `@Transactional` over JDBC cannot hold a transaction across a suspension. A
+Kotlin service that needs one transaction is a blocking method, and it calls the suspend wrappers
+inside `runBlocking`. Spring's coroutine path applies only to a `ReactiveTransactionManager`, and
+this record keeps R2DBC out of scope.
+
+The SM-1381 coordinator chose this form during SM-1457.
