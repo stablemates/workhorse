@@ -6,8 +6,10 @@
  */
 module dev.stablemates.workhorse {
   exports dev.stablemates.workhorse;
+  exports dev.stablemates.workhorse.dashboard;
 
   requires transitive java.sql;
   requires transitive org.jspecify;
   requires org.postgresql.jdbc;
+  requires static transitive jakarta.servlet;
 }
