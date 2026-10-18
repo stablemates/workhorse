@@ -68,10 +68,13 @@ public final class WorkhorseAutoConfiguration {
   /** Created by Spring. */
   public WorkhorseAutoConfiguration() {}
 
+  // The class stays public, so an application can name it in `exclude`. Each @Bean method is
+  // package-private, so a new bean dependency does not change the public API in api/java.txt.
+
   /** The connection source that joins the current Spring transaction. */
   @Bean
   @ConditionalOnMissingBean
-  public ConnectionSource workhorseConnectionSource(DataSource dataSource) {
+  ConnectionSource workhorseConnectionSource(DataSource dataSource) {
     return new TransactionAwareConnectionSource(dataSource);
   }
 
@@ -81,7 +84,7 @@ public final class WorkhorseAutoConfiguration {
    */
   @Bean
   @ConditionalOnMissingBean
-  public Queue workhorseQueue(
+  Queue workhorseQueue(
       ConnectionSource connections,
       WorkhorseProperties properties,
       ObjectProvider<JsonCodec> codec,
@@ -97,7 +100,7 @@ public final class WorkhorseAutoConfiguration {
   /** The operator API. */
   @Bean
   @ConditionalOnMissingBean
-  public Admin workhorseAdmin(ConnectionSource connections) {
+  Admin workhorseAdmin(ConnectionSource connections) {
     return new Admin(connections);
   }
 

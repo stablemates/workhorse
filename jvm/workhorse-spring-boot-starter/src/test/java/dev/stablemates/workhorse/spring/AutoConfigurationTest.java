@@ -10,12 +10,19 @@ import dev.stablemates.workhorse.Queue;
 import dev.stablemates.workhorse.dashboard.Dashboard;
 import dev.stablemates.workhorse.dashboard.DashboardAuthorization;
 import dev.stablemates.workhorse.dashboard.DashboardAuthorizer;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.SpringBootVersion;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
 
 /** The beans the starter builds without a database. */
 class AutoConfigurationTest {
@@ -35,6 +42,32 @@ class AutoConfigurationTest {
     } else {
       assertThat(version).startsWith(line + ".");
     }
+  }
+
+  @Test
+  void keepsEveryBeanMethodOutOfThePublicApi() throws NoSuchMethodException {
+    // An application names the class in `exclude`, so the class and its constructor stay public.
+    assertThat(Modifier.isPublic(WorkhorseAutoConfiguration.class.getModifiers())).isTrue();
+    assertThat(Modifier.isPublic(WorkhorseAutoConfiguration.class.getConstructor().getModifiers()))
+        .isTrue();
+    List<Method> beans = new ArrayList<>();
+    Deque<Class<?>> classes = new ArrayDeque<>(List.of(WorkhorseAutoConfiguration.class));
+    while (!classes.isEmpty()) {
+      Class<?> type = classes.pop();
+      classes.addAll(List.of(type.getDeclaredClasses()));
+      for (Method method : type.getDeclaredMethods()) {
+        if (method.isAnnotationPresent(Bean.class)) {
+          beans.add(method);
+        }
+      }
+    }
+    assertThat(beans)
+        .extracting(Method::getName)
+        .contains("workhorseConnectionSource", "workhorseQueue", "workhorseAdmin");
+    assertThat(beans)
+        .filteredOn(method -> Modifier.isPublic(method.getModifiers()))
+        .extracting(Method::getName)
+        .isEmpty();
   }
 
   @Test
