@@ -213,6 +213,15 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(
             heartbeat_log.record(sql)
             return await self._connection.fetch(sql, *parameters)
 
+        # A heartbeat round prepares its statements and sends BEGIN and COMMIT as simple queries.
+        async def prepare(self, sql: str) -> Any:
+            heartbeat_log.record(sql)
+            return await self._connection.prepare(sql)
+
+        async def execute(self, sql: str, *parameters: object) -> str:
+            heartbeat_log.record(sql)
+            return str(await self._connection.execute(sql, *parameters))
+
         def is_in_transaction(self) -> bool:
             return bool(self._connection.is_in_transaction())
 
