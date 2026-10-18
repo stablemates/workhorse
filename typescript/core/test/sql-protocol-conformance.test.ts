@@ -37,6 +37,7 @@ import {
   readPointer,
 } from "../../../scripts/verify-sql-protocol.js";
 import type {
+  RuntimeFixture,
   ReplayConflictRuntimeFixture,
   BatchRuntimeFixture,
   BudgetAdmissionRaceRuntimeFixture,
@@ -79,12 +80,17 @@ const compatibilityDatabase = createDatabaseTestHarness(
 const sqlDatabase = createDatabaseTestHarness(new URL("?sql", import.meta.url).href);
 const runtimeDatabase = createDatabaseTestHarness(new URL("?runtime", import.meta.url).href);
 const requestDatabase = createDatabaseTestHarness(new URL("?requests", import.meta.url).href);
+const conflictDatabase = createDatabaseTestHarness(
+  new URL("?replay-conflict", import.meta.url).href,
+);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const traceExporter = new InMemorySpanExporter();
 const traceProvider = new BasicTracerProvider({
   spanProcessors: [new SimpleSpanProcessor(traceExporter)],
 });
 const contextManager = new AsyncLocalStorageContextManager();
+// Loaded when Vitest collects the file, so that each runtime fixture can be its own test.
+const sharedFixtures = await loadSqlProtocolFixtures(repository);
 
 beforeAll(() => {
   otelContext.setGlobalContextManager(contextManager.enable());
@@ -1326,7 +1332,93 @@ function materializeInterpreterValue(value: JsonValue): unknown {
   return value;
 }
 
+async function executeRuntimeFixture(
+  queue: RuntimeQueue,
+  admin: Admin,
+  database: Pool,
+  fixture: RuntimeFixture,
+): Promise<void> {
+  switch (fixture.kind) {
+    case "replay-conflict":
+      await executeReplayConflictRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "batch":
+      await executeBatchRuntimeFixture(queue, admin, fixture);
+      break;
+    case "suspension-replay":
+      await executeSuspensionReplayRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "cooperative-cancellation":
+      await executeCooperativeCancellationRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "expiration":
+      await executeExpirationRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "lease-loss":
+      await executeLeaseLossRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "heartbeat-cadence":
+      await executeHeartbeatCadenceRuntimeFixture(queue, fixture);
+      break;
+    case "poll-cadence":
+      await executePollCadenceRuntimeFixture(database, fixture);
+      break;
+    case "graceful-drain":
+      await executeGracefulDrainRuntimeFixture(queue, admin, fixture);
+      break;
+    case "slot-refill":
+      await executeSlotRefillRuntimeFixture(database, admin, fixture);
+      break;
+    case "trace-propagation":
+      await executeTracePropagationRuntimeFixture(queue, database, fixture);
+      break;
+    case "budget-admission-race":
+      await executeBudgetAdmissionRaceRuntimeFixture(queue, database, fixture);
+      break;
+    case "missing-handler":
+      await executeMissingHandlerRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "release-wait":
+      await executeReleaseWaitRuntimeFixture(queue, database, fixture);
+      break;
+    case "json-round-trip":
+      await executeJsonRoundTripRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "oversized-result":
+      await executeOversizedResultRuntimeFixture(queue, admin, fixture);
+      break;
+    case "shutdown-cancellation":
+      await executeShutdownCancellationRuntimeFixture(queue, admin, fixture);
+      break;
+    case "heartbeat-failure":
+      await executeHeartbeatFailureRuntimeFixture(queue, admin, database, fixture);
+      break;
+    case "maintenance-phase-error":
+      await executeMaintenancePhaseErrorRuntimeFixture(queue, admin, database, fixture);
+      break;
+    default: {
+      const unknown: never = fixture;
+      throw new Error(`no executor for runtime fixture ${JSON.stringify(unknown)}`);
+    }
+  }
+}
+
 describe("SQL protocol conformance fixtures", () => {
+  // Hooks create and drop these scratch databases, not the tests. A drop waits for a
+  // cluster-wide checkpoint, and under load that wait alone can be longer than the test
+  // timeout. vitest.config.ts gives the hooks of a database test file a longer timeout.
+  const scratchDatabases = [sqlDatabase, conflictDatabase, runtimeDatabase, requestDatabase];
+  beforeAll(async () => {
+    // Wait for every setup before a failure stops the hook, so that afterAll cannot drop a
+    // database that a setup still creates.
+    const results = await Promise.allSettled(scratchDatabases.map((database) => database.setup()));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+  });
+  afterAll(async () => {
+    await Promise.all(scratchDatabases.map((database) => database.teardown()));
+  });
+
   it("declare the stable protocol, compatibility range, and complete lifecycle coverage", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
 
@@ -1433,139 +1525,50 @@ describe("SQL protocol conformance fixtures", () => {
   );
 
   it("verifies canonical requests, results, transitions, and structured errors through PostgreSQL", async () => {
-    await sqlDatabase.setup();
-    try {
-      const report = await verifySqlProtocolFixtures(sqlDatabase.pool, repository);
-      expect(report.coverage).toEqual(
-        new Set(
-          report.manifest.coverage.filter(
-            (capability) => !report.manifest.runtimeCoverage.includes(capability),
-          ),
+    const report = await verifySqlProtocolFixtures(sqlDatabase.pool, repository);
+    expect(report.coverage).toEqual(
+      new Set(
+        report.manifest.coverage.filter(
+          (capability) => !report.manifest.runtimeCoverage.includes(capability),
         ),
-      );
-      expect(report.scenarios).toBeGreaterThan(0);
-      expect(report.steps).toBeGreaterThan(report.scenarios);
-    } finally {
-      await sqlDatabase.teardown();
-    }
+      ),
+    );
+    expect(report.scenarios).toBeGreaterThan(0);
+    expect(report.steps).toBeGreaterThan(report.scenarios);
   });
 
   it("fails replay conflicts on their first occurrence", async () => {
-    const conflictDatabase = createDatabaseTestHarness(
-      new URL("?replay-conflict", import.meta.url).href,
+    const fixture = sharedFixtures.runtime.find(
+      (candidate): candidate is ReplayConflictRuntimeFixture =>
+        candidate.kind === "replay-conflict",
+    )!;
+    expect(fixture).toBeDefined();
+    await executeReplayConflictRuntimeFixture(
+      runtimeQueue(conflictDatabase.pool),
+      new Admin(conflictDatabase.pool),
+      conflictDatabase.pool,
+      fixture,
     );
-    await conflictDatabase.setup();
-    try {
-      const fixtures = await loadSqlProtocolFixtures(repository);
-      const fixture = fixtures.runtime.find(
-        (candidate): candidate is ReplayConflictRuntimeFixture =>
-          candidate.kind === "replay-conflict",
-      )!;
-      expect(fixture).toBeDefined();
-      await executeReplayConflictRuntimeFixture(
-        runtimeQueue(conflictDatabase.pool),
-        new Admin(conflictDatabase.pool),
-        conflictDatabase.pool,
-        fixture,
-      );
-    } finally {
-      await conflictDatabase.teardown();
-    }
   });
 
-  it("verifies language-runtime behavior through the shared fixtures", async () => {
-    await runtimeDatabase.setup();
-    try {
-      const fixtures = await loadSqlProtocolFixtures(repository);
-      const queue = runtimeQueue(runtimeDatabase.pool);
-      const admin = new Admin(runtimeDatabase.pool);
-      const coverage = new Set<string>();
-      for (const fixture of fixtures.runtime) {
-        fixture.covers.forEach((capability) => coverage.add(capability));
-        switch (fixture.kind) {
-          case "replay-conflict":
-            await executeReplayConflictRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
-            break;
-          case "batch":
-            await executeBatchRuntimeFixture(queue, admin, fixture);
-            break;
-          case "suspension-replay":
-            await executeSuspensionReplayRuntimeFixture(
-              queue,
-              admin,
-              runtimeDatabase.pool,
-              fixture,
-            );
-            break;
-          case "cooperative-cancellation":
-            await executeCooperativeCancellationRuntimeFixture(
-              queue,
-              admin,
-              runtimeDatabase.pool,
-              fixture,
-            );
-            break;
-          case "expiration":
-            await executeExpirationRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
-            break;
-          case "lease-loss":
-            await executeLeaseLossRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
-            break;
-          case "heartbeat-cadence":
-            await executeHeartbeatCadenceRuntimeFixture(queue, fixture);
-            break;
-          case "poll-cadence":
-            await executePollCadenceRuntimeFixture(runtimeDatabase.pool, fixture);
-            break;
-          case "graceful-drain":
-            await executeGracefulDrainRuntimeFixture(queue, admin, fixture);
-            break;
-          case "slot-refill":
-            await executeSlotRefillRuntimeFixture(runtimeDatabase.pool, admin, fixture);
-            break;
-          case "trace-propagation":
-            await executeTracePropagationRuntimeFixture(queue, runtimeDatabase.pool, fixture);
-            break;
-          case "budget-admission-race":
-            await executeBudgetAdmissionRaceRuntimeFixture(queue, runtimeDatabase.pool, fixture);
-            break;
-          case "missing-handler":
-            await executeMissingHandlerRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
-            break;
-          case "release-wait":
-            await executeReleaseWaitRuntimeFixture(queue, runtimeDatabase.pool, fixture);
-            break;
-          case "json-round-trip":
-            await executeJsonRoundTripRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
-            break;
-          case "oversized-result":
-            await executeOversizedResultRuntimeFixture(queue, admin, fixture);
-            break;
-          case "shutdown-cancellation":
-            await executeShutdownCancellationRuntimeFixture(queue, admin, fixture);
-            break;
-          case "heartbeat-failure":
-            await executeHeartbeatFailureRuntimeFixture(
-              queue,
-              admin,
-              runtimeDatabase.pool,
-              fixture,
-            );
-            break;
-          case "maintenance-phase-error":
-            await executeMaintenancePhaseErrorRuntimeFixture(
-              queue,
-              admin,
-              runtimeDatabase.pool,
-              fixture,
-            );
-        }
-      }
-      expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));
-    } finally {
-      await runtimeDatabase.teardown();
-    }
+  it("covers each runtime capability that the manifest declares", () => {
+    expect(new Set(sharedFixtures.runtime.flatMap((fixture) => fixture.covers))).toEqual(
+      new Set(sharedFixtures.manifest.runtimeCoverage),
+    );
   });
+
+  // Each fixture is a separate test, so that each one gets the full test timeout. The fixtures
+  // run in file order and share one database, one queue, and one admin.
+  const fixtureQueue = runtimeQueue(runtimeDatabase.pool);
+  const fixtureAdmin = new Admin(runtimeDatabase.pool);
+  it.each(sharedFixtures.runtime)(
+    "verifies language-runtime behavior through the $kind fixture $id",
+    async (fixture) => {
+      await expect(
+        executeRuntimeFixture(fixtureQueue, fixtureAdmin, runtimeDatabase.pool, fixture),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("keeps the manifest, scenarios, and TypeScript SQL contract in sync", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
@@ -1655,66 +1658,61 @@ describe("SQL protocol conformance fixtures", () => {
   it("pins TypeScript request serialization to the language-neutral contract", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
     const executed = new Set<string>();
-    await requestDatabase.setup();
-    try {
-      for (const fixture of fixtures.requests) {
-        let serialized: unknown;
-        const transaction: Queryable = {
-          async query() {
-            serialized = JSON.parse(String(arguments[1]?.[0]));
-            return {
-              rows: [{ ordinal: 1, task_id: fixture.id, outcome: "accepted", reason: null }],
-            } as never;
-          },
-        };
-        const queue = runtimeQueue(transaction);
-        await queue.enqueueMany([fixture.application as EnqueueRequest], transaction);
-        assertFixtureValue(
-          [fixture.postgres],
-          serialized as JsonValue,
-          `${fixture.id}.postgres`,
-          new Map(),
-        );
-
-        const accepted = await requestDatabase.pool.query<{
-          ordinal: number;
-          task_id: string;
-          outcome: string;
-          reason: string | null;
-        }>(
-          "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
-          [JSON.stringify(serialized)],
-        );
-        expect(accepted.rows).toEqual([
-          { ordinal: 1, task_id: expect.any(String), outcome: "accepted", reason: null },
-        ]);
-        const stored = await requestDatabase.pool.query(
-          "SELECT queue_name, task_type, payload, priority, concurrency_key, max_attempts, retry_policy, tags FROM workhorse.dashboard_task_v1 WHERE id = $1::uuid",
-          [accepted.rows[0]!.task_id],
-        );
-        expect(stored.rows).toEqual([
-          {
-            queue_name: fixture.postgres.queue,
-            task_type: fixture.postgres.type,
-            payload: fixture.postgres.payload,
-            priority: fixture.postgres.priority,
-            concurrency_key: fixture.postgres.concurrencyKey,
-            max_attempts: fixture.postgres.maxAttempts,
-            retry_policy: fixture.postgres.retryPolicy,
-            tags: fixture.postgres.tags,
-          },
-        ]);
-        executed.add(fixture.id);
-      }
-      verifyFixtureExecution(
-        fixtures.manifest,
-        "requests",
-        fixtures.requests.map((fixture) => fixture.id),
-        executed,
+    for (const fixture of fixtures.requests) {
+      let serialized: unknown;
+      const transaction: Queryable = {
+        async query() {
+          serialized = JSON.parse(String(arguments[1]?.[0]));
+          return {
+            rows: [{ ordinal: 1, task_id: fixture.id, outcome: "accepted", reason: null }],
+          } as never;
+        },
+      };
+      const queue = runtimeQueue(transaction);
+      await queue.enqueueMany([fixture.application as EnqueueRequest], transaction);
+      assertFixtureValue(
+        [fixture.postgres],
+        serialized as JsonValue,
+        `${fixture.id}.postgres`,
+        new Map(),
       );
-    } finally {
-      await requestDatabase.teardown();
+
+      const accepted = await requestDatabase.pool.query<{
+        ordinal: number;
+        task_id: string;
+        outcome: string;
+        reason: string | null;
+      }>(
+        "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+        [JSON.stringify(serialized)],
+      );
+      expect(accepted.rows).toEqual([
+        { ordinal: 1, task_id: expect.any(String), outcome: "accepted", reason: null },
+      ]);
+      const stored = await requestDatabase.pool.query(
+        "SELECT queue_name, task_type, payload, priority, concurrency_key, max_attempts, retry_policy, tags FROM workhorse.dashboard_task_v1 WHERE id = $1::uuid",
+        [accepted.rows[0]!.task_id],
+      );
+      expect(stored.rows).toEqual([
+        {
+          queue_name: fixture.postgres.queue,
+          task_type: fixture.postgres.type,
+          payload: fixture.postgres.payload,
+          priority: fixture.postgres.priority,
+          concurrency_key: fixture.postgres.concurrencyKey,
+          max_attempts: fixture.postgres.maxAttempts,
+          retry_policy: fixture.postgres.retryPolicy,
+          tags: fixture.postgres.tags,
+        },
+      ]);
+      executed.add(fixture.id);
     }
+    verifyFixtureExecution(
+      fixtures.manifest,
+      "requests",
+      fixtures.requests.map((fixture) => fixture.id),
+      executed,
+    );
   });
 
   it("pins TypeScript schedule serialization to every language-neutral fixture", async () => {
