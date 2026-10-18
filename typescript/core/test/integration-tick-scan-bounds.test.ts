@@ -6,22 +6,30 @@ const futureTasks = 10000;
 // Nothing is due, so a scan that seeks its partial index to the current time stops after a few
 // index pages. Filtering every future row visits each one's heap tuple and exceeds this bound.
 const sharedHitBound = 100;
+// A call can also refill catalog caches that DDL in other databases on the same server cleared.
+// Under load, one such refill costs more than a thousand hits. A scan that visits every future row
+// costs its hits on each call, so the smallest of a few calls still exceeds the bound.
+const measuredCalls = 5;
 
 async function sharedHits(sql: string): Promise<number> {
   // A first call on a connection compiles the function and fills its catalog caches, which costs
-  // more buffer hits than the scan. Measure the second call on the same connection.
+  // more buffer hits than the scan. Measure the later calls on the same connection.
   const client = await database.pool.connect();
   try {
     await client.query(sql);
-    const result = await client.query<{ "QUERY PLAN": unknown }>(
-      `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
-    );
-    const explain = result.rows[0]?.["QUERY PLAN"] as
-      | Array<{ Plan?: { "Shared Hit Blocks"?: number } }>
-      | undefined;
-    const hits = explain?.[0]?.Plan?.["Shared Hit Blocks"];
-    expect(hits).toBeTypeOf("number");
-    return hits as number;
+    const hits: number[] = [];
+    for (let call = 0; call < measuredCalls; call += 1) {
+      const result = await client.query<{ "QUERY PLAN": unknown }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
+      );
+      const explain = result.rows[0]?.["QUERY PLAN"] as
+        | Array<{ Plan?: { "Shared Hit Blocks"?: number } }>
+        | undefined;
+      const callHits = explain?.[0]?.Plan?.["Shared Hit Blocks"];
+      expect(callHits).toBeTypeOf("number");
+      hits.push(callHits as number);
+    }
+    return Math.min(...hits);
   } finally {
     client.release();
   }

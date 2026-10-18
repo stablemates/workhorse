@@ -1016,14 +1016,26 @@ describe("claim lease fence", () => {
   });
 
   it("materializes cancellation requested before an overdue deadline without stranding runtime", async () => {
+    // A claim skips a task whose deadline has passed. The deadline is far away when the task is
+    // claimed, and the test moves it into the past after the cancellation request. Under load, a
+    // deadline only a short time after the enqueue can pass before the claim.
     const id = await queue.enqueue("cancel-before-deadline", null, {
-      deadline: new Date(Date.now() + 120),
+      deadline: new Date(Date.now() + 60_000),
       maxAttempts: 3,
     });
     const claimed = await queue.claim("cancel-before-deadline-worker", { leaseMs: 5_000 });
     expect(claimed?.id).toBe(id);
     expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
-    await sleep(140);
+    await pool.query(
+      `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE task_id = $1`,
+      [id],
+    );
     expect(await queue.recoverExpired()).toBe(1);
     expect(await admin.getTask(id)).toMatchObject({
       state: "canceled",
@@ -1627,14 +1639,14 @@ describe("claim lease fence", () => {
       queue.syncRateLimitPolicies("test", [
         {
           queue: queueName,
-          rate: { limit: 1, intervalMs: 100, burst: 1 },
+          rate: { limit: 1, intervalMs: 60_000, burst: 1 },
         },
       ]),
     ).resolves.toMatchObject([
       {
         namespace: "test",
         queue: queueName,
-        rate: { limit: 1, intervalMs: 100, burst: 1 },
+        rate: { limit: 1, intervalMs: 60_000, burst: 1 },
         perKey: null,
       },
     ]);
@@ -1656,14 +1668,21 @@ describe("claim lease fence", () => {
       },
     ]);
 
-    await sleep(110);
+    // The bucket refills one token a minute, so time that passes between the claims under load
+    // cannot refill it. Move the refill time back one interval instead of waiting for it.
+    await pool.query(
+      `UPDATE workhorse.admission_shard
+          SET refilled_at = refilled_at - interval '60 seconds'
+        WHERE queue_name = $1`,
+      [queueName],
+    );
     await expect(queue.claim("rate-worker-b", { queue: queueName })).resolves.toMatchObject({
       id: secondId,
     });
     await expect(queue.listRateLimitPolicies([queueName])).resolves.toMatchObject([
       {
         queue: queueName,
-        rate: { limit: 1, intervalMs: 100, burst: 1 },
+        rate: { limit: 1, intervalMs: 60_000, burst: 1 },
       },
     ]);
     // The deprecated alias stays for the rest of 0.x and reads through the new method.
@@ -1678,7 +1697,8 @@ describe("claim lease fence", () => {
       {
         queue: queueName,
         rate: { limit: 100, intervalMs: 1_000, burst: 100 },
-        perKey: { limit: 1, intervalMs: 150, burst: 1 },
+        // A key refills one token a minute, so time between the claims cannot refill key a.
+        perKey: { limit: 1, intervalMs: 60_000, burst: 1 },
       },
     ]);
     const firstA = await queue.enqueue("key-rate", {}, { queue: queueName, concurrencyKey: "a" });

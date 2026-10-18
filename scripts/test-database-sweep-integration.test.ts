@@ -1,5 +1,5 @@
 import { Client, Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { dropLocalDatabase } from "../typescript/core/src/drop-local-database.js";
 import { databaseName, localDatabaseUrl } from "../typescript/core/src/local-database.js";
 import {
@@ -26,6 +26,11 @@ const context: SweepContext = {
   currentTemplate: "workhorse_test_template_absent_00000000",
 };
 
+// The sweep drops a database in the test body. A drop waits for a checkpoint, and under load that
+// wait can pass the default test timeout. The test gets the timeout of the database hooks, which
+// wait for the same checkpoints.
+const dropWait = { timeout: inject("databaseHookTimeout") };
+
 let admin: Pool;
 let liveSession: Client;
 
@@ -49,7 +54,7 @@ afterAll(async () => {
 });
 
 describe("sweeping leaked scratch databases", () => {
-  it("drops the abandoned database and leaves the one a session holds", async () => {
+  it("drops the abandoned database and leaves the one a session holds", dropWait, async () => {
     // Plan over this test's own databases only: the sweep command is what reclaims the server,
     // and a test run must not drop another checkout's leftovers behind its back.
     const inventory = (await readDatabaseInventory(admin)).filter((entry) =>

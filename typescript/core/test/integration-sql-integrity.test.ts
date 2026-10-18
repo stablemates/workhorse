@@ -1,25 +1,33 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
 
 const slowRate = { limit: 1, intervalMs: 3_600_000, burst: 3 };
-const raisedRate = { limit: 1, intervalMs: 1_000, burst: 3 };
+const raisedRate = { limit: 1, intervalMs: 60_000, burst: 3 };
 
-// At 0 s a burst of 3 at one token an hour is spent. At 1.2 s the rate becomes one token a second.
-// The elapsed 1.2 s earned almost nothing at the old rate, so the next start must still wait. A
-// refill at the new rate would have earned 1.2 tokens and started it.
+// At 0 s a burst of 3 at one token an hour is spent. Then the test moves the refill time of the
+// bucket 120 s into the past, and the rate becomes one token a minute. The 120 s earned only 0.03
+// tokens at the old rate, so the next start must still wait. A refill at the new rate would have
+// earned 2 tokens and started it. The test does not sleep, because time that passes after the
+// synchronization correctly earns tokens at the new rate. Under load, more than a second can pass
+// before the next claim. The new rate needs 60 s for a token, which is more than the test timeout.
 async function startAfterRaise(
   queueName: string,
   options: { concurrencyKey?: string; budget?: string },
+  bucket: { table: string; condition: string; key: string },
   raise: () => Promise<unknown>,
 ): Promise<number> {
   for (let index = 0; index < 4; index += 1) {
     await queue.enqueue("spend", null, { queue: queueName, ...options });
   }
   expect(await queue.claimMany("spender", 4, { queue: queueName })).toHaveLength(3);
-  await sleep(1_200);
+  const aged = await pool.query(
+    `UPDATE workhorse.${bucket.table} SET refilled_at = refilled_at - interval '120 seconds'
+      WHERE ${bucket.condition}`,
+    [bucket.key],
+  );
+  expect(aged.rowCount).toBeGreaterThan(0);
   await raise();
   return (await queue.claimMany("spender", 1, { queue: queueName })).length;
 }
@@ -27,8 +35,11 @@ async function startAfterRaise(
 describe("rate synchronization", () => {
   it("refills the queue bucket at the old rate up to the synchronization", async () => {
     await queue.syncRateLimitPolicies("integrity", [{ queue: "rate-raised", rate: slowRate }]);
-    const started = await startAfterRaise("rate-raised", {}, () =>
-      queue.syncRateLimitPolicies("integrity", [{ queue: "rate-raised", rate: raisedRate }]),
+    const started = await startAfterRaise(
+      "rate-raised",
+      {},
+      { table: "admission_shard", condition: "queue_name = $1", key: "rate-raised" },
+      () => queue.syncRateLimitPolicies("integrity", [{ queue: "rate-raised", rate: raisedRate }]),
     );
     expect(started).toBe(0);
   });
@@ -38,16 +49,29 @@ describe("rate synchronization", () => {
     await queue.syncRateLimitPolicies("integrity", [
       { queue: "key-raised", rate, perKey: slowRate },
     ]);
-    const started = await startAfterRaise("key-raised", { concurrencyKey: "customer" }, () =>
-      queue.syncRateLimitPolicies("integrity", [{ queue: "key-raised", rate, perKey: raisedRate }]),
+    const started = await startAfterRaise(
+      "key-raised",
+      { concurrencyKey: "customer" },
+      {
+        table: "rate_limit_bucket",
+        condition: "queue_name = $1 AND bucket_scope = 'key'",
+        key: "key-raised",
+      },
+      () =>
+        queue.syncRateLimitPolicies("integrity", [
+          { queue: "key-raised", rate, perKey: raisedRate },
+        ]),
     );
     expect(started).toBe(0);
   });
 
   it("refills a budget bucket at the old rate up to the synchronization", async () => {
     await queue.syncBudgets("integrity", [{ name: "raised", rate: slowRate }]);
-    const started = await startAfterRaise("budget-raised", { budget: "raised" }, () =>
-      queue.syncBudgets("integrity", [{ name: "raised", rate: raisedRate }]),
+    const started = await startAfterRaise(
+      "budget-raised",
+      { budget: "raised" },
+      { table: "budget_bucket", condition: "budget_name = $1", key: "raised" },
+      () => queue.syncBudgets("integrity", [{ name: "raised", rate: raisedRate }]),
     );
     expect(started).toBe(0);
   });
