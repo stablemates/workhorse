@@ -1523,12 +1523,79 @@
       "slug": "procrastinate",
       "name": "Procrastinate",
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1377",
+      "page": "published",
       "version": "3.10.0",
       "checked": "2026-10-17",
       "repository": "https://github.com/procrastinate-org/procrastinate",
       "summary": "Procrastinate is a Python distributed task processing library that uses PostgreSQL to store task definitions, manage locks and dispatch tasks.",
+      "rows": [
+        {
+          "id": "batch-enqueue",
+          "group": "producing",
+          "label": "Enqueue many tasks in one call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Atomic batch enqueue"
+            },
+            "page": "/docs/enqueue",
+            "note": "Up to 1,000 tasks commit or roll back together."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "batch_defer inserts many jobs in one call. If one job conflicts with a queueing lock, no job is deferred.",
+            "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/basics/batch_defer.md#L1-L64",
+            "version": "3.10.0",
+            "evidence": "\"you can defer multiple jobs at once using the batch_defer resp. batch_defer_async method.\" \"that would directly raise an AlreadyEnqueued exception and none of those jobs are deferred (the database transaction will be fully rolled back).\""
+          }
+        },
+        {
+          "id": "time-limits",
+          "group": "executing",
+          "label": "Time limit for each attempt",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Per-attempt execution timeouts"
+            },
+            "page": "/docs/deadlines",
+            "note": "An absolute deadline for the whole task is also supported."
+          },
+          "cell": {
+            "status": "Not supported",
+            "note": "A task has no time limit. shutdown_graceful_timeout aborts jobs only when a worker stops.",
+            "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/tasks.py#L78-L95",
+            "version": "3.10.0",
+            "evidence": "Task.__init__ parameters: name, aliases, retry, pass_context, queue, priority, lock, queueing_lock, task_middleware. No timeout. procrastinate/app.py#L311-L314: shutdown_graceful_timeout: \"... are aborted. A value of None corresponds to no timeout.\""
+          }
+        },
+        {
+          "id": "task-results",
+          "group": "operating",
+          "label": "Store and read the task result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Terminal result inspection"
+            },
+            "page": "/docs/queries",
+            "note": "The result is in the same PostgreSQL database."
+          },
+          "cell": {
+            "status": "Not supported",
+            "note": "The jobs table has no result column. The worker writes the return value to its log.",
+            "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/sql/schema.sql#L65-L79",
+            "version": "3.10.0",
+            "evidence": "CREATE TABLE procrastinate_jobs (id, queue_name, task_name, priority, lock, queueing_lock, args, status, scheduled_at, attempts, abort_requested, worker_id). procrastinate/worker.py#L229-L230: `if job_result and job_result.result: text += f' - Result: ...'[:250]`"
+          }
+        }
+      ],
       "cells": {
         "transactional-enqueue": {
           "status": "Supported",
@@ -1537,6 +1604,34 @@
           "version": "3.10.0",
           "evidence": "\"This lets you insert the job within the same transaction as your own database operations\" ... \"pass your connection to configure(connection=...). The job INSERT will execute on your connection, inside your transaction.\""
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "schedule_at sets a date, and schedule_in sets a delay from now.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/schedule.md#L6-L22",
+          "version": "3.10.0",
+          "evidence": "\"If a job is configured with a date in the future, it will run at the first opportunity after that date.\" \"Also, you can configure a delay from now: clean.configure(schedule_in={\"hours\": 1, \"minutes\": 30}).defer()\""
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "app.periodic takes a cron expression. The workers defer the jobs, and the database defers each period one time. If no worker runs, no job is deferred.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/cron.md#L1-L39",
+          "version": "3.10.0",
+          "evidence": "\"Procrastinate offers a way to schedule periodic deferring of tasks, with App.periodic. It uses the Unix cron syntax\". \"each worker is responsible for ensuring that each periodic task is deferred in time, and the database is responsible for making sure deferring only happens once per period\". \"If there is no worker running, then periodic tasks will not get scheduled.\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "An integer, where a larger number runs first. A worker takes a lower priority job when a lock blocks the higher priority job.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/priorities.md#L3-L12",
+          "version": "3.10.0",
+          "evidence": "\"Priority is represented as an (positive or negative) integer, where a larger number indicates a higher priority.\" \"If a procrastinate worker requests a job, and there is a high-priority job scheduled that is blocked by a lock, and a low-priority job that is available, the worker will take the low-priority job.\""
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "A queueing_lock refuses a second job with the same key while the first job waits. defer raises AlreadyEnqueued. After the first job starts, a new job is accepted.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/queueing_locks.md#L9-L37",
+          "version": "3.10.0",
+          "evidence": "\"You can tell Procrastinate that a specific set of jobs can never appear more than once in the queue, by using a queueing lock\". \"Trying to defer a task when the queueing_lock is active will result in an AlreadyEnqueued exception, which you can choose to ignore.\" \"queueing_lock allows a single job in todo status. Meanwhile, it allows multiple jobs to be in doing status.\""
+        },
         "debounce-throttle": {
           "status": "Partial",
           "note": "A queueing_lock refuses a second waiting job for each key, with no time period. The docs suggest a delay to throttle a task.",
@@ -1544,12 +1639,40 @@
           "version": "3.10.0",
           "evidence": "`queueing_lock` allows a single job in `todo` status. ... You might also want to [schedule](./schedule.md) jobs for such task in the near future, which can be effective to throttle the task."
         },
+        "task-dependencies": {
+          "status": "Not supported",
+          "note": "The job options have no dependency on another job. A task can defer the next job itself.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/tasks.py#L204-L228",
+          "version": "3.10.0",
+          "evidence": "configure() parameters: lock, queueing_lock, task_kwargs, schedule_at, schedule_in, queue, priority. None of them makes a job wait for another job."
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "By default, a task has no retry. RetryStrategy gives constant, linear, or exponential waits and can retry only some exception types.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/retry.md#L32-L63",
+          "version": "3.10.0",
+          "evidence": "\"define the retry delay, with constant, linear and exponential backoff options (if you don't, jobs will be retried immediately)\"; \"define the exception types you want to retry on\". \"exponential_wait=5 to wait 5 seconds then 25 then 125 and so on\". procrastinate/tasks.py#L87: `retry: retry_module.RetryValue = False`."
+        },
+        "crash-recovery": {
+          "status": "Partial",
+          "note": "Worker heartbeats find the stalled jobs of a stopped worker. The application must retry them, for example from a periodic task. Without a retry, the jobs stay in the doing status.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/production/retry_stalled_jobs.md#L3-L34",
+          "version": "3.10.0",
+          "evidence": "\"if no specific action is taken, these stalled jobs will remain in the queue forever, and their execution will never resume.\" \"Procrastinate workers update heartbeats at a regular interval\". \"Those stalled jobs can then be retried for example by a periodic task. To enable this add this task to your code\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "abort=True marks a running job. An async task gets asyncio.CancelledError. A sync task must check should_abort().",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/cancellation.md#L27-L75",
+          "version": "3.10.0",
+          "evidence": "\"if a job is already running, the abort option marks this job for abortion\". \"In a sync task, we can check (for example, periodically) if the task should be aborted.\" \"For async tasks (coroutines), they are cancelled via the asyncio cancellation mechasnism.\""
+        },
         "concurrency-limits": {
           "status": "Partial",
-          "note": "A lock lets one job for each lock string run at a time across all workers. The limit is always one.",
+          "note": "A lock lets one job for each lock string run at a time across all workers and all queues. The limit is always one.",
           "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/tasks.py#L204-L211",
           "version": "3.10.0",
-          "evidence": "lock : No two jobs with the same lock string can run simultaneously"
+          "evidence": "lock : No two jobs with the same lock string can run simultaneously. procrastinate/sql/schema.sql#L102: `CREATE UNIQUE INDEX procrastinate_jobs_lock_idx_v1 ON procrastinate_jobs (lock) WHERE status = 'doing';` The index has no queue column."
         },
         "rate-limits": {
           "status": "Not supported",
@@ -1561,9 +1684,16 @@
         "checkpoints": {
           "status": "Not supported",
           "note": "A retry runs the whole task function again.",
-          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/retry.md#L1-L8",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/worker.py#L295-L323",
           "version": "3.10.0",
-          "evidence": "Reviewed the task, retry, and context how-to pages: no step or checkpoint API. Retry doc: \"You can define a retry strategy on a task and Procrastinate will enforce it.\""
+          "evidence": "Each attempt calls the whole task function with the stored arguments: `return await task(*job_args, **job.task_kwargs)` and `return task(*job_args, **job.task_kwargs)`. The procrastinate_jobs table (procrastinate/sql/schema.sql#L65-L79) stores args, status, and attempts, and no step state."
+        },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running job cannot suspend. The job statuses have no waiting status. schedule_at delays a job before it starts.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/sql/schema.sql#L23-L31",
+          "version": "3.10.0",
+          "evidence": "procrastinate_job_status: 'todo' (\"The job is queued\"), 'doing' (\"The job has been fetched by a worker\"), 'succeeded', 'failed', 'cancelled', 'aborting' (legacy), 'aborted'."
         },
         "dashboard": {
           "status": "Partial",
@@ -1572,11 +1702,39 @@
           "version": "3.10.0",
           "evidence": "ProcrastinateJobAdmin defines retry, cancel and abort; \"actions = [retry, cancel, abort]\". docs/howto/production/monitoring.md#L61-L63: \"The administration web portal ... Not yet, maybe someday.\""
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "By default, failed jobs stay in the database. retry_job_by_id and a Django admin action run a failed job again.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/howto/advanced/retry.md#L124-L146",
+          "version": "3.10.0",
+          "evidence": "\"Retrying a failed job will set the status of the job back to todo while keeping the history of events in place.\" \"An admin action Retry Failed Job can also be invoked from the table view of the Procrastinate Jobs.\" docs/howto/production/delete_finished_jobs.md#L18: \"never to keep every job in the database, this is the default.\""
+        },
+        "queue-pause": {
+          "status": "Not supported",
+          "note": "No queue pause. The fetch function selects a job by status, lock, queue name, and scheduled time only. A worker consumes the queues that it gets when it starts.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/procrastinate/sql/schema.sql#L210-L262",
+          "version": "3.10.0",
+          "evidence": "procrastinate_fetch_job_v2(target_queue_names, p_worker_id) selects a job WHERE the lock has no earlier job, `jobs.status = 'todo'`, `jobs.queue_name = ANY( target_queue_names )`, and `jobs.scheduled_at <= now()`. No queue state is read. docs/howto/basics/worker.md#L3-L17 gives the queues as worker arguments."
+        },
+        "opentelemetry": {
+          "status": "Not supported",
+          "note": "Procrastinate ships no instrumentation and has no OpenTelemetry dependency. A worker middleware can start your own spans, as the docs show.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/pyproject.toml#L23-L38",
+          "version": "3.10.0",
+          "evidence": "dependencies: psycopg[pool], asgiref, attrs, croniter, python-dateutil, typing-extensions, packaging. Optional extras: django, sqlalchemy, aiopg, psycopg2, sphinx. docs/howto/advanced/middleware.md#L94-L100 shows a worker middleware that the application writes: `async def otel_mw(call_next, context, worker): with tracer.start_as_current_span(...)`. The opentelemetry-python-contrib instrumentation directory has no Procrastinate package."
+        },
         "worker-languages": {
           "value": "Python",
           "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/README.md#L15-L16",
           "version": "3.10.0",
           "evidence": "\"Procrastinate is an open-source Python 3.10+ distributed task processing library\""
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Core operations are PostgreSQL functions, so a client in another language is possible. The project ships no such client.",
+          "source": "https://github.com/procrastinate-org/procrastinate/blob/3.10.0/docs/discussions.md#L262-L267",
+          "version": "3.10.0",
+          "evidence": "\"This is so that the database is solely responsible for consistency, and would allow us to have the same behavior if someone were to write a procrastinate compatible client, in Python or in another language altogether.\""
         },
         "infrastructure": {
           "value": "PostgreSQL",

@@ -1,0 +1,142 @@
+---
+title: "Workhorse compared with Procrastinate"
+description: "Procrastinate vs Workhorse: two task queues that keep work in PostgreSQL. Compare their features, find when Procrastinate is the better choice, and move a task to Workhorse."
+---
+
+Procrastinate is a Python task queue that keeps its jobs in PostgreSQL. Workhorse is a durable task
+queue that also keeps its work in PostgreSQL. Workhorse delivers each task at least once. Each
+product lets you enqueue a task in the same transaction as your data, so neither needs a broker.
+This page compares the two products, row by row, and tells you when Procrastinate is the better
+choice.
+
+## Compare Workhorse and Procrastinate
+
+The two products share the base of a PostgreSQL queue. This base includes transactional enqueue,
+delays, cron schedules, priorities, a key that refuses a duplicate task, retries with backoff,
+cancellation of a running task, and batch enqueue. They differ in five areas:
+
+- **Recovery from a stopped worker.** A Procrastinate worker writes a heartbeat. If a worker stops,
+  its jobs stay in the `doing` status until your application retries them, for example from a
+  periodic task. A Workhorse worker holds a lease on each task. If the lease expires, another worker
+  gets the task.
+- **Limits across all workers.** A Procrastinate `lock` lets one job for each lock string run at a
+  time. Procrastinate has no other concurrency limit and no rate limit. Workhorse has concurrency
+  and rate limits for a queue or for each key.
+- **Checkpoints inside a task.** A Workhorse handler stores the result of each checkpoint. When the
+  task runs again, the handler skips each checkpoint that completed. It can also wait for a timer or
+  a signal without a worker slot. In Procrastinate, a retry runs the whole task function again.
+- **Operations.** Workhorse includes a dashboard, queue pause, OpenTelemetry, task dependencies, time
+  limits, and stored results. Procrastinate gives Django admin pages that retry, cancel, or abort a
+  job.
+- **Languages.** Procrastinate is a Python library. Workhorse has workers in TypeScript, Python, Go,
+  Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="procrastinate" />
+
+## When Procrastinate is the better choice
+
+Procrastinate is the better choice in these cases:
+
+- Your application is in Python only, and Django admin pages are sufficient to operate the jobs.
+- One job for each key at a time is the only limit that your tasks need.
+- Your tasks are short, and a retry that runs the whole task function again is acceptable.
+- Your code already uses Procrastinate locks and queueing locks, and a move costs more than it
+  gives.
+
+Workhorse is the better choice in these cases:
+
+- A task must recover from a stopped worker without code in your application.
+- A limit must apply to a queue or to each key across all workers, for example the rate limit of an
+  external API.
+- A task has work that is slow or costly to repeat, or it waits for a timer or a person.
+- Workers in more than one language must use the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Procrastinate
+
+Move one task type at a time. Keep the Procrastinate workers running until their queues are empty.
+The [migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts. The
+[Django recipe](/docs/django) explains how a task commits with your Django data.
+
+**Example.** An application sends a `welcome-email` task in the transaction that creates a user.
+The task has three attempts with exponential backoff.
+
+1. In Procrastinate, the application passes its connection to `configure(connection=conn)`.
+2. In Workhorse, the application builds a `Queue` on the same connection.
+3. `max_attempts=2` in a Procrastinate `RetryStrategy` gives two retries, so three attempts. In
+   Workhorse, `max_attempts=3` gives the same three attempts.
+
+Before the move, with Procrastinate:
+
+```python
+import psycopg
+from procrastinate import App, RetryStrategy, SyncPsycopgConnector
+
+app = App(connector=SyncPsycopgConnector(conninfo=DATABASE_URL))
+app.open()
+
+
+@app.task(name="welcome-email", retry=RetryStrategy(max_attempts=2, exponential_wait=5))
+def welcome_email(user_id):
+    send_welcome_email(user_id)
+
+
+with psycopg.connect(DATABASE_URL) as conn:
+    conn.execute("INSERT INTO users (id, email) VALUES (%s, %s)", (user_id, email))
+    welcome_email.configure(connection=conn).defer(user_id=user_id)
+    conn.commit()
+```
+
+After the move, with Workhorse:
+
+```python
+import psycopg
+from workhorse import EnqueueOptions, HandlerContext, Json, Queue, Worker
+
+with psycopg.connect(DATABASE_URL) as conn:
+    with conn.transaction():
+        conn.execute("INSERT INTO users (id, email) VALUES (%s, %s)", (user_id, email))
+        Queue(conn).enqueue(
+            "welcome-email",
+            {"user_id": user_id},
+            EnqueueOptions(
+                max_attempts=3,
+                retry_policy={
+                    "type": "exponential",
+                    "initialDelayMs": 5_000,
+                    "multiplier": 5,
+                    "maxDelayMs": 300_000,
+                },
+            ),
+        )
+
+
+def welcome_email(payload: Json, context: HandlerContext) -> Json:
+    send_welcome_email(payload["user_id"])
+    return None
+
+
+worker = Worker(pool).handle("welcome-email", welcome_email)
+worker.run()
+```
+
+`pool` is a Psycopg connection pool for the same database. Procrastinate passes keyword arguments
+to the task function. A Workhorse handler gets one JSON payload. Procrastinate gives each wait in
+seconds, and Workhorse gives each delay in milliseconds. Both policies wait 5 s, then 25 s. A
+Workhorse exponential policy needs a maximum delay.
+
+A Procrastinate `lock` runs one job for each lock string at a time, across all queues. In
+Workhorse, a [concurrency policy](/docs/concurrency-policies) with `max_active_per_key=1` and a
+`concurrency_key` on each task runs one task for each key at a time, in one queue. The same key in a
+different queue is a different key. Thus, put the tasks that share a lock in one queue.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
