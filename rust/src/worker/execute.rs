@@ -102,9 +102,11 @@ impl Inner {
                 result = &mut future => break result,
                 () = &mut watchdog, if watchdog_armed => {
                     // No renewal was accepted within the lease, so another worker may own the task.
+                    // A handler that ignores its token must not keep the lease alive.
                     watchdog_armed = false;
                     rejected.get_or_insert(OwnershipStatus::Stale);
                     token.cancel(CancelReason::LeaseLost);
+                    membership.leave();
                     tracing::warn!(
                         parent: &span,
                         event.name = "workhorse.task.lease_expired",

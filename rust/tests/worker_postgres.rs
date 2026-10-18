@@ -316,7 +316,7 @@ async fn lease_expiry(observer: &Client, task: Uuid) -> std::time::SystemTime {
         .get(0)
 }
 
-/// SM-1028: once the future that owns a lease is dropped, no heartbeat renews it.
+/// SM-1028: once the worker abandons a lease, no heartbeat renews it.
 ///
 /// A round already in flight may still land, so the expiry must first hold still for five
 /// heartbeat intervals. A lease that keeps renewing never holds still. Recovery runs only after
@@ -336,7 +336,7 @@ async fn assert_lease_lapses(harness: &Harness, observer: &Client, task: Uuid) {
         }
     })
     .await
-    .expect("a dropped execution renewed its lease");
+    .expect("a lease kept renewing after its owner abandoned it");
     tokio::time::timeout(WAIT, async {
         while !observer
             .query_one(
@@ -479,6 +479,135 @@ async fn a_dropped_run_once_stops_renewing_its_lease() {
     running.abort();
     assert!(running.await.unwrap_err().is_cancelled());
     assert_lease_lapses(&harness, &observer, task).await;
+}
+
+/// How the handler and the heartbeat round behave after the lease watchdog fires.
+#[derive(Clone, Copy, PartialEq)]
+enum AfterWatchdog {
+    /// The handler ignores its cancellation and never returns.
+    KeepsRunning,
+    /// Rounds run without a client bound, so the round that the row lock held answers late.
+    AnswersLate,
+    /// The handler ignores its cancellation, then returns a result.
+    ReturnsLate,
+}
+
+/// SM-1445: once the lease watchdog abandons an attempt, no later heartbeat round renews its lease.
+///
+/// A row lock holds every round until the watchdog fires. Then a renewal commits, as a round that
+/// the worker abandoned can, so the lease is valid again in PostgreSQL. Only the watchdog can stop
+/// the renewals that follow, because the handler ignores its cancellation.
+async fn assert_watchdog_stops_renewals(name: &str, after: AfterWatchdog) {
+    let Some(harness) = harness(name).await else { return };
+    let mut observer = harness.database.connect().await;
+    // The run continues, so its own maintenance would recover the lapsed lease before the test.
+    let worker = harness.worker(WorkerOptions {
+        shared_heartbeats: after == AfterWatchdog::AnswersLate,
+        maintenance_interval: Duration::from_secs(3600),
+        ..lapsing_options()
+    });
+    let (starts, mut running_handlers) = mpsc::unbounded_channel();
+    let (cancelled, mut reasons) = mpsc::unbounded_channel();
+    let (returns, mut returned) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::clone(&gate);
+    worker.handle("rust.ignores", move |_: Value, context: HandlerContext| {
+        let (starts, cancelled, returns) = (starts.clone(), cancelled.clone(), returns.clone());
+        let gate = Arc::clone(&release);
+        async move {
+            let _ = starts.send(());
+            let token = context.cancellation();
+            token.cancelled().await;
+            let _ = cancelled.send(token.reason());
+            gate.acquire().await.unwrap().forget();
+            let _ = returns.send(());
+            Ok(json!({"late": true}))
+        }
+    });
+    let task = harness
+        .enqueue(
+            "rust.ignores",
+            json!({}),
+            EnqueueOptions { max_attempts: 1, ..Default::default() },
+        )
+        .await;
+
+    let (_stop, mut running) = run(&worker);
+    started(&mut running_handlers, &mut running).await;
+    let lock = observer.transaction().await.unwrap();
+    lock.execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
+        .await
+        .unwrap();
+    let reason =
+        tokio::time::timeout(WAIT, reasons.recv()).await.expect("the watchdog never fired");
+    assert_eq!(reason, Some(Some(CancelReason::LeaseLost)));
+    let renewed: std::time::SystemTime = lock
+        .query_one(
+            "UPDATE workhorse.task_runtime
+                SET heartbeat_at = clock_timestamp(),
+                    expires_at = clock_timestamp() + interval '1 second'
+              WHERE task_id = $1
+          RETURNING heartbeat_at",
+            &[&task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    lock.commit().await.unwrap();
+
+    match after {
+        AfterWatchdog::KeepsRunning => {}
+        AfterWatchdog::AnswersLate => {
+            // The held round renews after the lock, and its accepted answer reaches the worker.
+            tokio::time::timeout(WAIT, async {
+                loop {
+                    let beat: std::time::SystemTime = observer
+                        .query_one(
+                            "SELECT heartbeat_at FROM workhorse.task_runtime WHERE task_id = $1",
+                            &[&task],
+                        )
+                        .await
+                        .unwrap()
+                        .get(0);
+                    if beat > renewed {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the held round never renewed the lease");
+        }
+        AfterWatchdog::ReturnsLate => {
+            gate.add_permits(1);
+            tokio::time::timeout(WAIT, returned.recv()).await.expect("the handler never returned");
+            // The lease is valid, so only the `lease_lost` verdict prevents `complete_v1`.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let row = harness.admin.get_task(task).await.unwrap().expect("task exists");
+            assert_eq!(row.state, TaskState::Active, "a late return settled the attempt");
+            assert_eq!(row.result, None);
+        }
+    }
+
+    assert_lease_lapses(&harness, &observer, task).await;
+    assert_ne!(harness.state(task).await, TaskState::Succeeded);
+    assert!(!running.is_finished(), "the worker run ended while its handler ran");
+    running.abort();
+}
+
+#[tokio::test]
+async fn a_lapsed_watchdog_stops_renewing_while_the_handler_keeps_running() {
+    assert_watchdog_stops_renewals("worker_watchdog_running", AfterWatchdog::KeepsRunning).await;
+}
+
+#[tokio::test]
+async fn a_renewal_answered_after_the_watchdog_does_not_restore_renewals() {
+    assert_watchdog_stops_renewals("worker_watchdog_late_answer", AfterWatchdog::AnswersLate).await;
+}
+
+#[tokio::test]
+async fn a_handler_that_returns_after_the_watchdog_settles_as_lease_lost() {
+    assert_watchdog_stops_renewals("worker_watchdog_late_return", AfterWatchdog::ReturnsLate).await;
 }
 
 /// SM-1085: dropping `run_once` while its batch member lingers abandons the member too.
