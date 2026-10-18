@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { corePackage, publishedPackages } from "./packages.js";
-import { pythonProvenanceProblems, verificationSteps } from "./verify-release.js";
+import { pythonProvenanceProblems, render, verificationSteps } from "./verify-release.js";
 
 describe("verificationSteps", () => {
   it("checks the public Python version attribute and the distribution metadata", async () => {
@@ -52,6 +52,71 @@ describe("verificationSteps", () => {
       environment: { GOPROXY: "https://proxy.golang.org" },
       expect: "github.com/stablemates/workhorse/go v1.2.3",
     });
+  });
+
+  it("runs a task in the Java and Kotlin consumers from Maven Central for the cold install", async () => {
+    const steps = await verificationSteps(
+      "maven",
+      "1.2.3",
+      {},
+      {
+        WORKHORSE_VERIFY_DATABASE_URL: "postgres://user:secret@db:5432/app",
+      },
+    );
+    const builds = steps.filter((step) => step.command === "gradle");
+
+    expect(builds.map((step) => step.args[1])).toEqual(["java", "kotlin"]);
+    for (const build of builds) {
+      expect(build.args).toContain("-PworkhorseVersion=1.2.3");
+      expect(build.args).toContain("--refresh-dependencies");
+      expect(build.args).toContain(
+        "--args=jdbc:postgresql://db:5432/app?user=user&password=secret",
+      );
+      expect(build.args.some((arg) => arg.startsWith("-PworkhorseRepository="))).toBe(false);
+      expect(render(build)).toContain("password=***");
+      expect(render(build)).not.toContain("secret");
+    }
+    // Each consumer prints its jar and the id of the task it ran and checked.
+    const [java, kotlin] = builds;
+    expect(
+      java?.expectPattern?.test("workhorse-1.2.3.jar\n0b0e6d1e-5c1a-4d3e-9f00-1a2b3c4d5e6f"),
+    ).toBe(true);
+    expect(java?.expectPattern?.test("workhorse-1.2.3.jar")).toBe(false);
+    expect(
+      kotlin?.expectPattern?.test(
+        "workhorse-kotlin-1.2.3.jar\n0b0e6d1e-5c1a-4d3e-9f00-1a2b3c4d5e6f",
+      ),
+    ).toBe(true);
+    expect(
+      kotlin?.expectPattern?.test(
+        "workhorse-kotlin-1.2.4.jar\n0b0e6d1e-5c1a-4d3e-9f00-1a2b3c4d5e6f",
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a cold install without a database to run the task in", async () => {
+    await expect(verificationSteps("maven", "1.2.3", {}, {})).rejects.toThrow(
+      "The maven target needs WORKHORSE_VERIFY_DATABASE_URL",
+    );
+  });
+
+  it("takes the JVM artifacts from the staging directory for the rehearsal", async () => {
+    const steps = await verificationSteps(
+      "maven",
+      "1.2.3",
+      { mavenRepo: "/staging" },
+      {
+        WORKHORSE_VERIFY_DATABASE_URL: "postgres://localhost/app",
+      },
+    );
+
+    for (const build of steps.filter((step) => step.command === "gradle")) {
+      expect(build.args).toContain("-PworkhorseRepository=/staging");
+      expect(build.args).not.toContain("--refresh-dependencies");
+    }
+    await expect(verificationSteps("crate", "1.2.3", { mavenRepo: "/staging" })).rejects.toThrow(
+      "--maven-repo applies only to the maven target",
+    );
   });
 
   it("installs every packed tarball instead of the npm release for the rehearsal", async () => {

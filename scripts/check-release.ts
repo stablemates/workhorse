@@ -5,9 +5,9 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 /**
  * The release check that every release tag runs before anything publishes.
  *
- * One release puts one version on npm, PyPI, the Go module proxy, crates.io, and RubyGems from one
- * commit. The crate and gem jobs of `.github/workflows/release.yml` skip publication when their
- * version disagrees with the tag, and the job still succeeds. So this check, not the publish jobs,
+ * One release puts one version on npm, PyPI, the Go module proxy, crates.io, RubyGems, and Maven
+ * Central from one commit. The crate, gem, and Maven Central jobs of `.github/workflows/release.yml`
+ * skip publication when their version disagrees with the tag, and the job still succeeds. So this check, not the publish jobs,
  * has to refuse a candidate that leaves one line behind. It reads every file that carries the
  * release version and reports every disagreement at once, whichever tag runs it.
  */
@@ -18,7 +18,7 @@ type ReleaseTarget = "go" | "npm" | "python";
 
 /** One release, spelled the way each ecosystem requires. */
 interface TrainVersion {
-  /** SemVer: npm, Go, crates.io, and the Ruby `VERSION` constant. */
+  /** SemVer: npm, Go, crates.io, Maven Central, and the Ruby `VERSION` constant. */
   readonly semver: string;
   /** PEP 440: the Python distribution. */
   readonly pep440: string;
@@ -177,12 +177,14 @@ async function checkNpmLine(files: ReleaseFiles, version: TrainVersion): Promise
   if (support !== undefined) {
     const install = (JSON.parse(support) as { install?: Record<string, string> }).install ?? {};
     for (const [key, command] of Object.entries(install)) {
+      // The schema download and pinned schema tool, a Gradle coordinate, and a Maven `<version>`.
       for (const match of command.matchAll(
-        /(?:\/download\/v|@stablemates\/workhorse@)([^/\s]+)/g,
+        /(?:\/download\/v|@stablemates\/workhorse@|dev\.stablemates:[\w-]+:)([^/\s"')]+)|<version>([^<]+)<\/version>/g,
       )) {
-        if (match[1] !== version.semver) {
+        const declared = match[1] ?? match[2];
+        if (declared !== version.semver) {
           files.problems.push(
-            `support.json install.${key} is ${match[1]} but the tag is ${version.semver}`,
+            `support.json install.${key} is ${declared} but the tag is ${version.semver}`,
           );
         }
       }
@@ -234,6 +236,8 @@ async function checkOtherLines(files: ReleaseFiles, version: TrainVersion): Prom
       "workhorse version",
     );
   }
+  // The three JVM artifacts share one version (ADR 0103).
+  await files.requireVersion("jvm/gradle.properties", /^version=(\S+)$/m, version.semver);
   await files.requireVersion(
     "ruby/lib/stablemates/workhorse/version.rb",
     /^\s*VERSION = "([^"]+)"$/m,

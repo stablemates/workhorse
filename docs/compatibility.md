@@ -766,15 +766,18 @@ Nobody may cancel the `main` CI push run of the candidate commit, because each r
 requires that run to succeed.
 
 The Rust crate and the Ruby gem have no tag of their own. Each rides the npm `v*` tag and publishes
-after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe.
+after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe. The three JVM artifacts
+ride the same tag. Their stage is ready, and their first publish waits for the maintainer steps of
+[JVM artifacts](#jvm-artifacts).
 
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
    manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
    All ten npm tarballs, the Python wheel, and the Python source distribution are installed in
    clean consumers. The Python dry run's `attestation-rehearsal` job must pass, which proves that
-   the attestation files exist and that the pinned uv uploads them. The Go external consumer, the Rust packaged-crate consumer, and the Ruby
-   packaged-gem consumer are built from the same commit.
+   the attestation files exist and that the pinned uv uploads them. The Go external consumer, the Rust packaged-crate consumer, the Ruby
+   packaged-gem consumer, and the JVM consumers of the staged artifacts are built from the same
+   commit.
    Test registries are not part of the rehearsal.
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    `pnpm release:verify python` checks its PEP 740 attestations on PyPI before the train continues.
@@ -802,7 +805,7 @@ check must refuse the candidate before the first registry receives it. `pnpm rel
 1. A file does not carry the release version. The files are every published `package.json`,
    `typescript/core/src/version.ts`, `python/pyproject.toml`, `python/src/workhorse/_version.py`,
    `python/uv.lock`, `go/version.go`, `rust/Cargo.toml`, `Cargo.lock`,
-   `ruby/lib/stablemates/workhorse/version.rb`, and each Ruby lockfile.
+   `ruby/lib/stablemates/workhorse/version.rb`, each Ruby lockfile, and `jvm/gradle.properties`.
 2. A peer range on a published package does not cover the release. For a `0.x` release, the range
    is the release's minor line. From the first major release, the range is its major line. The
    check reads every published `package.json` and `dashboard/app/package.json`.
@@ -831,6 +834,11 @@ directory:
 - `crate` resolves `workhorse = "=X.Y.Z"` from crates.io and checks the locked package ID.
 - `go` resolves the module through `proxy.golang.org` with no direct fallback and runs
   `go mod verify`.
+- `maven` builds the Java consumer of `dev.stablemates:workhorse` and the Kotlin consumer of
+  `dev.stablemates:workhorse-kotlin` from `jvm/release-consumer` against Maven Central. Each
+  consumer runs one task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names, and checks
+  that it succeeded. That database must have the Workhorse schema. Each consumer prints the file
+  name of the jar it loaded, which must name the version, and the id of the task.
 
 The script covers registry visibility, signatures or checksums, and clean installation. It also
 covers PyPI provenance. The maintainer still reviews provenance on the npm, crates.io, and RubyGems
@@ -847,6 +855,8 @@ substitutes the artifact about to ship for the registry release:
 - `--go-proxy <directory>` serves a file module proxy ahead of `proxy.golang.org`. It skips the
   checksum database for this module only, which has never seen the unpublished version, and uses a
   scratch module cache.
+- `--maven-repo <directory>` makes the consumers take `dev.stablemates` only from the staging
+  directory that `pnpm jvm:package-check` writes. They take every other module from Maven Central.
 
 A check the artifact cannot satisfy therefore fails the rehearsal, not the train after the tag.
 
@@ -1032,15 +1042,87 @@ a trusted publisher's API key without an OTP.
 Ruby competitor benchmark a release gate. That gate has to pass before the first release publishes the
 gem.
 
+### JVM artifacts
+
+The JVM SDK publishes three artifacts to Maven Central from `jvm/`: `dev.stablemates:workhorse`,
+`dev.stablemates:workhorse-kotlin`, and `dev.stablemates:workhorse-spring-boot-starter`
+([ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
+The three always carry one version. Like the crate and the gem, they have no tag of their own and
+publish from the npm `v*` tag. The stage is ready, but no version is published yet. The first
+publish waits for the maintainer steps at the end of this section.
+
+A Gradle build adds the core with `implementation("dev.stablemates:workhorse:0.8.0")`. A Maven
+build adds
+`<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>0.8.0</version></dependency>`.
+For the Kotlin module or the starter, replace the artifact ID with `workhorse-kotlin` or
+`workhorse-spring-boot-starter`. `support.json` states the two commands as `install.gradle` and
+`install.maven`.
+
+The core has two optional dependencies, the OpenTelemetry API and the Jakarta Servlet API. Its POM
+marks each one `<optional>true</optional>`, so Maven does not add it. Its Gradle module metadata
+puts each one in a feature variant, so Gradle adds it only when the build asks for the feature,
+for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
+
+1. Set `version` in `jvm/gradle.properties` to the release version and commit it with the
+   candidate.
+2. Use the `vX.Y.Z` tag that the [npm packages](#npm-packages) step creates on the candidate SHA.
+   Do not create another tag. The build job of `.github/workflows/release.yml` runs
+   `pnpm jvm:release-check`. It runs the JVM gates, then `pnpm jvm:package-check`, the dry run:
+   1. Gradle writes the three artifacts, with `-sources.jar`, `-javadoc.jar`, and checksums, to
+      `jvm/build/staging-deploy`. A throwaway key that the check generates signs every file.
+   2. The check refuses a module other than the three artifacts, a version other than
+      `jvm/gradle.properties`, a missing file, signature, or checksum, and a POM without the
+      metadata that Central requires.
+   3. It builds a Java, a Kotlin, and a Spring Boot consumer from the staging directory. With
+      PostgreSQL available, each consumer enqueues one task and runs it. It then runs
+      `pnpm release:verify maven` against the staging directory.
+      The dry run uploads nothing and reads no secret. The CI `jvm` job runs it on the Java floor on
+      every change.
+3. After npm publishes, the `maven-central` job compares the version in `jvm/gradle.properties`
+   with the tag. A mismatch writes a notice and publishes nothing. The job also writes a notice and
+   publishes nothing while one of the four secrets of the `maven-central` environment is missing.
+   The [release check](#release-train) in the build job refuses a mismatched tag before npm
+   publishes.
+4. On a match, the job stages and signs the artifacts with the release key, and runs the same
+   checks. It refuses a version that differs from the tag. It then zips the staging directory
+   without `maven-metadata.xml` files, and `scripts/upload-maven-central.ts` uploads the bundle to
+   the Central Publisher Portal with `publishingType=USER_MANAGED`. The job waits until the Portal
+   reports the deployment as `VALIDATED`.
+5. Open the deployment at <https://central.sonatype.com/publishing/deployments>, check it, and
+   select Publish. Maven Central never deletes a published version, so this step keeps a person
+   between the upload and a permanent version. After two clean releases, a maintainer can change
+   the stage to `publishingType=AUTOMATIC`.
+6. Verify the public version with `pnpm release:verify maven X.Y.Z`. Set
+   `WORKHORSE_VERIFY_DATABASE_URL` to a database with the Workhorse schema first.
+
+The `github-release` job waits for the `maven-central` job. A failed upload or a failed validation
+therefore ends the run before the GitHub release exists.
+
+A maintainer must do these steps before the first publish. SM-1384 records them. Nothing in this
+repository performs them.
+
+1. Register the domain `stablemates.dev`, and verify the namespace `dev.stablemates` in the Central
+   Portal with a DNS TXT record.
+2. Generate a Portal user token.
+3. Generate an OpenPGP key for signing only, and publish its public key to `keyserver.ubuntu.com`
+   and `keys.openpgp.org`.
+4. Create the `maven-central` environment on GitHub with a required reviewer and a policy that
+   admits only the `v*` tags, as `rubygems` has. Turn off administrator bypass. Do this before
+   step 5. A tag that runs the job before the environment exists makes GitHub create the
+   environment without protection.
+5. Add the four environment secrets: `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD`,
+   `MAVEN_SIGNING_KEY`, and `MAVEN_SIGNING_PASSWORD`. [Publication credentials](#publication-credentials)
+   describes each one.
+
 ### Release tags
 
 Each tag prefix publishes a fixed set of packages:
 
-| Tag         | Publishes                                    | Workflow                                |
-| ----------- | -------------------------------------------- | --------------------------------------- |
-| `v*`        | The ten npm packages, the crate, and the gem | `.github/workflows/release.yml`         |
-| `python/v*` | The PyPI distribution                        | `.github/workflows/release-python.yml`  |
-| `go/v*`     | The Go module, through the module proxy      | None; `scripts/release-go.sh` pushes it |
+| Tag         | Publishes                                                             | Workflow                                |
+| ----------- | --------------------------------------------------------------------- | --------------------------------------- |
+| `v*`        | The ten npm packages, the crate, the gem, and the three JVM artifacts | `.github/workflows/release.yml`         |
+| `python/v*` | The PyPI distribution                                                 | `.github/workflows/release-python.yml`  |
+| `go/v*`     | The Go module, through the module proxy                               | None; `scripts/release-go.sh` pushes it |
 
 Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `refs/tags/go/v*`.
 
@@ -1049,17 +1131,19 @@ Two repository tag rulesets cover `refs/tags/v*`, `refs/tags/python/v*`, and `re
 - "Lock release tags" (ruleset 24047194) blocks update, deletion, and non-fast-forward pushes. It has
   no bypass actor, so a published tag cannot move or disappear.
 
-The Ruby gem publishes from `v*`, which both rulesets already cover. If the gem ever moves to a
-different tag prefix, add that prefix to both rulesets in the same change.
+The Ruby gem and the JVM artifacts publish from `v*`, which both rulesets already cover. If one of
+them ever moves to a different tag prefix, add that prefix to both rulesets in the same change.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
 require workflow approval. The protected `npm`, `pypi`, `crates-io`, and `rubygems` environments
-require review, and all four prevent administrator bypass.
+require review, and all four prevent administrator bypass. The `maven-central` environment must
+have the same protection before the maintainer adds its secrets.
 
 ### Publication credentials
 
-None of the five registries holds a credential this repository stores, and none of them holds one
-that can expire.
+Five of the six registries hold no credential that this repository stores, and none of those five
+holds one that can expire. Maven Central is the exception, as the last paragraph of this section
+describes.
 
 npm publication uses trusted publishing. `npm publish` exchanges the publish job's GitHub Actions
 OIDC identity for a short-lived registry credential, and npm mints it only for the trusted publisher
@@ -1097,6 +1181,14 @@ an owner updates the trusted publisher on RubyGems.org.
 
 The Go module proxy needs no credential at all. `scripts/release-go.sh` pushes a tag, and the proxy
 serves what the public repository already holds.
+
+Maven Central has no trusted publishing, so its stage reads four GitHub Actions secrets of the
+`maven-central` environment. `MAVEN_CENTRAL_USERNAME` and `MAVEN_CENTRAL_PASSWORD` are the Central
+Portal user token. `MAVEN_SIGNING_KEY` is the ASCII-armored private OpenPGP key, and
+`MAVEN_SIGNING_PASSWORD` is its passphrase. Only the step that signs receives the key, and only the
+step that uploads receives the token. The token and the key do not expire by themselves, so the
+maintainer rotates them: generate a new token in the Portal, or a new key, and replace the secret.
+A new signing key must be on a public key server before the next release.
 
 ### Recovering a partially published release
 

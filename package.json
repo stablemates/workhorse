@@ -197,6 +197,8 @@
     "jvm:lint": "tsx scripts/with-env.ts gradle -p jvm lint -Pworkhorse.lint",
     "jvm:format": "tsx scripts/with-env.ts gradle -p jvm spotlessApply",
     "jvm:format:check": "tsx scripts/with-env.ts gradle -p jvm spotlessCheck",
+    "jvm:package-check": "tsx scripts/with-env.ts tsx scripts/check-jvm-release.ts",
+    "jvm:release-check": "pnpm jvm:gates && pnpm jvm:package-check",
     "jvm:gates": "pnpm jvm:lint && pnpm jvm:build && WORKHORSE_REQUIRE_DATABASE=1 pnpm jvm:test",
     "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
     "rust:release-check": "pnpm rust:gates && pnpm rust:package-check",

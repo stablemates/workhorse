@@ -24,11 +24,20 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 // fetch anything when it is absent. A Python, Go, Rust, or Ruby project has no `node_modules` to
 // resolve from, so its command names the version explicitly, and the rule below is what keeps that
 // literal equal to the version this repository publishes.
+//
+// A Gradle or Maven dependency is the other exception. Its coordinate has no form without a
+// version, so `install.gradle` and `install.maven` name the version of `jvm/gradle.properties`, and
+// a rule below holds them to it. They name the core, `dev.stablemates:workhorse`. The pages that
+// show them name the Kotlin module and the starter by their artifact IDs. No README or site page
+// shows them before Maven Central serves the artifacts (SM-1384), so `docs/compatibility.md` is
+// their only surface until then.
 
 const execFileAsync = promisify(execFile);
 
 type InstallCommand =
   | "go"
+  | "gradle"
+  | "maven"
   | "node"
   | "python"
   | "ruby"
@@ -83,6 +92,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
     commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
   },
   { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
+  { file: "docs/compatibility.md", commands: ["gradle", "maven"] },
 ];
 
 /** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
@@ -244,6 +254,32 @@ describe("install commands", () => {
     expect(asset).toBe("schema.sql");
     expect(workflow).toContain(`gh release create "$tag" sql/${asset}`);
     expect(workflow).toContain(`gh release upload "$tag" sql/${asset} --clobber`);
+  });
+
+  it("pins the Gradle and Maven coordinates to the JVM train version", async () => {
+    const manifest = await readInstallManifest();
+    const properties = await read("jvm/gradle.properties");
+    const version = /^version=(\S+)$/m.exec(properties)?.[1];
+
+    expect(version).toBeDefined();
+    expect(manifest.install.gradle).toBe(`implementation("dev.stablemates:workhorse:${version}")`);
+    expect(manifest.install.maven).toBe(
+      `<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>${version}</version></dependency>`,
+    );
+  });
+
+  it("keeps the Gradle and Maven coordinates off the README and site pages until Central serves them", async () => {
+    const manifest = await readInstallManifest();
+    const shown: string[] = [];
+
+    for (const [file, contents] of await documentedSurfaces()) {
+      if (!file.endsWith("README.md") && !file.startsWith("site/")) continue;
+      for (const key of ["gradle", "maven"] as const) {
+        if (contents.includes(manifest.install[key])) shown.push(`${file}: install.${key}`);
+      }
+    }
+
+    expect(shown).toEqual([]);
   });
 
   it("leaves the schema command a TypeScript project runs unpinned and local", async () => {

@@ -14,12 +14,14 @@ import { corePackage, publishedPackages, repositoryRoot } from "./packages.js";
  * tarballs, the unpacked `.crate` archive, or a module proxy staged from the commit to tag. A check
  * the artifact cannot satisfy therefore fails before any tag. The PyPI check also requires a PEP 740
  * attestation from this repository's release workflow on every published file; the dry run proves
- * the same upload path with `scripts/check-attestation-upload.ts`. The npm, crates.io, and Go
+ * the same upload path with `scripts/check-attestation-upload.ts`. The Maven target builds the Java
+ * and Kotlin consumers of `jvm/release-consumer`, the cold install of ADR 0103, against Maven
+ * Central or against the staging directory that `scripts/check-jvm-release.ts` writes. The npm, crates.io, and Go
  * provenance review and the enqueue-and-worker smoke stay with the maintainer;
  * `docs/compatibility.md` → Release train lists them.
  */
 
-type VerifyTarget = "crate" | "go" | "npm" | "python";
+type VerifyTarget = "crate" | "go" | "maven" | "npm" | "python";
 
 export interface VerificationStep {
   /** Program, resolved from PATH unless it names a path inside the scratch directory. */
@@ -29,6 +31,8 @@ export interface VerificationStep {
   readonly environment?: Readonly<Record<string, string>>;
   /** Trimmed stdout the step must print. Absent means only the exit status counts. */
   readonly expect?: string;
+  /** A pattern the trimmed stdout must match, for output that names a new task id. */
+  readonly expectPattern?: RegExp;
 }
 
 /**
@@ -44,6 +48,8 @@ export interface VerificationOptions {
   readonly crate?: string;
   /** go: a module proxy directory served ahead of proxy.golang.org. */
   readonly goProxy?: string;
+  /** maven: a staged Maven repository that serves `dev.stablemates` instead of Maven Central. */
+  readonly mavenRepo?: string;
 }
 
 type ArtifactOption = keyof VerificationOptions;
@@ -51,6 +57,7 @@ type ArtifactOption = keyof VerificationOptions;
 const artifactOptions: Readonly<Record<VerifyTarget, ArtifactOption>> = {
   crate: "crate",
   go: "goProxy",
+  maven: "mavenRepo",
   npm: "tarballs",
   python: "wheel",
 };
@@ -59,6 +66,7 @@ const artifactOptions: Readonly<Record<VerifyTarget, ArtifactOption>> = {
 const artifactFlags: Readonly<Record<ArtifactOption, string>> = {
   crate: "--crate",
   goProxy: "--go-proxy",
+  mavenRepo: "--maven-repo",
   tarballs: "--tarballs",
   wheel: "--wheel",
 };
@@ -183,6 +191,101 @@ function crateSteps(version: string, options: VerificationOptions): Verification
   ];
 }
 
+const jvmDirectory = path.join(repositoryRoot, "jvm");
+
+/** The Gradle properties that pin each JVM consumer to the versions the artifacts build against. */
+export async function consumerProperties(version: string): Promise<string[]> {
+  const catalogue = await readFile(path.join(jvmDirectory, "gradle", "libs.versions.toml"), "utf8");
+  const pinned = (name: string) => {
+    const value = new RegExp(`^${name} = "([^"]+)"$`, "m").exec(catalogue)?.[1];
+    if (!value) throw new Error(`jvm/gradle/libs.versions.toml declares no ${name} version`);
+    return value;
+  };
+  return [
+    `-PworkhorseVersion=${version}`,
+    `-PpgjdbcVersion=${pinned("pgjdbc")}`,
+    `-PkotlinVersion=${pinned("kotlin")}`,
+    `-PspringBootVersion=${pinned("spring-boot")}`,
+  ];
+}
+
+/**
+ * The scratch directory is outside the checkout, where a mise shim finds no pinned version. These
+ * variables give the shims the versions of `mise.toml`. A CI runner without mise ignores them.
+ */
+async function jvmToolchainEnvironment(): Promise<Record<string, string>> {
+  const pins = await readFile(path.join(repositoryRoot, "mise.toml"), "utf8");
+  const environment: Record<string, string> = {};
+  for (const tool of ["gradle", "java"]) {
+    const value = new RegExp(`^${tool} = "([^"]+)"$`, "m").exec(pins)?.[1];
+    if (value) environment[`MISE_${tool.toUpperCase()}_VERSION`] = value;
+  }
+  return environment;
+}
+
+/** The PostgreSQL database that the Maven target runs its tasks in. */
+const verifyDatabaseVariable = "WORKHORSE_VERIFY_DATABASE_URL";
+
+/** A JDBC URL for a `postgres://` URL, with the credentials as parameters. */
+export function jdbcUrl(url: string): string {
+  const parsed = new URL(url);
+  const parameters = new URLSearchParams(parsed.search);
+  if (parsed.username) parameters.set("user", decodeURIComponent(parsed.username));
+  if (parsed.password) parameters.set("password", decodeURIComponent(parsed.password));
+  const query = parameters.toString();
+  return `jdbc:postgresql://${parsed.host}${parsed.pathname}${query ? `?${query}` : ""}`;
+}
+
+/**
+ * The Java consumer takes `dev.stablemates:workhorse`, and the Kotlin consumer takes
+ * `dev.stablemates:workhorse-kotlin`. ADR 0103 makes each run a task end to end: each enqueues one
+ * task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names, runs it, and checks that it
+ * succeeded. Each prints the file name of the jar it loaded, then the task id.
+ */
+async function mavenSteps(
+  version: string,
+  options: VerificationOptions,
+  ambient: NodeJS.ProcessEnv,
+): Promise<VerificationStep[]> {
+  const database = ambient[verifyDatabaseVariable];
+  if (!database) {
+    throw new Error(
+      `The maven target needs ${verifyDatabaseVariable}, the URL of a PostgreSQL database with the Workhorse schema`,
+    );
+  }
+  const environment = await jvmToolchainEnvironment();
+  const properties = [
+    ...(await consumerProperties(version)),
+    ...(options.mavenRepo === undefined ? [] : [`-PworkhorseRepository=${options.mavenRepo}`]),
+  ];
+  return [
+    ["java", "workhorse"],
+    ["kotlin", "workhorse-kotlin"],
+  ].flatMap(([consumer, artifact]) => [
+    {
+      command: "cp",
+      args: ["-R", path.join(jvmDirectory, "release-consumer", consumer!), consumer!],
+    },
+    {
+      command: "gradle",
+      // After a publish, Gradle asks Maven Central again instead of trusting an earlier lookup.
+      args: [
+        "-p",
+        consumer!,
+        "--quiet",
+        ...(options.mavenRepo === undefined ? ["--refresh-dependencies"] : []),
+        "run",
+        ...properties,
+        `--args=${jdbcUrl(database)}`,
+      ],
+      environment,
+      expectPattern: new RegExp(
+        `^${artifact!.replaceAll("-", "\\-")}-${version.replaceAll(".", "\\.")}\\.jar\\n[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+      ),
+    },
+  ]);
+}
+
 /**
  * The staged proxy goes first and proxy.golang.org serves the dependencies, still with no `direct`
  * fallback. The checksum database has never seen the staged version, so it skips this module only.
@@ -290,6 +393,7 @@ export async function verificationSteps(
   target: VerifyTarget,
   version: string,
   options: VerificationOptions = {},
+  ambient: NodeJS.ProcessEnv = process.env,
 ): Promise<readonly VerificationStep[]> {
   requireArtifactTarget(target, options);
   switch (target) {
@@ -301,26 +405,35 @@ export async function verificationSteps(
       return crateSteps(version, options);
     case "go":
       return goSteps(version, options);
+    case "maven":
+      return await mavenSteps(version, options, ambient);
   }
 }
 
-function render(step: VerificationStep): string {
-  const quoted = [step.command, ...step.args].map((part) =>
-    /^[\w@=./:+-]+$/.test(part) ? part : `'${part.replaceAll("'", String.raw`'\''`)}'`,
-  );
+/** The step as a shell line, with a database password replaced. */
+export function render(step: VerificationStep): string {
+  const quoted = [step.command, ...step.args]
+    .map((part) => part.replace(/password=[^&\s]+/g, "password=***"))
+    .map((part) =>
+      /^[\w@=./:+-]+$/.test(part) ? part : `'${part.replaceAll("'", String.raw`'\''`)}'`,
+    );
   const environment = Object.entries(step.environment ?? {}).map(
     ([key, value]) => `${key}=${value}`,
   );
   return [...environment, ...quoted].join(" ");
 }
 
-async function runStep(step: VerificationStep, directory: string): Promise<void> {
+async function runStep(
+  step: VerificationStep,
+  directory: string,
+  ambient: NodeJS.ProcessEnv,
+): Promise<void> {
   process.stdout.write(`$ ${render(step)}\n`);
   const command = step.command.includes("/") ? path.join(directory, step.command) : step.command;
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = spawn(command, [...step.args], {
       cwd: directory,
-      env: { ...process.env, ...step.environment },
+      env: { ...ambient, ...step.environment },
       stdio: ["ignore", "pipe", "inherit"],
     });
     let output = "";
@@ -340,6 +453,11 @@ async function runStep(step: VerificationStep, directory: string): Promise<void>
       `${render(step)} printed ${JSON.stringify(stdout.trim())}, expected ${step.expect}`,
     );
   }
+  if (step.expectPattern !== undefined && !step.expectPattern.test(stdout.trim())) {
+    throw new Error(
+      `${render(step)} printed ${JSON.stringify(stdout.trim())}, expected ${String(step.expectPattern)}`,
+    );
+  }
 }
 
 /** Run every step for one registry in a fresh scratch directory, stopping at the first failure. */
@@ -347,6 +465,7 @@ export async function verifyRelease(
   target: VerifyTarget,
   version: string,
   options: VerificationOptions = {},
+  ambient: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   requireArtifactTarget(target, options);
   // Steps run in a scratch directory, so every artifact path must be absolute. Cargo reports the
@@ -359,10 +478,10 @@ export async function verifyRelease(
       ]),
     ),
   ) as VerificationOptions;
-  const steps = await verificationSteps(target, version, resolved);
+  const steps = await verificationSteps(target, version, resolved, ambient);
   const directory = await mkdtemp(path.join(tmpdir(), `workhorse-release-verify-${target}-`));
   try {
-    for (const step of steps) await runStep(step, directory);
+    for (const step of steps) await runStep(step, directory, ambient);
     // A local wheel has no PyPI provenance yet; the dry run's attestation rehearsal covers it.
     if (target === "python" && resolved.wheel === undefined) {
       process.stdout.write(
@@ -378,7 +497,13 @@ export async function verifyRelease(
 }
 
 function isTarget(value: string | undefined): value is VerifyTarget {
-  return value === "crate" || value === "go" || value === "npm" || value === "python";
+  return (
+    value === "crate" ||
+    value === "go" ||
+    value === "maven" ||
+    value === "npm" ||
+    value === "python"
+  );
 }
 
 function artifactOption(flag: string | undefined): ArtifactOption | undefined {
@@ -393,8 +518,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const artifactValid = flag === undefined || (option !== undefined && artifact !== undefined);
   if (!isTarget(target) || !version || !artifactValid || rest.length > 0) {
     process.stderr.write(
-      "Usage: pnpm release:verify <python|npm|crate|go> <X.Y.Z> " +
-        "[--wheel <file> | --tarballs <directory> | --crate <directory> | --go-proxy <directory>]\n",
+      "Usage: pnpm release:verify <python|npm|crate|go|maven> <X.Y.Z> " +
+        "[--wheel <file> | --tarballs <directory> | --crate <directory> | --go-proxy <directory> | " +
+        "--maven-repo <directory>]\n",
     );
     process.exitCode = 64;
   } else {

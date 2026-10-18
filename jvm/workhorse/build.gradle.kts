@@ -2,15 +2,26 @@
 
 description = "Workhorse for Java: the client, the worker, Admin, and the dashboard backend"
 
+// The two optional dependencies are feature variants of the main source set (ADR 0103, "Three
+// artifacts and their dependencies"). The published POM marks each one `<optional>true</optional>`,
+// and the Gradle module metadata gives each its own capability, so a caller resolves neither unless
+// it asks: for example `requireFeature("opentelemetry")`. `scripts/check-jvm-release.ts` checks both
+// files.
+extensions.configure<JavaPluginExtension> {
+  val main = the<SourceSetContainer>()["main"]
+  registerFeature("servlet") { usingSourceSet(main) }
+  registerFeature("opentelemetry") { usingSourceSet(main) }
+}
+
 dependencies {
   // PgJDBC at its floor. A caller may resolve a newer 42.7.x, and `PgjdbcVersion` refuses an
   // older one at run time.
   implementation(libs.pgjdbc)
   api(libs.jspecify)
   // The dashboard filter needs the Servlet API, which the servlet container supplies.
-  compileOnly(libs.jakarta.servlet.api)
+  "servletApi"(libs.jakarta.servlet.api)
   // OpenTelemetry is optional (ADR 0103, "Telemetry"): the caller's class path supplies the API.
-  compileOnly(libs.opentelemetry.api)
+  "opentelemetryApi"(libs.opentelemetry.api)
   testImplementation(libs.tomcat.embed.core)
   testImplementation(libs.opentelemetry.api)
   testImplementation(libs.opentelemetry.sdk.testing)
