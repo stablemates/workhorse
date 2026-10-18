@@ -49,7 +49,9 @@ class OpenTelemetryTelemetryTest {
             + caller.getSpanContext().getTraceId()
             + "-"
             + caller.getSpanContext().getSpanId()
-            + "-01",
+            // The flags of the span itself: the SDK sets the W3C random flag from 1.62.0.
+            + "-"
+            + caller.getSpanContext().getTraceFlags().asHex(),
         carrier.get("traceparent"));
   }
 

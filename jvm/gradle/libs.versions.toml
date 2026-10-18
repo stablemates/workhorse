@@ -1,10 +1,13 @@
 # Every JVM dependency and build plugin version. mise.toml pins Java and Gradle.
 [versions]
-pgjdbc = "42.7.8"
+# The PgJDBC floor: the first release that fixes GHSA-98qh-xjc8-98pq and GHSA-j92g-9f8w-j867 (ADR
+# 0103, "Amendment: the JVM floors rise past their known advisories"). `PgjdbcVersion.FLOOR` agrees.
+pgjdbc = "42.7.12"
 jspecify = "1.0.0"
 # The OpenTelemetry API that the core compiles against, an optional dependency (ADR 0103,
-# "Telemetry"). spring-boot-dependencies-4.0.8.pom, the Spring Boot floor, manages this version.
-opentelemetry = "1.55.0"
+# "Telemetry"). 1.62.0 is the first release that fixes GHSA-rcgg-9c38-7xpx. Spring Boot 4.1 manages
+# it, and the Spring Boot floor manages 1.55.0.
+opentelemetry = "1.62.0"
 # The dashboard backend compiles against the Jakarta Servlet floor of ADR 0103.
 jakarta-servlet = "6.0.0"
 # The servlet container for the dashboard tests: the Tomcat that Spring Boot 4.1.1, the newest 4.1
@@ -13,6 +16,10 @@ tomcat = "11.0.24"
 kotlin = "2.4.21"
 kotlin-core-libraries = "2.2.21"
 spring-boot = "4.0.8"
+# The jackson-databind floor of the starter's `jackson` feature: the first Jackson 3 release that
+# fixes the seven advisories of SM-1467. No Spring Boot BOM manages it yet: 4.0.8 and 4.1.1 manage
+# 3.1.5. jackson-databind 3.1.7 requires jackson-core 3.1.7.
+jackson = "3.1.7"
 junit = "6.1.3"
 errorprone = "2.50.0"
 errorprone-plugin = "5.1.1"
@@ -54,7 +61,7 @@ spring-web = { module = "org.springframework:spring-web" }
 spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
 spring-boot-opentelemetry = { module = "org.springframework.boot:spring-boot-opentelemetry" }
-jackson-databind = { module = "tools.jackson.core:jackson-databind" }
+jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 # The Kotlin parser of the API snapshot reader, at the version of the Kotlin compiler.
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }

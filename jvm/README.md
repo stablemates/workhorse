@@ -53,7 +53,7 @@ Runtime processes verify compatibility instead of changing the schema. Call
 
 Requires Java 21 or newer and PostgreSQL 15 through 18.
 
-The core needs PgJDBC 42.7.8 or newer and JSpecify. The Kotlin module needs Kotlin 2.2 or newer.
+The core needs PgJDBC 42.7.12 or newer and JSpecify. The Kotlin module needs Kotlin 2.2 or newer.
 The starter needs Spring Boot 4.0 or newer.
 
 ## Run one task
