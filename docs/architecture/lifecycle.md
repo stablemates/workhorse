@@ -367,8 +367,8 @@ The Python worker runs the first pass and every later pass on a dedicated mainte
 
 #### Background routines
 
-Every TypeScript, Python, Go, and Rust worker calls `run_maintenance_v1(p_now)` from its slow
-maintenance cycle. The function calls, in order:
+Every TypeScript, Python, Go, Rust, Ruby, and JVM worker calls `run_maintenance_v1(p_now)` from its
+slow maintenance cycle. The function calls, in order:
 
 1. `rollup_stats_v1`
 2. `prepare_history_partitions_v1`
@@ -382,6 +382,8 @@ maintenance cycle. The function calls, in order:
 | Python     | `maintenance_routine_poll_ms`                 | 60 seconds |
 | Go         | `WorkerOptions.MaintenanceRoutineInterval`    | 60 seconds |
 | Rust       | `WorkerOptions::maintenance_routine_interval` | 60 seconds |
+| Ruby       | `maintenance_routine_interval:`               | 60 seconds |
+| JVM        | `Worker.Builder.maintenanceRoutineInterval`   | 60 seconds |
 
 [ADR 0011](../decisions/0011-daily-retention-and-split-maintenance.md) decided that default, and
 [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md) holds the SDKs to it.

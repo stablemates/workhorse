@@ -4,8 +4,8 @@ This page is part of the [Workhorse architecture reference](../architecture.md).
 version, the migration plan and runner, and SQL protocol conformance.
 
 Workhorse is a durable queue in PostgreSQL. Its lifecycle transitions that correctness depends on
-are in versioned SQL functions. The TypeScript, Python, Go, and Rust `Queue`, `Admin`, and `Worker`
-stay thin protocol clients.
+are in versioned SQL functions. The TypeScript, Python, Go, Rust, Ruby, and JVM `Queue`, `Admin`,
+and `Worker` stay thin protocol clients.
 
 ## Schema versions and migrations
 
@@ -208,7 +208,7 @@ functions:
 ### Runtime fixtures
 
 `protocol/v1/runtime.json` defines worker behavior above the SQL protocol. The TypeScript suite runs
-every fixture through `Worker`. Python, Go, and Rust runtimes must run the same fixtures.
+every fixture through `Worker`. Python, Go, Rust, Ruby, and JVM runtimes must run the same fixtures.
 
 | Fixture      | Pins                                                                                                                                                                                                 |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

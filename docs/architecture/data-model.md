@@ -954,13 +954,14 @@ children, so the queue of the parent task is a full-tier queue. [ADR
 0097](../decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the
 rule.
 
-| SDK        | Where the SDK sets the queue of a child request with no queue                    |
-| ---------- | -------------------------------------------------------------------------------- |
-| TypeScript | `ChildTasksModule.childRequest` in `typescript/core/src/queue/child-tasks.ts`    |
-| Python     | `serialize_child_request` in `python/src/workhorse/_protocol.py`                 |
-| Go         | `HandlerContext.serializeChildRequest` in `go/child_tasks.go`, from `Task.Queue` |
-| Rust       | `child_request` in `rust/src/children.rs`, from `parent.queue`                   |
-| Ruby       | `Queue#serialize_child_request` in `ruby/lib/stablemates/workhorse/queue.rb`     |
+| SDK        | Where the SDK sets the queue of a child request with no queue                                                  |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `ChildTasksModule.childRequest` in `typescript/core/src/queue/child-tasks.ts`                                  |
+| Python     | `serialize_child_request` in `python/src/workhorse/_protocol.py`                                               |
+| Go         | `HandlerContext.serializeChildRequest` in `go/child_tasks.go`, from `Task.Queue`                               |
+| Rust       | `child_request` in `rust/src/children.rs`, from `parent.queue`                                                 |
+| Ruby       | `Queue#serialize_child_request` in `ruby/lib/stablemates/workhorse/queue.rb`                                   |
+| JVM        | `Queue.serializeChildRequest` in `jvm/workhorse/src/main/java/run/workhorse/Queue.java`, from `parent.queue()` |
 
 TypeScript `Queue.createChild`, `Queue.createChildren`, and `Queue.createChildrenAll` take a claimed
 parent task, so they follow the same rule.
@@ -974,8 +975,8 @@ On `conflict`, the rebuild that [Contract versions on replay](#contract-versions
 describes also reads the `queue_name` of each stored child through `get_task`. A rebuilt request
 with no queue takes the queue of the stored child with the same name. TypeScript also requires the
 same type, as it does for the contract version. The parent task then joins its child. A request
-that names a queue keeps that queue, so a changed queue remains a `ChildConflictError`. All five
-SDKs do this rebuild.
+that names a queue keeps that queue, so a changed queue remains a `ChildConflictError`. All six
+SDKs do this rebuild. The JVM reads the stored queues in `TaskContext.acceptedContractVersions`.
 
 #### Creating a child set
 

@@ -24,7 +24,7 @@ Two boundaries keep this matrix small:
 Ruby is the fifth SDK, shipped as the `stablemates-workhorse` gem ([ADR
 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md)). Its client, `Admin` client,
 dashboard backend, worker runtime, durable handler context, fast task tier, and batch delivery ship
-today. The integer semantics below compare the other four SDKs.
+today.
 
 The JVM SDK is the sixth SDK ([ADR
 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)). Its
@@ -232,21 +232,26 @@ every delay until a caller says otherwise.
 
 ## Integer semantics
 
-PostgreSQL stores a `jsonb` number at full precision, but the four SDKs do not read one the same
-way. Python decodes a JSON integer as a Python `int`, which is unbounded. Rust's `serde_json` holds
-an integer exactly within the signed and unsigned 64-bit ranges. TypeScript and Go decode
-it as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
+PostgreSQL stores a `jsonb` number at full precision, but the six SDKs do not read one the same way.
+Python decodes a JSON integer as a Python `int`, which is unbounded. Ruby decodes it through
+`JSON.parse` as an `Integer`, which is also unbounded. The JVM default codec,
+`JsonCodec.standard()`, decodes it as a `Long` inside the signed 64-bit range and as a `BigInteger`
+outside it. The Spring Boot `JacksonJsonCodec` also keeps an integer exact. Rust's `serde_json`
+holds an integer exactly within the signed and unsigned 64-bit ranges. TypeScript and Go decode it
+as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
 
 So a payload, result, checkpoint, or progress value that carries an integer larger than
-9,007,199,254,740,991 in magnitude is not portable. Enqueued from Python and handled in Python, it
-survives, and a Rust worker keeps it while it fits in 64 bits. Enqueued from Python and handled
-by a TypeScript or Go worker, it arrives rounded: the worker never sees the value the caller sent,
-and never reports an error.
+9,007,199,254,740,991 in magnitude is not portable. Enqueued from Python and handled by a Python,
+Ruby, or JVM worker, it survives. A Rust worker keeps it while it fits in 64 bits. Enqueued from
+Python and handled by a TypeScript or Go worker, it arrives rounded: the worker never sees the value
+the caller sent, and never reports an error.
 
 Workhorse does not reject such a value, because PostgreSQL accepts it and some languages read it
 correctly. Send an identifier beyond that bound as a string instead. Within the bound every SDK
 round-trips an integer exactly, and `typescript/core/test/json-integers.test.ts`,
 `python/tests/test_json_integers.py`, and `go/json_integers_test.go` hold those languages to that.
+`jvm/workhorse/src/test/java/run/workhorse/internal/JsonTest.java` holds the JVM parser to a
+`BigInteger` above the 64-bit range.
 
 Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
 workspace, `SM` team, and `workhorse` project. This document changes only
@@ -305,22 +310,24 @@ through its own public SDK.
 
 <!-- END GENERATED PARITY OPERATOR -->
 
-TypeScript, Go, Rust, and Ruby expose these methods through dedicated public `Admin` clients. Python
-provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded
-dashboards call the same clients for shared operator reads and controls. Cancellation remains
-application-shaped, so every queue client exposes it with audit attribution.
+TypeScript, Go, Rust, Ruby, and the JVM expose these methods through dedicated public `Admin`
+clients. Python provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg.
+Their embedded dashboards call the same clients for shared operator reads and controls. Cancellation
+remains application-shaped, so every queue client exposes it with audit attribution.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
 that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
 backend behind the `dashboard` feature. Ruby serves it as a Rack application that a Rails route or
-`Rack::Builder#map` mounts.
+`Rack::Builder#map` mounts. The JVM serves it as `run.workhorse.dashboard.Dashboard`, a Jakarta
+Servlet filter that the host application registers.
 
 ## Schema tooling is TypeScript-only, deliberately
 
 Schema installation and migration ship in `@stablemates/workhorse` and nowhere else. That is a
-decision, not a gap in the matrix, so no row above records it as Absent for Python, Go, and Rust.
+decision, not a gap in the matrix. Thus no row above records it as Absent for Python, Go, Rust,
+Ruby, or the JVM.
 
 Two reasons hold it there. No component can own an automatic migration, because no component is a
 singleton: the dashboard and every worker deploy on many nodes as part of an ordinary application
@@ -328,11 +335,12 @@ deploy, so a component that migrated itself would be many concurrent migrators r
 deliberate step. And `applySchemaMigrationPlan` is the most safety-critical code in this
 repository — an advisory lock, a post-lock version guard, gap rejection, transaction-control
 rejection, per-step atomic rollback, and a concurrent-migrator race that must be read as success.
-One implementation of that is worth more than four filled cells
+One implementation of that is worth more than five filled cells
 ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
 
-A Python, Go, or Rust deployment therefore runs the TypeScript CLI as a pipeline step, at the version its
-own SDK declares, and verifies with `workhorse schema status --json` before starting. What every
+A Python, Go, Rust, Ruby, Java, or Kotlin deployment therefore runs the TypeScript CLI as a
+pipeline step, at the version its own SDK declares. It verifies with `workhorse schema status
+--json` before it starts. What every
 language does ship is the startup check that reads the result: the "Public startup schema
 compatibility check" row above is Supported everywhere, and it is what turns a missed migration
 into a refused start rather than a corrupted write.
@@ -347,17 +355,16 @@ against a schema it cannot speak, not that every language grows a second migrati
 If a cell says Supported, tests in this repository must exercise that capability in that language.
 The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
 suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
-`Worker`. All four languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL
+`Worker`. All six SDKs execute `protocol/v1/contracts.json`. The Python suite runs the SQL
 fixtures through `python/tests/test_protocol_conformance.py` and every runtime fixture through
 `python/tests/test_worker_runtime_conformance.py`. The Rust suite runs every `protocol/v1` fixture
 category through `rust/tests/protocol_conformance.rs`, and
 `rust/tests/conformance/expected-unsupported.json` lists no exception. The Ruby suite runs every
-`protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`.
-`ruby/spec/conformance/expected-unsupported.json` lists each fixture the Ruby SDK cannot pass yet,
-with the Issue that owns it. The JVM suite runs every `protocol/v1` fixture through
-`jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`.
-`jvm/workhorse/src/test/resources/conformance/expected-unsupported.json` lists each fixture that
-needs a surface of an open JVM slice, with that slice.
+`protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`. The JVM suite
+runs every `protocol/v1` fixture through
+`jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`. The Ruby and
+JVM `expected-unsupported.json` files list no exception. Each suite fails if a fixture that the file
+does not list does not pass.
 
 `scripts/generate-parity-tables.ts` renders every capability matrix from
 `typescript/core/test/support/parity-capabilities.ts`. `pnpm parity:check` fails if the checked-in

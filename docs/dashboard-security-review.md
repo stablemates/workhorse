@@ -107,11 +107,12 @@ Confirm an error body reveals nothing about container paths or package internals
   them from the other.
 - Confirm the standalone listener sets `redactErrorStacks` whenever it is remotely reachable,
   unless the operator passed `--reveal-error-stacks`.
-- Confirm the schema-compatibility `503` body carries only version information in all five hosts.
+- Confirm the schema-compatibility `503` body carries only version information in all six hosts.
   A compatibility verdict answers with its message. Any other failure answers with the fixed
   "Unable to verify Workhorse schema compatibility because the database query failed." and is
-  logged on the server, never returned. Each host's test drives a driver error that names a
-  database address and asserts the address stays out of the body.
+  logged on the server, never returned. Each host other than the JVM has a test that drives a
+  driver error that names a database address. The test asserts that the address stays out of the
+  body. The JVM host has the behavior, but no test drives it yet (SM-1473).
 
 **Re-walk when** a read starts projecting a persisted error, when `redactErrorStacks` changes
 shape, when a host's compatibility check changes what it returns, or when the oRPC major version

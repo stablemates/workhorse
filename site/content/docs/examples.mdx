@@ -17,6 +17,8 @@ the order commit together, or they roll back together.
 - In TypeScript, give the transaction client as the last argument to `enqueue`.
 - In Python, Go, Rust, and Ruby, make the `Queue` on the open transaction, or on the connection
   that holds it.
+- In Java, give the JDBC `Connection` that holds the transaction as the first argument to
+  `enqueue`. In Kotlin, give it as the `connection` argument of `enqueueSuspend`.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
   <Tab value="TypeScript">

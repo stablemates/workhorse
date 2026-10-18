@@ -171,10 +171,10 @@ Two functions return one document or SQL `NULL`:
 - `workhorse.dashboard_event_detail_v1(p_input jsonb)` returns one complete event-detail document.
   It returns SQL `NULL` when the stable event identity does not exist.
 
-TypeScript, Python, and Go validate the wire input, call the matching function, and decode its
-single `jsonb` result. The TypeScript host can add its application-owned durability summary after
-`dashboard_tasks_v1` or `dashboard_task_detail_v1` returns. `DashboardDurabilityProjector` is an
-in-process callback, not database state.
+TypeScript, Python, Go, Rust, Ruby, and JVM hosts validate the wire input. They call the matching
+function and decode its single `jsonb` result. The TypeScript host can add its application-owned
+durability summary after `dashboard_tasks_v1` or `dashboard_task_detail_v1` returns.
+`DashboardDurabilityProjector` is an in-process callback, not database state.
 
 ### Go backend
 
@@ -815,10 +815,10 @@ change, and the procedure returns its snapshot.
 
 The backends differ in how they cancel and in when they allow it:
 
-| Backend                    | Cancel path                                                                                                                 | `canCancel` is true when                                                                     | `FORBIDDEN` when                    |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------- |
-| TypeScript                 | `DashboardTaskController.cancelTaskGroup`. `createDashboardOperatorControllers` implements it with `Admin.cancelTaskGroup`. | The operator mode is `writable` and the host gives `DashboardTaskController.cancelTaskGroup` | The host gives no cancel controller |
-| Go, Python, Rust, and Ruby | The shared cancel statement, which calls `cancel_task_group_v1`                                                             | The host is not read-only                                                                    | The host is read-only               |
+| Backend                         | Cancel path                                                                                                                 | `canCancel` is true when                                                                     | `FORBIDDEN` when                    |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------- |
+| TypeScript                      | `DashboardTaskController.cancelTaskGroup`. `createDashboardOperatorControllers` implements it with `Admin.cancelTaskGroup`. | The operator mode is `writable` and the host gives `DashboardTaskController.cancelTaskGroup` | The host gives no cancel controller |
+| Go, Python, Rust, Ruby, and JVM | The shared cancel statement, which calls `cancel_task_group_v1`                                                             | The host is not read-only                                                                    | The host is read-only               |
 
 Every backend also returns `FORBIDDEN` for a mutation when its operator mode is read-only. The
 authenticated actor replaces the browser `audit.actor`, as
@@ -1269,16 +1269,24 @@ vocabulary and the vocabulary that `Queue.cancel` reports cannot differ.
 `dashboard/v1/bundle/read-surface-<readSurfaceVersion>.tar.gz` tracked artifact. `bundle.json`
 records the archive name, read-surface version, and SHA-256 digest.
 
-- The generator copies both files into `go/dashboard` and `python/src/workhorse/dashboard`.
+- The generator copies both files into `go/dashboard`, `python/src/workhorse/dashboard`,
+  `rust/dashboard`, and `ruby/lib/stablemates/workhorse/dashboard`.
 - `pnpm dashboard-bundle:check` rebuilds the application and rejects a stale artifact or language
   copy.
 - `go/dashboard.Files` embeds the Go copy.
 - Python distributions keep their copy as package data for `importlib.resources`.
+- The Rust crate embeds its copy with `include_bytes!` in `rust/src/dashboard/mod.rs`.
+- The Ruby gem packages its copy, and `Dashboard#bundle_files` reads it from the gem.
+- The JVM has no language copy. `processResources` in `jvm/workhorse/build.gradle.kts` puts the
+  canonical `bundle.json` and `read-surface-*.tar.gz` into the jar under `run/workhorse/dashboard`.
+  `Bundle` reads both files as jar resources.
 
 #### Version injection
 
-The archive contains no Workhorse package version. Each TypeScript, Python, or Go host adds its own
-published version to `DashboardRuntimeConfig.workhorseVersion` when it renders `app/index.html`.
+The archive contains no Workhorse package version. Each TypeScript, Python, Go, Rust, Ruby, or JVM
+host adds its own published version to `DashboardRuntimeConfig.workhorseVersion` when it renders
+`app/index.html`. The JVM host reads the version through `SdkVersion.current()`. It sends `unknown`
+if the build wrote no version resource.
 The browser passes that value to `DashboardProps.workhorseVersion`. A direct React embed can supply
 the same prop or omit the version display. A package-only version change therefore leaves the
 archive digest unchanged.
@@ -1296,7 +1304,8 @@ records:
 If the installed npm archive omitted that file, the plugin requires a version-specific reviewed
 copy under `dashboard/app/third-party-legal`. The build fails if a bundled package has no declared
 licence or matching legal file. The archive digest makes any dependency or legal-text change stale
-until `pnpm dashboard-bundle:generate` updates the canonical, Go, and Python copies.
+until `pnpm dashboard-bundle:generate` updates the canonical copy and the Go, Python, Rust, and Ruby
+copies.
 
 ### HTML assembly
 
