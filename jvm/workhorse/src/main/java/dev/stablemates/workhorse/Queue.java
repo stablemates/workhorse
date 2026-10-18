@@ -271,8 +271,8 @@ public final class Queue {
 
   private TaskGroup sealTaskGroup(Call call, UUID groupId) {
     assertCompatible(call);
-    return group(
-        exactlyOne(
+    return Rows.group(
+        Rows.exactlyOne(
             Sql.rows(call.connection, SqlCatalogue.SEAL_TASK_GROUP_V1, groupId.toString()),
             "seal_task_group_v1"));
   }
@@ -290,7 +290,7 @@ public final class Queue {
   private Optional<TaskGroup> getTaskGroup(Call call, UUID groupId) {
     assertCompatible(call);
     List<Row> rows = Sql.rows(call.connection, SqlCatalogue.GET_TASK_GROUP_V1, groupId.toString());
-    return rows.isEmpty() ? Optional.empty() : Optional.of(group(rows.get(0)));
+    return rows.isEmpty() ? Optional.empty() : Optional.of(Rows.group(rows.get(0)));
   }
 
   /** The first page of at most 100 member tasks. */
@@ -329,43 +329,7 @@ public final class Queue {
       throw new IllegalArgumentException("after must be a non-negative Integer");
     }
     assertCompatible(call);
-    String group = groupId.toString();
-    List<Row> rows =
-        Sql.rows(
-            call.connection,
-            SqlCatalogue.LIST_TASK_GROUP_MEMBERS_V1,
-            group,
-            Long.toString(after),
-            Integer.toString(limit));
-    // A full page can be the last page. The read of one more member tells the two apart.
-    boolean more =
-        rows.size() == limit
-            && !Sql.rows(
-                    call.connection,
-                    SqlCatalogue.LIST_TASK_GROUP_MEMBERS_V1,
-                    group,
-                    Long.toString(rows.get(rows.size() - 1).requiredLong("position")),
-                    "1")
-                .isEmpty();
-    List<TaskGroupMember> members = new ArrayList<>();
-    for (Row row : rows) {
-      String state = row.text("state");
-      String outcome = row.text("outcome");
-      members.add(
-          new TaskGroupMember(
-              row.requiredLong("position"),
-              row.requiredUuid("task_id"),
-              row.text("queue_name"),
-              row.text("task_type"),
-              state == null ? null : constant(TaskState.class, "task_group_member_state", state),
-              outcome == null
-                  ? null
-                  : constant(TaskGroupMemberOutcome.class, "task_group_member_outcome", outcome),
-              row.requiredInstant("added_at"),
-              row.instant("counted_at")));
-    }
-    return new TaskGroupMemberPage(
-        members, more ? members.get(members.size() - 1).position() : null);
+    return Rows.memberPage(call.connection, groupId, after, limit);
   }
 
   /** The group that {@code taskId} is a member of, or whose callback it is, or empty. */
@@ -389,11 +353,11 @@ public final class Queue {
     String kind = row.text("callback_kind");
     return Optional.of(
         new TaskGroupLink(
-            constant(TaskGroupRole.class, "task_group_role", row.requiredText("role")),
+            Rows.constant(TaskGroupRole.class, "task_group_role", row.requiredText("role")),
             kind == null
                 ? null
-                : constant(TaskGroupCallbackKind.class, "task_group_callback", kind),
-            group(row)));
+                : Rows.constant(TaskGroupCallbackKind.class, "task_group_callback", kind),
+            Rows.group(row)));
   }
 
   /**
@@ -526,41 +490,6 @@ public final class Queue {
     }
   }
 
-  private TaskGroup group(Row row) {
-    Map<String, @Nullable Object> callbacks = Json.object(row.json("callbacks"));
-    List<TaskGroupCallback> list = new ArrayList<>();
-    if (callbacks != null) {
-      for (TaskGroupCallbackKind kind : TaskGroupCallbackKind.values()) {
-        String name = kind.name().toLowerCase(Locale.ROOT);
-        if (callbacks.containsKey(name)) {
-          Map<String, @Nullable Object> entry = Json.object(callbacks.get(name));
-          Object taskId = entry == null ? null : entry.get("taskId");
-          list.add(
-              new TaskGroupCallback(
-                  kind, taskId instanceof String text ? UUID.fromString(text) : null));
-        }
-      }
-    }
-    String result = row.text("result");
-    return new TaskGroup(
-        row.requiredUuid("group_id"),
-        constant(TaskGroupState.class, "task_group_state", row.requiredText("state")),
-        result == null ? null : constant(TaskGroupResult.class, "task_group_result", result),
-        new TaskGroupCounts(
-            row.requiredLong("total"),
-            row.requiredLong("succeeded"),
-            row.requiredLong("failed"),
-            row.requiredLong("canceled"),
-            row.requiredLong("pending")),
-        row.requiredInstant("created_at"),
-        row.instant("sealed_at"),
-        row.instant("finished_at"),
-        row.instant("canceled_at"),
-        row.text("canceled_by"),
-        row.text("cancel_reason"),
-        list);
-  }
-
   // ---------------------------------------------------------------------------------------------
   // Controls
 
@@ -584,15 +513,15 @@ public final class Queue {
       Call call, UUID taskId, @Nullable String requestedBy, @Nullable String reason) {
     assertCompatible(call);
     Row row =
-        exactlyOne(
+        Rows.exactlyOne(
             Sql.rows(
                 call.connection, SqlCatalogue.CANCEL_V1, taskId.toString(), requestedBy, reason),
             "cancel_v1");
     String state = row.text("state");
     return new CancelResult(
-        constant(CancelStatus.class, "cancel", row.requiredText("status")),
+        Rows.constant(CancelStatus.class, "cancel", row.requiredText("status")),
         taskId,
-        state == null ? null : constant(TaskState.class, "cancel", state),
+        state == null ? null : Rows.constant(TaskState.class, "cancel", state),
         row.integer("current_attempt"),
         row.instant("requested_at"),
         row.text("requested_by"),
@@ -641,7 +570,7 @@ public final class Queue {
         validateDelivery("signal", "signal payload", name, payload, idempotencyKey, requestedBy);
     assertCompatible(call);
     Row row =
-        exactlyOne(
+        Rows.exactlyOne(
             Sql.rows(
                 call.connection,
                 SqlCatalogue.SEND_SIGNAL_V1,
@@ -655,7 +584,7 @@ public final class Queue {
       throw new SignalIdempotencyConflictException(taskId, name);
     }
     return new SignalDeliveryResult(
-        constant(SignalStatus.class, "send_signal", row.requiredText("status")),
+        Rows.constant(SignalStatus.class, "send_signal", row.requiredText("status")),
         taskId,
         name,
         decode(row.text("payload")),
@@ -707,7 +636,7 @@ public final class Queue {
             "human wait", "human wait result", name, result, idempotencyKey, requestedBy);
     assertCompatible(call);
     Row row =
-        exactlyOne(
+        Rows.exactlyOne(
             Sql.rows(
                 call.connection,
                 SqlCatalogue.COMPLETE_HUMAN_WAIT_V1,
@@ -721,7 +650,7 @@ public final class Queue {
       throw new HumanWaitIdempotencyConflictException(taskId, name);
     }
     return new HumanWaitCompletionResult(
-        constant(HumanWaitStatus.class, "complete_human_wait", row.requiredText("status")),
+        Rows.constant(HumanWaitStatus.class, "complete_human_wait", row.requiredText("status")),
         taskId,
         name,
         decode(row.text("result")),
@@ -775,7 +704,7 @@ public final class Queue {
     assertCompatible(call);
     String since = Values.timestamp(Instant.now().minus(Duration.ofDays(1)));
     Row row =
-        exactlyOne(
+        Rows.exactlyOne(
             Sql.rows(call.connection, SqlCatalogue.QUEUE_HEALTH_V1, since), "queue_health_v1");
     Map<String, @Nullable Object> snapshot = Json.object(row.json("snapshot"));
     if (snapshot == null) {
@@ -1614,10 +1543,11 @@ public final class Queue {
   private static EnqueueResult enqueueResult(Row row) {
     String outcome = row.text("outcome");
     String reason = row.text("reason");
-    EnqueueOutcome parsed = constant(EnqueueOutcome.class, "enqueue", outcome);
+    EnqueueOutcome parsed = Rows.constant(EnqueueOutcome.class, "enqueue", outcome);
     EnqueueNonReplaceableReason because = null;
     if (parsed == EnqueueOutcome.NON_REPLACEABLE) {
-      because = reason == null ? null : optionalConstant(EnqueueNonReplaceableReason.class, reason);
+      because =
+          reason == null ? null : Rows.optionalConstant(EnqueueNonReplaceableReason.class, reason);
       if (because == null) {
         throw invalidResult();
       }
@@ -1650,34 +1580,6 @@ public final class Queue {
 
   private static String wire(Enum<?> value) {
     return value.name().toLowerCase(Locale.ROOT);
-  }
-
-  private static <E extends Enum<E>> E constant(
-      Class<E> type, String operation, @Nullable String text) {
-    E value = text == null ? null : optionalConstant(type, text);
-    if (value == null) {
-      throw new UnexpectedStatusException(operation, text);
-    }
-    return value;
-  }
-
-  private static <E extends Enum<E>> @Nullable E optionalConstant(Class<E> type, String text) {
-    if (!text.equals(text.toLowerCase(Locale.ROOT))) {
-      return null;
-    }
-    try {
-      return Enum.valueOf(type, text.toUpperCase(Locale.ROOT));
-    } catch (IllegalArgumentException unknown) {
-      return null;
-    }
-  }
-
-  private static Row exactlyOne(List<Row> rows, String function) {
-    if (rows.size() != 1) {
-      throw new WorkhorseException(
-          "workhorse." + function + " returned " + rows.size() + " rows; expected one");
-    }
-    return rows.get(0);
   }
 
   private static List<String> tags(List<String> values) {
