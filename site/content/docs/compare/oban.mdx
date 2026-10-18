@@ -1,0 +1,136 @@
+---
+title: "Workhorse compared with Oban"
+description: "Oban vs Workhorse: an Elixir task queue on a SQL database, and a PostgreSQL task queue with workers in five languages. Compare their features and editions, find when Oban is the better choice, and move a job to Workhorse."
+---
+
+Oban is a task queue for Elixir that keeps its work in PostgreSQL, MySQL, or SQLite. It has a free
+open source library and a paid package, Oban Pro. Workhorse is a durable task queue that keeps its
+work in PostgreSQL. It enqueues a task in your transaction, continues a task after a worker crash,
+and runs workers in TypeScript, Python, Go, Rust, and Ruby. Workhorse has no Elixir SDK. This page
+compares the two products, row by row, and tells you when Oban is the better choice.
+
+## Compare Workhorse and Oban
+
+The two products share the base of a database queue: transactional enqueue, delays, cron schedules,
+priorities, refusal of duplicate jobs, retries, and a free dashboard. They differ in five areas:
+
+- **Languages.** Oban runs jobs in Elixir. A separate package, oban-py, runs jobs in Python.
+  Workhorse has workers in five languages, and Elixir is not one of them. Thus a move from Oban to
+  Workhorse changes the language of your Elixir workers.
+- **Editions.** Oban keeps some features in Oban Pro. Limits across all nodes, rate limits, task
+  dependencies, and batches with callbacks need Oban Pro. Workhorse has these features in its
+  Apache-2.0 packages.
+- **Steps inside a task.** A Workhorse handler can store the result of each named step. When the
+  task runs again, the handler skips the steps that completed. It can also wait for a signal without
+  a worker slot. In Oban, a retry runs the whole job again, and a job can snooze until a later time.
+- **Cancellation.** Oban stops the process of a running job, on any node. A Workhorse handler gets
+  an abort signal, and the handler code must stop itself.
+- **Databases.** Oban also runs on MySQL and SQLite. Workhorse runs on PostgreSQL only.
+
+An Oban cell describes the free library. If Oban Pro has more, the cell also names Oban Pro and its
+status. Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="oban" />
+
+## When Oban is the better choice
+
+Oban is the better choice in these cases:
+
+- Your application is in Elixir, and your jobs call its modules directly.
+- Your application uses MySQL or SQLite, not PostgreSQL.
+- Your team already uses Oban Pro and its workflows or batches.
+- A running job must stop when an operator cancels it, without a check in the job code.
+
+Workhorse is the better choice in these cases:
+
+- Your workers are in TypeScript, Python, Go, Rust, or Ruby.
+- You need limits across all workers, rate limits, or task dependencies without a paid package.
+- A task has steps that are slow or costly to repeat.
+- A task waits for a signal or a person.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Oban
+
+A move from Oban changes the language of your Elixir workers, because Workhorse has no Elixir SDK.
+Workers of the oban-py package can stay in Python. Move one queue at a time. Keep the Oban queues
+running until they have no jobs. The [migration guide](/docs/migrate) gives the full procedure and
+a table of equivalent parts.
+
+**Example.** An application sends a `welcome-email` job in the transaction that creates a user. The
+job is in the `mailers` queue and has three attempts.
+
+1. In Oban, the application adds the job to an `Ecto.Multi` with `Oban.insert`.
+2. In Workhorse, the application calls `enqueue` on a `Queue` over the connection that holds the
+   transaction.
+3. `max_attempts: 3` in Oban gives three attempts in total. In Workhorse, `max_attempts=3` gives the
+   same three attempts.
+
+Before the move, with Oban:
+
+```elixir
+defmodule MyApp.WelcomeEmail do
+  use Oban.Worker, queue: :mailers, max_attempts: 3
+
+  @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"user_id" => user_id}}) do
+    MyApp.Mailer.send_welcome_email(user_id)
+    :ok
+  end
+end
+
+Ecto.Multi.new()
+|> Ecto.Multi.insert(:user, MyApp.User.changeset(%MyApp.User{}, %{email: email}))
+|> Oban.insert(:welcome_email, fn %{user: user} ->
+  MyApp.WelcomeEmail.new(%{user_id: user.id})
+end)
+|> MyApp.Repo.transaction()
+```
+
+After the move, with Workhorse in Python:
+
+```python
+from workhorse import EnqueueOptions, HandlerContext, Json, Queue, Worker
+
+with connection.transaction():
+    user_id = connection.execute(
+        "INSERT INTO users (email) VALUES (%s) RETURNING id", (email,)
+    ).fetchone()[0]
+    Queue(connection, default_queue="mailers").enqueue(
+        "welcome-email",
+        {"user_id": user_id},
+        EnqueueOptions(
+            max_attempts=3,
+            retry_policy={
+                "type": "decorrelated-jitter",
+                "baseDelayMs": 15_000,
+                "maxDelayMs": 300_000,
+            },
+        ),
+    )
+
+
+def welcome_email(payload: Json, context: HandlerContext) -> Json:
+    send_welcome_email(payload["user_id"])
+    return None
+
+
+worker = Worker(pool, queue="mailers", concurrency=10).handle("welcome-email", welcome_email)
+worker.run()
+```
+
+`connection` is a Psycopg connection, and `pool` is a Psycopg connection pool for the same
+database. Oban stores the arguments of a job as JSON, so `perform/1` gets them with string keys. A
+Workhorse handler also gets the payload as JSON, so it reads the same keys. The handler returns
+`None`, because Workhorse stores the return value as the task result.
+
+By default, Oban waits at least 15 seconds before a retry and adds a random part. A Workhorse
+decorrelated-jitter policy also gives a random delay, to a maximum.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Checkpoints](/docs/durable-execution) explains how a handler skips completed steps.
