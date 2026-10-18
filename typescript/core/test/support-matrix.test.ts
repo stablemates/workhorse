@@ -560,6 +560,7 @@ describe("continuous integration", () => {
       "rust",
       "ruby",
       "jvm",
+      "spring-boot",
       "ruby-rails",
       "demo",
     ]);
@@ -572,7 +573,7 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(11);
+    ).toHaveLength(12);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
