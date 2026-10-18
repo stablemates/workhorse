@@ -1157,6 +1157,10 @@ If one lease passes without a newer accepted renewal, the watchdog does these st
 
 Settlement then records `lease_lost` without calling `fail_v1`.
 
+Step 2 does not wait for the handler. The attempt leaves the heartbeat set at once, so if the
+handler ignores its cancellation and continues, no later round renews its lease. In Rust,
+`Inner::execute` calls `Membership::leave` (SM-1445).
+
 If a heartbeat call never settles, it blocks later rounds, because rounds do not overlap. Thus the
 watchdog sets the limit on how long a handler continues after its lease ends.
 
