@@ -170,6 +170,19 @@ function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } 
   return { promise, resolve };
 }
 
+// After an attempt settles, heartbeat statements that waited on the task row can still hold its
+// row lock, and a claim skips a locked row. A later pass takes the task. The 5 s bound is more than
+// 3 times the longest drain of abandoned heartbeat statements seen in the fault-injection check,
+// and shorter than the test timeout (docs/architecture/lifecycle.md, "A renewal that waits on a
+// settlement").
+async function runOnceUntilHandled(worker: Worker): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!(await worker.runOnce())) {
+    if (Date.now() >= deadline) throw new Error("no pass ran a handler within 5 s");
+    await sleep(10);
+  }
+}
+
 async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!condition()) {
@@ -379,25 +392,31 @@ async function executeExpirationRuntimeFixture(
         },
   );
   const abortReasons: unknown[] = [];
+  const handled: { id: string; attempt: number }[] = [];
   const worker = new Worker(earlyTimerQueue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
   }).handle(fixture.taskType, async (_payload, context) => {
+    handled.push({ id: context.task.id, attempt: context.task.attempt });
     const reason = await waitForAbort(context.signal);
     abortReasons.push(reason);
     throw reason;
   });
 
-  for (const expected of fixture.expectedAfterRuns) {
-    await expect(worker.runOnce()).resolves.toBe(true);
+  for (const [run, expected] of fixture.expectedAfterRuns.entries()) {
+    // The first pass claims a new task, so it must run the handler.
+    if (run === 0) await expect(worker.runOnce()).resolves.toBe(true);
+    else await runOnceUntilHandled(worker);
     await expect(admin.getTask(id)).resolves.toMatchObject({
       state: expected.state,
       currentAttempt: expected.attempt,
       ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
     });
   }
+  // Each pass ran the same task, at the next attempt.
+  expect(handled).toEqual(fixture.expectedAfterRuns.map((_, run) => ({ id, attempt: run + 1 })));
   expect(abortReasons).toEqual(
     fixture.expectedAbortReasons.map((name) => expect.objectContaining({ name })),
   );
