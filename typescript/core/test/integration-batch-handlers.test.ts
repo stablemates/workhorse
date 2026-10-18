@@ -6,6 +6,13 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { deferred, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
+function aborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 describe("batch handlers", () => {
   it("keeps batches within one queue when a worker serves several queues", async () => {
     const firstQueue = `batch-multi-first-${randomUUID()}`;
@@ -373,6 +380,7 @@ describe("batch handlers", () => {
     );
     const workerId = "batch-isolation-worker";
     const heartbeatMany = queue.heartbeatMany.bind(queue);
+    const heartbeatSeen = deferred();
     const heartbeat = vi
       .spyOn(queue, "heartbeatMany")
       .mockImplementation(async (tasks, owner, leaseMs) => {
@@ -382,28 +390,31 @@ describe("batch handlers", () => {
             ? new Map<string, "accepted">()
             : await heartbeatMany(renewable, owner, leaseMs);
         statuses.set(staleId, "accepted");
+        heartbeatSeen.resolve();
         return statuses;
       });
     const worker = new Worker(queue, {
       workerId,
       queue: queueName,
       concurrency: 2,
-      leaseMs: 5_000,
       heartbeatMs: 50,
+      // A reserved heartbeat connection renews through another Queue object, so the spy does not
+      // see its heartbeats. That heartbeat also locks the stale row, and recovery skips locked rows.
+      sharedHeartbeats: true,
     }).handleBatch<{ outcome: string }, { source: string }>(
       "batch-isolation",
       { maxSize: 2, lingerMs: 100 },
       async (items) => {
         const stale = items.find(({ payload }) => payload.outcome === "stale")!;
-        await pool.query(
-          "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1",
-          [staleId],
-        );
+        await heartbeatSeen.promise;
+        await expect(
+          pool.query(
+            "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1",
+            [staleId],
+          ),
+        ).resolves.toMatchObject({ rowCount: 1 });
         await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
-        const reclaimed = await queue.claim("batch-isolation-reclaimer", {
-          queue: queueName,
-          leaseMs: 1_000,
-        });
+        const reclaimed = await queue.claim("batch-isolation-reclaimer", { queue: queueName });
         expect(reclaimed).toMatchObject({ id: staleId, attempt: 2 });
         expect(reclaimed!.fenceToken).toBeGreaterThan(stale.context.task.fenceToken);
         await expect(
@@ -450,7 +461,8 @@ describe("batch handlers", () => {
       workerId: "batch-cancel-worker",
       queue: queueName,
       concurrency: 2,
-      leaseMs: 1_000,
+      // The worker stops renewing a canceled member's lease, and acknowledge_cancel_v1 needs a live
+      // lease. The default 30 s lease is longer than the 20 s test timeout, so it cannot lapse first.
       heartbeatMs: 20,
     }).handleBatch<{ outcome: string }, null>(
       "batch-cancel",
@@ -458,7 +470,7 @@ describe("batch handlers", () => {
       async (items) => {
         const canceled = items.find(({ payload }) => payload.outcome === "cancel")!;
         await queue.cancel(canceled.context.task.id, { requestedBy: "batch-test" });
-        await vi.waitFor(() => expect(canceled.context.signal.aborted).toBe(true));
+        await aborted(canceled.context.signal);
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
@@ -478,10 +490,11 @@ describe("batch handlers", () => {
       { duration: "short" },
       { queue: queueName, executionTimeoutMs: 20, maxAttempts: 1 },
     );
+    // The peer's timeout is longer than the 20 s test timeout. The test checks only its isolation.
     const succeededId = await queue.enqueue(
       "batch-timeout",
       { duration: "long" },
-      { queue: queueName, executionTimeoutMs: 1_000 },
+      { queue: queueName, executionTimeoutMs: 60_000 },
     );
     const worker = new Worker(queue, {
       workerId: "batch-timeout-worker",
@@ -503,10 +516,12 @@ describe("batch handlers", () => {
 
   it("expires one batch member's deadline without failing its peer", async () => {
     const queueName = `batch-deadline-${randomUUID()}`;
+    // A claim skips a task whose deadline has passed. A deadline after the 20 s test timeout keeps
+    // the member claimable, and the handler moves the deadline into the past while the member runs.
     const deadlineId = await queue.enqueue(
       "batch-deadline",
       { deadline: true },
-      { queue: queueName, deadline: new Date(Date.now() + 200), maxAttempts: 1 },
+      { queue: queueName, deadline: new Date(Date.now() + 60_000), maxAttempts: 1 },
     );
     const succeededId = await queue.enqueue(
       "batch-deadline",
@@ -517,11 +532,21 @@ describe("batch handlers", () => {
       workerId: "batch-deadline-worker",
       queue: queueName,
       concurrency: 2,
+      heartbeatMs: 20,
     }).handleBatch<{ deadline: boolean }, null>(
       "batch-deadline",
       { maxSize: 2, lingerMs: 100 },
       async (items) => {
-        await sleep(250);
+        const expiring = items.find(({ payload }) => payload.deadline)!;
+        const peer = items.find(({ payload }) => !payload.deadline)!;
+        await expect(
+          pool.query(
+            "UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() WHERE task_id = $1",
+            [deadlineId],
+          ),
+        ).resolves.toMatchObject({ rowCount: 1 });
+        await aborted(expiring.context.signal);
+        expect(peer.context.signal.aborted).toBe(false);
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
