@@ -6,6 +6,7 @@ import { repositoryRoot } from "./packages.js";
 interface SupportManifest {
   readonly support: {
     readonly go: { readonly minimum: string };
+    readonly java: { readonly minimum: number };
     readonly node: { readonly tested: readonly number[] };
     readonly postgres: { readonly tested: readonly number[] };
     readonly python: { readonly tested: readonly string[] };
@@ -21,6 +22,11 @@ interface DeclaredMinimums {
 interface ReadmeContract {
   readonly example: string;
   readonly exampleLanguage: string;
+  /**
+   * A Java or Kotlin example sits inside a class or a function body, so its README excerpt drops
+   * that indentation. The comparison then ignores the indentation of each line.
+   */
+  readonly indented?: boolean;
   readonly languageSupport: (
     support: SupportManifest["support"],
     declared: DeclaredMinimums,
@@ -94,7 +100,26 @@ const contracts: readonly ReadmeContract[] = [
     exampleLanguage: "ruby",
     languageSupport: (_support, declared) => `Ruby ${declared.ruby} or newer`,
   },
+  // The JVM README quotes the release consumers, which the release check builds and runs.
+  {
+    readme: "jvm/README.md",
+    example: "jvm/release-consumer/java/src/main/java/consumer/Main.java",
+    exampleLanguage: "java",
+    indented: true,
+    languageSupport: (support) => `Java ${support.java.minimum} or newer`,
+  },
+  {
+    readme: "jvm/README.md",
+    example: "jvm/release-consumer/kotlin/src/main/kotlin/consumer/Main.kt",
+    exampleLanguage: "kotlin",
+    indented: true,
+    languageSupport: (support) => `Java ${support.java.minimum} or newer`,
+  },
 ];
+
+function withoutIndentation(contents: string): string {
+  return contents.replace(/^[ \t]+/gm, "");
+}
 
 /**
  * The one URL every README points an agent at. An agent that lands on a package
@@ -127,7 +152,7 @@ describe("SDK README alignment", () => {
     const wrongCount: string[] = [];
     // The root README is a product overview with no first task (ADR 0100), so it has no SDK
     // contract, but it still points an agent at the router.
-    for (const readme of ["README.md", ...contracts.map((contract) => contract.readme)]) {
+    for (const readme of new Set(["README.md", ...contracts.map((contract) => contract.readme)])) {
       const pointers = (await read(readme)).split(agentRouter).length - 1;
       if (pointers !== 1) wrongCount.push(`${readme}: found ${pointers}, expected 1`);
     }
@@ -151,7 +176,10 @@ describe("SDK README alignment", () => {
       const testedExample = await read(contract.example);
       if (examples.length === 0) missingExamples.push(contract.readme);
       for (const example of examples) {
-        if (!testedExample.includes(example)) {
+        const found = contract.indented
+          ? withoutIndentation(testedExample).includes(withoutIndentation(example))
+          : testedExample.includes(example);
+        if (!found) {
           staleExamples.push(`${contract.readme}: not an excerpt from ${contract.example}`);
         }
       }

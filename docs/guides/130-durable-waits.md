@@ -56,6 +56,8 @@ await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
 | Go `HandlerContext`                               | `Sleep(name, duration)`    | `SleepUntil(name, wakeAt)`   |
 | Rust handler context                              | `sleep(name, duration)`    | `sleep_until(name, wake_at)` |
 | Ruby handler context                              | `sleep(name, seconds)`     | `sleep_until(name, wake_at)` |
+| Java `HandlerContext`                             | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
+| Kotlin `SuspendHandlerContext`                    | `sleep(name, duration)`    | `sleepUntil(name, time)`     |
 
 | Limit                                      | Value                                                |
 | ------------------------------------------ | ---------------------------------------------------- |
@@ -78,7 +80,7 @@ makes a waiting task ready.
 A [fast-tier queue](305-fast-tier.md) rejects durable waits. That tier keeps no durable execution
 state.
 
-More detail: [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle.md#scheduling-a-timer-wait).
+More detail: [Task lifecycle: Scheduling a timer wait](../architecture/lifecycle.md#scheduling-a-timer-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
 
 </details>
 
@@ -261,13 +263,15 @@ await ctx.checkpoint("welcome", () => mailer.welcome(payload.to, template), {
 Each SDK gives the input of a checkpoint. The fingerprint function returns the fingerprint
 that the call stores.
 
-| SDK        | Call with an input                                                            | Fingerprint function                            | Stored fingerprint                  |
-| ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
-| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                       | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
-| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                     | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
-| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                               | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
-| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                         | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
-| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})` | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
+| SDK        | Call with an input                                                                 | Fingerprint function                            | Stored fingerprint                  |
+| ---------- | ---------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
+| TypeScript | `HandlerContext.checkpoint(name, operation, { input })`                            | `checkpointInputFingerprint(input)`             | `TaskCheckpoint.inputFingerprint`   |
+| Rust       | `HandlerContext::checkpoint_with_input(name, &input, op)`                          | `checkpoint_input_fingerprint(&input)`          | `TaskCheckpoint::input_fingerprint` |
+| Ruby       | `HandlerContext#checkpoint(name, input:) { … }`                                    | `Workhorse.checkpoint_input_fingerprint(input)` | `TaskCheckpoint#input_fingerprint`  |
+| Python     | `HandlerContext.checkpoint(name, operation, input=…)`                              | `checkpoint_input_fingerprint(input)`           | `TaskCheckpoint.input_fingerprint`  |
+| Go         | `HandlerContext.Checkpoint(name, operation, CheckpointOptions{Input: input})`      | `CheckpointInputFingerprint(input)`             | `TaskCheckpoint.InputFingerprint`   |
+| Java       | `HandlerContext.checkpoint(name, type, CheckpointOptions.input(input), operation)` | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
+| Kotlin     | `checkpoint<T>(name, CheckpointOptions.input(input)) { … }`                        | `Checkpoints.inputFingerprint(input)`           | `TaskCheckpoint.inputFingerprint()` |
 
 The fingerprint is the SHA-256 digest of the RFC 8785 canonical JSON of the input, as 64 lowercase
 hexadecimal characters. Key order does not change it. Each SDK gives the same digest for the same
@@ -290,7 +294,7 @@ run:
 Overlapping calls with one name compare their inputs in the same way. The stored fingerprint is
 null for a checkpoint without an input.
 
-More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint).
+More detail: [Data model: `task_checkpoint`](../architecture/data-model.md#task_checkpoint), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
 
 </details>
 

@@ -79,6 +79,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "go/examples/README.md", commands: ["go"] },
   { file: "rust/README.md", commands: ["rust", "schemaPinned"] },
   { file: "ruby/README.md", commands: ["ruby", "schemaPinned"] },
+  { file: "jvm/README.md", commands: ["schemaPinned"] },
   {
     file: "site/content/docs/installation.mdx",
     commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaDownload", "schemaPinned"],

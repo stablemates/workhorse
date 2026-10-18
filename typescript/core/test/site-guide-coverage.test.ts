@@ -276,7 +276,7 @@ describe("documentation site guide coverage", () => {
     }
     expect(guide).toContain("AsyncWorker.from_asyncpg(worker_pool,");
     expect(guide).not.toContain("Workers that share a database pool also share the listener");
-    expect(guide).toContain("A Python or Rust worker holds its own.");
+    expect(guide).toContain("A Python, Rust, Java, or Kotlin worker holds its own.");
     expect(readme).toContain("Queue(application_connection).enqueue(");
     expect(readme).toContain("Worker(worker_pool)");
   });

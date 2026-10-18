@@ -23,8 +23,10 @@ columns, and limits of that area. For an explanation of a concept, read the
   and the TypeScript test that [replays stored state](architecture/schema-and-protocol.md#replay-stored-state-in-a-test)
 - The [Python](architecture/schema-and-protocol.md#python-sdk),
   [Go](architecture/schema-and-protocol.md#go-sdk),
-  [Ruby](architecture/schema-and-protocol.md#ruby-sdk), and
-  [Rust](architecture/schema-and-protocol.md#rust-sdk) SDKs
+  [Ruby](architecture/schema-and-protocol.md#ruby-sdk),
+  [Rust](architecture/schema-and-protocol.md#rust-sdk), and
+  [JVM](architecture/schema-and-protocol.md#jvm-sdk) SDKs. The JVM section covers the Java core,
+  the Kotlin module, and the Spring Boot starter.
 - [Documentation and release checks](architecture/schema-and-protocol.md#documentation-and-release-checks)
 - [PostgreSQL and runtime responsibilities](architecture/schema-and-protocol.md#postgresql-and-runtime-responsibilities)
 
@@ -55,6 +57,9 @@ columns, and limits of that area. For an explanation of a concept, read the
 - The [`dashboard/v1` wire contract](architecture/dashboard.md#dashboard-wire-contract)
 - The [dashboard package boundary](architecture/dashboard.md#dashboard-package-boundary), including
   the [Task groups page](architecture/dashboard.md#task-groups-page) and authentication
+- The embedded [Python](architecture/dashboard.md#python-backend),
+  [Go](architecture/dashboard.md#go-backend), and [JVM](architecture/dashboard.md#jvm-backend)
+  backends
 
 ### [Telemetry](architecture/telemetry.md)
 

@@ -275,23 +275,27 @@ and transaction-local server timeouts that end the heartbeat by the same deadlin
 
 Before handlers and cohorts take connections, each language holds these connections:
 
-| Language   | Listener connection                                                                                                                                | Heartbeat connection                                                                  |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| TypeScript | One `TaskNotificationHub` per pool in `notifications.ts`, holding one pooled connection. `listeningPool` skips it when `options.max` is 1 or less. | One shared heartbeat connection per pool in `heartbeat-connection.ts`.                |
-| Go         | One `taskNotificationHub` per `*pgxpool.Pool`. `subscribeToTaskNotifications` polls instead when `MaxConns` is below 2.                            | `holdHeartbeatConnection` holds the shared heartbeat connection.                      |
-| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                  | One `Worker::Heartbeat.dedicated(pool)` per pool object, holding one pool connection. |
-| Python     | One per `Worker` or `AsyncWorker`, from the supplied Psycopg or asyncpg pool.                                                                      | One per `Worker` or `AsyncWorker`, from the same pool.                                |
-| Rust       | Opened per worker by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool.                                                | One per worker, from the pool.                                                        |
+| Language   | Listener connection                                                                                                                                | Heartbeat connection                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| TypeScript | One `TaskNotificationHub` per pool in `notifications.ts`, holding one pooled connection. `listeningPool` skips it when `options.max` is 1 or less. | One shared heartbeat connection per pool in `heartbeat-connection.ts`.                      |
+| Go         | One `taskNotificationHub` per `*pgxpool.Pool`. `subscribeToTaskNotifications` polls instead when `MaxConns` is below 2.                            | `holdHeartbeatConnection` holds the shared heartbeat connection.                            |
+| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                  | One `Worker::Heartbeat.dedicated(pool)` per pool object, holding one pool connection.       |
+| Python     | One per `Worker` or `AsyncWorker`, from the supplied Psycopg or asyncpg pool.                                                                      | One per `Worker` or `AsyncWorker`, from the same pool.                                      |
+| Rust       | Opened per worker by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool.                                                | One per worker, from the pool.                                                              |
+| JVM        | One per `Worker`, from its `DataSource`, while `run` or `start` runs. None under `pollingOnly(true)` or `runOnce`.                                 | One `Heartbeat.dedicated(dataSource)` per `DataSource` object, held while any attempt runs. |
 
 TypeScript keys both its listener and its heartbeat connection by the pool object. Go follows the
-same pattern.
+same pattern. The JVM keys its heartbeat connection by the `DataSource` object.
 
-In every language, a dedicated heartbeat connection needs a pool of at least 3 connections, unless
-the opt-out is set:
+In every language except the JVM, a dedicated heartbeat connection needs a pool of at least 3
+connections, unless the opt-out is set:
 
 - `sharedHeartbeats` in TypeScript
 - `SharedHeartbeats` in Go
 - `shared_heartbeats` in Python, Rust, and Ruby
+
+A `DataSource` reports no pool size, so the JVM worker makes no such check. Its opt-out is
+`sharedHeartbeats(true)`.
 
 #### Schema operations
 

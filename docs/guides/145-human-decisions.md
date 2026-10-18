@@ -55,13 +55,15 @@ decision a shorter lifetime, pass `ExternalWaitOptions`.
 <details>
 <summary>Reference: declaring a human wait</summary>
 
-| SDK        | Handler call                                                              |
-| ---------- | ------------------------------------------------------------------------- |
-| TypeScript | `HandlerContext.waitForHuman(name, context, { timeoutMs })`               |
-| Python     | `wait_for_human(name, context, *, timeout_ms=None)`                       |
-| Go         | `HandlerContext.WaitForHuman(name, context, ...ExternalWaitOptions)`      |
-| Rust       | `wait_for_human(name, context, timeout)`, with `Some(duration)` or `None` |
-| Ruby       | `wait_for_human(name, context, timeout:)`, with `timeout:` in seconds     |
+| SDK        | Handler call                                                                             |
+| ---------- | ---------------------------------------------------------------------------------------- |
+| TypeScript | `HandlerContext.waitForHuman(name, context, { timeoutMs })`                              |
+| Python     | `wait_for_human(name, context, *, timeout_ms=None)`                                      |
+| Go         | `HandlerContext.WaitForHuman(name, context, ...ExternalWaitOptions)`                     |
+| Rust       | `wait_for_human(name, context, timeout)`, with `Some(duration)` or `None`                |
+| Ruby       | `wait_for_human(name, context, timeout:)`, with `timeout:` in seconds                    |
+| Java       | `HandlerContext.waitForHuman(name, context, type, timeout)`, with a `Duration` or `null` |
+| Kotlin     | `waitForHuman<T>(name, context, timeout)`, with a `Duration` or `null`                   |
 
 | Limit                               | Value                                              |
 | ----------------------------------- | -------------------------------------------------- |
@@ -84,7 +86,7 @@ decision a shorter lifetime, pass `ExternalWaitOptions`.
 - `HumanWaitConflictError` fails the task without a retry and keeps the current attempt.
 - A [fast-tier queue](305-fast-tier.md) rejects human waits with `FastTierUnsupportedError`.
 
-More detail: [Data model: Declaring a human wait](../architecture/data-model.md#declaring-a-human-wait).
+More detail: [Data model: Declaring a human wait](../architecture/data-model.md#declaring-a-human-wait), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: Kotlin handler context](../architecture/schema-and-protocol.md#kotlin-handler-context).
 
 </details>
 
@@ -192,7 +194,9 @@ records who completed the decision. It does not give permission.
 
 Go applications use `Queue.CompleteHumanWait` with `ExternalWaitDelivery`. Rust applications call
 `Queue::complete_human_wait` with `DeliveryOptions`. Ruby applications call
-`Queue#complete_human_wait` with `idempotency_key:` and `requested_by:`. Each result holds the
+`Queue#complete_human_wait` with `idempotency_key:` and `requested_by:`. Java applications call
+`Queue.completeHumanWait(taskId, name, result, idempotencyKey, requestedBy)`, and Kotlin
+applications call `completeHumanWaitSuspend`. Each result holds the
 accepted decision and the actor. If a changed request uses a stored key, the call returns a typed
 conflict error.
 
@@ -228,7 +232,7 @@ A same-key request with a changed result or actor raises `HumanWaitIdempotencyCo
   and the completion time.
 - `human_wait_completed` and `human_wait_rejected` events hold value-free lifecycle evidence.
 
-More detail: [Data model: Completing a human wait](../architecture/data-model.md#completing-a-human-wait).
+More detail: [Data model: Completing a human wait](../architecture/data-model.md#completing-a-human-wait), [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue), and [Schema and SQL protocol: Kotlin module](../architecture/schema-and-protocol.md#kotlin-module).
 
 </details>
 
@@ -259,7 +263,8 @@ the deadline ends the wait. Choose a `timeoutMs` that your operators can meet. W
 decision can stay open after it is no longer important.
 
 Python handlers give `timeout_ms` for the same limit. Rust handlers give `Some(duration)` as the
-timeout. Ruby handlers give `timeout:` as a number of seconds.
+timeout. Ruby handlers give `timeout:` as a number of seconds. Java and Kotlin handlers give a
+`java.time.Duration`, or `null` for the longest wait.
 
 [Cancellation](120-cancellation.md) also ends the decision, and a late completion returns `stale`.
 The decision record stays as long as its task, under the [retention](330-retention.md) rules.

@@ -170,13 +170,15 @@ The source of the listener connection depends on the language:
   connection for all the workers.
 - A Python worker takes its own listener connection from the pool.
 - A Rust worker opens its own listener connection outside the pool, from its `listen_config`.
+- A Java or Kotlin worker takes its own listener connection from its `DataSource`.
 
 If a TypeScript or Go pool is too small to give a connection to the listener, the worker polls and
 does not listen.
 
 The heartbeat connection follows the same rule. TypeScript, Go, and Ruby workers on one pool share
 one heartbeat connection. Each Python worker and each Rust worker takes its own heartbeat
-connection from the pool.
+connection from the pool. Java and Kotlin workers on one `DataSource` object share one heartbeat
+connection.
 
 Behind a pooler that cannot deliver notifications, the listener connection delivers nothing. But
 the connection still counts against the client limit of the pooler. In each language except Rust,
@@ -193,6 +195,8 @@ from the pool. Handlers cannot use these reserved connections.
 - **Rust.** The workers hold four heartbeat connections in the pool. 16 connections remain. The
   four listener connections are outside the pool, so the server or the pooler must accept four
   more clients.
+- **Java or Kotlin.** The workers hold four listeners and one heartbeat connection. 15 connections
+  remain.
 
 <Diagram
   name="pgbouncer-budget"
@@ -209,10 +213,11 @@ from the pool. Handlers cannot use these reserved connections.
 | Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool object.                     |
 | Python     | One per `Worker` or `AsyncWorker`, from the supplied Psycopg or asyncpg pool.                                                                         | One per `Worker` or `AsyncWorker`, from the same pool.                       |
 | Rust       | One per worker, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per worker, from the pool.                                               |
+| JVM        | One per `Worker`, from its `DataSource`, while `run` or `start` runs.                                                                                 | One per `DataSource` object, held while any attempt runs.                    |
 
 TypeScript and Go key both shared connections by the pool object.
 
-More detail: [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).
+More detail: [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language) and [Schema and SQL protocol: JVM connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-connections).
 
 </details>
 
@@ -220,7 +225,7 @@ More detail: [Overview: Connection budgets per language](https://github.com/stab
 
 A heartbeat renews the lease of a running task. A worker sends its heartbeats on a dedicated
 connection, so busy handlers cannot delay them. TypeScript, Go, and Ruby workers on one pool share
-this connection.
+this connection. Java and Kotlin workers on one `DataSource` object share it.
 
 **Example.** A worker with concurrency 8 shares a pool with its handlers. Each handler holds a
 pooled connection for a slow report query. Suppose that the heartbeat uses the same pool.
@@ -234,18 +239,19 @@ pooled connection for a slow report query. Suppose that the heartbeat uses the s
 Thus, each worker keeps a dedicated heartbeat connection, and the heartbeat never waits for the
 shared pool. Count this connection in addition to the listener and the handler connections. If the
 pool cannot give this connection, or if the pool does not state its size, the worker does not
-start. Its error gives the reason.
+start. Its error gives the reason. A Java worker is different. A `DataSource` does not state its
+size, so the worker starts. The heartbeat takes its connection when the first attempt runs.
 
-To send heartbeats through the shared pool, set `sharedHeartbeats`. Then busy handlers can delay
-the lease renewal. Go names this option `SharedHeartbeats`. Python, Rust, and Ruby name it
-`shared_heartbeats`. The heartbeat connection runs only self-contained statements, so it works in
-every pool mode.
+To send heartbeats through the shared pool, set `sharedHeartbeats`. Then busy handlers can delay the
+lease renewal. Go names this option `SharedHeartbeats`. Python, Rust, and Ruby name it
+`shared_heartbeats`. Java names it `sharedHeartbeats(true)`, and Kotlin `sharedHeartbeats = true`.
+The heartbeat connection runs only self-contained statements, so it works in every pool mode.
 
 <details>
 <summary>Reference: heartbeat reservation</summary>
 
 **Minimum pool.** A dedicated heartbeat connection needs a pool of at least 3 connections in every
-language. That leaves room for the listener and one claim.
+language except the JVM. That leaves room for the listener and one claim.
 
 **Refusal (TypeScript).** The `Worker` constructor throws when the `Queue` cannot lend the
 connection. The message names the reason and the opt-out:
@@ -258,7 +264,8 @@ A custom `WorkerQueueApi` that is not a `Queue` is not checked.
 
 **Refusal in other languages.** Python raises `ValueError` when the pool capacity is unknown or
 below 3. Go's `NewWorker` and Rust's worker constructor return an error when the pool maximum is
-below 3. Ruby raises unless the pool size is an integer of at least 3.
+below 3. Ruby raises unless the pool size is an integer of at least 3. The Java worker makes no
+check, because a `DataSource` reports no pool size.
 
 | Language   | Opt-out             |
 | ---------- | ------------------- |
@@ -267,6 +274,7 @@ below 3. Ruby raises unless the pool size is an integer of at least 3.
 | Python     | `shared_heartbeats` |
 | Rust       | `shared_heartbeats` |
 | Ruby       | `shared_heartbeats` |
+| Java       | `sharedHeartbeats`  |
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
 `heartbeatRoundMs`, a deadline of at most `heartbeatMs`. The round sends `heartbeat_many_v1` in its
@@ -275,7 +283,7 @@ deadline. A round that fails destroys the connection, and asks the pool for a ne
 The connect thus starts before the next round. If it is still pending when the next round starts,
 that round waits for it, and the rest of the wait counts against the deadline of that round.
 
-More detail: [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection) and [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline).
+More detail: [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline), and [Schema and SQL protocol: JVM connections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-connections).
 
 </details>
 
@@ -291,8 +299,9 @@ connection take two connections. The worker selects only as many cohorts as the 
 connections allow. On a larger pool, more connections remain, so the worker selects more cohorts.
 Then more completion round trips can occur at the same time.
 
-This rule applies in each language if the pool states its size. Workhorse never limits an explicit
-`cohorts` option.
+This rule applies in each language if the pool states its size. A Java `DataSource` does not state
+its size, so the pool does not cap the Java default. Workhorse never limits an explicit `cohorts`
+option.
 
 <details>
 <summary>Reference: default cohorts</summary>
@@ -302,6 +311,9 @@ This rule applies in each language if the pool states its size. Workhorse never 
 - 1 below concurrency 8;
 - otherwise `ceil(concurrency / 8)`, clamped to 2 through 8;
 - then capped at the spare connections, and never below 1.
+
+The Java worker uses the same first two rules. A `DataSource` reports no pool size, so the third
+rule does not apply.
 
 **Spare connections**
 
@@ -316,7 +328,7 @@ In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs
 statements outside that pool, so its default is not capped.
 
-More detail: [Fast tier: Dispatch cohorts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#dispatch-cohorts) and [Fast tier: TypeScript worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#typescript-worker).
+More detail: [Fast tier: Dispatch cohorts](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#dispatch-cohorts), [Fast tier: TypeScript worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#typescript-worker), and [Schema and SQL protocol: JVM worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-worker).
 
 </details>
 

@@ -11,7 +11,8 @@ An operator uses an operator client for these actions. Each SDK keeps the operat
 from the `Queue` client of the application. TypeScript makes an `Admin` with a pool, and Python uses
 `Admin` or `AsyncAdmin`. Go calls `NewAdmin` with a pgx or `database/sql` executor that the caller
 owns. Rust uses `Admin::connect` or `Admin::new`, and Ruby calls `Admin.new` with a connection or a
-pool. An operator can also redrive from the dashboard.
+pool. Java builds `new Admin(ConnectionSource.of(dataSource))`, and Kotlin calls the suspend
+wrapper of each `Admin` method. An operator can also redrive from the dashboard.
 
 ## Find the tasks that failed
 

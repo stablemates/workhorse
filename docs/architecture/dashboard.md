@@ -196,6 +196,75 @@ dispatch order as Python. `RPCError` carries defined status, code, message, and 
 the Go HTTP backend. `go/dashboard/cmd/conformance` supplies the contract's `enqueueTest` and
 `setSchedulePaused` extensions and the writable/read-only deployments.
 
+### JVM backend
+
+`run.workhorse.dashboard.Dashboard` is the JVM backend. It implements
+`jakarta.servlet.Filter`. `Dashboard.builder(ConnectionSource connections, DashboardAuthorizer
+authorize)` returns a `Dashboard.Builder` with these options and defaults:
+
+| Option              | Default                     |
+| ------------------- | --------------------------- |
+| `path`              | `"/workhorse"`              |
+| `environment`       | `"development"`             |
+| `auditActor`        | `"dashboard"`               |
+| `readOnly`          | `false`                     |
+| `browserModules`    | empty                       |
+| `configuredWorkers` | empty                       |
+| `maintenanceLoops`  | `{"tickIntervalMs": 1000}`  |
+| `allowedHosts`      | empty                       |
+| `procedures`        | empty                       |
+| `enqueueTest`       | unset, so the procedure 403 |
+| `setSchedulePaused` | unset, so the procedure 403 |
+| `codec`             | `JsonCodec.standard()`      |
+
+The Kotlin module adds no dashboard API. A Kotlin application uses the Java API.
+
+`DashboardAuthorizer.authorize(HttpServletRequest)` returns a sealed `DashboardAuthorization`:
+`principal(actor)`, `allow()`, or `deny()`. `Principal.actor` is the authenticated identity.
+`auditActor` names the actor only when `authorize` returns `allow()`. The JVM has no response
+result: `deny()` always answers 401 with `{"error":"Unauthorized"}`. If `authorize` throws a
+checked exception other than `IOException` or `ServletException`, the filter wraps it in a
+`ServletException`.
+
+The filter reads the request path as `getRequestURI()` less `getContextPath()`. `owns(path)` is true
+for the base path and for each path under it. The filter passes any other request, and any request
+that is not HTTP, to `chain.doFilter`. Thus the host's own servlets still answer it.
+
+The filter handles a request that it owns in this order:
+
+1. A non-empty `allowedHosts` refuses any other `Host` with 421, before `authorize` runs.
+2. `authorize` runs.
+3. The schema compatibility check runs. The filter caches only a passing answer.
+4. The filter rejects a mutation that is not same-origin with 403, before it decodes the input. It
+   then rejects a mutation on a read-only host with 403.
+5. It reads at most 2 MiB of request body, and answers 413 for a larger body.
+6. It validates the input against the generated `dashboard/v1` schemas. A mutation `audit.requestId`
+   of more than 512 UTF-8 bytes answers 400.
+7. It overwrites `audit.actor`, and calls the procedure.
+
+Each `allowedHosts` entry is a bare `host[:port]`. `build()` throws `IllegalArgumentException` for
+an entry with user information, a path, a query, a fragment, or an empty port. The filter compares
+hosts in lowercase, without the default port of the request scheme. The same-origin check compares
+the `Origin` scheme and host with `getScheme()` and the `Host` header as exact strings.
+
+Reads and controls go through `Admin`, `Queue`, and the generated `SqlCatalogue` statements. Each
+call uses its own connection, and the filter opens no transaction. The jar carries the browser
+bundle as resources, and the filter unpacks it once. It serves each asset with `Cache-Control:
+public, max-age=31536000, immutable`.
+
+The `dashboard/v1` input schemas use ECMA-262 `pattern`. The filter compiles each pattern through
+an internal translator before `java.util.regex` reads it:
+
+- Outside a bracket expression, `^` becomes `\A` and `$` becomes `\z`. Thus a final line terminator
+  does not match.
+- The translator accepts literals, `\d`, the escaped syntax characters, bracket expressions, groups,
+  non-capturing groups, alternation, and quantifiers.
+- It refuses every other construct, such as `.`, a lookaround, a backreference, `\s`, `\b`, a
+  property escape, or a flag, with `IllegalArgumentException`.
+
+`DashboardConformanceTest` replays every shared fixture exchange against a writable and a read-only
+filter in an embedded servlet container.
+
 ### Presentation policy
 
 ADR 0037 keeps presentation policy out of those backends. The backends return raw inputs:

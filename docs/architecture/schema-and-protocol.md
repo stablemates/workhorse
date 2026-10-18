@@ -2311,6 +2311,542 @@ returns an `Authorization`.
 `site/content/docs/` and `docs/guides/`, and each Rust snippet in `site/lib/landing-snippets.ts`,
 must equal one region. Every region must back at least one of them.
 
+## JVM SDK
+
+The JVM SDK has three artifacts from one Gradle build under `jvm/`, as
+[ADR 0103](../decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+decides. Each artifact uses the group `run.workhorse` and the train version.
+
+| Artifact                        | Package                | Contents                                                          |
+| ------------------------------- | ---------------------- | ----------------------------------------------------------------- |
+| `workhorse`                     | `run.workhorse`        | `Queue`, `Admin`, `Worker`, `WorkerProcess`, the dashboard filter |
+| `workhorse-kotlin`              | `run.workhorse.kotlin` | Suspend handlers, suspend wrappers, and the worker DSL            |
+| `workhorse-spring-boot-starter` | `run.workhorse.spring` | Auto-configuration, transactions, lifecycle, and health           |
+
+The core is the named Java module `run.workhorse`. Every package is `@NullMarked`. The
+module does not export `run.workhorse.internal`, which holds the generated
+`SqlCatalogue`, the default codec, the contract validator, the heartbeat, and the listener. Each
+Workhorse exception extends the unchecked `WorkhorseException`, a `RuntimeException`. An invalid
+argument throws the standard `IllegalArgumentException` instead. The `Queue`, `Admin`, and
+`Worker` constructors throw `IllegalStateException` when PgJDBC is older than 42.7.8.
+
+### JVM connection sources
+
+`Queue` and `Admin` take a `ConnectionSource`. It has two methods, `acquire()` and
+`release(connection, transactional)`. Each method of `Queue` and `Admin` has two forms.
+
+- **The caller form** takes a `java.sql.Connection` first. The SDK runs on that connection in the
+  transaction of the caller. It only reads `getAutoCommit()`. It never begins, commits, rolls back,
+  or closes, and it changes no session state.
+- **The source form** omits the connection. The SDK calls `acquire()`, runs the call, and calls
+  `release(connection, transactional)`, also after a failure. `transactional` is true when the
+  connection had autocommit off.
+
+`ConnectionSource.of(DataSource)` runs each call in autocommit. If the pool gives a connection with
+autocommit off, it turns autocommit on for the call. Its `release` restores the earlier value, and
+then closes the connection.
+
+Each `Queue` and each `Admin` instance caches its compatibility check once for its source, and once
+for each caller `Connection`. It caches a refusal, but not a driver error. The check runs after
+argument validation, before the first statement of a call. `assertCompatible()` and
+`assertCompatible(Connection)` run it at once.
+
+| Condition                                                            | `CompatibilityException.Code`                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------ |
+| SQLSTATE `42P01` or `3F000`                                          | `SCHEMA_NOT_INSTALLED`                                 |
+| Schema version below the floor                                       | `SCHEMA_TOO_OLD`                                       |
+| Client protocol below or above the protocols it speaks               | `CLIENT_PROTOCOL_TOO_OLD` or `CLIENT_PROTOCOL_TOO_NEW` |
+| The schema serves no protocol of the client, and the client is older | `SCHEMA_TOO_NEW`                                       |
+| The schema serves no protocol of the client otherwise                | `SCHEMA_TOO_OLD`                                       |
+
+The exception text is `workhorse compatibility check refused: ` and the code in lowercase with
+hyphens, such as `schema-too-old`.
+
+### JVM queue
+
+`new Queue(ConnectionSource)` and `new Queue(ConnectionSource, QueueOptions)` build a queue. Its
+methods are `enqueue`, `enqueueMany`, `cancel`, `sendSignal`, `completeHumanWait`, `health`, the
+task group calls, the `sync` calls, and the `list` calls for policies and budgets.
+`completeHumanWait(taskId, name, result, idempotencyKey, requestedBy)` throws
+`HumanWaitIdempotencyConflictException` for a changed request under a stored key.
+`QueueOptions` holds `defaultQueue`, default `"default"`, `codec`, default `JsonCodec.standard()`,
+and `telemetry`, default `WorkhorseTelemetry.global()`.
+
+`EnqueueOptions.builder()` builds the options of one enqueue. `EnqueueOptions.defaults()` has none
+set.
+
+| Option                     | Accepts                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `queue`                    | At most 256 UTF-8 bytes. `null` is the default queue.                           |
+| `priority`                 | 0 through 100. The default is 0.                                                |
+| `runAt`                    | An `Instant`. A request without it runs now.                                    |
+| `deadline`                 | An `Instant`, truncated to milliseconds.                                        |
+| `executionTimeout`         | A `Duration` of 0 through 31,536,000,000 ms. 0 sets no timeout.                 |
+| `maxAttempts`              | 1 through 100. `null` or 0 is 25.                                               |
+| `concurrencyKey`, `budget` | At most 256 UTF-8 bytes each.                                                   |
+| `tags`                     | At most 20 tags of 1 through 100 characters.                                    |
+| `idempotency`              | An `Idempotency(key, scope, ttl)`. The key holds 1 through 512 UTF-8 bytes.     |
+| `debounce`, `throttle`     | A key of 1 through 512 UTF-8 bytes and a window of 1 through 31,536,000,000 ms. |
+| `dependencies`             | 1 through 100 unique prerequisite task IDs.                                     |
+
+A request takes at most one of idempotency, debounce, and throttle. Debounce takes no `runAt`.
+Debounce and throttle take no dependencies. An invalid option throws `IllegalArgumentException`
+before any statement.
+
+`enqueueMany` takes at most 1,000 requests. An empty list returns an empty list and runs no
+statement. `enqueue` returns an `EnqueueResult(taskId, outcome, reason)`. `outcome` is an
+`EnqueueOutcome`: `ACCEPTED`, `REPLAYED`, `REPLACED`, `NON_REPLACEABLE`, or `COALESCED`. `reason`
+is set only for `NON_REPLACEABLE`: `INCOMPATIBLE_KEY_MODE`, `NOT_PENDING`, or
+`WINDOW_ELAPSED_PENDING`.
+
+`Queue.taskGroup(callbacks, Consumer<TaskGroupBuilder>)` creates, adds, and seals a group in one
+statement. A `TaskGroupBuilder` holds at most 100,000 tasks. `TaskGroupCallbacks(onFinish,
+onSuccess, onFailure)` holds three nullable `EnqueueRequest` callbacks. A callback takes no
+idempotency, debounce, or throttle. `addToTaskGroup` takes at most 1,000 requests.
+
+`Queue.health()` calls `queue_health_v1` with a rejection window of one day. It returns
+`QueueHealth(Map<String, Object> snapshot)`, which holds the snapshot keys as PostgreSQL returns
+them.
+
+`syncSchedules`, `syncConcurrencyPolicies`, `syncRateLimitPolicies`, and `syncBudgets` take a
+namespace, the definitions, and an optional `prune`. The overload without `prune` prunes.
+`syncContracts(Map<String, TaskTypeContracts>)` synchronizes payload contracts by task type. On a
+`contract_mismatch` outcome, an enqueue reloads the contracts of the named types and runs the
+statement one more time. If the second run also mismatches, it throws
+`ContractPolicyChangedException`.
+
+The SDK maps an `SQLException` to a `WorkhorseException` by SQLSTATE.
+
+| SQLSTATE             | Exception                                                          |
+| -------------------- | ------------------------------------------------------------------ |
+| `P1001`              | `EnqueueIdempotencyConflictException`                              |
+| `P1002`              | `RedriveIdempotencyConflictException`                              |
+| `P1003`              | `DependencyCycleException`                                         |
+| `P1005`              | `DependencyLimitExceededException`                                 |
+| `P1006`              | `PurgeIdempotencyConflictException`                                |
+| `P1007`              | `FastTierUnsupportedException`                                     |
+| `P1008`              | `TaskGroupClosedException`                                         |
+| `P1009`              | `TaskGroupLimitExceededException`                                  |
+| `P1010`              | `TaskGroupMembershipConflictException`                             |
+| `0A000` from a claim | `IsolationLevelException`, which names the isolation level         |
+| Any other            | `DatabaseException`, with the SQLSTATE and the original as `cause` |
+
+The exceptions for `P1001`, `P1002`, `P1003`, `P1005`, `P1006`, `P1008`, `P1009`, and `P1010` extend
+`DiagnosedException`. Its `details()` holds the decoded JSON `DETAIL`.
+`FastTierUnsupportedException` for `P1007` gives `queue()`, `feature()`, and `ordinal()` instead.
+
+### JVM admin
+
+`new Admin(ConnectionSource)` builds the operator client. A read of one item returns an
+`Optional`.
+
+| Kind     | Methods                                                                                                     |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| Reads    | `listTasks`, `getTask`, `getTaskTimeline`, `listDeadLetters`, `getCheckpoint`, `listCheckpoints`            |
+| Reads    | `getProgress`, `getWait`, `listWaits`, `listSignalWaits`, `listHumanWaits`, `listWorkers`, task group reads |
+| Controls | `redrive`, `redriveMany`, `setWorkerPaused`, `pauseQueue`, `resumeQueue`, `purgeQueue`                      |
+| Controls | `cancelTaskGroup`, `repairTaskGroupDrift`                                                                   |
+
+Each control takes an `AdminAudit(actor, reason, requestId)`. If a field is not valid, `Admin`
+throws `IllegalArgumentException` before any statement.
+
+| `AdminAudit` field | Accepts                     |
+| ------------------ | --------------------------- |
+| `actor`            | 1 through 200 code points   |
+| `reason`           | 1 through 2,000 code points |
+| `requestId`        | 1 through 512 UTF-8 bytes   |
+
+| Read                                         | Default limit | Accepted limit   |
+| -------------------------------------------- | ------------- | ---------------- |
+| `listTasks`, `getTaskTimeline`               | 100           | 1 through 1,000  |
+| `listDeadLetters`, `redriveMany`             | 100           | 1 through 1,000  |
+| `listSignalWaits`, `listHumanWaits`          | 100           | 1 through 1,000  |
+| `listTaskGroupMembers`                       | 100           | 1 through 1,000  |
+| `listTaskGroupEvents`                        | 1,000         | 1 through 1,000  |
+| `listTaskGroupDrift`, `repairTaskGroupDrift` | 1,000         | 1 through 10,000 |
+
+`Admin` has no `health` method, because `Queue.health` reads the same snapshot.
+
+### JVM worker
+
+`Worker.builder(DataSource)` returns a `Worker.Builder`. `build()` throws
+`IllegalArgumentException` for an invalid option. Durations round to whole milliseconds.
+
+| Option                       | Default                                                                                             | Accepts                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `queues`                     | `default`                                                                                           | Non-empty names                                                                |
+| `concurrency`                | 1                                                                                                   | 1 through 100                                                                  |
+| `lease`                      | 30 seconds                                                                                          | 100 milliseconds through 1 day                                                 |
+| `heartbeat`                  | The larger of 100 milliseconds and a third of the lease                                             | 1 millisecond through `Integer.MAX_VALUE` milliseconds, shorter than the lease |
+| `pollInterval`               | 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                 | 1 millisecond through `Integer.MAX_VALUE` milliseconds                         |
+| `maintenanceInterval`        | 1 second                                                                                            | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `maintenanceRoutineInterval` | 60 seconds                                                                                          | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `registryInterval`           | 5 seconds                                                                                           | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `scheduleCatchupLimit`       | 100                                                                                                 | 1 through 10,000                                                               |
+| `shutdownGrace`              | 25 seconds                                                                                          | 0 through 1 day                                                                |
+| `cohorts`                    | 1 when `concurrency` is below 8; otherwise `concurrency` divided by 8, rounded up, from 2 through 8 | 1 through `concurrency`                                                        |
+
+`disableRegistry(true)` turns off the worker registry. `sharedHeartbeats(true)` makes heartbeat
+rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
+`RetryDelay` that returns a delay of 0 through 2,147,483,647 milliseconds, or `null` for the
+persisted policy. A `DataSource` reports no pool size, so the worker never refuses a small pool and
+never caps the default cohorts.
+
+`handle(taskType, payloadClass, handler)` and `handle(TaskHandler)` register a handler. A second
+registration of a task type replaces the first. The worker releases a claimed task that has no
+handler through `release_owned_v1`, and it logs `workhorse.handler.missing`.
+
+#### JVM handler threads
+
+Each claimed task runs on its own virtual thread, named `workhorse-handler-<taskId>`. With
+`executor(ExecutorService)`, the worker submits each handler to that executor instead, and never
+shuts the executor down. Slot accounting under a lock bounds the claimed tasks to `concurrency`.
+Each claim runs on its own virtual thread.
+
+The heartbeat thread and the listener thread are daemon platform threads. Thus a full carrier pool
+cannot delay a lease renewal. `start()` runs the worker loop on a non-daemon platform thread named
+`workhorse-worker-<workerId>`.
+
+#### JVM connections
+
+Each worker holds one listener connection from its `DataSource` while `run` or `start` runs. It
+holds none under `pollingOnly(true)` or `runOnce`. After a listener failure, it calls
+`onNotificationError`, reconnects with a backoff of 100 milliseconds through 5 seconds, and polls in
+the meantime.
+
+Workers built on one `DataSource` object share one dedicated heartbeat connection. The heartbeat
+holds that connection while any attempt runs. After a failed round, it takes a new connection at
+once and keeps its round schedule. If the pool refuses a connection, it asks again after at most
+100 milliseconds. [Task lifecycle: Heartbeat schedule](lifecycle.md#heartbeat-schedule) states the
+schedule. Every other statement borrows a connection for its own duration.
+
+If a claim fails with SQLSTATE `0A000` because the connection does not use read committed
+isolation, the worker logs `workhorse.worker.claim_isolation`. It treats the claim as empty, and the
+run continues.
+
+#### JVM running and stopping
+
+- `run()` claims until `stop()`, and then drains.
+- `runOnce()` claims until a claim returns no task with a handler, and then drains. It opens no
+  listener. It returns `true` only when it claimed a task whose type has a handler.
+- `start()` runs the loop on its own thread and returns at once. `close()` calls `stop()`, waits for
+  the drain, and throws a failure of the `start` loop.
+- `isRunning()` returns `true` from `start` until its thread ends, and while `run` or `runOnce`
+  runs, including the drain.
+- `pause()` and `resume()` change a local pause. `isPaused()` is also true while an operator pause
+  holds. The worker reads the operator pause from `register_worker_v1` at each registry refresh.
+
+The worker registers with `sdk_language` `java`, for Java and Kotlin alike. It reads `sdk_version`
+from the resource `run/workhorse/version.properties` in its jar, which the build writes with the
+train version. If that resource is absent or empty, `sdk_version` is `null`. The registry refresh
+interval defaults to 5 seconds. A maintenance failure
+ends the run, and `run` throws it. A registration failure only logs
+`workhorse.worker.registration_failed` and calls `onRegistrationError`.
+
+After `stop()`, the worker shuts down in this order:
+
+1. It claims nothing new. It runs the tasks of claims already in flight.
+2. It waits up to `shutdownGrace` for running handlers.
+3. It cancels the rest with `SHUTDOWN` and calls `Thread.interrupt()` on their threads. The
+   interrupt waits while the worker's own statement runs on that thread.
+4. It waits a 250 millisecond unwind window.
+5. It abandons a handler that still runs after that window, and stops renewing its lease.
+6. It deregisters the worker. This step waits up to 1 second.
+7. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
+
+Some cleanup can take time after `shutdownGrace`:
+
+| Step             | Wait after the grace                              |
+| ---------------- | ------------------------------------------------- |
+| Claims in flight | Up to 250 milliseconds, when the grace is shorter |
+| Listener close   | At least 200 milliseconds                         |
+| Unwind window    | 250 milliseconds                                  |
+| Deregistration   | Up to 1 second                                    |
+
+Thus a complete shutdown can end up to about 2 seconds after `shutdownGrace`.
+
+The worker installs no JVM shutdown hook and traps no signal.
+
+#### JVM failure settlement
+
+- An `Exception` from a handler fails the attempt through `fail_v1`. The failure name is the simple
+  type name of the exception. The stack is its stack trace followed by each `cause`.
+- A `ConflictException` fails the task with no further attempt.
+- During a shutdown, a `CancelledException` with `SHUTDOWN` or an `InterruptedException` in the
+  cause chain releases the task through `release_owned_v1`, which charges no attempt.
+- A `LeaseLostException` settles nothing, because the fence already refuses the write.
+- Before it completes a task, the worker checks the result. A NUL character fails the attempt with
+  `<task type> result contains a NUL character, which PostgreSQL jsonb cannot store`. The codec
+  refuses a lone surrogate. A result over the `result_max_bytes` of the task throws
+  `ValueSizeLimitException`. The retry policy applies to each.
+- A `java.lang.Error` from an ordinary handler ends the run. The worker drains, and `run` throws
+  that error. The task is not settled, so its lease expires.
+- A batch handler is different. An `Error` from it fails each task in the batch, as the batch
+  section describes.
+
+### JVM batch handlers
+
+`handleBatch(taskType, payloadClass, BatchOptions, BatchHandler)` registers a batch handler.
+
+- `BatchOptions(maxSize, linger)` takes a `maxSize` of 1 through 100 and at most `concurrency`.
+- `linger` is a `Duration` of 0 through 60 seconds in whole milliseconds.
+
+The worker groups the waiting tasks of one type by queue. It orders a batch by descending priority,
+and then by claim order. A full batch dispatches at once. Otherwise the linger deadline of the first
+waiting task dispatches it. During a drain, a lingering task stops when every admitted task of its
+type and queue has arrived. The worker checks again every 50 ms.
+
+`BatchHandler.handle(items)` receives one `BatchHandlerItem` for each task. Each item holds the
+`payload` and its own `BatchHandlerContext`. The handler returns one `BatchHandlerOutcome` for each
+item, in the same order: `new BatchSucceeded(result)` or `new BatchFailed(exception)`.
+
+- A thrown `Exception`, a `null` list, a list of the wrong size, or a `null` element fails every
+  task in the batch.
+- A thrown `Error` fails every task with a `WorkhorseException` that names it.
+- Every task in the batch still settles under its own lease and fence.
+
+The worker records `record_batch_dispatch_v1` before the call, and `record_batch_failure_v1` after
+a whole-batch failure. A failed evidence write logs `workhorse.handler.batch_evidence_failed`.
+
+### JVM worker processes
+
+`WorkerProcess.runWorkerProcess(worker)` runs a worker as its own process. It returns only by
+ending the process.
+
+1. It reads the stop version of the worker, and registers one JVM shutdown hook. Thus a signal that
+   arrives before the run loop starts still stops it.
+2. It runs the worker on the calling thread.
+3. On `SIGINT` or `SIGTERM`, the JVM starts its shutdown hooks. The hook calls `worker.stop()` and
+   waits until the run ends.
+4. When the run returns or throws, the calling thread releases the hook. If the run threw, it writes
+   the stack trace to standard error.
+
+| Outcome on the calling thread          | Action                                  |
+| -------------------------------------- | --------------------------------------- |
+| The run returns, and no shutdown began | `System.exit(0)`                        |
+| The run throws, and no shutdown began  | `System.exit(1)`                        |
+| A shutdown began                       | Wait for the JVM to end with its status |
+
+The helper defines no behavior for a second signal. `SIGKILL` is the forced stop. The JVM runs all
+shutdown hooks concurrently. Thus an application hook must not close the worker's `DataSource`. A
+program that closes resources after the drain calls `run` and `stop` itself.
+
+### JVM telemetry
+
+The worker and the queue log through `System.Logger`. The OpenTelemetry API is an optional
+dependency. If the application does not include it, telemetry does nothing and loads no
+OpenTelemetry code.
+By default the SDK reads `GlobalOpenTelemetry`. `WorkhorseTelemetry.of(OpenTelemetry)` passes an
+explicit instance to `QueueOptions` or to `Worker.Builder.telemetry`.
+
+`Queue` starts a `workhorse.enqueue` span, as the TypeScript queue does. It stores the W3C trace
+context of that span with each task. It stores no context larger than 1,024 bytes, and no context
+without `traceparent`. The worker emits the `workhorse.claim`, `workhorse.handler`,
+`workhorse.complete`, `workhorse.retry`, `workhorse.maintenance`, and `workhorse.recovery` spans.
+Each name is in `api/telemetry.txt`.
+
+### JVM handler context
+
+Java `run.workhorse.HandlerContext` holds the durable calls. `task()`, `cancellation()`,
+`isCancelled()`, and `taskGroup()` make no protocol call.
+
+| Call                                                                                  | Behavior                                                                                                                                |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `getCheckpoint(name)`                                                                 | Returns the stored `TaskCheckpoint`, or an empty `Optional` when none exists.                                                           |
+| `checkpoint(name, type, operation)` and `checkpoint(name, type, options, operation)`  | Returns the stored value, or runs the `Callable` once and saves its result through `save_checkpoint_v2`. `null` is stored and replayed. |
+| `setProgress(value)`                                                                  | Calls `update_progress_v1` and returns the stored `TaskProgress`.                                                                       |
+| `getProgress()`                                                                       | Returns the latest `TaskProgress`, or an empty `Optional` before any report.                                                            |
+| `sleep(name, duration)`                                                               | Accepts a `Duration` of 1 millisecond through 365 days, rounded to the nearest millisecond. Calls `schedule_wait_v1`.                   |
+| `sleepUntil(name, time)`                                                              | Accepts an `Instant` at most 365 days ahead. Calls `schedule_wait_v1`.                                                                  |
+| `waitForSignal(name, type, timeout)` and `waitForHuman(name, context, type, timeout)` | Take a `Duration` timeout from 1 millisecond through 7 days. `null` selects 7 days, or an earlier task deadline.                        |
+| `runChild(name, taskType, payload, options, resultType)`                              | Takes `EnqueueOptions` less the coalescing and dependency options, and calls `create_child_v2`.                                         |
+| `runChildren(children)` and `runChildrenAll(children)`                                | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`.           |
+
+`runChildren` maps each name to a `ChildOutcome`, whose `status` is `ChildStatus.SUCCEEDED`,
+`FAILED`, or `CANCELED`. `runChildrenAll` maps each name to its result. If the child queue is
+omitted, it is the queue of the parent task.
+
+`Checkpoints.inputFingerprint(input)` returns the SHA-256 digest of the RFC 8785 canonical JSON of a
+checkpoint input. It throws `IllegalArgumentException` for a value that is not JSON, or for a
+number of more than 2^53 - 1 in magnitude. `CheckpointOptions.input(input)` gives a checkpoint its
+input, and a `null` input is the JSON value `null`.
+
+#### JVM argument validation
+
+- A checkpoint, wait, or child name contains 1 through 200 Unicode code points. An invalid name
+  throws `IllegalArgumentException` before the operation runs and before any statement.
+- Signal and human wait names also have no leading or trailing whitespace or NUL.
+- The human context encodes to at most 65,536 bytes of JSON.
+- `runChild` throws `IllegalArgumentException` for options with idempotency, debounce, throttle, or
+  dependencies.
+- A child set of more than 100 children throws `LimitExceededException` before any other check.
+  Duplicate child names throw `IllegalArgumentException`.
+- A new child payload that its current contract rejects throws `ContractValidationException` before
+  any write. For a replay, the context builds the request again with each existing child's accepted
+  contract version. PostgreSQL compares it with the accepted request.
+
+#### JVM errors
+
+| Status or condition | Exception                                                            |
+| ------------------- | -------------------------------------------------------------------- |
+| `stale`             | `LeaseLostException`                                                 |
+| `conflict`          | `ConflictException`                                                  |
+| `input_conflict`    | `CheckpointInputConflictException`, a `ConflictException`            |
+| `already_waiting`   | `AlreadyWaitingException`                                            |
+| `limit_exceeded`    | `LimitExceededException`                                             |
+| `rate_limited`      | `ProgressRateLimitedException`, whose `retryAfter()` is a `Duration` |
+| `result_too_large`  | `ChildResultLimitExceededException`                                  |
+| Undefined status    | `UnexpectedStatusException`                                          |
+
+Before each durable write, the context checks the token. If the token holds `LEASE_LOST`, it throws
+`LeaseLostException`. For any other reason, it throws `CancelledException`. Reads and checkpoint
+replays return without that check. A checked exception from a checkpoint operation passes through
+unchanged, and the context saves nothing.
+
+On a fast-tier queue, each durable write throws `FastTierUnsupportedException` before any
+statement. The name check runs first. `getCheckpoint`, `getProgress`, and `taskGroup()` do not
+check the tier.
+
+#### JVM concurrent calls with one name
+
+Concurrent calls with one name share the write of the first call. A request that does not match
+throws `ConflictException`.
+
+- A checkpoint shares by name. If both calls have an input, different fingerprints throw
+  `CheckpointInputConflictException`.
+- A relative sleep shares for all durations. An absolute sleep shares only the same wake time.
+- A signal wait shares by name only. Thus the timeout of the first call is used.
+- A human wait shares the same context. The context compares as JSON text with sorted object keys,
+  not as the RFC 8785 form of a checkpoint fingerprint.
+- A child shares its encoded request. A child set shares its mode and its encoded request.
+- `setProgress` calls are not shared.
+
+When progress writes overlap, the context keeps the highest `revision` that PostgreSQL acknowledged.
+
+#### JVM suspension
+
+A `scheduled` sleep, a `waiting` signal or human wait, and a `created` child send
+`suspended_for_wait` or `suspended_for_child` to the attempt arbiter. The context records the
+release before its log call, and the call always throws the internal
+`run.workhorse.internal.Suspension`.
+
+Only a winning submission cancels the token with `SUSPENDED`. `Suspension` extends
+`java.lang.Error`, so `catch (Exception e)` does not catch it, and `finally` blocks still run. If
+the handler catches the suspension and then returns or throws an `Exception`, the worker ignores the
+result. It logs `workhorse.handler.signal_swallowed` at `WARNING`. An `Error` after a caught
+suspension ends the run, as for any other handler.
+
+### JVM batch handler context
+
+`BatchHandlerContext` exposes `task`, `cancellation`, `getCheckpoint`, both `checkpoint` forms,
+`getProgress`, `setProgress`, and `taskGroup`. It has no wait or child call. Each member of a batch
+has its own context, so each write is fenced on the lease of that member, and each member has the
+same fast-tier refusals.
+
+### Kotlin handler context
+
+`SuspendHandlerContext` in `workhorse-kotlin` wraps `HandlerContext`. Its `java` property returns
+the Java context.
+
+- A reified type parameter replaces the `Type` argument, as in `checkpoint<T>(name) { … }`,
+  `waitForSignal<T>(name)`, `waitForHuman<T>(name, context)`, and `runChild<T>(name, taskType)`.
+- A Java `Optional` result is a nullable type.
+- `taskGroup` returns a `SuspendTaskGroupContext`.
+- The defaults are `timeout = null`, `context = null`, `payload = null`, `options = null` for a
+  checkpoint, and `EnqueueOptions.defaults()` for a child.
+
+Suspend handlers run on a coroutine dispatcher over a virtual-thread executor. A durable call of
+`SuspendHandlerContext` runs to its end before a coroutine cancellation reaches the handler. Thus a
+cancellation never interrupts the statement of a checkpoint, wait, child, or progress call. Only
+the operation that a checkpoint runs gets the interrupt. The `Queue` and `Admin` suspend wrappers
+run in `runInterruptible`.
+
+A token cancellation cancels the handler's coroutine `Job`. A `CancellationException` reaches the
+worker as `CancelledException` when the token has a reason. The Kotlin module has no suspend batch
+handler.
+
+### Spring Boot starter
+
+`workhorse-spring-boot-starter` registers `run.workhorse.spring.WorkhorseAutoConfiguration`. It
+applies only when the context has one `DataSource` candidate. Each bean in the table below backs
+off when the application defines its own bean of that type. The health indicator and the dashboard
+filter back off by bean name, `workhorseHealthIndicator` and `workhorseDashboard`.
+
+The starter requires only the `workhorse` core, `spring-boot-autoconfigure`, and `spring-boot-jdbc`.
+Its other modules are optional feature variants. The published POM marks each one optional, so the
+application adds each module that it uses.
+
+| Feature         | Modules                                   | Beans that need it                          |
+| --------------- | ----------------------------------------- | ------------------------------------------- |
+| `jackson`       | `spring-boot-jackson`, `jackson-databind` | The `JsonCodec` on the application's mapper |
+| `health`        | `spring-boot-health`                      | The health indicator                        |
+| `servlet`       | `spring-web`, `jakarta.servlet-api`       | The dashboard filter                        |
+| `opentelemetry` | `opentelemetry-api`                       | `WorkhorseTelemetry`                        |
+
+| Bean                        | Condition                                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `ConnectionSource`          | Always. It is a `TransactionAwareConnectionSource`.                                            |
+| `Queue`, `Admin`            | Always. `Queue` uses `workhorse.queue.default-queue`.                                          |
+| `JsonCodec`                 | Jackson and a `JsonMapper` bean are present.                                                   |
+| `WorkhorseTelemetry`        | The OpenTelemetry API and one `OpenTelemetry` bean are present.                                |
+| `Worker`, `WorkerLifecycle` | `workhorse.worker.enabled=true`.                                                               |
+| `HealthIndicator`           | The worker is on, Actuator is present, and `management.health.workhorse.enabled` is not false. |
+| Dashboard filter            | `workhorse.dashboard.enabled=true`, a servlet application, and one `DashboardAuthorizer` bean. |
+
+`TransactionAwareConnectionSource` acquires through `DataSourceUtils.getConnection`. Inside an
+active Spring transaction, it returns the connection that holds the transaction, and the SDK does
+not commit it. Thus an enqueue inside `@Transactional` commits and rolls back with that transaction.
+Outside a transaction, it runs the call in autocommit.
+
+The worker bean uses `Worker.builder(dataSource)` and the `workhorse.worker.*` properties. It
+registers every `TaskHandler` bean, and then applies each `WorkerCustomizer`. If the context holds
+`TaskHandler` beans and the worker is off, the starter logs one warning that names
+`workhorse.worker.enabled`.
+
+`WorkerLifecycle` is a `SmartLifecycle` bean in `SmartLifecycle.DEFAULT_PHASE`. It starts the worker
+with `start()` after the context refreshes. On stop, it calls `worker.stop()` and then `close()` on
+its own thread. Spring waits for that drain only for `spring.lifecycle.timeout-per-shutdown-phase`.
+Keep that timeout above `workhorse.worker.shutdown-grace` plus 2 seconds. The worker cleanup after
+the grace takes up to about 2 seconds, as the JVM running and stopping section shows.
+
+| Lifecycle state       | Health    |
+| --------------------- | --------- |
+| `NEW`                 | `UNKNOWN` |
+| `RUNNING`             | `UP`      |
+| `STOPPING`, `STOPPED` | `DOWN`    |
+| `FAILED`              | `DOWN`    |
+
+The lifecycle reports `FAILED` when the worker stops without a lifecycle stop.
+
+`JacksonJsonCodec` copies the application's `JsonMapper` with `WRITE_NAN_AS_STRINGS` and
+`ALLOW_NON_NUMERIC_NUMBERS` off. When it encodes, it throws `IllegalArgumentException` for a
+non-finite number or a lone surrogate.
+
+### Kotlin module
+
+`workhorse-kotlin` adds no protocol behavior. Each `Queue` and `Admin` method has one suspend
+wrapper named after it, such as `enqueueSuspend` and `getTaskSuspend`. A wrapper takes
+`connection: Connection? = null` as its last parameter. `taskGroupSuspend` is the exception: its
+trailing block comes after `connection`. With a connection, a wrapper uses the caller form.
+A Java `Optional` result is a nullable type. The wrappers run the Java call in `runInterruptible` on
+another thread. Spring binds a transaction to its thread, so a wrapper in the source form does not
+join a Spring transaction. Give the transaction's connection, or call the Java method.
+
+Spring takes its coroutine transaction path only for a `ReactiveTransactionManager`. With a
+`DataSourceTransactionManager`, a `suspend` `@Transactional` method commits at its first
+suspension point. Thus Workhorse can join a Spring JDBC transaction only from a `@Transactional`
+method that does not suspend. Such a method can enter coroutine code on the same thread, for
+example with `runBlocking`.
+
+`workhorseWorker(dataSource) { … }` builds a `Worker` with a `WorkerScope`. Each scope property sets
+the `Worker.Builder` option of the same name, and `null` keeps the default.
+`handle<P>(taskType, SuspendHandler<P>)` registers a suspend handler with a reified payload type.
+The scope has no property for `cohorts`, `telemetry`, or `handleBatch`. `java { … }` reaches them
+on the `Worker.Builder`. A scope property overrides the same option that `java { … }` sets.
+
+A suspend handler runs in a coroutine on a dispatcher over a virtual-thread executor. A token
+cancellation cancels the coroutine `Job`, and the handler thread waits until the coroutine ends.
+
 ## Documentation and release checks
 
 These checks test the README files, the documentation examples, and the install commands.

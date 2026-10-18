@@ -559,7 +559,7 @@ Lag differs by category:
   uses the same delay.
 - A successful pass that ends without a full batch clears the column.
 - The `queue_health_v1` document reports the column as `terminal_cleanup_backlog_since`. Go,
-  Python, Rust, and Ruby return that key. TypeScript `Queue.health()` maps it to
+  Python, Rust, Ruby, and Java return that key. TypeScript `Queue.health()` maps it to
   `terminalCleanupBacklogSince`.
 - A backlog older than `terminal_cleanup_backlog_ms` raises the degraded reason
   `terminal-cleanup-backlog`. Its `observed` value is the backlog's age in milliseconds.

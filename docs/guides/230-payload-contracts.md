@@ -80,14 +80,15 @@ The error does not contain the bad data.
 | `sensitiveResultKeys`  | Optional. Top-level result keys hidden from reads.  |
 
 **Synchronization.** TypeScript calls `queue.syncContracts()`. Python, Rust, and Ruby call
-`sync_contracts`, and Go calls `SyncContracts`. `sync_contract_definitions_v1` inserts immutable
+`sync_contracts`, and Go calls `SyncContracts`. Java calls `Queue.syncContracts`, and Kotlin calls
+`syncContractsSuspend`. `sync_contract_definitions_v1` inserts immutable
 `(task_type, version)` rows into `contract_definition`.
 
 **Validation errors.** `TaskContractValidationError` carries the task type, the contract version,
 and whether the payload or the result failed. It keeps neither the value nor the library
 diagnostic.
 
-More detail: [Data model: Contract definitions and policy](../architecture/data-model.md#contract-definitions-and-policy).
+More detail: [Data model: Contract definitions and policy](../architecture/data-model.md#contract-definitions-and-policy) and [Schema and SQL protocol: JVM queue](../architecture/schema-and-protocol.md#jvm-queue).
 
 </details>
 
@@ -201,12 +202,14 @@ the same text.
 - `complete_v1` checks the persisted result limit before it deletes the active runtime.
 - An oversized value raises `TaskValueSizeLimitError` with the actual and allowed byte counts.
 - An oversized result raises `TaskValueSizeLimitError` in the TypeScript, Go, Python, and Rust
-  workers, and `ValueSizeLimitError` in the Ruby worker. The retry policy applies.
+  workers, `ValueSizeLimitError` in the Ruby worker, and `ValueSizeLimitException` in the Java
+  worker. The retry policy applies.
 - In Python, a `NaN` or infinite number in a result raises `ValueError`.
 
 **Unstorable results.** jsonb refuses `\u0000` (SQLSTATE `22P05`) and an unpaired UTF-16 surrogate
 escape (SQLSTATE `22P02`). The Go, Python, TypeScript, and Ruby workers check for both. The Rust
-worker checks for NUL only, because a Rust `String` cannot hold an unpaired surrogate. A refused
+worker checks for NUL only, because a Rust `String` cannot hold an unpaired surrogate. The Java
+worker also checks for both, with its own error text. A refused
 result fails the attempt through `fail_v1` with this message:
 
 `<task type> result contains a NUL character or an unpaired surrogate, which PostgreSQL jsonb cannot store`
@@ -214,7 +217,7 @@ result fails the attempt through `fail_v1` with this message:
 The message carries no part of the value. On the fast tier, the refused result never joins the
 completion batch, so the other results in the batch still complete.
 
-More detail: [Data model: Value size limits](../architecture/data-model.md#value-size-limits) and [Data model: Results jsonb cannot store](../architecture/data-model.md#results-jsonb-cannot-store).
+More detail: [Data model: Value size limits](../architecture/data-model.md#value-size-limits), [Data model: Results jsonb cannot store](../architecture/data-model.md#results-jsonb-cannot-store), and [Schema and SQL protocol: JVM failure settlement](../architecture/schema-and-protocol.md#jvm-failure-settlement).
 
 </details>
 
@@ -256,7 +259,8 @@ More detail: [Data model: Redaction keys](../architecture/data-model.md#redactio
 
 ## Use only the permitted schema features
 
-Workhorse has SDKs for TypeScript, Python, Go, Rust, and Ruby. All SDKs must get the same answer for
+Workhorse has SDKs for TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin. All SDKs must get the
+same answer for
 the same data. Some JSON Schema features give different answers in different languages, so
 Workhorse does not permit them:
 
