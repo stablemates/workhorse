@@ -166,7 +166,7 @@ have two severities:
 The codes are stable strings. Thus your automation can use the code and does not have to parse
 text. If the queue exceeds a budget, `workhorse health --json` exits with a non-zero code.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
 
     ```ts
@@ -215,6 +215,28 @@ text. If the queue exceeds a budget, `workhorse health --json` exits with a non-
     ```ruby
     status = queue.health.fetch("status")
     warn status.fetch("reasons").inspect unless status.fetch("level") == "healthy"
+    ```
+
+  </Tab>
+  <Tab value="Java">
+
+    ```java
+    QueueHealth health = queue.health();
+    if (health.snapshot().get("status") instanceof Map<?, ?> status
+        && !"healthy".equals(status.get("level"))) {
+      System.err.println(status.get("reasons"));
+    }
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+
+    ```kotlin
+    val health = queue.healthSuspend()
+    val status = health.snapshot["status"] as Map<*, *>
+    if (status["level"] != "healthy") {
+      System.err.println(status["reasons"])
+    }
     ```
 
   </Tab>

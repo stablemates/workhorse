@@ -18,9 +18,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
-import run.workhorse.Queue;
 import run.workhorse.TaskDetail;
 import run.workhorse.TaskState;
 import run.workhorse.testing.ScratchDatabase;
@@ -28,7 +26,8 @@ import run.workhorse.testing.ScratchDatabase;
 /**
  * Runs each worker snippet that runs until the process ends in a child JVM ({@link
  * ExampleProcess}). The worker runs one {@code email.send} task, and then the test sends {@code
- * SIGTERM}.
+ * SIGTERM}. The worker claims every task of {@code email} and {@code billing}, so each run has its
+ * own database.
  */
 @ExtendWith(ScratchDatabase.class)
 @Timeout(value = 180, unit = TimeUnit.SECONDS)
@@ -38,14 +37,25 @@ class WorkerProcessExamplesTest {
 
   private @Nullable Process child;
   private @Nullable Path errors;
+  private @Nullable IsolatedExampleDatabase database;
 
   @AfterEach
-  void killChild() throws IOException {
-    if (child != null && child.isAlive()) {
-      child.destroyForcibly();
-    }
-    if (errors != null) {
-      Files.deleteIfExists(errors);
+  void killChild() throws IOException, SQLException, InterruptedException {
+    try {
+      if (child != null && child.isAlive()) {
+        child.destroyForcibly();
+        // The database drop waits for the connections of the child to end.
+        assertTrue(
+            child.waitFor(ExampleDatabase.WAIT.toSeconds(), TimeUnit.SECONDS),
+            "the child JVM ends before the test drops its database");
+      }
+      if (errors != null) {
+        Files.deleteIfExists(errors);
+      }
+    } finally {
+      if (database != null) {
+        database.close();
+      }
     }
   }
 
@@ -58,15 +68,17 @@ class WorkerProcessExamplesTest {
         "kotlin-worker-process"
       })
   void theWorkerRunsTheTaskAndEndsOnSigterm(String snippet) throws Exception {
+    IsolatedExampleDatabase db = IsolatedExampleDatabase.create("worker-process");
+    database = db;
     String to = snippet + "-" + UUID.randomUUID() + "@example.com";
     UUID taskId =
-        new Queue(ConnectionSource.of(ExampleDatabase.dataSource()))
+        db.queue()
             .enqueue(
                 "email.send", Map.of("to", to), EnqueueOptions.builder().queue("email").build())
             .taskId();
 
-    Process process = start(snippet);
-    TaskDetail task = ExampleDatabase.awaitTerminal(taskId);
+    Process process = start(snippet, db.jdbcUrl());
+    TaskDetail task = db.awaitTerminal(taskId);
     assertEquals(TaskState.SUCCEEDED, task.state(), errorText());
     assertEquals(Map.of("deliveredTo", to), task.result());
 
@@ -76,12 +88,12 @@ class WorkerProcessExamplesTest {
     assertEquals(SIGTERM_STATUS, process.exitValue(), errorText());
   }
 
-  private Process start(String snippet) throws IOException, SQLException {
+  private Process start(String snippet, String jdbcUrl) throws IOException {
     Path java = Path.of(System.getProperty("java.home"), "bin", "java");
     List<String> command = new ArrayList<>(List.of(java.toString()));
     command.add("-cp");
     command.add(System.getProperty("java.class.path"));
-    command.addAll(List.of(ExampleProcess.class.getName(), snippet, ExampleDatabase.jdbcUrl()));
+    command.addAll(List.of(ExampleProcess.class.getName(), snippet, jdbcUrl));
     ProcessBuilder builder = new ProcessBuilder(command);
     Path file = Files.createTempFile("workhorse-example-process", ".err");
     errors = file;

@@ -26,7 +26,7 @@ Thus, a deadline ends the task even if the attempt budget has attempts left.
 To set a deadline, give `deadline` when you enqueue the task. The deadline is a time, not a
 duration.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("price.quote", { quoteId }, { deadline: quoteExpiresAt });
@@ -62,6 +62,23 @@ duration.
   <Tab value="Ruby">
     ```ruby
     queue.enqueue("price.quote", {"quoteId" => quote_id}, deadline: quote_expires_at)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "price.quote",
+        Map.of("quoteId", quoteId),
+        EnqueueOptions.builder().deadline(quoteExpiresAt).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "price.quote",
+      mapOf("quoteId" to quoteId),
+      EnqueueOptions.builder().deadline(quoteExpiresAt).build(),
+    )
     ```
   </Tab>
 </Tabs>
@@ -137,7 +154,7 @@ To set the timeout, give `executionTimeoutMs` when you enqueue the task. The tim
 the handler can run in one attempt. It does not set when the task must end. Use it if one attempt
 must stop, but a later attempt can succeed. For example, an HTTP call stops responding.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("report.build", { reportId }, {
@@ -187,6 +204,26 @@ must stop, but a later attempt can succeed. For example, an HTTP call stops resp
     ```ruby
     queue.enqueue("report.build", {"reportId" => report_id},
       execution_timeout: attempt_timeout, max_attempts: attempt_budget)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "report.build",
+        Map.of("reportId", reportId),
+        EnqueueOptions.builder()
+            .executionTimeout(attemptTimeout)
+            .maxAttempts(attemptBudget)
+            .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "report.build",
+      mapOf("reportId" to reportId),
+      EnqueueOptions.builder().executionTimeout(attemptTimeout).maxAttempts(attemptBudget).build(),
+    )
     ```
   </Tab>
 </Tabs>

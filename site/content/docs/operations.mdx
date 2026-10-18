@@ -940,7 +940,7 @@ operator wants the worker to stop claiming tasks during the investigation.
 4. A deploy starts the process again. The new process registers as a new instance, and the worker
    runs again.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const admin = new Admin(pool);
@@ -989,6 +989,29 @@ operator wants the worker to stop claiming tasks during the investigation.
     audit = Stablemates::Workhorse::AdminAudit.new(actor: actor.email, reason: "investigating slow provider",
       request_id: incident_id)
     result = admin.set_worker_paused("billing-worker-1", true, audit: audit)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Admin admin = new Admin(ConnectionSource.of(dataSource));
+    List<WorkerInfo> workers = admin.listWorkers();
+    Optional<WorkerPauseResult> result =
+        admin.setWorkerPaused(
+            "billing-worker-1",
+            true,
+            new AdminAudit(actor.email(), "investigating slow provider", incidentId));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val admin = Admin(ConnectionSource.of(dataSource))
+    val workers = admin.listWorkersSuspend()
+    val result =
+      admin.setWorkerPausedSuspend(
+        "billing-worker-1",
+        true,
+        AdminAudit(actor.email, "investigating slow provider", incidentId),
+      )
     ```
   </Tab>
 </Tabs>

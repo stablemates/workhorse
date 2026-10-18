@@ -27,7 +27,7 @@ Three requests make one task, and the task uses the latest revision. Each reques
 
 To use debounce, give a `debounce` key and a window when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("search.reindex", { documentId, revision }, {
@@ -78,6 +78,30 @@ To use debounce, give a `debounce` key and a window when you enqueue the task.
       debounce: Stablemates::Workhorse::Debounce.new(
         key: document_id, window: quiet_period, schedule: :reset, scope: "search-index"
       ))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    EnqueueResult result =
+        queue.enqueue(
+            "search.reindex",
+            Map.of("documentId", documentId, "revision", revision),
+            EnqueueOptions.builder()
+                .debounce(
+                    new Debounce(documentId, quietPeriod, DebounceSchedule.RESET, "search-index"))
+                .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val result =
+      queue.enqueueSuspend(
+        "search.reindex",
+        mapOf("documentId" to documentId, "revision" to revision),
+        EnqueueOptions.builder()
+          .debounce(Debounce(documentId, quietPeriod, DebounceSchedule.RESET, "search-index"))
+          .build(),
+      )
     ```
   </Tab>
 </Tabs>

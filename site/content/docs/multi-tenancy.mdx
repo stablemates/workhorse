@@ -43,7 +43,7 @@ three enqueue options. Workhorse already enforces each of these options:
 - A `tenant:` tag lets an operator filter by tenant. Dead-letter lists, redrive filters, and the
   dashboard task list accept a tag filter.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const tenant = "acme";
@@ -141,6 +141,51 @@ three enqueue options. Workhorse already enforces each of these options:
     queue.enqueue("report.generate", {"month" => "2026-08"},
       queue: "reports", concurrency_key: tenant, budget: tenant, tags: ["tenant:#{tenant}"])
     ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    String tenant = "acme";
+
+    queue.syncConcurrencyPolicies(
+        "workers", List.of(new ConcurrencyPolicyDefinition("reports", 40, 4)));
+    queue.syncBudgets("workers", List.of(new BudgetDefinition(tenant, 8, null)));
+
+    EnqueueResult result =
+        queue.enqueue(
+            "report.generate",
+            Map.of("month", "2026-08"),
+            EnqueueOptions.builder()
+                .queue("reports")
+                .concurrencyKey(tenant)
+                .budget(tenant)
+                .tags("tenant:" + tenant)
+                .build());
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val tenant = "acme"
+
+    queue.syncConcurrencyPoliciesSuspend(
+      "workers",
+      listOf(ConcurrencyPolicyDefinition("reports", 40, 4)),
+    )
+    queue.syncBudgetsSuspend("workers", listOf(BudgetDefinition(tenant, 8, null)))
+
+    val result =
+      queue.enqueueSuspend(
+        "report.generate",
+        mapOf("month" to "2026-08"),
+        EnqueueOptions.builder()
+          .queue("reports")
+          .concurrencyKey(tenant)
+          .budget(tenant)
+          .tags("tenant:$tenant")
+          .build(),
+      )
+    ```
+
   </Tab>
 </Tabs>
 

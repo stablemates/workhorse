@@ -27,7 +27,7 @@ and waits.
 Thus, a checkpoint runs its operation one time and stores the result. Each later run returns the
 stored result.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const charge = await ctx.checkpoint("charge", () =>
@@ -78,6 +78,24 @@ stored result.
     ```ruby
     charge = context.checkpoint("charge") { Payments.charge(order.fetch("id"), "charge:#{order.fetch("id")}") }
     shipment = context.checkpoint("shipment") { Logistics.create_shipment(order.fetch("id"), charge) }
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Object charge =
+        context.checkpoint(
+            "charge", Object.class, () -> payments.charge(orderId, "charge:" + orderId));
+    Object shipment =
+        context.checkpoint(
+            "shipment", Object.class, () -> logistics.createShipment(orderId, charge));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val charge =
+      ctx.checkpoint<Map<String, Any?>>("charge") { payments.charge(orderId, "charge:$orderId") }
+    val shipment =
+      ctx.checkpoint<Map<String, Any?>>("shipment") { logistics.createShipment(orderId, charge) }
     ```
   </Tab>
 </Tabs>
@@ -141,7 +159,7 @@ Thus, a durable wait releases the worker until its time comes. Each wait has a n
 the name tells Workhorse that the wait ended and that the handler can continue. Use `ctx.sleep` to
 wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
@@ -179,6 +197,20 @@ wait for a duration. Use `ctx.sleepUntil` to wait until a specified time.
     welcome = context.checkpoint("welcome") { Mailer.welcome(trial.fetch("to")) }
     context.sleep_until("follow-up-window", Time.iso8601(trial.fetch("followUpAt")))
     follow_up = context.checkpoint("follow-up") { Mailer.follow_up(trial.fetch("to")) }
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    context.checkpoint("welcome", Object.class, () -> mailer.welcome(to));
+    context.sleepUntil("follow-up-window", followUpAt);
+    context.checkpoint("follow-up", Object.class, () -> mailer.followUp(to));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    ctx.checkpoint<Map<String, Any?>>("welcome") { mailer.welcome(to) }
+    ctx.sleepUntil("follow-up-window", followUpAt)
+    ctx.checkpoint<Map<String, Any?>>("follow-up") { mailer.followUp(to) }
     ```
   </Tab>
 </Tabs>
@@ -510,7 +542,7 @@ and each delivery is idempotent. A network retry cannot resume the task two time
 [Signals](/docs/signals) and [Human waits](/docs/human-waits) for the timeout and authorization
 rules.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const event = await ctx.waitForSignal<{ id: string }>("provider-event");
@@ -544,6 +576,20 @@ rules.
     ```ruby
     event = context.wait_for_signal("provider-event")
     review = context.wait_for_human("operator-review", {"eventId" => event.fetch("id")})
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<?, ?> event = context.waitForSignal("provider-event", Map.class, null);
+    Object review =
+        context.waitForHuman(
+            "operator-review", Map.of("eventId", event.get("id")), Object.class, null);
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val event = ctx.waitForSignal<Map<String, Any?>>("provider-event")
+    val review = ctx.waitForHuman<Any?>("operator-review", mapOf("eventId" to event["id"]))
     ```
   </Tab>
 </Tabs>

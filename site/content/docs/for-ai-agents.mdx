@@ -248,7 +248,7 @@ Each example does these steps:
 3. It runs a worker. The handler puts the external send in a checkpoint.
 4. It reads the stored result of the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts verify
     import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -531,6 +531,122 @@ Each example does these steps:
 
     task = Stablemates::Workhorse::Admin.new(pool).get_task(enqueued.task_id)
     puts "#{task.state} #{JSON.generate(task.result)}" if task
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    static String sendConfirmationEmail(String orderId) {
+      return "receipt-for-" + orderId;
+    }
+
+    static TaskDetail integrate(String databaseUrl) throws SQLException {
+      PGSimpleDataSource dataSource = new PGSimpleDataSource();
+      dataSource.setURL(databaseUrl); // a JDBC URL, such as jdbc:postgresql://localhost/app
+      Queue queue = new Queue(ConnectionSource.of(dataSource));
+
+      UUID taskId;
+      try (Connection connection = dataSource.getConnection()) {
+        connection.setAutoCommit(false);
+        try {
+          try (PreparedStatement insert =
+              connection.prepareStatement("INSERT INTO orders (id, status) VALUES (?, ?)")) {
+            insert.setString(1, "order-42");
+            insert.setString(2, "new");
+            insert.executeUpdate();
+          }
+          taskId =
+              queue
+                  .enqueue(
+                      connection,
+                      "order.created",
+                      Map.of("orderId", "order-42"),
+                      EnqueueOptions.builder()
+                          .maxAttempts(5)
+                          .retryPolicy(Map.of("type", "fixed", "delayMs", 1_000))
+                          .build())
+                  .taskId();
+          connection.commit();
+        } catch (SQLException | RuntimeException error) {
+          connection.rollback();
+          throw error;
+        }
+      }
+
+      try (Worker worker =
+          Worker.builder(dataSource)
+              .pollingOnly(true)
+              .handle(
+                  "order.created",
+                  Map.class,
+                  (context, payload) -> {
+                    String orderId = String.valueOf(payload.get("orderId"));
+                    // The send runs once. A replay reuses the recorded receipt.
+                    String receipt =
+                        context.checkpoint(
+                            "confirmation-email", String.class, () -> sendConfirmationEmail(orderId));
+                    return Map.of("processedOrderId", orderId, "receipt", receipt);
+                  })
+              .build()) {
+        worker.runOnce(); // Production workers call WorkerProcess.runWorkerProcess(worker).
+      }
+
+      TaskDetail task = new Admin(ConnectionSource.of(dataSource)).getTask(taskId).orElseThrow();
+      System.out.println(task.state() + " " + task.result());
+      return task;
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    fun sendConfirmationEmail(orderId: String): String = "receipt-for-$orderId"
+
+    suspend fun integrate(databaseUrl: String): TaskDetail? {
+      val dataSource = PGSimpleDataSource().apply { setURL(databaseUrl) } // a JDBC URL
+      val queue = Queue(ConnectionSource.of(dataSource))
+
+      val taskId =
+        dataSource.connection.use { connection ->
+          connection.autoCommit = false
+          try {
+            val sql = "INSERT INTO orders (id, status) VALUES (?, ?)"
+            connection.prepareStatement(sql).use { insert ->
+              insert.setString(1, "order-42")
+              insert.setString(2, "new")
+              insert.executeUpdate()
+            }
+            val enqueued =
+              queue.enqueueSuspend(
+                "order.created",
+                mapOf("orderId" to "order-42"),
+                EnqueueOptions.builder()
+                  .maxAttempts(5)
+                  .retryPolicy(mapOf("type" to "fixed", "delayMs" to 1_000))
+                  .build(),
+                connection,
+              )
+            connection.commit()
+            enqueued.taskId()
+          } catch (error: Throwable) {
+            connection.rollback()
+            throw error
+          }
+        }
+
+      workhorseWorker(dataSource) {
+          pollingOnly = true
+          handle<Map<String, Any?>>("order.created") { context, payload ->
+            val orderId = payload["orderId"] as String
+            // The send runs once. A replay reuses the recorded receipt.
+            val receipt = context.checkpoint("confirmation-email") { sendConfirmationEmail(orderId) }
+            mapOf("processedOrderId" to orderId, "receipt" to receipt)
+          }
+        }
+        .use { worker -> worker.runOnce() } // Production workers call WorkerProcess.runWorkerProcess.
+
+      val task = Admin(ConnectionSource.of(dataSource)).getTaskSuspend(taskId)
+      println("${task?.state()} ${task?.result()}")
+      return task
+    }
     ```
   </Tab>
 </Tabs>

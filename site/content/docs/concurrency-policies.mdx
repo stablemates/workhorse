@@ -50,7 +50,7 @@ Python applications use `Queue.sync_concurrency_policies` or `AsyncQueue.sync_co
 through the connection that they own. `Queue.list_concurrency_policies` and
 `AsyncQueue.list_concurrency_policies` return the stored policy rows.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncConcurrencyPolicies("workers", [
@@ -96,6 +96,22 @@ through the connection that they own. `Queue.list_concurrency_policies` and
     ], prune: false)
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    List<ConcurrencyPolicy> policies =
+        queue.syncConcurrencyPolicies(
+            "workers", List.of(new ConcurrencyPolicyDefinition("mail", 20, 3)));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val policies =
+      queue.syncConcurrencyPoliciesSuspend(
+        "workers",
+        listOf(ConcurrencyPolicyDefinition("mail", 20, 3)),
+      )
+    ```
+  </Tab>
 </Tabs>
 
 Workers do not need the policy in their own configuration, because each claim reads the policy from
@@ -108,7 +124,7 @@ pruning.
 Each policy limits one queue. It can also limit the tasks that share a `concurrencyKey` in that
 queue. The key can name a tenant, a destination host, or an account.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
@@ -148,6 +164,23 @@ queue. The key can name a tenant, a destination host, or an account.
   <Tab value="Ruby">
     ```ruby
     queue.enqueue("mail.send", {"messageId" => message_id}, queue: "mail", concurrency_key: tenant_id)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "mail.send",
+        Map.of("messageId", messageId),
+        EnqueueOptions.builder().queue("mail").concurrencyKey(tenantId).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "mail.send",
+      mapOf("messageId" to messageId),
+      EnqueueOptions.builder().queue("mail").concurrencyKey(tenantId).build(),
+    )
     ```
   </Tab>
 </Tabs>
@@ -272,7 +305,7 @@ namespace owns its budgets. Workhorse removes the omitted budgets, unless you di
 
 A task names its budget when you enqueue it, with the `budget` option beside `concurrencyKey`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncBudgets("workers", [{ name: "vendor-api", maxActive: 4 }]);
@@ -333,6 +366,40 @@ A task names its budget when you enqueue it, with the `budget` option beside `co
     ], prune: false)
     queue.enqueue("invoice.sync", {"id" => 1}, queue: "billing", budget: "vendor-api")
     ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    List<Budget> budgets =
+        queue.syncBudgets("workers", List.of(new BudgetDefinition("vendor-api", 4, null)));
+
+    queue.enqueue(
+        "invoice.sync",
+        Map.of("id", 1),
+        EnqueueOptions.builder().queue("billing").budget("vendor-api").build());
+    queue.enqueue(
+        "contact.sync",
+        Map.of("id", 2),
+        EnqueueOptions.builder().queue("crm").budget("vendor-api").build());
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val budgets =
+      queue.syncBudgetsSuspend("workers", listOf(BudgetDefinition("vendor-api", 4, null)))
+
+    queue.enqueueSuspend(
+      "invoice.sync",
+      mapOf("id" to 1),
+      EnqueueOptions.builder().queue("billing").budget("vendor-api").build(),
+    )
+    queue.enqueueSuspend(
+      "contact.sync",
+      mapOf("id" to 2),
+      EnqueueOptions.builder().queue("crm").budget("vendor-api").build(),
+    )
+    ```
+
   </Tab>
 </Tabs>
 

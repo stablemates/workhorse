@@ -27,7 +27,7 @@ To add a payload contract:
 2. Put the document in `QueueOptions.contracts` when you create the queue.
 3. Call `queue.syncContracts()` when your application starts.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const contracts = {
@@ -104,6 +104,48 @@ To add a payload contract:
         }
       )
     )
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<String, TaskTypeContracts> contracts =
+        Map.of(
+            "mail.send",
+            new TaskTypeContracts(
+                "mail-current",
+                Map.of(
+                    "mail-current",
+                    new TaskContractVersion(
+                        Map.of("type", "object", "required", List.of("recipient")),
+                        Map.of("type", "object"),
+                        null,
+                        null,
+                        List.of("accessToken"),
+                        List.of()))));
+    queue.syncContracts(contracts);
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val contracts =
+      mapOf(
+        "mail.send" to
+          TaskTypeContracts(
+            "mail-current",
+            mapOf(
+              "mail-current" to
+                TaskContractVersion(
+                  mapOf("type" to "object", "required" to listOf("recipient")),
+                  mapOf("type" to "object"),
+                  null,
+                  null,
+                  listOf("accessToken"),
+                  listOf(),
+                ),
+            ),
+          ),
+      )
+    queue.syncContractsSuspend(contracts)
     ```
   </Tab>
 </Tabs>

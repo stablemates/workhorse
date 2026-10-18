@@ -41,7 +41,7 @@ time that a partial batch waits for more tasks. A batch is not a
 [task group](/docs/task-groups), which is a set of tasks that Workhorse tracks until all of them
 finish.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
@@ -101,6 +101,51 @@ finish.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues("email")
+            .concurrency(32)
+            .handleBatch(
+                "email.send",
+                Object.class,
+                new BatchOptions(20, Duration.ofMillis(50)),
+                items -> {
+                  List<BatchDelivery> deliveries =
+                      emailProvider.sendMany(
+                          items.stream().map(BatchHandlerItem::payload).toList());
+                  return deliveries.stream()
+                      .<BatchHandlerOutcome>map(
+                          delivery -> {
+                            Exception error = delivery.error();
+                            return error != null
+                                ? new BatchFailed(error)
+                                : new BatchSucceeded(Map.of("providerId", delivery.id()));
+                          })
+                      .toList();
+                })
+            .build();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker =
+      workhorseWorker(dataSource) {
+        queues = listOf("email")
+        concurrency = 32
+        handleBatch<Map<String, Any?>>("email.send", BatchOptions(20, Duration.ofMillis(50))) {
+          items ->
+          val deliveries = emailProvider.sendMany(items.map { item -> item.payload })
+          deliveries.map<_, BatchHandlerOutcome> { delivery ->
+            val error = delivery.error
+            if (error != null) BatchFailed(error)
+            else BatchSucceeded(mapOf("providerId" to delivery.id))
+          }
+        }
+      }
+    ```
+  </Tab>
 </Tabs>
 
 `maxSize` sets the maximum size of a batch. `lingerMs` sets the linger. The linger timer does not
@@ -143,7 +188,7 @@ More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/wor
 A producer does not change for a batch handler. The app enqueues one ordinary task for each email.
 The producer cannot see that a batch handler runs the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("email.send", { to: "person@example.com" });
@@ -171,6 +216,16 @@ The producer cannot see that a batch handler runs the task.
   <Tab value="Ruby">
     ```ruby
     queue.enqueue("email.send", {"to" => "person@example.com"})
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue("email.send", Map.of("to", "person@example.com"));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend("email.send", mapOf("to" to "person@example.com"))
     ```
   </Tab>
 </Tabs>

@@ -24,7 +24,7 @@ go out before the import is complete.
 An edge is the link from one dependent to one prerequisite. To make a task wait, give
 `EnqueueOptions.dependencies` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -89,6 +89,41 @@ An edge is the link from one dependent to one prerequisite. To make a task wait,
         on_failure: :fail,
         on_cancellation: :cancel
       ))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    UUID importId = queue.enqueue("contacts.import", Map.of("source", "upload")).taskId();
+    queue.enqueue(
+        "contacts.notify",
+        Map.of("importId", importId.toString()),
+        EnqueueOptions.builder()
+            .dependencies(
+                new Dependencies(
+                    List.of(importId),
+                    DependencyPolicy.RELEASE,
+                    DependencyPolicy.FAIL,
+                    DependencyPolicy.CANCEL))
+            .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val importId = queue.enqueueSuspend("contacts.import", mapOf("source" to "upload")).taskId
+    queue.enqueueSuspend(
+      "contacts.notify",
+      mapOf("importId" to importId.toString()),
+      EnqueueOptions.builder()
+        .dependencies(
+          Dependencies(
+            listOf(importId),
+            DependencyPolicy.RELEASE,
+            DependencyPolicy.FAIL,
+            DependencyPolicy.CANCEL,
+          ),
+        )
+        .build(),
+    )
     ```
   </Tab>
 </Tabs>

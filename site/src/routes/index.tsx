@@ -332,9 +332,9 @@ const operatingNote = (
 
 const dashboardNote = (
   <>
-    TypeScript, Python, Go, Rust, Ruby, and Java embed the same packaged dashboard through their
-    native HTTP interfaces. Each host needs a database connection, with no worker runtime or extra
-    service.
+    TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin embed the same packaged dashboard through
+    their native HTTP interfaces. Each host needs a database connection, with no worker runtime or
+    extra service.
   </>
 );
 
@@ -370,10 +370,25 @@ const dashboardTabs: readonly CodeTab[] = [
     note: dashboardNote,
     snippet: landingSupplementalSnippets.operateDashboard.ruby,
   },
+  {
+    label: "java",
+    file: "Dashboard.java",
+    note: dashboardNote,
+    snippet: landingSupplementalSnippets.operateDashboard.java,
+  },
+  {
+    label: "kotlin",
+    file: "Dashboard.kt",
+    note: dashboardNote,
+    snippet: landingSupplementalSnippets.operateDashboard.kotlin,
+  },
 ];
 
-/** Operational SDK calls, grouped separately to stay within the ten-tab CSS contract. */
-const healthFleetTabs: readonly CodeTab[] = [
+/**
+ * Operational SDK calls: the health check and the fleet controls. Each is its own group, because
+ * the CSS tab contract of `global.css` allows at most ten tabs in one group.
+ */
+const healthTabs: readonly CodeTab[] = [
   {
     label: "health ts",
     file: "monitor.ts",
@@ -405,6 +420,21 @@ const healthFleetTabs: readonly CodeTab[] = [
     snippet: landingSupplementalSnippets.operateHealth.ruby,
   },
   {
+    label: "health java",
+    file: "Monitor.java",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateHealth.java,
+  },
+  {
+    label: "health kt",
+    file: "Monitor.kt",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateHealth.kotlin,
+  },
+];
+
+const fleetTabs: readonly CodeTab[] = [
+  {
     label: "fleet ts",
     file: "pause-fleet.ts",
     note: operatingNote,
@@ -433,6 +463,18 @@ const healthFleetTabs: readonly CodeTab[] = [
     file: "pause_fleet.rb",
     note: operatingNote,
     snippet: landingSupplementalSnippets.operateFleet.ruby,
+  },
+  {
+    label: "fleet java",
+    file: "PauseFleet.java",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateFleet.java,
+  },
+  {
+    label: "fleet kt",
+    file: "PauseFleet.kt",
+    note: operatingNote,
+    snippet: landingSupplementalSnippets.operateFleet.kotlin,
   },
 ];
 
@@ -476,6 +518,16 @@ const deployTabs: readonly CodeTab[] = [
     file: "bin/worker",
     snippet: landingSupplementalSnippets.deploy.ruby,
   },
+  {
+    label: "java",
+    file: "Worker.java",
+    snippet: landingSupplementalSnippets.deploy.java,
+  },
+  {
+    label: "kotlin",
+    file: "Worker.kt",
+    snippet: landingSupplementalSnippets.deploy.kotlin,
+  },
 ];
 
 /**
@@ -505,15 +557,26 @@ const packages = [
 
 function FeatureSection({ feature, index }: { feature: Feature; index: number }) {
   const baseFile = feature.file.replace(/\.ts$/, "");
+  // A Java or Kotlin file takes the name of its class: `settle-order` becomes `SettleOrder`.
+  const classFile = baseFile.replace(/(^|-)([a-z])/g, (_match, _dash, letter: string) =>
+    letter.toUpperCase(),
+  );
   const snippets = landingFeatureSnippets[feature.snippet];
   const tabs: readonly CodeTab[] = [
     { label: "typescript", file: feature.file, snippet: snippets.typescript },
-    ...("python" in snippets && "go" in snippets && "rust" in snippets && "ruby" in snippets
+    ...("python" in snippets &&
+    "go" in snippets &&
+    "rust" in snippets &&
+    "ruby" in snippets &&
+    "java" in snippets &&
+    "kotlin" in snippets
       ? [
           { label: "python", file: `${baseFile}.py`, snippet: snippets.python },
           { label: "go", file: `${baseFile}.go`, snippet: snippets.go },
           { label: "rust", file: `${baseFile.replaceAll("-", "_")}.rs`, snippet: snippets.rust },
           { label: "ruby", file: `${baseFile.replaceAll("-", "_")}.rb`, snippet: snippets.ruby },
+          { label: "java", file: `${classFile}.java`, snippet: snippets.java },
+          { label: "kotlin", file: `${classFile}.kt`, snippet: snippets.kotlin },
         ]
       : []),
   ];
@@ -960,7 +1023,10 @@ function HomePage() {
               </p>
             </div>
             <div className="min-w-0">
-              <CodeTabs name="health-fleet" tabs={healthFleetTabs} />
+              <CodeTabs name="health" tabs={healthTabs} />
+              <div className="mt-6">
+                <CodeTabs name="fleet" tabs={fleetTabs} />
+              </div>
               <FleetOperationsDiagram />
             </div>
           </div>

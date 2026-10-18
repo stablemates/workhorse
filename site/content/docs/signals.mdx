@@ -26,7 +26,7 @@ it. The handler waits for a signal named `approval`. The review service answers 
 
 <Diagram name="signals-wait" alt="A signal wait frees the worker until the payload arrives" />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");
@@ -64,6 +64,20 @@ it. The handler waits for a signal named `approval`. The review service answers 
     ```ruby
     approval = context.wait_for_signal("approval")
     publish_order if approval["approved"] == true
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<?, ?> approval = context.waitForSignal("approval", Map.class, null);
+    if (Boolean.TRUE.equals(approval.get("approved"))) {
+      publishOrder();
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val approval = ctx.waitForSignal<Map<String, Any?>>("approval")
+    if (approval["approved"] == true) publishOrder()
     ```
   </Tab>
 </Tabs>

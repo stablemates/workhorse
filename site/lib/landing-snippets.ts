@@ -15,6 +15,13 @@
  * rust/examples/landing.rs, which `pnpm rust:clippy` compiles.
  * Every Ruby snippet is a copy of one `landing-*` region in
  * ruby/examples/landing.rb, which a documentation spec runs against PostgreSQL.
+ * Every Java snippet is a copy of one `landing-*-java` region in
+ * jvm/examples/src/main/java/run/workhorse/examples/Landing.java, and every
+ * Kotlin snippet is a copy of one `landing-*-kotlin` region in
+ * jvm/examples/src/main/kotlin/run/workhorse/examples/Landing.kt.
+ * `LandingExamplesTest`, `LandingKotlinExamplesTest`, and
+ * `LandingProcessExamplesTest` in jvm/examples/src/test run each region against
+ * PostgreSQL.
  * `scripts/check-language-examples.ts` fails when a copy and its region differ.
  */
 export const landingSnippets = {
@@ -117,6 +124,35 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
   end
   Stablemates::Workhorse.run_worker_process(worker)
 end`,
+
+  heroJava: `static void run(DataSource dataSource) {
+  new Queue(ConnectionSource.of(dataSource))
+      .enqueue("email.welcome", Map.of("to", "ada@example.com"));
+
+  Worker worker =
+      Worker.builder(dataSource)
+          .concurrency(4)
+          .handle(
+              "email.welcome",
+              Map.class,
+              (context, payload) -> Map.of("deliveredTo", payload.get("to")))
+          .build();
+  WorkerProcess.runWorkerProcess(worker);
+}`,
+
+  heroKotlin: `suspend fun run(dataSource: DataSource) {
+  Queue(ConnectionSource.of(dataSource))
+    .enqueueSuspend("email.welcome", mapOf("to" to "ada@example.com"))
+
+  val worker =
+    workhorseWorker(dataSource) {
+      concurrency = 4
+      handle<Map<String, Any?>>("email.welcome") { _, payload ->
+        mapOf("deliveredTo" to payload["to"])
+      }
+    }
+  WorkerProcess.runWorkerProcess(worker)
+}`,
   languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -252,6 +288,39 @@ pub async fn create_order(
     end
   end
 end`,
+
+  enqueueJava: `static void createOrder(DataSource dataSource, String orderId, long total) throws SQLException {
+  try (Connection connection = dataSource.getConnection()) {
+    connection.setAutoCommit(false);
+    try (PreparedStatement insert =
+        connection.prepareStatement("INSERT INTO orders (id, total) VALUES (?, ?)")) {
+      insert.setString(1, orderId);
+      insert.setLong(2, total);
+      insert.executeUpdate();
+    }
+
+    // Same transaction: the task exists exactly when the order does.
+    new Queue(ConnectionSource.of(dataSource))
+        .enqueue(connection, "order.confirm", Map.of("orderId", orderId));
+    connection.commit();
+  }
+}`,
+
+  enqueueKotlin: `suspend fun createOrder(dataSource: DataSource, orderId: String, total: Long) {
+  dataSource.connection.use { connection ->
+    connection.autoCommit = false
+    connection.prepareStatement("INSERT INTO orders (id, total) VALUES (?, ?)").use { insert ->
+      insert.setString(1, orderId)
+      insert.setLong(2, total)
+      insert.executeUpdate()
+    }
+
+    // Same transaction: the task exists exactly when the order does.
+    Queue(ConnectionSource.of(dataSource))
+      .enqueueSuspend("order.confirm", mapOf("orderId" to orderId), connection = connection)
+    connection.commit()
+  }
+}`,
   checkpoints: `worker.handle("invoice.issue", async (payload, ctx) => {
   // After Workhorse stores a checkpoint result, later runs return it.
   const charge = await ctx.checkpoint("charge", () =>
@@ -370,6 +439,48 @@ def self.register_invoice(worker)
     {"chargeId" => charge["id"]}
   end
 end`,
+
+  checkpointsJava: `static Map<String, Object> chargeCard(@Nullable Object amount) {
+  return Map.of("id", "ch_" + amount);
+}
+
+static Map<String, @Nullable Object> renderInvoice(@Nullable Object chargeId) {
+  return Map.of("chargeId", chargeId);
+}
+
+static Worker.Builder registerInvoice(Worker.Builder worker) {
+  return worker.handle(
+      "invoice.issue",
+      Map.class,
+      (context, invoice) -> {
+        // After Workhorse stores a checkpoint result, later runs return it.
+        Map<?, ?> charge =
+            context.checkpoint("charge", Map.class, () -> chargeCard(invoice.get("amount")));
+
+        Map<?, ?> pdf =
+            context.checkpoint("render", Map.class, () -> renderInvoice(charge.get("id")));
+
+        System.out.println("email " + invoice.get("email") + " " + pdf);
+        return Map.of("chargeId", charge.get("id"));
+      });
+}`,
+
+  checkpointsKotlin: `fun chargeCard(amount: Any?): Map<String, Any?> = mapOf("id" to "ch_$amount")
+
+fun renderInvoice(chargeId: Any?): Map<String, Any?> = mapOf("chargeId" to chargeId)
+
+fun WorkerScope.registerInvoice() {
+  handle<Map<String, Any?>>("invoice.issue") { context, invoice ->
+    // After Workhorse stores a checkpoint result, later runs return it.
+    val charge =
+      context.checkpoint<Map<String, Any?>>("charge") { chargeCard(invoice["amount"]) }
+
+    val pdf = context.checkpoint<Map<String, Any?>>("render") { renderInvoice(charge["id"]) }
+
+    println("email \${invoice["email"]} $pdf")
+    mapOf("chargeId" to charge["id"])
+  }
+}`,
   sleep: `worker.handle("order.settle", async (payload, ctx) => {
   const order = await ctx.checkpoint("place", () =>
     placeOrder(payload),
@@ -455,6 +566,38 @@ def self.register_settlement(worker)
     {"settled" => order["orderId"]}
   end
 end`,
+
+  sleepJava: `static Map<String, @Nullable Object> placeOrder(Map<?, ?> payload) {
+  return Map.of("orderId", payload.get("orderId"));
+}
+
+static Worker.Builder registerSettlement(Worker.Builder worker) {
+  return worker.handle(
+      "order.settle",
+      Map.class,
+      (context, payload) -> {
+        Map<?, ?> order = context.checkpoint("place", Map.class, () -> placeOrder(payload));
+
+        // Slot released here. The process can restart, deploy, or die.
+        context.sleep("settlement-window", Duration.ofHours(1));
+
+        return Map.of("settled", order.get("orderId"));
+      });
+}`,
+
+  sleepKotlin: `fun placeOrder(payload: Map<String, Any?>): Map<String, Any?> =
+  mapOf("orderId" to payload["orderId"])
+
+fun WorkerScope.registerSettlement() {
+  handle<Map<String, Any?>>("order.settle") { context, payload ->
+    val order = context.checkpoint<Map<String, Any?>>("place") { placeOrder(payload) }
+
+    // Slot released here. The process can restart, deploy, or die.
+    context.sleep("settlement-window", Duration.ofHours(1))
+
+    mapOf("settled" to order["orderId"])
+  }
+}`,
   retries: `await queue.enqueue(
   "match.reminder",
   { matchId },
@@ -561,6 +704,46 @@ pub async fn remind(
       "maxDelayMs" => 60_000
     })
 end`,
+
+  retriesJava: `static EnqueueResult remind(Queue queue, String matchId, Instant kickoff) {
+  return queue.enqueue(
+      "match.reminder",
+      Map.of("matchId", matchId),
+      EnqueueOptions.builder()
+          // Pointless after kickoff, whatever else happens.
+          .deadline(kickoff)
+          // Any single attempt is stuck after 30 seconds.
+          .executionTimeout(Duration.ofSeconds(30))
+          .maxAttempts(5)
+          .retryPolicy(
+              Map.of(
+                  "type", "exponential",
+                  "initialDelayMs", 1_000,
+                  "multiplier", 2,
+                  "maxDelayMs", 60_000))
+          .build());
+}`,
+
+  retriesKotlin: `suspend fun remind(queue: Queue, matchId: String, kickoff: Instant): EnqueueResult =
+  queue.enqueueSuspend(
+    "match.reminder",
+    mapOf("matchId" to matchId),
+    EnqueueOptions.builder()
+      // Pointless after kickoff, whatever else happens.
+      .deadline(kickoff)
+      // Any single attempt is stuck after 30 seconds.
+      .executionTimeout(Duration.ofSeconds(30))
+      .maxAttempts(5)
+      .retryPolicy(
+        mapOf(
+          "type" to "exponential",
+          "initialDelayMs" to 1_000,
+          "multiplier" to 2,
+          "maxDelayMs" to 60_000,
+        ),
+      )
+      .build(),
+  )`,
   idempotency: `const taskId = await queue.enqueue(
   "invoice.capture",
   { invoiceId: "inv-1" },
@@ -639,6 +822,28 @@ def self.capture(queue)
       key: "capture:inv-1", scope: "tenant-42", ttl: 86_400
     ))
 end`,
+
+  idempotencyJava: `// A retried webhook gets the same taskId back instead of a second capture.
+static EnqueueResult capture(Queue queue) {
+  return queue.enqueue(
+      "invoice.capture",
+      Map.of("invoiceId", "inv-1"),
+      EnqueueOptions.builder()
+          .queue("billing")
+          .idempotency(new Idempotency("capture:inv-1", "tenant-42", Duration.ofDays(1)))
+          .build());
+}`,
+
+  idempotencyKotlin: `// A retried webhook gets the same taskId back instead of a second capture.
+suspend fun capture(queue: Queue): EnqueueResult =
+  queue.enqueueSuspend(
+    "invoice.capture",
+    mapOf("invoiceId" to "inv-1"),
+    EnqueueOptions.builder()
+      .queue("billing")
+      .idempotency(Idempotency("capture:inv-1", "tenant-42", Duration.ofDays(1)))
+      .build(),
+  )`,
   schedules: `// Run on every deployment with the complete list.
 await queue.syncSchedules(
   "billing",
@@ -762,6 +967,30 @@ pub async fn run(pool: Pool) -> Result<(), Box<dyn std::error::Error>> {
   worker = Stablemates::Workhorse::Worker.new(pool, schedule_namespaces: ["billing"])
   Stablemates::Workhorse.run_worker_process(worker)
 end`,
+
+  schedulesJava: `static void run(DataSource dataSource) {
+  // Run on every deployment with the complete list.
+  ScheduledTask task = ScheduledTask.of("invoices.generate", Map.of());
+  ScheduleDefinition schedule =
+      new ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task);
+  new Queue(ConnectionSource.of(dataSource)).syncSchedules("billing", List.of(schedule), true);
+
+  // Any worker in the namespace fires due schedules itself.
+  Worker worker = Worker.builder(dataSource).scheduleNamespaces("billing").build();
+  WorkerProcess.runWorkerProcess(worker);
+}`,
+
+  schedulesKotlin: `suspend fun run(dataSource: DataSource) {
+  // Run on every deployment with the complete list.
+  val task = ScheduledTask.of("invoices.generate", emptyMap<String, Any?>())
+  val schedule = ScheduleDefinition("nightly-invoice-run", "0 2 * * *", task)
+  Queue(ConnectionSource.of(dataSource))
+    .syncSchedulesSuspend("billing", listOf(schedule), prune = true)
+
+  // Any worker in the namespace fires due schedules itself.
+  val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing") }
+  WorkerProcess.runWorkerProcess(worker)
+}`,
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
   // At most 20 mail tasks active; at most 2 per tenant.
   { queue: "mail", maxActive: 20, maxActivePerKey: 2 },
@@ -899,6 +1128,38 @@ pub async fn configure(
   queue.enqueue("mail.send", {"messageId" => message_id},
     queue: "mail", concurrency_key: "tenant:#{tenant_id}")
 end`,
+
+  flowControlJava: `static void configure(Queue queue, String messageId, String tenantId) {
+  // At most 20 mail tasks active; at most 2 per tenant.
+  ConcurrencyPolicyDefinition mail = new ConcurrencyPolicyDefinition("mail", 20, 2);
+  queue.syncConcurrencyPolicies("workers", List.of(mail), false);
+
+  RateLimitPolicyDefinition provider =
+      new RateLimitPolicyDefinition(
+          "provider-api", new RateLimit(100, Duration.ofSeconds(1), 200));
+  queue.syncRateLimitPolicies("workers", List.of(provider), false);
+
+  queue.enqueue(
+      "mail.send",
+      Map.of("messageId", messageId),
+      EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:" + tenantId).build());
+}`,
+
+  flowControlKotlin: `suspend fun configure(queue: Queue, messageId: String, tenantId: String) {
+  // At most 20 mail tasks active; at most 2 per tenant.
+  val mail = ConcurrencyPolicyDefinition("mail", 20, 2)
+  queue.syncConcurrencyPoliciesSuspend("workers", listOf(mail), prune = false)
+
+  val provider =
+    RateLimitPolicyDefinition("provider-api", RateLimit(100, Duration.ofSeconds(1), 200))
+  queue.syncRateLimitPoliciesSuspend("workers", listOf(provider), prune = false)
+
+  queue.enqueueSuspend(
+    "mail.send",
+    mapOf("messageId" to messageId),
+    EnqueueOptions.builder().queue("mail").concurrencyKey("tenant:$tenantId").build(),
+  )
+}`,
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
   { orderId },
@@ -1032,6 +1293,61 @@ def self.register_fulfillment(worker)
     {"receipt" => receipt}
   end
 end`,
+
+  dependenciesJava: `static void confirm(Queue queue, String orderId) {
+  Map<String, Object> order = Map.of("orderId", orderId);
+  EnqueueResult inventory = queue.enqueue("inventory.reserve", order);
+
+  Dependencies dependencies =
+      new Dependencies(
+          List.of(inventory.taskId()),
+          DependencyPolicy.RELEASE,
+          DependencyPolicy.CANCEL,
+          DependencyPolicy.CANCEL);
+  queue.enqueue(
+      "order.confirm", order, EnqueueOptions.builder().dependencies(dependencies).build());
+}
+
+static Worker.Builder registerFulfillment(Worker.Builder worker) {
+  return worker.handle(
+      "order.fulfill",
+      Map.class,
+      (context, order) -> {
+        EnqueueOptions options = EnqueueOptions.builder().queue("payments").build();
+        Map<String, @Nullable Object> capture = Map.of("orderId", order.get("id"));
+        Map<?, ?> receipt =
+            context.runChild("charge", "payment.capture", capture, options, Map.class);
+        return Map.of("receipt", receipt);
+      });
+}`,
+
+  dependenciesKotlin: `suspend fun confirm(queue: Queue, orderId: String) {
+  val order = mapOf("orderId" to orderId)
+  val inventory = queue.enqueueSuspend("inventory.reserve", order)
+
+  val dependencies =
+    Dependencies(
+      listOf(inventory.taskId()),
+      DependencyPolicy.RELEASE,
+      DependencyPolicy.CANCEL,
+      DependencyPolicy.CANCEL,
+    )
+  queue.enqueueSuspend(
+    "order.confirm",
+    order,
+    EnqueueOptions.builder().dependencies(dependencies).build(),
+  )
+}
+
+fun WorkerScope.registerFulfillment() {
+  handle<Map<String, Any?>>("order.fulfill") { context, order ->
+    val options = EnqueueOptions.builder().queue("payments").build()
+    val capture = mapOf("orderId" to order["id"])
+    val receipt =
+      context.runChild<Map<String, Any?>>("charge", "payment.capture", capture, options)
+    mapOf("receipt" to receipt)
+  }
+}`,
   coalescing: `const options = {
   debounce: {
     key: documentId,
@@ -1140,6 +1456,35 @@ pub async fn reindex(
   latest = queue.enqueue("search.reindex", {"documentId" => document_id, "revision" => 2}, debounce: debounce)
   puts "#{first.outcome} #{latest.outcome}"
 end`,
+
+  coalescingJava: `static void reindex(Queue queue, String documentId, Duration quietPeriod) {
+  Debounce debounce =
+      new Debounce(documentId, quietPeriod, DebounceSchedule.RESET, "search-index");
+  EnqueueOptions options = EnqueueOptions.builder().debounce(debounce).build();
+  EnqueueResult first =
+      queue.enqueue("search.reindex", Map.of("documentId", documentId, "revision", 1), options);
+  EnqueueResult latest =
+      queue.enqueue("search.reindex", Map.of("documentId", documentId, "revision", 2), options);
+  System.out.println(first.outcome() + " " + latest.outcome());
+}`,
+
+  coalescingKotlin: `suspend fun reindex(queue: Queue, documentId: String, quietPeriod: Duration) {
+  val debounce = Debounce(documentId, quietPeriod, DebounceSchedule.RESET, "search-index")
+  val options = EnqueueOptions.builder().debounce(debounce).build()
+  val first =
+    queue.enqueueSuspend(
+      "search.reindex",
+      mapOf("documentId" to documentId, "revision" to 1),
+      options,
+    )
+  val latest =
+    queue.enqueueSuspend(
+      "search.reindex",
+      mapOf("documentId" to documentId, "revision" to 2),
+      options,
+    )
+  println("\${first.outcome()} \${latest.outcome()}")
+}`,
   externalWaits: `worker.handle("release.publish", async (release, ctx) => {
   const scan = await ctx.waitForSignal("security-scan");
 
@@ -1281,6 +1626,46 @@ def self.deliver_scan(queue, task_id, result, delivery_id)
   queue.send_signal(task_id, "security-scan", result,
     idempotency_key: delivery_id, requested_by: "security-scanner")
 end`,
+
+  externalWaitsJava: `static Worker.Builder registerRelease(Worker.Builder worker) {
+  return worker.handle(
+      "release.publish",
+      Map.class,
+      (context, release) -> {
+        Object scan = context.waitForSignal("security-scan", Object.class, null);
+
+        Map<String, @Nullable Object> request =
+            Map.of("releaseId", release.get("id"), "scan", scan);
+        Map<?, ?> review = context.waitForHuman("release-approval", request, Map.class, null);
+
+        return Map.of("published", review.get("approved"));
+      });
+}
+
+static void deliverScan(Queue queue, UUID taskId, Object result, String deliveryId) {
+  queue.sendSignal(taskId, "security-scan", result, deliveryId, "security-scanner");
+}`,
+
+  externalWaitsKotlin: `fun WorkerScope.registerRelease() {
+  handle<Map<String, Any?>>("release.publish") { context, release ->
+    val scan = context.waitForSignal<Any?>("security-scan")
+
+    val request = mapOf("releaseId" to release["id"], "scan" to scan)
+    val review = context.waitForHuman<Map<String, Any?>>("release-approval", request)
+
+    mapOf("published" to review["approved"])
+  }
+}
+
+suspend fun deliverScan(queue: Queue, taskId: UUID, result: Any?, deliveryId: String) {
+  queue.sendSignalSuspend(
+    taskId,
+    "security-scan",
+    result,
+    idempotencyKey = deliveryId,
+    requestedBy = "security-scanner",
+  )
+}`,
   batchHandlers: `worker.handleBatch(
   "email.send",
   { maxSize: batchSize, lingerMs: batchLingerMs },
@@ -1353,6 +1738,24 @@ pub fn register_email_batch(worker: &Worker, batch_size: usize, linger: Duration
     items.map { |item| {status: :succeeded, result: item.payload} }
   end
 end`,
+
+  batchHandlersJava: `static Worker.Builder registerEmailBatch(
+    Worker.Builder worker, int batchSize, Duration linger) {
+  return worker.handleBatch(
+      "email.send",
+      Object.class,
+      new BatchOptions(batchSize, linger),
+      items ->
+          items.stream()
+              .<BatchHandlerOutcome>map(item -> new BatchSucceeded(item.payload()))
+              .toList());
+}`,
+
+  batchHandlersKotlin: `fun WorkerScope.registerEmailBatch(batchSize: Int, linger: Duration) {
+  handleBatch<Any?>("email.send", BatchOptions(batchSize, linger)) { items ->
+    items.map { item -> BatchSucceeded(item.payload()) }
+  }
+}`,
   cancellation: `worker.handle("rows.export", async (payload, ctx) => {
   for (const row of payload.rows) {
     // Stop between items…
@@ -1455,6 +1858,40 @@ pub async fn configure_export(
 
   queue.cancel(task_id, requested_by: "operator@example.com", reason: "customer withdrew the request")
 end`,
+
+  cancellationJava: `static Worker.Builder configureExport(Queue queue, Worker.Builder worker, UUID taskId) {
+  worker.handle(
+      "rows.export",
+      List.class,
+      (context, rows) -> {
+        for (Object row : rows) {
+          context.cancellation().throwIfCancelled();
+          System.out.println("upload " + row);
+        }
+        return Map.of("stopped", false);
+      });
+
+  queue.cancel(taskId, "operator@example.com", "customer withdrew the request");
+  return worker;
+}`,
+
+  cancellationKotlin: `fun WorkerScope.registerExport() {
+  handle<List<Any?>>("rows.export") { context, rows ->
+    for (row in rows) {
+      context.cancellation.throwIfCancelled()
+      println("upload $row")
+    }
+    mapOf("stopped" to false)
+  }
+}
+
+suspend fun cancelExport(queue: Queue, taskId: UUID) {
+  queue.cancelSuspend(
+    taskId,
+    requestedBy = "operator@example.com",
+    reason = "customer withdrew the request",
+  )
+}`,
   deadLetters: `const admin = new Admin(pool);
 const page = await admin.listDeadLetters({
   queue: "billing",
@@ -1553,6 +1990,37 @@ pub async fn redrive_billing(admin: &Admin<Pool>) -> Result<(), Error> {
     admin.redrive(failure.task_id, audit: audit)
   end
 end`,
+
+  deadLettersJava: `static void redriveBilling(Admin admin) {
+  DeadLetterQuery query =
+      DeadLetterQuery.builder().queue("billing").errorName("CardDeclined").limit(100).build();
+  DeadLetterPage page = admin.listDeadLetters(query);
+
+  for (DeadLetter failure : page.items()) {
+    AdminAudit audit =
+        new AdminAudit(
+            "operator@example.com",
+            "provider incident resolved",
+            "incident-2026-08-03:" + failure.taskId());
+    admin.redrive(failure.taskId(), audit);
+  }
+}`,
+
+  deadLettersKotlin: `suspend fun redriveBilling(admin: Admin) {
+  val query =
+    DeadLetterQuery.builder().queue("billing").errorName("CardDeclined").limit(100).build()
+  val page = admin.listDeadLettersSuspend(query)
+
+  for (failure in page.items()) {
+    val audit =
+      AdminAudit(
+        "operator@example.com",
+        "provider incident resolved",
+        "incident-2026-08-03:\${failure.taskId()}",
+      )
+    admin.redriveSuspend(failure.taskId(), audit)
+  }
+}`,
   operateDashboard: `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
@@ -1653,6 +2121,43 @@ def self.mount(pool)
   )
   Rack::Builder.new { map("/workhorse") { run dashboard } }
 end`,
+
+  operateDashboardJava: `static @Nullable String adminSession(HttpServletRequest request) {
+  return request.getHeader("X-Admin");
+}
+
+static void mount(DataSource dataSource, ServletContext servletContext) {
+  Dashboard dashboard =
+      Dashboard.builder(
+              ConnectionSource.of(dataSource),
+              request -> {
+                String actor = adminSession(request);
+                return actor != null
+                    ? DashboardAuthorization.principal(actor)
+                    : DashboardAuthorization.deny();
+              })
+          .path("/workhorse")
+          .build();
+  servletContext
+      .addFilter("workhorse-dashboard", dashboard)
+      .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/workhorse/*");
+}`,
+
+  operateDashboardKotlin: `fun adminSession(request: HttpServletRequest): String? = request.getHeader("X-Admin")
+
+fun mount(dataSource: DataSource, servletContext: ServletContext) {
+  val dashboard =
+    Dashboard.builder(ConnectionSource.of(dataSource)) { request ->
+        val actor = adminSession(request)
+        if (actor != null) DashboardAuthorization.principal(actor)
+        else DashboardAuthorization.deny()
+      }
+      .path("/workhorse")
+      .build()
+  servletContext
+    .addFilter("workhorse-dashboard", dashboard)
+    .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/workhorse/*")
+}`,
   operateHealth: `const admin = new Admin(pool);
 const health = await admin.health();
 
@@ -1744,6 +2249,36 @@ pub async fn inspect(pool: &Pool) -> Result<(), Error> {
   live = Stablemates::Workhorse::Admin.new(pool).list_tasks(states: [:active, :scheduled], limit: 100)
   puts live.items.length
 end`,
+
+  operateHealthJava: `static void inspect(DataSource dataSource) {
+  Map<String, @Nullable Object> health =
+      new Queue(ConnectionSource.of(dataSource)).health().snapshot();
+  if (health.get("status") instanceof Map<?, ?> status
+      && !"healthy".equals(status.get("level"))) {
+    System.out.println(status.get("reasons"));
+  }
+
+  // Cross-state listing on a dedicated projection: reading it never slows dispatch down.
+  TaskQuery query =
+      TaskQuery.builder()
+          .states(List.of(TaskState.ACTIVE, TaskState.SCHEDULED))
+          .limit(100)
+          .build();
+  TaskPage live = new Admin(ConnectionSource.of(dataSource)).listTasks(query);
+  System.out.println(live.items().size());
+}`,
+
+  operateHealthKotlin: `suspend fun inspect(dataSource: DataSource) {
+  val health = Queue(ConnectionSource.of(dataSource)).healthSuspend().snapshot()
+  val status = health["status"] as Map<*, *>
+  if (status["level"] != "healthy") println(status["reasons"])
+
+  // Cross-state listing on a dedicated projection: reading it never slows dispatch down.
+  val query =
+    TaskQuery.builder().states(listOf(TaskState.ACTIVE, TaskState.SCHEDULED)).limit(100).build()
+  val live = Admin(ConnectionSource.of(dataSource)).listTasksSuspend(query)
+  println(live.items().size)
+}`,
   operateFleet: `const admin = new Admin(pool);
 for (const entry of await admin.listWorkers()) {
   if (entry.queue !== "billing") continue;
@@ -1838,6 +2373,34 @@ pub async fn pause_billing(pool: &Pool) -> Result<(), Error> {
     admin.set_worker_paused(entry.worker_id, true, audit: audit)
   end
 end`,
+
+  operateFleetJava: `static void pauseBilling(DataSource dataSource) {
+  Admin admin = new Admin(ConnectionSource.of(dataSource));
+  for (WorkerInfo entry : admin.listWorkers()) {
+    if (!entry.queue().equals("billing")) {
+      continue;
+    }
+    AdminAudit audit =
+        new AdminAudit(
+            "operator@example.com", "rolling deploy", "deploy-2026-08-23:" + entry.workerId());
+    admin.setWorkerPaused(entry.workerId(), true, audit);
+  }
+}`,
+
+  operateFleetKotlin: `suspend fun pauseBilling(dataSource: DataSource) {
+  val admin = Admin(ConnectionSource.of(dataSource))
+  for (entry in admin.listWorkersSuspend()) {
+    if (entry.queue() != "billing") continue
+
+    val audit =
+      AdminAudit(
+        "operator@example.com",
+        "rolling deploy",
+        "deploy-2026-08-23:\${entry.workerId()}",
+      )
+    admin.setWorkerPausedSuspend(entry.workerId(), true, audit)
+  }
+}`,
   ormDrizzle: `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -2016,6 +2579,42 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
   worker.handle("email.send") { |email, _context| {"sent" => email["to"]} }
   Stablemates::Workhorse.run_worker_process(worker)
 end`,
+
+  deployJava: `static void run() {
+  // The application supplies the pool. JDBC_DATABASE_URL holds a jdbc:postgresql: URL.
+  HikariDataSource dataSource = new HikariDataSource();
+  dataSource.setJdbcUrl(System.getenv("JDBC_DATABASE_URL"));
+  dataSource.setMaximumPoolSize(10);
+
+  Worker worker =
+      Worker.builder(dataSource)
+          .queues("email")
+          .concurrency(8)
+          // Bounded graceful drain on SIGTERM.
+          .shutdownGrace(Duration.ofSeconds(25))
+          .handle("email.send", Map.class, (context, email) -> Map.of("sent", email.get("to")))
+          .build();
+  WorkerProcess.runWorkerProcess(worker);
+}`,
+
+  deployKotlin: `fun run() {
+  // The application supplies the pool. JDBC_DATABASE_URL holds a jdbc:postgresql: URL.
+  val dataSource =
+    HikariDataSource().apply {
+      jdbcUrl = System.getenv("JDBC_DATABASE_URL")
+      maximumPoolSize = 10
+    }
+
+  val worker =
+    workhorseWorker(dataSource) {
+      queues = listOf("email")
+      concurrency = 8
+      // Bounded graceful drain on SIGTERM.
+      shutdownGrace = Duration.ofSeconds(25)
+      handle<Map<String, Any?>>("email.send") { _, email -> mapOf("sent" to email["to"]) }
+    }
+  WorkerProcess.runWorkerProcess(worker)
+}`,
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
@@ -2028,6 +2627,8 @@ export const landingFeatureSnippets = {
     go: "enqueueGo",
     rust: "enqueueRust",
     ruby: "enqueueRuby",
+    java: "enqueueJava",
+    kotlin: "enqueueKotlin",
   },
   checkpoints: {
     typescript: "checkpoints",
@@ -2035,6 +2636,8 @@ export const landingFeatureSnippets = {
     go: "checkpointsGo",
     rust: "checkpointsRust",
     ruby: "checkpointsRuby",
+    java: "checkpointsJava",
+    kotlin: "checkpointsKotlin",
   },
   sleep: {
     typescript: "sleep",
@@ -2042,6 +2645,8 @@ export const landingFeatureSnippets = {
     go: "sleepGo",
     rust: "sleepRust",
     ruby: "sleepRuby",
+    java: "sleepJava",
+    kotlin: "sleepKotlin",
   },
   retries: {
     typescript: "retries",
@@ -2049,6 +2654,8 @@ export const landingFeatureSnippets = {
     go: "retriesGo",
     rust: "retriesRust",
     ruby: "retriesRuby",
+    java: "retriesJava",
+    kotlin: "retriesKotlin",
   },
   idempotency: {
     typescript: "idempotency",
@@ -2056,6 +2663,8 @@ export const landingFeatureSnippets = {
     go: "idempotencyGo",
     rust: "idempotencyRust",
     ruby: "idempotencyRuby",
+    java: "idempotencyJava",
+    kotlin: "idempotencyKotlin",
   },
   schedules: {
     typescript: "schedules",
@@ -2063,6 +2672,8 @@ export const landingFeatureSnippets = {
     go: "schedulesGo",
     rust: "schedulesRust",
     ruby: "schedulesRuby",
+    java: "schedulesJava",
+    kotlin: "schedulesKotlin",
   },
   flowControl: {
     typescript: "flowControl",
@@ -2070,6 +2681,8 @@ export const landingFeatureSnippets = {
     go: "flowControlGo",
     rust: "flowControlRust",
     ruby: "flowControlRuby",
+    java: "flowControlJava",
+    kotlin: "flowControlKotlin",
   },
   dependencies: {
     typescript: "dependencies",
@@ -2077,6 +2690,8 @@ export const landingFeatureSnippets = {
     go: "dependenciesGo",
     rust: "dependenciesRust",
     ruby: "dependenciesRuby",
+    java: "dependenciesJava",
+    kotlin: "dependenciesKotlin",
   },
   coalescing: {
     typescript: "coalescing",
@@ -2084,6 +2699,8 @@ export const landingFeatureSnippets = {
     go: "coalescingGo",
     rust: "coalescingRust",
     ruby: "coalescingRuby",
+    java: "coalescingJava",
+    kotlin: "coalescingKotlin",
   },
   externalWaits: {
     typescript: "externalWaits",
@@ -2091,6 +2708,8 @@ export const landingFeatureSnippets = {
     go: "externalWaitsGo",
     rust: "externalWaitsRust",
     ruby: "externalWaitsRuby",
+    java: "externalWaitsJava",
+    kotlin: "externalWaitsKotlin",
   },
   batchHandlers: {
     typescript: "batchHandlers",
@@ -2098,6 +2717,8 @@ export const landingFeatureSnippets = {
     go: "batchHandlersGo",
     rust: "batchHandlersRust",
     ruby: "batchHandlersRuby",
+    java: "batchHandlersJava",
+    kotlin: "batchHandlersKotlin",
   },
   cancellation: {
     typescript: "cancellation",
@@ -2105,6 +2726,8 @@ export const landingFeatureSnippets = {
     go: "cancellationGo",
     rust: "cancellationRust",
     ruby: "cancellationRuby",
+    java: "cancellationJava",
+    kotlin: "cancellationKotlin",
   },
   deadLetters: {
     typescript: "deadLetters",
@@ -2112,6 +2735,8 @@ export const landingFeatureSnippets = {
     go: "deadLettersGo",
     rust: "deadLettersRust",
     ruby: "deadLettersRuby",
+    java: "deadLettersJava",
+    kotlin: "deadLettersKotlin",
   },
 } as const satisfies Record<
   string,
@@ -2122,6 +2747,8 @@ export const landingFeatureSnippets = {
       go: LandingSnippetId;
       rust: LandingSnippetId;
       ruby: LandingSnippetId;
+      java: LandingSnippetId;
+      kotlin: LandingSnippetId;
     }
 >;
 
@@ -2135,6 +2762,8 @@ export const landingSupplementalSnippets = {
     go: "heroGo",
     rust: "heroRust",
     ruby: "heroRuby",
+    java: "heroJava",
+    kotlin: "heroKotlin",
   },
   operateDashboard: {
     typescript: "operateDashboard",
@@ -2142,6 +2771,8 @@ export const landingSupplementalSnippets = {
     go: "operateDashboardGo",
     rust: "operateDashboardRust",
     ruby: "operateDashboardRuby",
+    java: "operateDashboardJava",
+    kotlin: "operateDashboardKotlin",
   },
   operateHealth: {
     typescript: "operateHealth",
@@ -2149,6 +2780,8 @@ export const landingSupplementalSnippets = {
     go: "operateHealthGo",
     rust: "operateHealthRust",
     ruby: "operateHealthRuby",
+    java: "operateHealthJava",
+    kotlin: "operateHealthKotlin",
   },
   operateFleet: {
     typescript: "operateFleet",
@@ -2156,6 +2789,8 @@ export const landingSupplementalSnippets = {
     go: "operateFleetGo",
     rust: "operateFleetRust",
     ruby: "operateFleetRuby",
+    java: "operateFleetJava",
+    kotlin: "operateFleetKotlin",
   },
   deploy: {
     typescript: "deploy",
@@ -2163,6 +2798,8 @@ export const landingSupplementalSnippets = {
     go: "deployGo",
     rust: "deployRust",
     ruby: "deployRuby",
+    java: "deployJava",
+    kotlin: "deployKotlin",
   },
 } as const satisfies Record<
   string,
@@ -2172,85 +2809,123 @@ export const landingSupplementalSnippets = {
     go: LandingSnippetId;
     rust: LandingSnippetId;
     ruby: LandingSnippetId;
+    java: LandingSnippetId;
+    kotlin: LandingSnippetId;
   }
 >;
 
 /** Shiki language overrides for snippets that are not TypeScript. */
 export const landingSnippetLanguages: Partial<
-  Record<LandingSnippetId, "python" | "go" | "rust" | "ruby" | "ts">
+  Record<LandingSnippetId, "python" | "go" | "rust" | "ruby" | "java" | "kotlin" | "ts">
 > = {
   heroPython: "python",
   heroGo: "go",
   heroRust: "rust",
   heroRuby: "ruby",
+  heroJava: "java",
+  heroKotlin: "kotlin",
   languagePython: "python",
   languageGo: "go",
   enqueuePython: "python",
   enqueueGo: "go",
   enqueueRust: "rust",
   enqueueRuby: "ruby",
+  enqueueJava: "java",
+  enqueueKotlin: "kotlin",
   checkpointsPython: "python",
   checkpointsGo: "go",
   checkpointsRust: "rust",
   checkpointsRuby: "ruby",
+  checkpointsJava: "java",
+  checkpointsKotlin: "kotlin",
   sleepPython: "python",
   sleepGo: "go",
   sleepRust: "rust",
   sleepRuby: "ruby",
+  sleepJava: "java",
+  sleepKotlin: "kotlin",
   retriesPython: "python",
   retriesGo: "go",
   retriesRust: "rust",
   retriesRuby: "ruby",
+  retriesJava: "java",
+  retriesKotlin: "kotlin",
   idempotencyPython: "python",
   idempotencyGo: "go",
   idempotencyRust: "rust",
   idempotencyRuby: "ruby",
+  idempotencyJava: "java",
+  idempotencyKotlin: "kotlin",
   schedulesPython: "python",
   schedulesGo: "go",
   schedulesRust: "rust",
   schedulesRuby: "ruby",
+  schedulesJava: "java",
+  schedulesKotlin: "kotlin",
   flowControlPython: "python",
   flowControlGo: "go",
   flowControlRust: "rust",
   flowControlRuby: "ruby",
+  flowControlJava: "java",
+  flowControlKotlin: "kotlin",
   dependenciesPython: "python",
   dependenciesGo: "go",
   dependenciesRust: "rust",
   dependenciesRuby: "ruby",
+  dependenciesJava: "java",
+  dependenciesKotlin: "kotlin",
   coalescingPython: "python",
   coalescingGo: "go",
   coalescingRust: "rust",
   coalescingRuby: "ruby",
+  coalescingJava: "java",
+  coalescingKotlin: "kotlin",
   externalWaitsPython: "python",
   externalWaitsGo: "go",
   externalWaitsRust: "rust",
   externalWaitsRuby: "ruby",
+  externalWaitsJava: "java",
+  externalWaitsKotlin: "kotlin",
   batchHandlersPython: "python",
   batchHandlersGo: "go",
   batchHandlersRust: "rust",
   batchHandlersRuby: "ruby",
+  batchHandlersJava: "java",
+  batchHandlersKotlin: "kotlin",
   cancellationPython: "python",
   cancellationGo: "go",
   cancellationRust: "rust",
   cancellationRuby: "ruby",
+  cancellationJava: "java",
+  cancellationKotlin: "kotlin",
   deadLettersPython: "python",
   deadLettersGo: "go",
   deadLettersRust: "rust",
   deadLettersRuby: "ruby",
+  deadLettersJava: "java",
+  deadLettersKotlin: "kotlin",
   operateDashboardPython: "python",
   operateDashboardGo: "go",
   operateDashboardRust: "rust",
   operateDashboardRuby: "ruby",
+  operateDashboardJava: "java",
+  operateDashboardKotlin: "kotlin",
   operateHealthPython: "python",
   operateHealthGo: "go",
   operateHealthRust: "rust",
   operateHealthRuby: "ruby",
+  operateHealthJava: "java",
+  operateHealthKotlin: "kotlin",
   operateFleetPython: "python",
   operateFleetGo: "go",
   operateFleetRust: "rust",
   operateFleetRuby: "ruby",
+  operateFleetJava: "java",
+  operateFleetKotlin: "kotlin",
   deployPython: "python",
   deployGo: "go",
   deployRust: "rust",
   deployRuby: "ruby",
+  deployJava: "java",
+  deployKotlin: "kotlin",
 };

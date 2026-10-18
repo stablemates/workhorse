@@ -21,7 +21,7 @@ use a [checkpoint](/docs/durable-execution).
 3. After four batches, an operator opens the task in the [dashboard](/docs/dashboard).
 4. The dashboard shows the phase `importing` and 2,000 processed rows.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await ctx.setProgress({ phase: "reading", processed: 0 });
@@ -71,6 +71,26 @@ use a [checkpoint](/docs/durable-execution).
       processed += batch.length
       context.set_progress({"phase" => "importing", "processed" => processed})
     end
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    context.setProgress(Map.of("phase", "reading", "processed", 0));
+    for (List<String> batch : readBatches(payload.get("source"))) {
+      importBatch(batch);
+      processed += batch.size();
+      context.setProgress(Map.of("phase", "importing", "processed", processed));
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    context.setProgress(mapOf("phase" to "reading", "processed" to 0))
+    for (batch in readBatches(payload["source"])) {
+      importBatch(batch)
+      processed += batch.size
+      context.setProgress(mapOf("phase" to "importing", "processed" to processed))
+    }
     ```
   </Tab>
 </Tabs>
