@@ -4,7 +4,14 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { cellText, comparisons, hubMarkdown, productMarkdown } from "../lib/comparisons.js";
+import {
+  cellText,
+  comparisons,
+  hubCategories,
+  hubMarkdown,
+  hubRows,
+  productMarkdown,
+} from "../lib/comparisons.js";
 
 /**
  * The schema of `site/comparisons.json` (ADR 0104). Every fact on a comparison
@@ -299,6 +306,47 @@ describe("the comparison data", () => {
         errors.push(`${where}: the hub Markdown does not show "${text}"`);
       }
     }
+    expect(errors).toEqual([]);
+  });
+
+  it("gives the hub one table for each feature, Workhorse first, then each category", () => {
+    const hub = hubMarkdown("https://example.com");
+    const sections = hub.split(/^### /m).slice(1);
+    const errors: string[] = [];
+    const features = hubRows();
+    const categories = hubCategories();
+    if (sections.length !== features.length + categories.length) {
+      errors.push(`the hub has ${sections.length} sections`);
+    }
+    features.forEach((row, index) => {
+      const lines = (sections[index] ?? "").split("\n");
+      if (lines[0] !== row.label) errors.push(`section ${index} is "${lines[0]}", not ${row.id}`);
+      const body = lines.filter((line) => line.startsWith("| ")).slice(2);
+      if (!body[0]?.startsWith("| Workhorse | ")) errors.push(`${row.id}: Workhorse is not first`);
+      let at = 1;
+      for (const { category, products } of categories) {
+        if (body[at] !== `| **${category.title}** | |`) {
+          errors.push(`${row.id}: no "${category.title}" line at row ${at}`);
+        }
+        at += 1;
+        for (const product of products) {
+          if (!body[at]?.includes(`${product.name}`) || !body[at]?.includes(product.version)) {
+            errors.push(`${row.id}: row ${at} is not ${product.slug} ${product.version}`);
+          }
+          at += 1;
+        }
+      }
+      if (body.length !== at) errors.push(`${row.id}: ${body.length} rows, expected ${at}`);
+    });
+    categories.forEach(({ category, products }, index) => {
+      const section = sections[features.length + index] ?? "";
+      if (!section.startsWith(`${category.title}\n`)) errors.push(`no table for ${category.id}`);
+      for (const product of products) {
+        if (!section.includes(` | ${product.version} | ${product.checked} |`)) {
+          errors.push(`${category.id}: no version and check date for ${product.slug}`);
+        }
+      }
+    });
     expect(errors).toEqual([]);
   });
 
