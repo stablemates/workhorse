@@ -122,4 +122,28 @@ final class Rows {
     }
     return rows.get(0);
   }
+
+  /**
+   * A {@code uuid[]} column. The runner gives its PostgreSQL array text, such as {@code {a,b}}. A
+   * UUID element never needs quotes, so a split at each comma reads the array exactly.
+   */
+  static List<UUID> uuids(Row row, String column) {
+    String text = row.requiredText(column);
+    if (!text.startsWith("{") || !text.endsWith("}")) {
+      throw new WorkhorseException("PostgreSQL returned an invalid " + column + " column");
+    }
+    String body = text.substring(1, text.length() - 1);
+    List<UUID> ids = new ArrayList<>();
+    if (body.isEmpty()) {
+      return ids;
+    }
+    for (String element : body.split(",", -1)) {
+      try {
+        ids.add(UUID.fromString(element));
+      } catch (IllegalArgumentException error) {
+        throw new WorkhorseException("PostgreSQL returned an invalid " + column + " column");
+      }
+    }
+    return ids;
+  }
 }

@@ -1040,11 +1040,11 @@ public final class Admin {
         required(row.textList("tags"), "tags"),
         state(row),
         row.uuid("prerequisite_task_id"),
-        uuids(row, "prerequisite_task_ids"),
+        Rows.uuids(row, "prerequisite_task_ids"),
         dependencyPolicy(row),
         blockedReason(row),
         row.uuid("parent_task_id"),
-        uuids(row, "child_task_ids"),
+        Rows.uuids(row, "child_task_ids"),
         row.requiredInteger("current_attempt"),
         row.requiredInteger("max_attempts"),
         Json.object(row.json("retry_policy")),
@@ -1088,11 +1088,11 @@ public final class Admin {
         required(row.textList("tags"), "tags"),
         state(row),
         row.uuid("prerequisite_task_id"),
-        uuids(row, "prerequisite_task_ids"),
+        Rows.uuids(row, "prerequisite_task_ids"),
         dependencyPolicy(row),
         blockedReason(row),
         row.uuid("parent_task_id"),
-        uuids(row, "child_task_ids"),
+        Rows.uuids(row, "child_task_ids"),
         row.requiredInteger("current_attempt"),
         row.requiredInteger("max_attempts"),
         Json.object(row.json("retry_policy")),
@@ -1226,30 +1226,6 @@ public final class Admin {
   private static @Nullable Duration duration(Row row, String column) {
     Long milliseconds = row.longValue(column);
     return milliseconds == null ? null : Values.duration(milliseconds);
-  }
-
-  /**
-   * A {@code uuid[]} column. The runner gives its PostgreSQL array text, such as {@code {a,b}}. A
-   * UUID element never needs quotes, so a split at each comma reads the array exactly.
-   */
-  private static List<UUID> uuids(Row row, String column) {
-    String text = row.requiredText(column);
-    if (!text.startsWith("{") || !text.endsWith("}")) {
-      throw new WorkhorseException("PostgreSQL returned an invalid " + column + " column");
-    }
-    String body = text.substring(1, text.length() - 1);
-    List<UUID> ids = new ArrayList<>();
-    if (body.isEmpty()) {
-      return ids;
-    }
-    for (String element : body.split(",", -1)) {
-      try {
-        ids.add(UUID.fromString(element));
-      } catch (IllegalArgumentException error) {
-        throw new WorkhorseException("PostgreSQL returned an invalid " + column + " column");
-      }
-    }
-    return ids;
   }
 
   private static <T> T required(@Nullable T value, String column) {
