@@ -17,6 +17,10 @@ nullaway = "0.14.2"
 spotless = "8.10.4"
 # Spotless 8.10.4 cannot load google-java-format 1.37.0, which changed an API that Spotless calls.
 google-java-format = "1.36.1"
+# The Spring Boot lines the starter tests run on besides the 4.0 floor (ADR 0103, "Floors").
+# `-Pworkhorse.springBoot=4.1` or `=snapshot` selects one for the starter's test class paths.
+spring-boot-4-1 = "4.1.1"
+spring-boot-snapshot = "4.2.0-SNAPSHOT"
 
 [libraries]
 pgjdbc = { module = "org.postgresql:postgresql", version.ref = "pgjdbc" }
@@ -30,6 +34,15 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 errorprone-core = { module = "com.google.errorprone:error_prone_core", version.ref = "errorprone" }
 nullaway = { module = "com.uber.nullaway:nullaway", version.ref = "nullaway" }
+# The starter's optional and test modules. The Spring Boot BOM supplies their versions.
+spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
+spring-boot-configuration-processor = { module = "org.springframework.boot:spring-boot-configuration-processor", version.ref = "spring-boot" }
+spring-boot-jackson = { module = "org.springframework.boot:spring-boot-jackson" }
+spring-boot-health = { module = "org.springframework.boot:spring-boot-health" }
+spring-web = { module = "org.springframework:spring-web" }
+spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc" }
+spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+jackson-databind = { module = "tools.jackson.core:jackson-databind" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
