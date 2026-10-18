@@ -3421,10 +3421,10 @@
         },
         "opentelemetry": {
           "status": "Supported",
-          "note": "Tracing through SDK interceptors.",
-          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/typescript/workers/interceptors.mdx#L30-L33",
+          "note": "The TypeScript SDK exports metrics to an OpenTelemetry collector. An interceptor package adds traces.",
+          "source": "https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/develop/typescript/platform/observability.mdx#L33-L38",
           "version": "1.32.1",
-          "evidence": "The TypeScript SDK comes with an optional interceptor package that adds tracing with OpenTelemetry."
+          "evidence": "\"Workers can emit metrics and traces.\" ... \"`metrics: { otel: { url } }`: The URL of a gRPC OpenTelemetry collector.\" ... \"To set up tracing of Workflows and Activities, use our `opentelemetry-interceptors` package.\" (docs/develop/go/integrations/opentelemetry-v2.mdx#L16-L27 at the same commit: the Go SDK plugin can \"generate spans and emit metrics for Temporal SDK operations\".)"
         },
         "worker-languages": {
           "value": "Go, Java, .NET, PHP, Python, Ruby, Rust, TypeScript",
@@ -3656,11 +3656,11 @@
           "evidence": "\"Pause a function during maintenance so new events do not start its runs. Inngest still receives and stores those events, but skips the paused function.\" \"Events received during the pause do not run automatically. If they must be processed, create a Replay ... The available history depends on your plan's retention.\" (Looked at ui/apps/dev-server-ui and pkg/coreapi/gql.mutations.graphql at v1.46.0: no pause action.)"
         },
         "opentelemetry": {
-          "status": "Supported",
-          "note": "In the TypeScript SDK, an experimental middleware exports function spans.",
+          "status": "Partial",
+          "note": "Traces only. In the TypeScript SDK, an experimental middleware exports function spans.",
           "source": "https://github.com/inngest/website/blob/bb3a8f29705c6d2e11e665a1d42395655dbcd493/pages/docs/reference/typescript/v4/extended-traces.mdx#L9-L44",
           "version": "1.46.0",
-          "evidence": "\"Inngest supports OpenTelemetry for distributed tracing and observability across your functions. The `extendedTracesMiddleware` exports OpenTelemetry spans from your functions to Inngest Traces\"; `import { extendedTracesMiddleware } from \"inngest/experimental\";`"
+          "evidence": "\"Inngest supports OpenTelemetry for distributed tracing and observability across your functions. The `extendedTracesMiddleware` exports OpenTelemetry spans from your functions to Inngest Traces\"; `import { extendedTracesMiddleware } from \"inngest/experimental\";` (In inngest v1.46.0, the server serves Prometheus metrics at /metrics, pkg/devserver/devserver.go#L710-L712. pkg/telemetry/metrics/metrics.go has an OTLP meter provider, but no code calls MeterSetup. The Prometheus export of the managed service, pages/docs/platform-and-operations/integrations/prometheus.mdx#L8, is not OpenTelemetry. The SDK repositories inngest-js@dc1204183c601163b1c4cac3b4330f337d551637, inngest-py@0c53b506108a12ebf0a83044a2db8641f128ba14, inngestgo@a333bff11563716e30c3f4456f34cde1ac2d72ba, and inngest-kt@bcbfac7252a1213240292ace8a8f3b21e3763b93 have no OpenTelemetry meter or metric.)"
         },
         "worker-languages": {
           "value": "TypeScript/JavaScript, Python, Go, Kotlin/Java",
@@ -4127,11 +4127,11 @@
           "evidence": "\"You can manually pause an invocation too\"; restate invocations pause Greeter (\"bulk pause, e.g. per service\"). The docs at this commit describe no pause for a service or for its new invocations."
         },
         "opentelemetry": {
-          "status": "Supported",
-          "note": "The server exports traces over OTLP.",
+          "status": "Partial",
+          "note": "Traces only. The server exports traces over OTLP and serves its metrics in the Prometheus format.",
           "source": "https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/server/monitoring/tracing.mdx#L14-L20",
           "version": "1.8.0",
-          "evidence": "\"Set up the OTLP exporter by pointing the configuration entry `tracing-endpoint` to your trace collector.\" OTLP/gRPC by default, OTLP/HTTP with the otlp+http:// scheme."
+          "evidence": "\"Set up the OTLP exporter by pointing the configuration entry `tracing-endpoint` to your trace collector.\" OTLP/gRPC by default, OTLP/HTTP with the otlp+http:// scheme. docs/server/monitoring/metrics.mdx#L7: \"Restate servers expose operational metrics in Prometheus exposition format ... localhost:5122/metrics\". (restate v1.8.0 crates/tracing-instrumentation/Cargo.toml#L34 enables only the trace feature of opentelemetry-otlp. The SDK repositories sdk-typescript@02a12acb879fcf46448d88d028304d3a3113e7e2, sdk-java@142d3bfbb6c66c22644f01af87b710764d1aed61, sdk-python@63d2fe5745c0369bae2adc2641b571bb5b5bea28, sdk-go@05ae8660e5f394a86bce4dc4772c913a6c454209, sdk-rust@06b2ed39846bf2728e134c871cafec208ca3d967, and sdk-ruby@2927cb060d682b348abb0105010e23d513b96bf2 have no OpenTelemetry meter or metric.)"
         },
         "worker-languages": {
           "value": "TypeScript, Java, Kotlin, Python, Go, Rust, Ruby",
