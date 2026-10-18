@@ -6,7 +6,7 @@ val springBootVersion: String by project
 
 dependencies {
   implementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
-  implementation("dev.stablemates:workhorse-spring-boot-starter:$workhorseVersion")
+  implementation("run.workhorse:workhorse-spring-boot-starter:$workhorseVersion")
   // The application's DataSource. The starter builds its Queue and its worker on it.
   implementation("org.springframework.boot:spring-boot-starter-jdbc")
   runtimeOnly("org.postgresql:postgresql")

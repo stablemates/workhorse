@@ -63,7 +63,7 @@ tasks.register<JavaExec>("javaApi") {
   inputs.files(coreJar, starterJar, snapshotClasspath)
   outputs.file(output)
   classpath = readerClasspath
-  mainClass = "dev.stablemates.workhorse.apisnapshot.MainKt"
+  mainClass = "run.workhorse.apisnapshot.MainKt"
   argumentProviders.add(
     CommandLineArgumentProvider {
       listOf(
@@ -86,7 +86,7 @@ tasks.register<JavaExec>("kotlinApi") {
   inputs.dir(kotlinSources)
   outputs.file(output)
   classpath = readerClasspath
-  mainClass = "dev.stablemates.workhorse.apisnapshot.MainKt"
+  mainClass = "run.workhorse.apisnapshot.MainKt"
   argumentProviders.add(
     CommandLineArgumentProvider {
       listOf("kotlin", output.get().asFile.path, kotlinSources.asFile.path)

@@ -25,7 +25,7 @@ val catalogue = the<VersionCatalogsExtension>().named("libs")
 val schema = file("../sql/schema/current.sql")
 
 subprojects {
-  group = "dev.stablemates"
+  group = "run.workhorse"
   version = rootProject.version
 
   apply(plugin = "java-library")

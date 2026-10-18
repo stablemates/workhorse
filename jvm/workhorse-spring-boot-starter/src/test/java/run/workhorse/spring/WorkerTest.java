@@ -1,0 +1,257 @@
+package run.workhorse.spring;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+import java.lang.reflect.Type;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.sql.DataSource;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.HealthIndicator;
+import org.springframework.boot.health.contributor.Status;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.context.ConfigurableApplicationContext;
+import run.workhorse.Admin;
+import run.workhorse.ConnectionSource;
+import run.workhorse.EnqueueOptions;
+import run.workhorse.HandlerContext;
+import run.workhorse.Queue;
+import run.workhorse.ShutdownIncompleteException;
+import run.workhorse.TaskHandler;
+import run.workhorse.TaskState;
+import run.workhorse.Worker;
+import run.workhorse.testing.ScratchDataSource;
+import run.workhorse.testing.ScratchDatabase;
+
+/** The worker bean: its switch, its handlers, its drain, and its health. */
+@ExtendWith({ScratchDatabase.class, OutputCaptureExtension.class})
+class WorkerTest {
+  /** The payload of the test task. The Jackson codec decodes it as this record. */
+  record Shipment(String order) {}
+
+  /** A handler bean that holds each attempt until the test releases it. */
+  static final class ShipHandler implements TaskHandler<Shipment> {
+    final CountDownLatch started = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    final AtomicReference<@Nullable Shipment> finished = new AtomicReference<>();
+    volatile boolean ignoreInterrupts;
+
+    @Override
+    public String taskType() {
+      return "order.ship";
+    }
+
+    @Override
+    public Type payloadType() {
+      return Shipment.class;
+    }
+
+    @Override
+    public @Nullable Object handle(HandlerContext ctx, Shipment payload) throws Exception {
+      started.countDown();
+      if (ignoreInterrupts) {
+        // A handler that ignores the shutdown: the worker abandons it after the unwind window.
+        // It runs until the test releases it, whatever the timing of the drain.
+        boolean released = false;
+        while (!released) {
+          try {
+            released = release.await(10, TimeUnit.MILLISECONDS);
+          } catch (InterruptedException ignored) {
+            // The shutdown interrupts the handler. This handler does not stop for it.
+          }
+        }
+      } else {
+        release.await();
+      }
+      finished.set(payload);
+      return null;
+    }
+  }
+
+  private static ApplicationContextRunner enabled(String queueName, ShipHandler handler) {
+    return Contexts.database()
+        .withBean(ShipHandler.class, () -> handler)
+        .withPropertyValues(
+            "workhorse.worker.enabled=true",
+            "workhorse.worker.queues=" + queueName,
+            "workhorse.worker.poll-interval=50ms",
+            "workhorse.worker.disable-registry=true");
+  }
+
+  private static UUID enqueue(ConfigurableApplicationContext context, String queueName) {
+    return context
+        .getBean(Queue.class)
+        .enqueue(
+            "order.ship", new Shipment("A-7"), EnqueueOptions.builder().queue(queueName).build())
+        .taskId();
+  }
+
+  private static TaskState state(Admin admin, UUID taskId) {
+    return admin.getTask(taskId).orElseThrow().state();
+  }
+
+  @Test
+  void noWorkerStartsWithoutTheProperty() {
+    ShipHandler handler = new ShipHandler();
+    Contexts.runner()
+        .withBean(DataSource.class, () -> mock(DataSource.class))
+        .withBean(ShipHandler.class, () -> handler)
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(Queue.class).hasSingleBean(Admin.class);
+              assertThat(context).doesNotHaveBean(Worker.class);
+              assertThat(context).doesNotHaveBean(WorkerLifecycle.class);
+              assertThat(context).doesNotHaveBean(HealthIndicator.class);
+              assertThat(Thread.getAllStackTraces().keySet())
+                  .noneMatch(thread -> thread.getName().startsWith("workhorse-worker-"));
+            });
+  }
+
+  @Test
+  void theWorkerOffWarningNamesTheProperty(CapturedOutput output) {
+    Contexts.runner()
+        .withBean(DataSource.class, () -> mock(DataSource.class))
+        .withBean(ShipHandler.class, ShipHandler::new)
+        .withPropertyValues("workhorse.worker.enabled=false")
+        .run(context -> assertThat(context).hasNotFailed());
+    assertThat(output).contains("1 TaskHandler bean(s)").contains("workhorse.worker.enabled=true");
+  }
+
+  @Test
+  void theWorkerRunsHandlerBeansWithTheJacksonCodec() throws Exception {
+    String queueName = Contexts.unique("run");
+    ShipHandler handler = new ShipHandler();
+    enabled(queueName, handler)
+        .run(
+            context -> {
+              UUID taskId = enqueue(context, queueName);
+              assertThat(handler.started.await(10, TimeUnit.SECONDS)).isTrue();
+              handler.release.countDown();
+              long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+              Admin admin = context.getBean(Admin.class);
+              while (state(admin, taskId) != TaskState.SUCCEEDED && System.nanoTime() < end) {
+                Thread.sleep(20);
+              }
+              assertThat(state(admin, taskId)).isEqualTo(TaskState.SUCCEEDED);
+              assertThat(handler.finished.get()).isEqualTo(new Shipment("A-7"));
+            });
+  }
+
+  @Test
+  void contextShutdownDrainsTheWorker() throws Exception {
+    String queueName = Contexts.unique("drain");
+    ShipHandler handler = new ShipHandler();
+    AtomicReference<@Nullable WorkerLifecycle> lifecycle = new AtomicReference<>();
+    AtomicReference<@Nullable UUID> task = new AtomicReference<>();
+    Thread releaser =
+        Thread.ofVirtual()
+            .unstarted(
+                () -> {
+                  try {
+                    // The context closes while the handler runs. The drain waits for it.
+                    handler.started.await();
+                    Thread.sleep(300);
+                    handler.release.countDown();
+                  } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                  }
+                });
+    enabled(queueName, handler)
+        .withPropertyValues("workhorse.worker.shutdown-grace=10s")
+        .run(
+            context -> {
+              lifecycle.set(context.getBean(WorkerLifecycle.class));
+              task.set(enqueue(context, queueName));
+              assertThat(handler.started.await(10, TimeUnit.SECONDS)).isTrue();
+              releaser.start();
+            });
+    // The runner has closed the context.
+    WorkerLifecycle stopped = lifecycle.get();
+    assertThat(stopped).isNotNull();
+    assertThat(handler.finished.get()).as("the handler finished during the drain").isNotNull();
+    assertThat(stopped.state()).isEqualTo(WorkerLifecycle.State.STOPPED);
+    assertThat(stopped.isRunning()).isFalse();
+    UUID taskId = task.get();
+    assertThat(taskId).isNotNull();
+    Admin admin = new Admin(ConnectionSource.of(new ScratchDataSource(true)));
+    assertThat(state(admin, taskId)).isEqualTo(TaskState.SUCCEEDED);
+  }
+
+  @Test
+  void aStopRightAfterTheStartEndsTheRun() {
+    String queueName = Contexts.unique("early");
+    enabled(queueName, new ShipHandler())
+        .run(
+            context -> {
+              WorkerLifecycle lifecycle = context.getBean(WorkerLifecycle.class);
+              lifecycle.stop();
+              lifecycle.start();
+              // No pause between the start and the stop: the stop must reach the new run.
+              lifecycle.stop();
+              assertThat(lifecycle.state()).isEqualTo(WorkerLifecycle.State.STOPPED);
+              assertThat(lifecycle.worker().isRunning()).isFalse();
+              assertThat(lifecycle.isRunning()).isFalse();
+            });
+  }
+
+  @Test
+  void theHealthIndicatorReportsAStoppedWorker() throws Exception {
+    String queueName = Contexts.unique("health");
+    ShipHandler handler = new ShipHandler();
+    enabled(queueName, handler)
+        .run(
+            context -> {
+              HealthIndicator health =
+                  context.getBean("workhorseHealthIndicator", HealthIndicator.class);
+              assertThat(health.health().getStatus()).isEqualTo(Status.UP);
+
+              context.getBean(WorkerLifecycle.class).stop();
+
+              Health down = health.health();
+              assertThat(down.getStatus()).isEqualTo(Status.DOWN);
+              assertThat(down.getDetails()).containsEntry("state", "stopped");
+            });
+  }
+
+  @Test
+  void theHealthIndicatorReportsAnAbandonedHandler() throws Exception {
+    String queueName = Contexts.unique("abandon");
+    ShipHandler handler = new ShipHandler();
+    handler.ignoreInterrupts = true;
+    enabled(queueName, handler)
+        .withPropertyValues("workhorse.worker.shutdown-grace=0s")
+        .run(
+            context -> {
+              HealthIndicator health =
+                  context.getBean("workhorseHealthIndicator", HealthIndicator.class);
+              enqueue(context, queueName);
+              assertThat(handler.started.await(10, TimeUnit.SECONDS)).isTrue();
+
+              try {
+                context.getBean(WorkerLifecycle.class).stop();
+
+                Health down = health.health();
+                assertThat(down.getStatus()).isEqualTo(Status.DOWN);
+                assertThat(down.getDetails()).containsEntry("state", "failed");
+                assertThat(context.getBean(WorkerLifecycle.class).failure())
+                    .isInstanceOf(ShutdownIncompleteException.class);
+              } finally {
+                // Lets the abandoned handler end before the context closes.
+                handler.release.countDown();
+              }
+              long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+              while (handler.finished.get() == null && System.nanoTime() < end) {
+                Thread.sleep(10);
+              }
+              assertThat(handler.finished.get()).isNotNull();
+            });
+  }
+}

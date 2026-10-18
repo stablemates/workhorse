@@ -87,7 +87,7 @@ moves from one class to another reads as one line gone and one line arrived.
 
 `java.txt` reads the built jars of `workhorse` and `workhorse-spring-boot-starter`, one section for
 each. A jar with a module descriptor exports only the packages its descriptor exports, so
-`dev.stablemates.workhorse.internal` is absent. The starter is an automatic module, which exports
+`run.workhorse.internal` is absent. The starter is an automatic module, which exports
 every package. The reader loads each class by reflection and prints every public and protected
 class, constructor, method, and field.
 

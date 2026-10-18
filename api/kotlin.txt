@@ -9,114 +9,114 @@
 # top-level line with the package. A type name that the file imports or that the package declares
 # is fully qualified. Any other name is a Kotlin default import or a type parameter.
 
-package dev.stablemates.workhorse.kotlin
-dev.stablemates.workhorse.kotlin: @PublishedApi internal fun erasure(type: java.lang.reflect.Type): Class<*>
-dev.stablemates.workhorse.kotlin: @PublishedApi internal inline fun <reified P> javaClassOf(): Class<*>
-dev.stablemates.workhorse.kotlin: @PublishedApi internal inline fun <reified T> javaTypeOf(): java.lang.reflect.Type
-dev.stablemates.workhorse.kotlin: @PublishedApi internal suspend fun <T> blocking(call: () -> T): T
-dev.stablemates.workhorse.kotlin: public fun workhorseWorker(dataSource: javax.sql.DataSource, configure: dev.stablemates.workhorse.kotlin.WorkerScope.() -> Unit): dev.stablemates.workhorse.Worker
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.cancelTaskGroupSuspend(groupId: java.util.UUID, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroup?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getCheckpointSuspend(taskId: java.util.UUID, name: String, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskCheckpoint?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getProgressSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskProgress?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroup?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getTaskSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskDetail?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getTaskTimelineSuspend(taskId: java.util.UUID, query: dev.stablemates.workhorse.TimelineQuery = TimelineQuery.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.TimelinePage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.getWaitSuspend(taskId: java.util.UUID, name: String, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskWait?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listCheckpointsSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.TaskCheckpoint>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listDeadLettersSuspend(query: dev.stablemates.workhorse.DeadLetterQuery = DeadLetterQuery.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.DeadLetterPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listHumanWaitsSuspend(query: dev.stablemates.workhorse.HumanWaitQuery = HumanWaitQuery.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.HumanWaitPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listSignalWaitsSuspend(query: dev.stablemates.workhorse.SignalWaitQuery = SignalWaitQuery.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.SignalWaitPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listTaskGroupDriftSuspend(limit: Int = 1000, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.TaskGroupDrift>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listTaskGroupEventsSuspend(groupId: java.util.UUID, limit: Int = 1000, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.TaskGroupEvent>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listTaskGroupMembersSuspend(groupId: java.util.UUID, after: Long = 0, limit: Int = 100, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroupMemberPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listTasksSuspend(query: dev.stablemates.workhorse.TaskQuery = TaskQuery.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listWaitsSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.TaskWait>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.listWorkersSuspend(connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.WorkerInfo>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.pauseQueueSuspend(queue: String, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.purgeQueueSuspend(queue: String, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): Long
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.redriveManySuspend(filter: dev.stablemates.workhorse.RedriveFilter, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): dev.stablemates.workhorse.BulkRedrivePage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.redriveSuspend(sourceTaskId: java.util.UUID, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): dev.stablemates.workhorse.RedriveResult
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.repairTaskGroupDriftSuspend(audit: dev.stablemates.workhorse.AdminAudit, limit: Int = 1000, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.TaskGroupRepair>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.resumeQueueSuspend(queue: String, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Admin.setWorkerPausedSuspend(workerId: String, paused: Boolean, audit: dev.stablemates.workhorse.AdminAudit, connection: java.sql.Connection? = null): dev.stablemates.workhorse.WorkerPauseResult?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.addToTaskGroupSuspend(groupId: java.util.UUID, requests: List<dev.stablemates.workhorse.EnqueueRequest>, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.EnqueueResult>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.cancelSuspend(taskId: java.util.UUID, requestedBy: String? = null, reason: String? = null, connection: java.sql.Connection? = null): dev.stablemates.workhorse.CancelResult
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.completeHumanWaitSuspend(taskId: java.util.UUID, name: String, result: Any?, idempotencyKey: String, requestedBy: String, connection: java.sql.Connection? = null): dev.stablemates.workhorse.HumanWaitCompletionResult
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.createTaskGroupSuspend(callbacks: dev.stablemates.workhorse.TaskGroupCallbacks, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroup
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.enqueueManySuspend(requests: List<dev.stablemates.workhorse.EnqueueRequest>, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.EnqueueResult>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.enqueueSuspend(taskType: String, payload: Any?, options: dev.stablemates.workhorse.EnqueueOptions = EnqueueOptions.defaults(), connection: java.sql.Connection? = null): dev.stablemates.workhorse.EnqueueResult
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.findTaskGroupSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroupLink?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.getTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroup?
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.healthSuspend(connection: java.sql.Connection? = null): dev.stablemates.workhorse.QueueHealth
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.listBudgetsSuspend(names: List<String>? = null, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.Budget>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.listConcurrencyPoliciesSuspend(queues: List<String>? = null, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.ConcurrencyPolicy>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.listRateLimitPoliciesSuspend(queues: List<String>? = null, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.RateLimitPolicy>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.listTaskGroupMembersSuspend(groupId: java.util.UUID, after: Long = 0, limit: Int = 100, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroupMemberPage
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.sealTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): dev.stablemates.workhorse.TaskGroup
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.sendSignalSuspend(taskId: java.util.UUID, name: String, payload: Any?, idempotencyKey: String, requestedBy: String, connection: java.sql.Connection? = null): dev.stablemates.workhorse.SignalDeliveryResult
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.syncBudgetsSuspend(namespace: String, definitions: List<dev.stablemates.workhorse.BudgetDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.Budget>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.syncConcurrencyPoliciesSuspend(namespace: String, definitions: List<dev.stablemates.workhorse.ConcurrencyPolicyDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.ConcurrencyPolicy>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.syncContractsSuspend(contracts: Map<String, dev.stablemates.workhorse.TaskTypeContracts>, connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.syncRateLimitPoliciesSuspend(namespace: String, definitions: List<dev.stablemates.workhorse.RateLimitPolicyDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<dev.stablemates.workhorse.RateLimitPolicy>
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.syncSchedulesSuspend(namespace: String, schedules: List<dev.stablemates.workhorse.ScheduleDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): Unit
-dev.stablemates.workhorse.kotlin: public suspend fun dev.stablemates.workhorse.Queue.taskGroupSuspend(callbacks: dev.stablemates.workhorse.TaskGroupCallbacks, connection: java.sql.Connection? = null, block: dev.stablemates.workhorse.TaskGroupBuilder.() -> Unit): dev.stablemates.workhorse.TaskGroupBlockResult
+package run.workhorse.kotlin
+run.workhorse.kotlin: @PublishedApi internal fun erasure(type: java.lang.reflect.Type): Class<*>
+run.workhorse.kotlin: @PublishedApi internal inline fun <reified P> javaClassOf(): Class<*>
+run.workhorse.kotlin: @PublishedApi internal inline fun <reified T> javaTypeOf(): java.lang.reflect.Type
+run.workhorse.kotlin: @PublishedApi internal suspend fun <T> blocking(call: () -> T): T
+run.workhorse.kotlin: public fun workhorseWorker(dataSource: javax.sql.DataSource, configure: run.workhorse.kotlin.WorkerScope.() -> Unit): run.workhorse.Worker
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.cancelTaskGroupSuspend(groupId: java.util.UUID, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.TaskGroup?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getCheckpointSuspend(taskId: java.util.UUID, name: String, connection: java.sql.Connection? = null): run.workhorse.TaskCheckpoint?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getProgressSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskProgress?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskGroup?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getTaskSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskDetail?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getTaskTimelineSuspend(taskId: java.util.UUID, query: run.workhorse.TimelineQuery = TimelineQuery.defaults(), connection: java.sql.Connection? = null): run.workhorse.TimelinePage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.getWaitSuspend(taskId: java.util.UUID, name: String, connection: java.sql.Connection? = null): run.workhorse.TaskWait?
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listCheckpointsSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): List<run.workhorse.TaskCheckpoint>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listDeadLettersSuspend(query: run.workhorse.DeadLetterQuery = DeadLetterQuery.defaults(), connection: java.sql.Connection? = null): run.workhorse.DeadLetterPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listHumanWaitsSuspend(query: run.workhorse.HumanWaitQuery = HumanWaitQuery.defaults(), connection: java.sql.Connection? = null): run.workhorse.HumanWaitPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listSignalWaitsSuspend(query: run.workhorse.SignalWaitQuery = SignalWaitQuery.defaults(), connection: java.sql.Connection? = null): run.workhorse.SignalWaitPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listTaskGroupDriftSuspend(limit: Int = 1000, connection: java.sql.Connection? = null): List<run.workhorse.TaskGroupDrift>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listTaskGroupEventsSuspend(groupId: java.util.UUID, limit: Int = 1000, connection: java.sql.Connection? = null): List<run.workhorse.TaskGroupEvent>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listTaskGroupMembersSuspend(groupId: java.util.UUID, after: Long = 0, limit: Int = 100, connection: java.sql.Connection? = null): run.workhorse.TaskGroupMemberPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listTasksSuspend(query: run.workhorse.TaskQuery = TaskQuery.defaults(), connection: java.sql.Connection? = null): run.workhorse.TaskPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listWaitsSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): List<run.workhorse.TaskWait>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.listWorkersSuspend(connection: java.sql.Connection? = null): List<run.workhorse.WorkerInfo>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.pauseQueueSuspend(queue: String, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.purgeQueueSuspend(queue: String, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): Long
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.redriveManySuspend(filter: run.workhorse.RedriveFilter, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.BulkRedrivePage
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.redriveSuspend(sourceTaskId: java.util.UUID, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.RedriveResult
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.repairTaskGroupDriftSuspend(audit: run.workhorse.AdminAudit, limit: Int = 1000, connection: java.sql.Connection? = null): List<run.workhorse.TaskGroupRepair>
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.resumeQueueSuspend(queue: String, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.setWorkerPausedSuspend(workerId: String, paused: Boolean, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.WorkerPauseResult?
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.addToTaskGroupSuspend(groupId: java.util.UUID, requests: List<run.workhorse.EnqueueRequest>, connection: java.sql.Connection? = null): List<run.workhorse.EnqueueResult>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.cancelSuspend(taskId: java.util.UUID, requestedBy: String? = null, reason: String? = null, connection: java.sql.Connection? = null): run.workhorse.CancelResult
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.completeHumanWaitSuspend(taskId: java.util.UUID, name: String, result: Any?, idempotencyKey: String, requestedBy: String, connection: java.sql.Connection? = null): run.workhorse.HumanWaitCompletionResult
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.createTaskGroupSuspend(callbacks: run.workhorse.TaskGroupCallbacks, connection: java.sql.Connection? = null): run.workhorse.TaskGroup
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.enqueueManySuspend(requests: List<run.workhorse.EnqueueRequest>, connection: java.sql.Connection? = null): List<run.workhorse.EnqueueResult>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.enqueueSuspend(taskType: String, payload: Any?, options: run.workhorse.EnqueueOptions = EnqueueOptions.defaults(), connection: java.sql.Connection? = null): run.workhorse.EnqueueResult
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.findTaskGroupSuspend(taskId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskGroupLink?
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.getTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskGroup?
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.healthSuspend(connection: java.sql.Connection? = null): run.workhorse.QueueHealth
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.listBudgetsSuspend(names: List<String>? = null, connection: java.sql.Connection? = null): List<run.workhorse.Budget>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.listConcurrencyPoliciesSuspend(queues: List<String>? = null, connection: java.sql.Connection? = null): List<run.workhorse.ConcurrencyPolicy>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.listRateLimitPoliciesSuspend(queues: List<String>? = null, connection: java.sql.Connection? = null): List<run.workhorse.RateLimitPolicy>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.listTaskGroupMembersSuspend(groupId: java.util.UUID, after: Long = 0, limit: Int = 100, connection: java.sql.Connection? = null): run.workhorse.TaskGroupMemberPage
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.sealTaskGroupSuspend(groupId: java.util.UUID, connection: java.sql.Connection? = null): run.workhorse.TaskGroup
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.sendSignalSuspend(taskId: java.util.UUID, name: String, payload: Any?, idempotencyKey: String, requestedBy: String, connection: java.sql.Connection? = null): run.workhorse.SignalDeliveryResult
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncBudgetsSuspend(namespace: String, definitions: List<run.workhorse.BudgetDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<run.workhorse.Budget>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncConcurrencyPoliciesSuspend(namespace: String, definitions: List<run.workhorse.ConcurrencyPolicyDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<run.workhorse.ConcurrencyPolicy>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncContractsSuspend(contracts: Map<String, run.workhorse.TaskTypeContracts>, connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncRateLimitPoliciesSuspend(namespace: String, definitions: List<run.workhorse.RateLimitPolicyDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): List<run.workhorse.RateLimitPolicy>
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.syncSchedulesSuspend(namespace: String, schedules: List<run.workhorse.ScheduleDefinition>, prune: Boolean = true, connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Queue.taskGroupSuspend(callbacks: run.workhorse.TaskGroupCallbacks, connection: java.sql.Connection? = null, block: run.workhorse.TaskGroupBuilder.() -> Unit): run.workhorse.TaskGroupBlockResult
 
-public fun interface dev.stablemates.workhorse.kotlin.SuspendHandler<P>
-dev.stablemates.workhorse.kotlin.SuspendHandler: public abstract suspend fun handle(ctx: dev.stablemates.workhorse.kotlin.SuspendHandlerContext, payload: P): Any?
+public fun interface run.workhorse.kotlin.SuspendHandler<P>
+run.workhorse.kotlin.SuspendHandler: public abstract suspend fun handle(ctx: run.workhorse.kotlin.SuspendHandlerContext, payload: P): Any?
 
-public final class dev.stablemates.workhorse.kotlin.SuspendHandlerContext
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> checkpoint(name: String, type: java.lang.reflect.Type, options: dev.stablemates.workhorse.CheckpointOptions?, operation: suspend () -> T): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> runChild(name: String, taskType: String, payload: Any?, options: dev.stablemates.workhorse.EnqueueOptions, resultType: java.lang.reflect.Type): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> waitForHuman(name: String, context: Any?, type: java.lang.reflect.Type, timeout: java.time.Duration?): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> waitForSignal(name: String, type: java.lang.reflect.Type, timeout: java.time.Duration?): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun getCheckpoint(name: String): dev.stablemates.workhorse.TaskCheckpoint?
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun getProgress(): dev.stablemates.workhorse.TaskProgress?
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun runChildren(children: List<dev.stablemates.workhorse.ChildRequest>): Map<String, dev.stablemates.workhorse.ChildOutcome>
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun runChildrenAll(children: List<dev.stablemates.workhorse.ChildRequest>): Map<String, Any?>
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun setProgress(progress: Any?): dev.stablemates.workhorse.TaskProgress
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun sleep(name: String, duration: java.time.Duration): Unit
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend fun sleepUntil(name: String, time: java.time.Instant): Unit
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> checkpoint(name: String, options: dev.stablemates.workhorse.CheckpointOptions? = null, noinline operation: suspend () -> T): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> runChild(name: String, taskType: String, payload: Any? = null, options: dev.stablemates.workhorse.EnqueueOptions = EnqueueOptions.defaults()): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> waitForHuman(name: String, context: Any? = null, timeout: java.time.Duration? = null): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> waitForSignal(name: String, timeout: java.time.Duration? = null): T
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public val cancellation: dev.stablemates.workhorse.CancellationToken
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public val isCancelled: Boolean
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public val java: dev.stablemates.workhorse.HandlerContext
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public val task: dev.stablemates.workhorse.ClaimedTask
-dev.stablemates.workhorse.kotlin.SuspendHandlerContext: public val taskGroup: dev.stablemates.workhorse.kotlin.SuspendTaskGroupContext
+public final class run.workhorse.kotlin.SuspendHandlerContext
+run.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> checkpoint(name: String, type: java.lang.reflect.Type, options: run.workhorse.CheckpointOptions?, operation: suspend () -> T): T
+run.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> runChild(name: String, taskType: String, payload: Any?, options: run.workhorse.EnqueueOptions, resultType: java.lang.reflect.Type): T
+run.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> waitForHuman(name: String, context: Any?, type: java.lang.reflect.Type, timeout: java.time.Duration?): T
+run.workhorse.kotlin.SuspendHandlerContext: @PublishedApi internal suspend fun <T> waitForSignal(name: String, type: java.lang.reflect.Type, timeout: java.time.Duration?): T
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun getCheckpoint(name: String): run.workhorse.TaskCheckpoint?
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun getProgress(): run.workhorse.TaskProgress?
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun runChildren(children: List<run.workhorse.ChildRequest>): Map<String, run.workhorse.ChildOutcome>
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun runChildrenAll(children: List<run.workhorse.ChildRequest>): Map<String, Any?>
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun setProgress(progress: Any?): run.workhorse.TaskProgress
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun sleep(name: String, duration: java.time.Duration): Unit
+run.workhorse.kotlin.SuspendHandlerContext: public suspend fun sleepUntil(name: String, time: java.time.Instant): Unit
+run.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> checkpoint(name: String, options: run.workhorse.CheckpointOptions? = null, noinline operation: suspend () -> T): T
+run.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> runChild(name: String, taskType: String, payload: Any? = null, options: run.workhorse.EnqueueOptions = EnqueueOptions.defaults()): T
+run.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> waitForHuman(name: String, context: Any? = null, timeout: java.time.Duration? = null): T
+run.workhorse.kotlin.SuspendHandlerContext: public suspend inline fun <reified T> waitForSignal(name: String, timeout: java.time.Duration? = null): T
+run.workhorse.kotlin.SuspendHandlerContext: public val cancellation: run.workhorse.CancellationToken
+run.workhorse.kotlin.SuspendHandlerContext: public val isCancelled: Boolean
+run.workhorse.kotlin.SuspendHandlerContext: public val java: run.workhorse.HandlerContext
+run.workhorse.kotlin.SuspendHandlerContext: public val task: run.workhorse.ClaimedTask
+run.workhorse.kotlin.SuspendHandlerContext: public val taskGroup: run.workhorse.kotlin.SuspendTaskGroupContext
 
-public final class dev.stablemates.workhorse.kotlin.SuspendTaskGroupContext
-dev.stablemates.workhorse.kotlin.SuspendTaskGroupContext: public suspend fun add(requests: List<dev.stablemates.workhorse.EnqueueRequest>): List<dev.stablemates.workhorse.EnqueueResult>
-dev.stablemates.workhorse.kotlin.SuspendTaskGroupContext: public suspend fun get(): dev.stablemates.workhorse.TaskGroupLink?
-dev.stablemates.workhorse.kotlin.SuspendTaskGroupContext: public val java: dev.stablemates.workhorse.TaskGroupContext
+public final class run.workhorse.kotlin.SuspendTaskGroupContext
+run.workhorse.kotlin.SuspendTaskGroupContext: public suspend fun add(requests: List<run.workhorse.EnqueueRequest>): List<run.workhorse.EnqueueResult>
+run.workhorse.kotlin.SuspendTaskGroupContext: public suspend fun get(): run.workhorse.TaskGroupLink?
+run.workhorse.kotlin.SuspendTaskGroupContext: public val java: run.workhorse.TaskGroupContext
 
-@WorkhorseDsl public final class dev.stablemates.workhorse.kotlin.WorkerScope
-dev.stablemates.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> register(taskType: String, payloadType: Class<P>, handler: dev.stablemates.workhorse.kotlin.SuspendHandler<P>): Unit
-dev.stablemates.workhorse.kotlin.WorkerScope: public fun java(configure: dev.stablemates.workhorse.Worker.Builder.() -> Unit): Unit
-dev.stablemates.workhorse.kotlin.WorkerScope: public inline fun <reified P> handle(taskType: String, handler: dev.stablemates.workhorse.kotlin.SuspendHandler<P>): Unit
-dev.stablemates.workhorse.kotlin.WorkerScope: public var codec: dev.stablemates.workhorse.JsonCodec? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var concurrency: Int? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var disableRegistry: Boolean? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var executor: java.util.concurrent.ExecutorService? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var heartbeat: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var lease: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var logger: System.Logger? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var maintenanceInterval: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var maintenanceRoutineInterval: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var onNotificationError: ((Throwable) -> Unit)? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var onRegistrationError: ((Throwable) -> Unit)? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var pollInterval: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var pollingOnly: Boolean? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var queues: List<String>? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var registryInterval: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var retryDelay: dev.stablemates.workhorse.RetryDelay? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var scheduleCatchupLimit: Int? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var scheduleNamespaces: List<String>? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var sharedHeartbeats: Boolean? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var shutdownGrace: java.time.Duration? = null
-dev.stablemates.workhorse.kotlin.WorkerScope: public var workerId: String? = null
+@WorkhorseDsl public final class run.workhorse.kotlin.WorkerScope
+run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> register(taskType: String, payloadType: Class<P>, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: public fun java(configure: run.workhorse.Worker.Builder.() -> Unit): Unit
+run.workhorse.kotlin.WorkerScope: public inline fun <reified P> handle(taskType: String, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: public var codec: run.workhorse.JsonCodec? = null
+run.workhorse.kotlin.WorkerScope: public var concurrency: Int? = null
+run.workhorse.kotlin.WorkerScope: public var disableRegistry: Boolean? = null
+run.workhorse.kotlin.WorkerScope: public var executor: java.util.concurrent.ExecutorService? = null
+run.workhorse.kotlin.WorkerScope: public var heartbeat: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var lease: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var logger: System.Logger? = null
+run.workhorse.kotlin.WorkerScope: public var maintenanceInterval: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var maintenanceRoutineInterval: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var onNotificationError: ((Throwable) -> Unit)? = null
+run.workhorse.kotlin.WorkerScope: public var onRegistrationError: ((Throwable) -> Unit)? = null
+run.workhorse.kotlin.WorkerScope: public var pollInterval: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var pollingOnly: Boolean? = null
+run.workhorse.kotlin.WorkerScope: public var queues: List<String>? = null
+run.workhorse.kotlin.WorkerScope: public var registryInterval: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var retryDelay: run.workhorse.RetryDelay? = null
+run.workhorse.kotlin.WorkerScope: public var scheduleCatchupLimit: Int? = null
+run.workhorse.kotlin.WorkerScope: public var scheduleNamespaces: List<String>? = null
+run.workhorse.kotlin.WorkerScope: public var sharedHeartbeats: Boolean? = null
+run.workhorse.kotlin.WorkerScope: public var shutdownGrace: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var workerId: String? = null
 
-@DslMarker public annotation class dev.stablemates.workhorse.kotlin.WorkhorseDsl
+@DslMarker public annotation class run.workhorse.kotlin.WorkhorseDsl

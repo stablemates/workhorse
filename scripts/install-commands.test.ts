@@ -27,7 +27,7 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 //
 // A Gradle or Maven dependency is the other exception. Its coordinate has no form without a
 // version, so `install.gradle` and `install.maven` name the version of `jvm/gradle.properties`, and
-// a rule below holds them to it. They name the core, `dev.stablemates:workhorse`. The pages that
+// a rule below holds them to it. They name the core, `run.workhorse:workhorse`. The pages that
 // show them name the Kotlin module and the starter by their artifact IDs. No README or site page
 // shows them before Maven Central serves the artifacts (SM-1384), so `docs/compatibility.md` is
 // their only surface until then.
@@ -262,9 +262,9 @@ describe("install commands", () => {
     const version = /^version=(\S+)$/m.exec(properties)?.[1];
 
     expect(version).toBeDefined();
-    expect(manifest.install.gradle).toBe(`implementation("dev.stablemates:workhorse:${version}")`);
+    expect(manifest.install.gradle).toBe(`implementation("run.workhorse:workhorse:${version}")`);
     expect(manifest.install.maven).toBe(
-      `<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>${version}</version></dependency>`,
+      `<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>${version}</version></dependency>`,
     );
   });
 

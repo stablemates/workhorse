@@ -90,7 +90,7 @@ extensions.configure<PublishingExtension> {
   }
 }
 
-tasks.jar { manifest { attributes("Automatic-Module-Name" to "dev.stablemates.workhorse.spring") } }
+tasks.jar { manifest { attributes("Automatic-Module-Name" to "run.workhorse.spring") } }
 
 // `WithoutOpenTelemetryTest`, tagged `without-opentelemetry`, runs on a class path with no
 // OpenTelemetry jar, so it proves that the starter starts its context without the optional API. The
@@ -102,7 +102,7 @@ val withoutOpenTelemetry =
     group = "verification"
     testClassesDirs = testSources.output.classesDirs
     classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
-    filter { includeTestsMatching("dev.stablemates.workhorse.spring.WithoutOpenTelemetryTest") }
+    filter { includeTestsMatching("run.workhorse.spring.WithoutOpenTelemetryTest") }
     useJUnitPlatform { includeTags("without-opentelemetry") }
     systemProperty("workhorse.springBoot", springBootLine)
   }

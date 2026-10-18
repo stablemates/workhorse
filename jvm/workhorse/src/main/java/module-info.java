@@ -1,12 +1,12 @@
 /**
  * Workhorse for Java: a durable task queue whose state lives in PostgreSQL.
  *
- * <p>The module exports the public packages only. {@code dev.stablemates.workhorse.internal} stays
- * private to the SDK.
+ * <p>The module exports the public packages only. {@code run.workhorse.internal} stays private to
+ * the SDK.
  */
-module dev.stablemates.workhorse {
-  exports dev.stablemates.workhorse;
-  exports dev.stablemates.workhorse.dashboard;
+module run.workhorse {
+  exports run.workhorse;
+  exports run.workhorse.dashboard;
 
   requires transitive java.sql;
   requires transitive org.jspecify;

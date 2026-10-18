@@ -13,7 +13,7 @@ import { repositoryRoot } from "./packages.js";
 
 const state = readJvmEvidenceState(repositoryRoot);
 const test = {
-  file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+  file: "run/workhorse/QueueDatabaseTest.java",
   test: "storesEveryTaskOption",
 };
 
@@ -41,7 +41,7 @@ describe("JVM parity evidence", () => {
     expect(state.tests.get(test.file)?.has(test.test)).toBe(true);
     expect(
       state.tests
-        .get("dev/stablemates/workhorse/conformance/ProtocolConformanceTest.java")
+        .get("run/workhorse/conformance/ProtocolConformanceTest.java")
         ?.has("failsTheRunForAnUnlistedFailingFixture"),
     ).toBe(true);
   });

@@ -20,7 +20,7 @@ dependencyResolutionManagement {
     if (workhorseRepository != null) {
       exclusiveContent {
         forRepository { maven { url = uri(workhorseRepository) } }
-        filter { includeGroup("dev.stablemates") }
+        filter { includeGroup("run.workhorse") }
       }
     }
     mavenCentral()

@@ -24,8 +24,7 @@ const cases: readonly Case[] = [
   {
     contract: javaContract,
     member: (line) =>
-      line.startsWith("dev.stablemates.workhorse.Queue: public ") &&
-      line.includes("(java.lang.String"),
+      line.startsWith("run.workhorse.Queue: public ") && line.includes("(java.lang.String"),
     narrow: (line) => line.replace("(java.lang.String", "(java.lang.CharSequence"),
   },
   {

@@ -1415,3 +1415,29 @@ wrappers keep `runInterruptible`.
 
 The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
 SM-1447.
+
+## Amendment: the JVM group and packages move to run.workhorse (2026-10-18)
+
+The Coordinates and packages section chose the group `dev.stablemates` and named a fallback. This
+amendment applies the fallback. It supersedes each `dev.stablemates` name in this record.
+
+| Artifact                        | Package                |
+| ------------------------------- | ---------------------- |
+| `workhorse`                     | `run.workhorse`        |
+| `workhorse-kotlin`              | `run.workhorse.kotlin` |
+| `workhorse-spring-boot-starter` | `run.workhorse.spring` |
+
+The group is `run.workhorse`, and the Central Portal namespace needs the domain `workhorse.run`.
+The core is the named module `run.workhorse`, and internal code lives under
+`run.workhorse.internal`. The artifact names, the type names, and every signature do not change.
+
+The maintainer decided on 2026-10-18 not to register `stablemates.dev`. Workhorse already serves
+its site from `workhorse.run`, so the project keeps one domain.
+
+The Coordinates and packages section says that the fallback must apply before SM-1395 lands the
+first snapshot. SM-1395 landed first, but no JVM artifact is published. So the rename breaks no
+user. Only `api/java.txt` and `api/kotlin.txt` change, and each line changes only in its package
+prefix. The Java snapshot sorts its lines, so some lines also move.
+
+SM-1384 verifies the namespace `run.workhorse` on the domain `workhorse.run` before the first
+publish. SM-1455 makes the rename.
