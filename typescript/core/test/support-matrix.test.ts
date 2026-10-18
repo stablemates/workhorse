@@ -44,11 +44,18 @@ interface SupportManifest {
       readonly tested: string[];
     };
     readonly go: { readonly minimum: string };
+    readonly java: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: number;
+      readonly tested: number[];
+    };
+    readonly kotlin: { readonly minimum: string };
     readonly node: {
       readonly endOfLife: EndOfLifeDates;
       readonly minimum: number;
       readonly tested: number[];
     };
+    readonly pgjdbc: { readonly minimum: string };
     readonly postgres: {
       readonly endOfLife: EndOfLifeDates;
       readonly minimum: number;
@@ -64,9 +71,16 @@ interface SupportManifest {
       readonly minimum: string;
       readonly tested: string[];
     };
+    readonly "spring-boot": {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: string;
+      readonly tested: string[];
+    };
   };
   readonly toolchains: {
     readonly go: string;
+    readonly gradle: string;
+    readonly java: string;
     readonly node: string;
     readonly pnpm: string;
     readonly ruby: string;
@@ -83,16 +97,36 @@ async function readSupportManifest(): Promise<SupportManifest> {
 const RUNTIME_NAMES = {
   activejob: "Active Job",
   go: "Go",
+  java: "Java",
+  kotlin: "Kotlin",
   node: "Node.js",
+  pgjdbc: "PgJDBC",
   postgres: "PostgreSQL",
   python: "Python",
   ruby: "Ruby",
+  "spring-boot": "Spring Boot",
 } satisfies Record<keyof SupportManifest["support"], string>;
 
 // Go is deliberately absent: its policy is relative to whichever two releases are current, so the
 // Go project publishes no date to transcribe, and recording one would make this repository the
-// authority on a schedule it does not own. See "Raising a floor" in docs/compatibility.md.
-const DATED_RUNTIMES = ["activejob", "node", "postgres", "python", "ruby"] as const;
+// authority on a schedule it does not own. Kotlin and PgJDBC are absent for the same reason: the
+// Kotlin compiler ends a language version when it drops it, and PgJDBC moves under the dependency
+// range rule. See "Raising a floor" in docs/compatibility.md.
+const DATED_RUNTIMES = [
+  "activejob",
+  "java",
+  "node",
+  "postgres",
+  "python",
+  "ruby",
+  "spring-boot",
+] as const;
+
+/** The upstream schedules that publish only a month, keyed as `RUNTIME_NAMES` spells them. */
+const MONTH_PRECISION_RUNTIMES: ReadonlySet<string> = new Set([
+  RUNTIME_NAMES.java,
+  RUNTIME_NAMES.python,
+]);
 
 interface DatedVersion {
   /** The runtime as the documentation names it, for example `Node.js`. */
@@ -108,8 +142,9 @@ interface DatedVersion {
 /**
  * The instant a recorded end-of-life date has passed.
  *
- * Node.js, PostgreSQL, Ruby, and Rails publish a day. The Python developer guide publishes only a month for a
- * version that has not retired yet, so a month-precision entry stands for the whole month and this
+ * Node.js, PostgreSQL, Ruby, Rails, and Spring Boot publish a day. The Python developer guide publishes
+ * only a month for a version that has not retired yet, and the Adoptium support roadmap publishes only
+ * a month for a Temurin release, so a month-precision entry stands for the whole month and this
  * returns the start of the following one. Either way the answer is the moment after the last
  * instant upstream could still mean, so the check never fires early.
  */
@@ -150,6 +185,11 @@ function endOfLifeCell(dates: EndOfLifeDates): string {
   return Object.entries(dates)
     .map(([version, date]) => `${version}: ${date ?? "not announced"}`)
     .join(", ");
+}
+
+/** Markdown wraps prose at will, so a sentence check compares runs of whitespace as one space. */
+function collapseWhitespace(source: string): string {
+  return source.replace(/\s+/g, " ");
 }
 
 function markdownTable(source: string, heading: string): Record<string, Record<string, string>> {
@@ -221,6 +261,9 @@ const LANGUAGE_GATES = {
   Ruby: ["ruby:lint", "ruby:test", "ruby:vuln", "ruby-api:check"],
 } as const;
 
+/** The `major.minor` line of a full version, for example `4.0` for `4.0.8`. */
+const minor = (version: string | undefined) => /^(\d+\.\d+)\./.exec(version ?? "")?.[1];
+
 /** The Active Job minor a Bundler lockfile resolved. */
 const lockedActiveJob = (source: string) => /^ {4}activejob \((\d+\.\d+)\./m.exec(source)?.[1];
 
@@ -254,12 +297,8 @@ describe("supported version constants", () => {
       // CI installs the advisory scanner itself, so `pnpm rust:vuln` runs the same release there.
       "cargo-deny": /tool: cargo-deny@(\S+)/.exec(workflow)?.[1],
       go: manifest.toolchains.go,
-      // The static job installs the JDK and Gradle that lint and format the JVM sources, so CI runs
-      // the same releases. SM-1397 moves both pins to `support.json`.
-      gradle: /gradle-version: (\S+) # Pinned to the gradle version in mise\.toml\./.exec(
-        workflow,
-      )?.[1],
-      java: `temurin-${/java-version: (\S+) # Pinned to the java version in mise\.toml\./.exec(workflow)?.[1]}`,
+      gradle: manifest.toolchains.gradle,
+      java: manifest.toolchains.java,
       // mise bootstraps the hook runner before pnpm install, so it pins the same release.
       lefthook: devDependencies.lefthook!.replace(/^\^/, ""),
       node: manifest.toolchains.node,
@@ -269,6 +308,21 @@ describe("supported version constants", () => {
       rust: manifest.toolchains.rust,
       uv: manifest.toolchains.uv,
     });
+    // The static job installs the JDK and Gradle that lint and format the JVM sources, and every JVM
+    // job installs the same Gradle, so CI runs the releases that mise.toml pins.
+    const gradleVersions = [
+      ...workflow.matchAll(/gradle-version: (\S+) # Pinned to the gradle version in mise\.toml\./g),
+    ].map((match) => match[1]);
+    expect(gradleVersions.length).toBeGreaterThan(0);
+    expect(new Set(gradleVersions)).toEqual(new Set([manifest.toolchains.gradle]));
+    expect(
+      `temurin-${/java-version: (\S+) # Pinned to the java version in mise\.toml\./.exec(workflow)?.[1]}`,
+    ).toBe(manifest.toolchains.java);
+    // The JDK pin may run ahead of the Java floor, because the build compiles with `--release` set
+    // to the floor. It must still be a release that CI tests.
+    expect(manifest.support.java.tested).toContain(
+      Number(/^temurin-(\d+)\./.exec(manifest.toolchains.java)?.[1]),
+    );
     // The Go pin may run ahead of the floor when only a newer release carries a standard library
     // fix (SM-1206). The `go` CI lane still runs the floor, because setup-go sets GOTOOLCHAIN=local.
     const [goMajor, goMinor] = manifest.toolchains.go.split(".").map(Number);
@@ -365,6 +419,51 @@ describe("supported version constants", () => {
     );
   });
 
+  it("matches the JVM build and the Spring Boot lines CI runs", async () => {
+    const [manifest, catalogueSource, rootBuild, kotlinBuild, starterBuild, workflow] =
+      await Promise.all([
+        readSupportManifest(),
+        read("jvm/gradle/libs.versions.toml"),
+        read("jvm/build.gradle.kts"),
+        read("jvm/workhorse-kotlin/build.gradle.kts"),
+        read("jvm/workhorse-spring-boot-starter/build.gradle.kts"),
+        read(".github/workflows/ci.yml"),
+      ]);
+    const catalogue = parseToml(catalogueSource) as { versions: Record<string, string> };
+    const { java, kotlin, pgjdbc } = manifest.support;
+    const springBoot = manifest.support["spring-boot"];
+
+    // Every JVM module compiles with `--release` set to the floor, so no class needs a newer JDK.
+    expect(java.tested[0]).toBe(java.minimum);
+    expect(rootBuild).toContain(`val javaFloor = ${java.minimum}\n`);
+    expect(kotlinBuild).toContain(`jvmTarget = JvmTarget.JVM_${java.minimum}\n`);
+    // A Kotlin caller on the floor reads the module and resolves no newer standard library.
+    const kotlinLine = kotlin.minimum.replace(".", "_");
+    expect(kotlinBuild).toContain(`val kotlinFloor = KotlinVersion.KOTLIN_${kotlinLine}\n`);
+    expect(kotlinBuild).toContain("languageVersion = kotlinFloor\n");
+    expect(kotlinBuild).toContain("apiVersion = kotlinFloor\n");
+    expect(minor(catalogue.versions["kotlin-core-libraries"])).toBe(kotlin.minimum);
+    expect(catalogue.versions.pgjdbc).toBe(pgjdbc.minimum);
+    // The main sources compile against the Spring Boot floor. The `jvm` job tests the floor, and
+    // the `spring-boot` job tests the newest line with the floor-compiled jar.
+    expect(springBoot.tested[0]).toBe(springBoot.minimum);
+    // The floor line selects the `spring-boot` catalogue version, and each newer line selects its
+    // own, such as `spring-boot-4-1`. The floor is also the line a build uses by default.
+    expect(starterBuild).toContain(
+      `providers.gradleProperty("workhorse.springBoot").getOrElse("${springBoot.minimum}")`,
+    );
+    for (const [index, line] of springBoot.tested.entries()) {
+      const key = index === 0 ? "spring-boot" : `spring-boot-${line.replace(".", "-")}`;
+      expect(minor(catalogue.versions[key])).toBe(line);
+      expect(starterBuild).toContain(`"${line}" -> "${key}"\n`);
+    }
+    const newestSpringBoot = springBoot.tested.at(-1);
+    expect(workflow).toContain(`name: Spring Boot ${newestSpringBoot} starter`);
+    expect(workflow).toContain(
+      `:workhorse-spring-boot-starter:test -Pworkhorse.springBoot=${newestSpringBoot}\n`,
+    );
+  });
+
   it("keeps each list sorted, non-empty, and anchored at its minimum", () => {
     expect(SUPPORTED_NODE_MAJORS.length).toBeGreaterThan(0);
     expect(SUPPORTED_POSTGRES_MAJORS.length).toBeGreaterThan(0);
@@ -400,7 +499,9 @@ describe("upstream end of life", () => {
       // An unexpected key would slip past the manifest-match test's toMatchObject above.
       expect(Object.keys(entry).toSorted()).toEqual(["endOfLife", "minimum", "tested"]);
     }
-    expect(Object.keys(manifest.support.go)).toEqual(["minimum"]);
+    for (const runtime of ["go", "kotlin", "pgjdbc"] as const) {
+      expect(Object.keys(manifest.support[runtime])).toEqual(["minimum"]);
+    }
   });
 
   it("dates every floor, and leaves a date unannounced only while upstream has not set one", async () => {
@@ -413,7 +514,14 @@ describe("upstream end of life", () => {
       const entry = manifest.support[runtime];
       expect(entry.endOfLife[String(entry.minimum)]).toEqual(expect.any(String));
     }
-    for (const runtime of ["activejob", "node", "postgres", "python"] as const) {
+    for (const runtime of [
+      "activejob",
+      "java",
+      "node",
+      "postgres",
+      "python",
+      "spring-boot",
+    ] as const) {
       expect(Object.values(manifest.support[runtime].endOfLife)).not.toContain(null);
     }
   });
@@ -421,12 +529,15 @@ describe("upstream end of life", () => {
   it("transcribes each date at the precision its upstream schedule publishes", async () => {
     const manifest = await readSupportManifest();
 
-    // nodejs/Release, the PostgreSQL versioning policy, Ruby's maintenance branches page, and the
-    // Rails maintenance policy all name a day. The Python developer guide names only a month until
-    // a version actually retires, and rounding that to a day would invent a date the schedule does
-    // not state.
+    // nodejs/Release, the PostgreSQL versioning policy, Ruby's maintenance branches page, the
+    // Rails maintenance policy, and the Spring Boot support page all name a day. The Python
+    // developer guide names only a month until a version actually retires, and the Adoptium support
+    // roadmap names only a month for each Temurin release. Rounding either to a day would invent a
+    // date the schedule does not state.
     for (const entry of datedVersions(manifest)) {
-      const precision = entry.runtime === "Python" ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/;
+      const precision = MONTH_PRECISION_RUNTIMES.has(entry.runtime)
+        ? /^\d{4}-\d{2}$/
+        : /^\d{4}-\d{2}-\d{2}$/;
       expect(entry.date).toMatch(precision);
     }
   });
@@ -501,6 +612,10 @@ describe("continuous integration", () => {
     expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
     expect(pullRequest.rust.include).toEqual([{ postgres: 18 }]);
     expect(pullRequest.ruby.include).toEqual([{ ruby: "4.0", postgres: 18 }]);
+    expect(pullRequest.jvm.include).toEqual([
+      { java: 21, postgres: 18 },
+      { java: 27, postgres: 18 },
+    ]);
     expect(pullRequest.packed.include).toEqual([{ node: 24 }]);
     expect(push).toEqual(pullRequest);
 
@@ -516,6 +631,9 @@ describe("continuous integration", () => {
     );
     expect(full.ruby.include).toHaveLength(
       manifest.support.ruby.tested.length * manifest.support.postgres.tested.length,
+    );
+    expect(full.jvm.include).toHaveLength(
+      manifest.support.java.tested.length * manifest.support.postgres.tested.length,
     );
     expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
@@ -1139,6 +1257,26 @@ describe("documentation", () => {
         Minimum: manifest.support.activejob.minimum,
         "End of life": endOfLifeCell(manifest.support.activejob.endOfLife),
       },
+      Java: {
+        Supported: manifest.support.java.tested.join(", "),
+        Minimum: String(manifest.support.java.minimum),
+        "End of life": endOfLifeCell(manifest.support.java.endOfLife),
+      },
+      Kotlin: {
+        Supported: `${manifest.support.kotlin.minimum} and newer`,
+        Minimum: manifest.support.kotlin.minimum,
+        "End of life": "No date; the Kotlin compiler drops a language version",
+      },
+      "Spring Boot": {
+        Supported: manifest.support["spring-boot"].tested.join(", "),
+        Minimum: manifest.support["spring-boot"].minimum,
+        "End of life": endOfLifeCell(manifest.support["spring-boot"].endOfLife),
+      },
+      PgJDBC: {
+        Supported: `${manifest.support.pgjdbc.minimum} and newer`,
+        Minimum: manifest.support.pgjdbc.minimum,
+        "End of life": "No date; the dependency range rule applies",
+      },
     } satisfies Record<string, { Supported: string; Minimum: string; "End of life": string }>;
     for (const [runtime, cells] of Object.entries(expectedSupport)) {
       expect(supportTable[runtime]).toMatchObject(cells);
@@ -1147,6 +1285,17 @@ describe("documentation", () => {
     expect(supportTable.Go).toMatchObject({
       Notes: `pgx ${pgxVersion} is the minimum and the tested version.`,
     });
+    expect(supportTable.Java?.Notes).toContain(`\`--release ${manifest.support.java.minimum}\``);
+    expect(supportTable.Kotlin?.Notes).toContain(
+      `language and API version ${manifest.support.kotlin.minimum}`,
+    );
+    const servletFloor = /^jakarta-servlet = "(\d+\.\d+)\.\d+"$/m.exec(
+      await read("jvm/gradle/libs.versions.toml"),
+    )?.[1];
+    expect(servletFloor).toBeDefined();
+    expect(collapseWhitespace(compatibility)).toContain(
+      `Its floor is Jakarta Servlet ${servletFloor}.`,
+    );
     for (const sdkReadme of [coreReadme, pythonReadme, goReadme]) {
       const sections = [
         "## Install",

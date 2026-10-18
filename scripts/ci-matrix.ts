@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 
 interface Support {
   readonly go: { readonly minimum: string };
+  readonly java: { readonly tested: readonly number[] };
   readonly node: { readonly tested: readonly number[] };
   readonly postgres: { readonly tested: readonly number[] };
   readonly python: { readonly tested: readonly string[] };
@@ -14,14 +15,6 @@ interface Matrix<T> {
 }
 
 export const WEEKLY_COMPATIBILITY_SCHEDULE = "17 4 * * 0";
-
-/**
- * The Java releases CI tests, ascending from the floor (ADR 0103, "Floors"). A change runs the
- * floor and the newest release, and the weekly run adds every release between them.
- *
- * SM-1397 moves this list to `support.json`, beside the other tested versions.
- */
-export const TESTED_JAVA_RELEASES = [21, 25, 27] as const;
 
 export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
@@ -48,11 +41,15 @@ function crossProduct<AKey extends string, A, BKey extends string, B>(
 
 export function buildCiMatrices(support: Support, eventName: string, schedule = ""): CiMatrices {
   const goVersion = support.go.minimum.replace(/\.0$/, "");
+  const oldestJava = support.java.tested[0];
+  const newestJava = support.java.tested.at(-1);
   const newestNode = support.node.tested.at(-1);
   const newestPostgres = support.postgres.tested.at(-1);
   const newestPython = support.python.tested.at(-1);
   const newestRuby = support.ruby.tested.at(-1);
   if (
+    oldestJava === undefined ||
+    newestJava === undefined ||
     newestNode === undefined ||
     newestPostgres === undefined ||
     newestPython === undefined ||
@@ -73,11 +70,9 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       },
       rust: { include: [{ postgres: newestPostgres }] },
       ruby: { include: [{ ruby: newestRuby, postgres: newestPostgres }] },
+      // A change runs the Java floor and the newest release (ADR 0103, "Floors").
       jvm: {
-        include: [TESTED_JAVA_RELEASES[0], TESTED_JAVA_RELEASES.at(-1)!].map((java) => ({
-          java,
-          postgres: newestPostgres,
-        })),
+        include: [oldestJava, newestJava].map((java) => ({ java, postgres: newestPostgres })),
       },
       packed: { include: [{ node: newestNode }] },
     };
@@ -101,7 +96,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       include: crossProduct("ruby", support.ruby.tested, "postgres", support.postgres.tested),
     },
     jvm: {
-      include: crossProduct("java", TESTED_JAVA_RELEASES, "postgres", support.postgres.tested),
+      include: crossProduct("java", support.java.tested, "postgres", support.postgres.tested),
     },
     packed: { include: [{ node: newestNode }] },
   };

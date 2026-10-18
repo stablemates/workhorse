@@ -21,6 +21,18 @@
     "go": {
       "minimum": "1.25.0"
     },
+    "java": {
+      "endOfLife": {
+        "21": "2029-12",
+        "25": "2031-09",
+        "27": "2027-03"
+      },
+      "minimum": 21,
+      "tested": [21, 25, 27]
+    },
+    "kotlin": {
+      "minimum": "2.2"
+    },
     "node": {
       "endOfLife": {
         "22": "2027-04-30",
@@ -28,6 +40,9 @@
       },
       "minimum": 22,
       "tested": [22, 24]
+    },
+    "pgjdbc": {
+      "minimum": "42.7.8"
     },
     "postgres": {
       "endOfLife": {
@@ -56,10 +71,20 @@
       },
       "minimum": "3.3",
       "tested": ["3.3", "3.4", "4.0"]
+    },
+    "spring-boot": {
+      "endOfLife": {
+        "4.0": "2026-12-31",
+        "4.1": "2027-07-31"
+      },
+      "minimum": "4.0",
+      "tested": ["4.0", "4.1"]
     }
   },
   "toolchains": {
     "go": "1.26.9",
+    "gradle": "9.8.1",
+    "java": "temurin-25.0.4",
     "node": "24",
     "pnpm": "10.18.3",
     "uv": "0.12.21",

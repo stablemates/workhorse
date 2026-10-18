@@ -25,15 +25,19 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                           |
-| ---------- | -------------- | ------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.          |
-| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.         |
-| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.              |
-| Rust       | 1.89 and newer | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.        |
-| Ruby       | 3.3, 3.4, 4.0  | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.     |
-| Active Job | 8.0, 8.1       | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support. |
-| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.         |
+| Runtime     | Supported        | Minimum | End of life                                                    | Notes                                                                                           |
+| ----------- | ---------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Node.js     | 22, 24           | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
+| Python      | 3.12–3.14        | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
+| Go          | 1.25 and newer   | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
+| Rust        | 1.89 and newer   | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
+| Ruby        | 3.3, 3.4, 4.0    | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
+| Active Job  | 8.0, 8.1         | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
+| Java        | 21, 25, 27       | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
+| Kotlin      | 2.2 and newer    | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
+| Spring Boot | 4.0, 4.1         | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
+| PgJDBC      | 42.7.8 and newer | 42.7.8  | No date; the dependency range rule applies                     | The JDBC driver of every JVM module.                                                            |
+| PostgreSQL  | 15, 16, 17, 18   | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.                                         |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
@@ -71,31 +75,66 @@ runs the suite without optional features and packages the crate into a clean con
 release gate does. [ADR 0083](decisions/0083-run-each-language-suite-once-per-change.md) records
 this split.
 
+The JVM SDK has three modules: the `workhorse` core, `workhorse-kotlin`, and
+`workhorse-spring-boot-starter`. They are not published yet, so this page gives no install command
+for Gradle or Maven. Every module compiles with `--release` set to the Java floor. A local build
+uses the JDK that `mise.toml` pins. Each JVM CI job uses the Java release of its matrix entry. Pull
+requests and pushes run the JVM suite on the Java floor and on the newest tested Java release,
+against the newest PostgreSQL. The weekly schedule runs every tested Java release against every
+supported PostgreSQL major.
+[ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+records these floors.
+
+Java 21 and 25 are long-term releases. The Adoptium support roadmap publishes a month, not a day,
+for each Temurin release. For Java 21 and 25 it states "at least" that month, so the recorded date
+is the earliest end that Adoptium promises.
+
+The Kotlin module compiles with language version and API version 2.2, and it uses the 2.2
+standard library. So a caller on the Kotlin 2.2 compiler can read it, and resolves no newer
+standard library. The build itself uses a newer Kotlin compiler.
+
+The Spring Boot starter compiles against the Spring Boot floor. The `jvm` CI job tests it on the
+floor. The `spring-boot` CI job tests the same jar on the newest tested Spring Boot line. A weekly
+CI job tests it on the next Spring Boot snapshot. That CI job does not block a release.
+
+The core declares the Jakarta Servlet API as an optional dependency for the dashboard backend. Its
+floor is Jakarta Servlet 6.0. CI tests the dashboard backend in the Tomcat release that the newest
+tested Spring Boot line manages.
+
 ### Raising a floor
 
-Raising the Node.js, Python, Go, Ruby, Active Job, or PostgreSQL minimum is a **minor** release. It is never a major
-and never a patch, and it is the only way a version leaves the table above.
-[ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md) records
-the decision. The support matrix is deliberately not one of the governed surfaces in
-[What SemVer governs](#what-semver-governs); this rule governs it instead.
+Raising the Node.js, Python, Go, Ruby, Active Job, Java, Kotlin, Spring Boot, or PostgreSQL minimum
+is a **minor** release. It is never a major and never a patch. With one exception, it is the only
+way a version leaves the table above. The exception is a Java release that is not long-term: Temurin
+ends its support before the Java floor. ADR 0103 tests the Java floor and the newest Java release,
+so the newest release then replaces it in the table. [ADR
+0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md) records the
+decision. The support matrix is deliberately not one of the governed surfaces in [What SemVer
+governs](#what-semver-governs); this rule governs it instead.
 
 A floor rises only when the version being dropped has reached its **upstream end of life**. The
 upstream project's own schedule is the authority and this repository keeps no competing one:
 
-| Runtime    | End of life is                                      | Published at                                                                  |
-| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Node.js    | Past the release's published end-of-life date       | [nodejs/Release](https://github.com/nodejs/Release)                           |
-| Python     | Past the version's published end-of-life date       | [Python developer guide](https://devguide.python.org/versions/)               |
-| Go         | Older than the two releases the Go project supports | [Go release policy](https://go.dev/doc/devel/release#policy)                  |
-| Ruby       | Past the branch's published end-of-life date        | [Ruby maintenance branches](https://www.ruby-lang.org/en/downloads/branches/) |
-| Active Job | Past the Rails release's security support           | [Rails maintenance policy](https://rubyonrails.org/maintenance)               |
-| PostgreSQL | Past the major's community end-of-life date         | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/)       |
+| Runtime     | End of life is                                             | Published at                                                                                |
+| ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Node.js     | Past the release's published end-of-life date              | [nodejs/Release](https://github.com/nodejs/Release)                                         |
+| Python      | Past the version's published end-of-life date              | [Python developer guide](https://devguide.python.org/versions/)                             |
+| Go          | Older than the two releases the Go project supports        | [Go release policy](https://go.dev/doc/devel/release#policy)                                |
+| Ruby        | Past the branch's published end-of-life date               | [Ruby maintenance branches](https://www.ruby-lang.org/en/downloads/branches/)               |
+| Active Job  | Past the Rails release's security support                  | [Rails maintenance policy](https://rubyonrails.org/maintenance)                             |
+| Java        | Past the Temurin release's end of availability             | [Adoptium support roadmap](https://adoptium.net/support/)                                   |
+| Kotlin      | The Kotlin compiler no longer accepts the language version | [Kotlin evolution principles](https://kotlinlang.org/docs/kotlin-evolution-principles.html) |
+| Spring Boot | Past the line's end of open-source support                 | [Spring Boot support](https://spring.io/projects/spring-boot#support)                       |
+| PostgreSQL  | Past the major's community end-of-life date                | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/)                     |
 
-`support.json` records that date for every listed Node.js, Python, Ruby, Active Job, and PostgreSQL
-version, and the `End of life` column above publishes it. Go is the exception: its policy is
-relative to whatever the current release is, so there is no published date to transcribe and none is
-recorded. Node.js, PostgreSQL, Ruby, and Rails publish a day. The Python developer guide publishes
-only a month until a version retires, and a month-precision entry stands for that whole month.
+`support.json` records that date for every listed Node.js, Python, Ruby, Active Job, Java, Spring
+Boot, and PostgreSQL version, and the `End of life` column above publishes it. Go is the exception:
+its policy is relative to whatever the current release is, so there is no published date to
+transcribe and none is recorded. Kotlin has no date for the same reason: a newer compiler ends a
+language version when it drops it. Node.js, PostgreSQL, Ruby, Rails, and Spring Boot publish a day.
+The Python developer guide publishes only a month until a version retires, and the Adoptium support
+roadmap publishes only a month for each Temurin release. A month-precision entry stands for that
+whole month.
 
 Ruby names a branch's end only once the branch enters security maintenance. Until then its
 `support.json` date is `null`, and the table says "not announced" rather than guessing. The floor
@@ -118,8 +157,8 @@ releases, and every package manager in these ecosystems reports that as a resolu
 
 ### Moving a dependency range
 
-`pg`, Psycopg, asyncpg, and pgx move under the same rule, in either direction, and every move is a
-minor:
+`pg`, Psycopg, asyncpg, pgx, PgJDBC, and the Jakarta Servlet API move under the same rule, in
+either direction, and every move is a minor:
 
 - **Raising a floor inside the declared major range** — a minor.
 - **Widening the range to admit a new upstream major** — a minor, once CI exercises it.
