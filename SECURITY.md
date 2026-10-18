@@ -48,9 +48,10 @@ is a maintainer review. The dashboard server is the one component that serves HT
 [`docs/dashboard-security-review.md`](docs/dashboard-security-review.md) is the checklist its review
 walks. That file also states when a pull request has to re-walk a row.
 
-The npm, PyPI, Go, Rust, and Ruby dependency trees are scanned on each run of CI: `pnpm npm:vuln`
-for npm, `pnpm python:vuln` for PyPI, `pnpm go:vuln` for the Go module, `pnpm rust:vuln` for the
-Rust crate, and `pnpm ruby:vuln` for the Ruby gem. An advisory the scan reports fails the build
+The npm, PyPI, Go, Rust, Ruby, and Maven dependency trees are scanned on each run of CI:
+`pnpm npm:vuln` for npm, `pnpm python:vuln` for PyPI, `pnpm go:vuln` for the Go module,
+`pnpm rust:vuln` for the Rust crate, `pnpm ruby:vuln` for the Ruby gem, and `pnpm jvm:vuln` for the
+runtime class paths of the three JVM artifacts. An advisory the scan reports fails the build
 until it is fixed or accepted in writing with a review date. `pnpm tooling:vuln` scans the npm
 development tree and the Python development and build tooling in a separate lane. That lane runs in
 CI and again before each release is built for publication, and its acceptances cannot answer an

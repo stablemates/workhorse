@@ -141,6 +141,9 @@ jobs:
       - run: pnpm go:vuln
       - run: pnpm rust:vuln
       - run: pnpm ruby:vuln
+      # `jvm:vuln` publishes the JVM artifacts to a scratch repository, resolves their runtime class
+      # paths as a caller does, and asks the OSV database about each module.
+      - run: pnpm jvm:vuln
       # The build and publication tooling, in its own lane under ADR 0058.
       - run: pnpm tooling:vuln
       - run: pnpm typecheck
