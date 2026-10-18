@@ -1198,8 +1198,7 @@
       "slug": "oban",
       "name": "Oban",
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1374",
+      "page": "published",
       "version": "2.24.2",
       "checked": "2026-10-17",
       "repository": "https://github.com/oban-bg/oban",
@@ -1212,6 +1211,34 @@
           "version": "2.24.2",
           "evidence": "\"Transactional Control — Enqueue a job along with other database changes, ensuring that everything is committed or rolled back atomically.\" lib/oban.ex#L724-L737 shows Oban.insert in an Ecto.Multi."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "scheduled_in gives a delay in seconds, and scheduled_at gives a time.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/scheduling_jobs.md#L6-L27",
+          "version": "2.24.2",
+          "evidence": "\"You can **schedule** jobs to run after a specific dalay (in seconds): ... new(scheduled_in: _seconds = 5)\" and \"you can schedule jobs at a *specific timestamp*: ... new(scheduled_at: ~U[2020-12-25 19:00:00Z])\""
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "The Cron plugin inserts the jobs from the leader node. The minimum resolution is one minute.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/periodic_jobs.md#L41-L51",
+          "version": "2.24.2",
+          "evidence": "\"The Cron plugin automatically inserts jobs according to the schedule you define. ... Jobs are always inserted by the leader node in a cluster, which prevents duplicate jobs regardless of cluster size, restarts, or crashes.\" periodic_jobs.md#L164: \"Cron scheduling has a one-minute resolution at minimum.\""
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "Ten levels, from 0 to 9, inside a queue. 0 is the highest priority.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/job.ex#L246-L247",
+          "version": "2.24.2",
+          "evidence": "\"`:priority` — a numerical indicator from 0 to 9 of how important this job is relative to other jobs in the same queue. The lower the number, the higher priority the job.\" README.md#L111-L112: \"Prioritize jobs within a queue to run ahead of others with ten levels of granularity.\""
+        },
+        "enqueue-deduplication": {
+          "status": "Supported",
+          "note": "Options refuse a duplicate job by worker, queue, args, or meta, in a period and in a set of states.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/unique_jobs.md#L5-L35",
+          "version": "2.24.2",
+          "evidence": "\"The unique jobs feature allows you to specify constraints to prevent *enqueuing* duplicate jobs. ... `:period` ... `:fields` ... `:keys` ... `:states`\""
+        },
         "debounce-throttle": {
           "status": "Supported",
           "note": "A deduplication period refuses a duplicate job for each key. A duplicate of a scheduled job can replace its scheduled_at, which gives debounce.",
@@ -1219,16 +1246,48 @@
           "version": "2.24.2",
           "evidence": "`:period` — The number of seconds until a job is no longer considered duplicate ... `:scheduled` - Only `scheduled` jobs (useful for \"debouncing\"). unique_jobs.md#L135-L165: replace: [scheduled: [:scheduled_at]]"
         },
+        "task-dependencies": {
+          "status": "Not supported",
+          "paid": {
+            "edition": "Oban Pro",
+            "status": "Supported"
+          },
+          "note": "The free library has no dependency option. Workflows with dependencies are in Oban Pro, the paid package.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L130-L142",
+          "version": "2.24.2",
+          "evidence": "README.md#L130-L133: \"An official set of extensions, plugins, and workers ... is available as a licensed package.\" L141-L142, in that list: \"**Workflows** — Compose jobs with arbitrary dependencies for sequential, fan-out, and fan-in execution patterns.\" (Looked at the options of Oban.Job.new in lib/oban/job.ex#L239-L265: no dependency option.)"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "The default is 20 attempts. The default backoff is exponential, with jitter and a minimum of 15 seconds. A worker can change the backoff.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/error_handling.md#L24-L41",
+          "version": "2.24.2",
+          "evidence": "\"When a job fails and the number of execution attempts is below the configured `max_attempts` limit for that job, the job will automatically be retried in the future. ... The retry delay has an *exponential backoff with jitter*. ... By default, jobs are retried up to 20 times.\" lib/oban/worker.ex#L381-L382: \"Defaults to an exponential algorithm with a minimum delay of 15 seconds and a small amount of jitter.\""
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "Lifeline moves a job that is still executing after rescue_after back to available. The default is one hour. A job that still runs can run two times.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/lifeline.ex#L2-L40",
+          "version": "2.24.2",
+          "evidence": "\"The `Lifeline` plugin periodically rescues orphaned jobs, i.e. jobs that are stuck in the `executing` state because the node was shut down before the job could finish. Rescuing is purely based on time ... This plugin may transition jobs that are genuinely `executing` and cause duplicate execution. ... `:rescue_after` ... 1 hour by default\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "Oban.cancel_job stops the process of a running job on any node. The job code does not need to check for cancellation.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban.ex#L1472-L1478",
+          "version": "2.24.2",
+          "evidence": "\"Cancel an `executing`, `available`, `scheduled` or `retryable` job and mark it as `cancelled` to prevent it from running. If the job is currently `executing` it will be killed\" README.md#L97-L98: \"Jobs can be canceled in the middle of execution regardless of which node they are running on.\""
+        },
         "concurrency-limits": {
           "status": "Not supported",
           "paid": {
             "edition": "Oban Pro",
             "status": "Supported"
           },
-          "note": "The free limit applies to each queue on one node. Oban Pro, a paid package, adds a global limit for each queue.",
+          "note": "The free limit applies to each queue on one node. Oban Pro, a paid package, adds a global limit for each queue and a partition of that limit by job fields or keys.",
           "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/learning/defining_queues.md#L89-L95",
           "version": "2.24.2",
-          "evidence": "Queue limits are **local** (per-node), not global (per-cluster). ... If you require a global limit, you must restrict the number of nodes running a particular queue or consider Oban Pro's [Smart Engine][smart]. README.md#L135-L136: \"**Smart Engine** — Enables global concurrency, global rate limiting, queue partitioning, and auto insert batching\""
+          "evidence": "Queue limits are **local** (per-node), not global (per-cluster). ... If you require a global limit, you must restrict the number of nodes running a particular queue or consider Oban Pro's [Smart Engine][smart]. README.md#L135-L136: \"**Smart Engine** — Enables global concurrency, global rate limiting, queue partitioning, and auto insert batching\" Oban Web v2.13.1, https://github.com/oban-bg/oban_web/blob/v2.13.1/lib/oban/web/live/queues/detail_component.ex#L60-L71: global_partition_fields: partition_value(checks, \"global_limit\", \"fields\"), global_partition_keys: partition_value(checks, \"global_limit\", \"keys\")"
         },
         "rate-limits": {
           "status": "Not supported",
@@ -1236,24 +1295,52 @@
             "edition": "Oban Pro",
             "status": "Supported"
           },
-          "note": "The free Basic engine has no rate limit for a queue or a key. Oban Pro, a paid package, adds global rate limits.",
+          "note": "The free Basic engine has no rate limit for a queue or a key. Oban Pro, a paid package, adds a global rate limit for each queue and a partition of that limit by job fields or keys.",
           "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/engine.ex#L15-L19",
           "version": "2.24.2",
-          "evidence": "The Basic engine lacks advanced functionality such as global limits, rate limits, and unique bulk insert. README.md#L135-L136: \"Enables global concurrency, global rate limiting, queue partitioning\""
+          "evidence": "The Basic engine lacks advanced functionality such as global limits, rate limits, and unique bulk insert. README.md#L135-L136: \"Enables global concurrency, global rate limiting, queue partitioning\" Oban Web v2.13.1, https://github.com/oban-bg/oban_web/blob/v2.13.1/lib/oban/web/live/queues/detail_component.ex#L60-L71: rate_partition_fields: partition_value(checks, \"rate_limit\", \"fields\"), rate_partition_keys: partition_value(checks, \"rate_limit\", \"keys\")"
         },
         "checkpoints": {
           "status": "Not supported",
-          "note": "A retry runs the whole job again. Workflows in the paid Oban Pro link separate jobs, not steps of one job.",
-          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L141-L142",
+          "note": "A retry calls perform/1 again with the same job. Workflows in the paid Oban Pro link separate jobs, not steps of one job.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/queues/executor.ex#L143-L145",
           "version": "2.24.2",
-          "evidence": "Workflows — Compose jobs with arbitrary dependencies for sequential, fan-out, and fan-in execution patterns. (Listed under Oban Pro, \"available as a licensed package\".)"
+          "evidence": "def perform(%__MODULE__{job: job, state: :unset, worker: worker} = exec) do case worker.perform(job) do (The executor calls perform/1 with the whole job. Looked at Oban.Job and Oban.Worker in lib/oban/job.ex and lib/oban/worker.ex: no field or callback stores the result of a step.) error_handling.md#L26-L28: a failed job \"will automatically be retried in the future\". README.md#L141-L142, under Oban Pro: \"Workflows — Compose jobs with arbitrary dependencies\""
+        },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "A job returns {:snooze, period} and runs again after the period. The return value has no wait for a signal.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/worker.ex#L262-L275",
+          "version": "2.24.2",
+          "evidence": "\"When returning `{:snooze, period}` in `c:perform/1`, the job is postponed for at least the specified period. ... Snoozing schedules execution for the specified period in the future and rolls back the job's `attempt`.\" (Looked at the return values of perform/1 in worker.ex#L89-L106: no wait for a signal or an event.)"
         },
         "dashboard": {
           "status": "Supported",
-          "note": "Oban Web is a free separate package. It is open source since v2.11.",
+          "note": "Oban Web is a free separate package under the Apache-2.0 license.",
           "source": "https://github.com/oban-bg/oban_web/blob/v2.13.1/README.md#L16-L25",
           "version": "2.24.2",
           "evidence": "oban_web README: Apache 2 license badge; \"Oban Web is a view of Oban's inner workings that you host directly within your application.\" mix.exs#L49: licenses: [\"Apache-2.0\"]"
+        },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "A job without attempts left becomes discarded, and Oban.retry_job runs it again. The Pruner deletes old discarded jobs. Its default age is 60 seconds.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban.ex#L1411-L1413",
+          "version": "2.24.2",
+          "evidence": "\"Sets a job as `available`, adding attempts if already maxed out. ... The job is scheduled for immediate execution.\" error_handling.md#L26-L28: \"If the number of failures reaches `max_attempts`, the job gets **discarded**.\" lib/oban/pruner.ex#L3-L19: \"Periodically delete `completed`, `cancelled`, and `discarded` jobs based on their age. ... the default of 60 seconds\""
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "note": "Oban.pause_queue pauses the queue on all nodes, or on one node.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban.ex#L1069-L1081",
+          "version": "2.24.2",
+          "evidence": "\"Pause a running queue, preventing it from executing any new jobs. All running jobs will remain running until they are finished. ... `:local_only` - whether the queue will be paused only on the local node, default: `false`\""
+        },
+        "opentelemetry": {
+          "status": "Partial",
+          "note": "Traces only. The OpenTelemetry project publishes the opentelemetry_oban package. It makes spans from the Telemetry events of Oban, and it has no metrics.",
+          "source": "https://github.com/open-telemetry/opentelemetry-erlang-contrib/blob/43f880a1f10e809e53cf827bc3336d33fd5fdeb0/instrumentation/opentelemetry_oban/README.md#L1-L34",
+          "version": "2.24.2",
+          "evidence": "\"OpentelemetryOban uses [telemetry](https://hexdocs.pm/telemetry/) handlers to create `OpenTelemetry` spans from Oban events. ... By default a new trace is automatically started when a job is processed. To also record a span when a job is created ... `OpentelemetryOban.insert/2`\" (Commit of the tag opentelemetry-oban-v1.2.0. Looked at lib/: job_handler.ex and plugin_handler.ex make spans only; no meter or metric. Oban itself sends :telemetry events, README.md#L125-L126.)"
         },
         "worker-languages": {
           "value": "Elixir, Python",
@@ -1261,6 +1348,13 @@
           "source": "https://github.com/oban-bg/oban-py/blob/v0.6.7/README.md#L10",
           "version": "2.24.2",
           "evidence": "oban-py v0.6.7: \"Oban is a sophisticated job orchestration framework for Python, backed by PostgreSQL.\" oban README.md#L10: \"Robust job processing in Elixir\""
+        },
+        "enqueue-languages": {
+          "value": "Any, through SQL",
+          "note": "A program inserts a row into the oban_jobs table. The guide shows a Rails example.",
+          "source": "https://github.com/oban-bg/oban/blob/v2.24.2/guides/recipes/migrating-from-other-languages.md#L3-L6",
+          "version": "2.24.2",
+          "evidence": "\"Oban relies on a structured `oban_jobs` table as its job queue, and purposefully uses JSON as a portable data structures for serialization. That makes enqueueing jobs into Oban simple for any language with a PostgreSQL adapter—no Oban client necessary.\""
         },
         "infrastructure": {
           "value": "PostgreSQL, MySQL, or SQLite",
@@ -1275,7 +1369,79 @@
           "version": "2.24.2",
           "evidence": "mix.exs: licenses: [\"Apache-2.0\"]. README.md#L130-L133: \"An official set of extensions, plugins, and workers ... is available as a licensed package.\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "batch-enqueue",
+          "group": "producing",
+          "label": "Enqueue many tasks in one call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Atomic batch enqueue"
+            },
+            "page": "/docs/enqueue",
+            "note": "Up to 1,000 tasks commit or roll back together."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "Oban.insert_all inserts a list of jobs, also in an Ecto.Multi. With the free engine, it does not refuse duplicate jobs.",
+            "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban.ex#L792-L804",
+            "version": "2.24.2",
+            "evidence": "\"Insert multiple jobs into the database for execution. ... If `insert_all` encounters an issue, the function will raise an error based on your database adapter. This behavior is valuable in conjunction with `c:Ecto.Repo.transaction/2` because it allows for rollbacks.\" L816-L821: \"With the basic engine, you must use `insert/3` to insert unique jobs one at a time.\""
+          }
+        },
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Not supported",
+            "paid": {
+              "edition": "Oban Pro",
+              "status": "Supported"
+            },
+            "note": "Batches with callbacks are in Oban Pro, the paid package. The free library has none.",
+            "source": "https://github.com/oban-bg/oban/blob/v2.24.2/README.md#L130-L145",
+            "version": "2.24.2",
+            "evidence": "README.md#L130-L133: \"An official set of extensions, plugins, and workers ... is available as a licensed package.\" L144-L145, in that list: \"**Batches** — Process related jobs while tracking overall progress across all nodes and executing optional callbacks.\""
+          }
+        },
+        {
+          "id": "time-limits",
+          "group": "executing",
+          "label": "Time limit for each attempt",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Per-attempt execution timeouts"
+            },
+            "page": "/docs/deadlines",
+            "note": "An absolute deadline for the whole task is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The timeout/1 callback of a worker sets a limit for each attempt. It has no default limit.",
+            "source": "https://github.com/oban-bg/oban/blob/v2.24.2/lib/oban/worker.ex#L225-L260",
+            "version": "2.24.2",
+            "evidence": "\"By default, individual jobs may execute indefinitely. If this is undesirable you may define a timeout in milliseconds with the `c:timeout/1` callback on your worker module. ... If the job fails to execute before the timeout period then it will error with a dedicated `Oban.TimeoutError` exception. Timeouts are treated like any other failure\""
+          }
+        }
+      ]
     },
     {
       "slug": "goodjob",
