@@ -86,6 +86,16 @@ and structured database errors. A language runtime owns local validation, handle
 concurrency, heartbeats, polling or notifications, cancellation delivery, telemetry, and graceful
 shutdown.
 
+## Supported host load
+
+The runtime fixtures set time limits, so a very slow host can fail a fixture without a defect in
+Workhorse. If the 1-minute load average of the host is at most 2 for each CPU core, Workhorse
+supports the conformance run. On a 32-core host, that limit is a load average of 64. Above the limit,
+Workhorse does not support the run, and a failed fixture in it is not evidence of a defect.
+
+A test run in this repository whose result counts as evidence must start below a 1-minute load
+average of 60. For example, a run that counts how often a test fails must start below that load.
+
 ## Rust integration lane
 
 The Rust integration harness lives in the canonical Cargo workspace rooted at `Cargo.toml`.
