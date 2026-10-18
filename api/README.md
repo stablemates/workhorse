@@ -3,19 +3,23 @@
 Each file here records one governed surface as it stands on this commit. A pull request
 that removes a name, renames one, or narrows a type changes a file here, so the change is visible in
 review and the check names it. [ADR 0054](../docs/decisions/0054-define-what-1-0-0-promises.md)
-[ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), and
-[ADR 0084](../docs/decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md) define the surfaces, and Gate 1 of
+[ADR 0079](../docs/decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
+[ADR 0084](../docs/decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md), and
+[ADR 0103](../docs/decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+define the surfaces, and Gate 1 of
 [ADR 0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md) requires the checks.
 
-| File             | Surface                                                                                         | Check                          | Generator                         |
-| ---------------- | ----------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------- |
-| `typescript.txt` | Every published package's `exports` map and shipped `.d.ts`                                     | `pnpm typescript-api:check`    | `pnpm typescript-api:generate`    |
-| `python.txt`     | Every public `workhorse` module's `__all__`                                                     | `pnpm python-api:check`        | `pnpm python-api:generate`        |
-| `go.txt`         | Exported identifiers of the Go module's non-`internal` packages                                 | `pnpm go-api:check`            | `pnpm go-api:generate`            |
-| `rust.txt`       | Every public item of the `workhorse` crate, per feature                                         | `pnpm rust-api:check`          | `pnpm rust-api:generate`          |
-| `ruby.txt`       | Every public constant under `Stablemates::Workhorse` and the Active Job adapter, less `:nodoc:` | `pnpm ruby-api:check`          | `pnpm ruby-api:generate`          |
-| `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads                              | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
-| `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits                                      | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
+| File             | Surface                                                                                                     | Check                          | Generator                         |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------- |
+| `typescript.txt` | Every published package's `exports` map and shipped `.d.ts`                                                 | `pnpm typescript-api:check`    | `pnpm typescript-api:generate`    |
+| `python.txt`     | Every public `workhorse` module's `__all__`                                                                 | `pnpm python-api:check`        | `pnpm python-api:generate`        |
+| `go.txt`         | Exported identifiers of the Go module's non-`internal` packages                                             | `pnpm go-api:check`            | `pnpm go-api:generate`            |
+| `rust.txt`       | Every public item of the `workhorse` crate, per feature                                                     | `pnpm rust-api:check`          | `pnpm rust-api:generate`          |
+| `ruby.txt`       | Every public constant under `Stablemates::Workhorse` and the Active Job adapter, less `:nodoc:`             | `pnpm ruby-api:check`          | `pnpm ruby-api:generate`          |
+| `java.txt`       | Every public and protected Java declaration of `workhorse` and the starter, and each `workhorse.*` property | `pnpm java-api:check`          | `pnpm java-api:generate`          |
+| `kotlin.txt`     | Every public Kotlin declaration of `workhorse-kotlin`, with its default arguments                           | `pnpm kotlin-api:check`        | `pnpm kotlin-api:generate`        |
+| `cli.txt`        | The `workhorse` commands, flags, exit codes, and `--json` payloads                                          | `pnpm cli-surface:check`       | `pnpm cli-surface:generate`       |
+| `telemetry.txt`  | Every instrument, span, and attribute name Workhorse emits                                                  | `pnpm telemetry-surface:check` | `pnpm telemetry-surface:generate` |
 
 These are generated artifacts. Do not edit one by hand: run its generator and commit what it wrote.
 
@@ -69,6 +73,55 @@ can pass has a line.
 Each module gets one section with its superclass, included modules, `Data` members, constants, and
 public methods. A method the module inherits is left out, because its superclass or included module
 already names it. The value of `VERSION` is left out too, because it changes on every release.
+
+## How the JVM files read the artifacts
+
+The two JVM files need different readers, because each language hides a different part of its
+surface. `jvm/api-snapshot`, a Gradle subproject that is never published, holds both readers. Its
+`javaApi` and `kotlinApi` tasks write the files, and the `pnpm` scripts compare them.
+
+In both files each member line starts with the name of the class that declares it. So a member that
+moves from one class to another reads as one line gone and one line arrived.
+
+### What `java.txt` reads
+
+`java.txt` reads the built jars of `workhorse` and `workhorse-spring-boot-starter`, one section for
+each. A jar with a module descriptor exports only the packages its descriptor exports, so
+`dev.stablemates.workhorse.internal` is absent. The starter is an automatic module, which exports
+every package. The reader loads each class by reflection and prints every public and protected
+class, constructor, method, and field.
+
+Each type keeps its generic arguments and its JSpecify `@Nullable` and `@NonNull` annotations,
+because a Kotlin caller compiles against that nullness. Each class header starts with its JSpecify
+scope, `@NullMarked` or `@NullUnmarked`, from the class, an enclosing class, or the package. A
+member that sets its own scope shows it too. An unannotated type means "not null" in a marked scope
+and "unknown" in an unmarked one. So a scope change is a nullness change.
+
+Parameter names are absent, because a Java caller cannot see them. A compile-time constant keeps its
+value, because javac copies that value into the caller.
+
+The starter section ends with each `workhorse.*` property and its type. The names and types come
+from the configuration metadata that Spring Boot reads. The defaults come from the built property
+class, because the metadata misses some defaults, such as an empty list. The reader makes a new
+properties object and reads each property through its getters.
+
+### What `kotlin.txt` reads
+
+`kotlin.txt` reads the sources of `workhorse-kotlin` with the Kotlin compiler's parser. A class file
+records that a parameter has a default, but not its value. So only the source can show a changed
+default. The task compiles the module first, so a source that does not compile fails before the
+reader runs.
+
+Each line keeps its `suspend`, `inline`, and `reified` modifiers. A line also states each keyword
+that the compiler adds without a word in the source. These are the constructor of a class that
+declares none, `final` on a class, and `abstract` on an interface member without a body. Whitespace
+and comments in a default value are collapsed, but a string literal keeps every character. Inside a
+literal, `%` shows as `%25` and a line break as `%0A`, so each line stays one line.
+
+An `internal` declaration marked `@PublishedApi` is present, because a public inline function
+compiles a call to it into the caller. A type name that the file imports or that the package
+declares is fully qualified. The reader refuses a star import, because it could not then qualify
+the names.
 
 ## Where the last two read from
 

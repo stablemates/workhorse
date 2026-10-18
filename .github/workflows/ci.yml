@@ -106,8 +106,9 @@ jobs:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
           bundler-cache: true
-      # `pnpm lint` compiles the JVM sources with Error Prone and NullAway, and `pnpm format:check`
-      # runs google-java-format over them, both on the JDK that mise.toml pins.
+      # `pnpm lint` compiles the JVM sources with Error Prone and NullAway, `pnpm format:check`
+      # runs google-java-format over them, and `java-api:check` and `kotlin-api:check` build the JVM
+      # artifacts to read their API, all on the JDK that mise.toml pins.
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -129,6 +130,8 @@ jobs:
       - run: pnpm python-api:check
       - run: pnpm go-api:check
       - run: pnpm ruby-api:check
+      - run: pnpm java-api:check
+      - run: pnpm kotlin-api:check
       - run: pnpm cli-surface:check
       - run: pnpm telemetry-surface:check
       - run: pnpm format:check
