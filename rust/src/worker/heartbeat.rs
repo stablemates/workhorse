@@ -1,7 +1,7 @@
 //! One batched lease renewal per interval for every task a worker owns.
 //!
 //! Each worker reserves one pooled connection for its rounds before handlers can exhaust the pool.
-//! A round that fails or outlives the interval discards that connection, and the next round
+//! A round that fails or outlives its deadline discards that connection, and the next round
 //! acquires a fresh one. Server timeouts end the round's heartbeat statement and its idle waits by
 //! the same deadline; a `COMMIT` that PostgreSQL has already started can finish later. Go shares
 //! one reserved connection per pool; a Rust worker holds its own.
@@ -144,6 +144,18 @@ async fn server_bounded_rows(
     Ok(rows)
 }
 
+/// The deadline of one heartbeat round for `interval`. It is three quarters of the interval, so
+/// that one timed-out round leaves a renewal margin when `2 × interval + bound < lease`. Below an
+/// interval of 200 ms the bound is at least `min(50 ms, interval)`. Up to 50 ms the bound thus
+/// equals the interval, as before SM-1444, and a timed-out round leaves about no margin. It is at
+/// least 1 ms, in whole milliseconds rounded down. Every SDK uses the same formula.
+fn heartbeat_round_bound_for(interval: Duration) -> Duration {
+    const MILLISECOND: Duration = Duration::from_millis(1);
+    let floor = Duration::from_millis(50).min(interval);
+    let three_quarters = Duration::from_millis((interval.as_millis() * 3 / 4) as u64);
+    three_quarters.max(floor).max(MILLISECOND)
+}
+
 impl Inner {
     /// Takes the round connection now; a pool that cannot lend one is asked again by the first round.
     pub(super) async fn reserve_heartbeat_connection(&self) {
@@ -209,10 +221,15 @@ impl Inner {
         self.heartbeats.state().task.take()
     }
 
+    /// Sends one round at a time. A round falls due one interval after the previous round started,
+    /// not after it ended. A round that ends after its next slot starts one overdue round at once,
+    /// and the interval after it counts from that start, so missed slots are never replayed. A
+    /// wake that finds members starts no early round. `Instant` is monotonic.
     async fn run_heartbeats(self: Arc<Self>) {
+        let mut next = Instant::now() + self.heartbeat_interval;
         loop {
             tokio::select! {
-                () = tokio::time::sleep(self.heartbeat_interval) => {}
+                () = tokio::time::sleep_until(next) => {}
                 () = self.heartbeats.wake.notified() => {}
             }
             let members: Vec<(Uuid, i64)> = {
@@ -223,6 +240,10 @@ impl Inner {
                 }
                 state.members.iter().map(|(task, (fence, _))| (*task, *fence)).collect()
             };
+            if Instant::now() < next {
+                continue;
+            }
+            next = Instant::now() + self.heartbeat_interval;
             if let Err(error) = self.heartbeat_round(&members).await {
                 tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "heartbeat round failed; retrying");
             }
@@ -253,14 +274,16 @@ impl Inner {
                     .replacement
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pending);
-                Err(Error::invalid("heartbeat round exceeded the heartbeat interval"))
+                Err(Error::invalid("heartbeat round exceeded its deadline"))
             }
         }
     }
 
-    /// The deadline of one round on the reserved connection. It equals the heartbeat interval.
+    /// The deadline of one round on the reserved connection (`heartbeat_round_bound_for`). Rounds
+    /// start on a fixed schedule, so after one timed-out round the next round still ends before the
+    /// lease when `2 × interval + bound < lease`, as with the defaults.
     fn heartbeat_round_bound(&self) -> std::time::Duration {
-        self.heartbeat_interval
+        heartbeat_round_bound_for(self.heartbeat_interval)
     }
 
     async fn heartbeat_round(&self, members: &[(Uuid, i64)]) -> Result<(), Error> {
@@ -275,9 +298,9 @@ impl Inner {
         let sent_at = Instant::now();
         let params: [&(dyn tokio_postgres::types::ToSql + Sync); 2] = [&self.worker_id, &payload];
         // A shared round borrows like any other statement. A round on the reserved connection is
-        // bounded by the interval, on the client and on the server, so a statement stalled on it
+        // bounded by `heartbeat_round_bound`, on the client and on the server, so a statement stalled on it
         // cannot hold the next round.
-        let expired = || Error::invalid("heartbeat round exceeded the heartbeat interval");
+        let expired = || Error::invalid("heartbeat round exceeded its deadline");
         let rows = if self.options.shared_heartbeats {
             fenced_rows(&self.pool, sql::HEARTBEAT_MANY_V1, &params).await?
         } else {
@@ -373,6 +396,21 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_round_bound_is_three_quarters_of_the_interval_and_the_interval_up_to_50_ms() {
+        let bound = |milliseconds| heartbeat_round_bound_for(Duration::from_millis(milliseconds));
+        assert_eq!(bound(10), Duration::from_millis(10));
+        assert_eq!(bound(40), Duration::from_millis(40));
+        assert_eq!(bound(50), Duration::from_millis(50));
+        assert_eq!(bound(66), Duration::from_millis(50));
+        assert_eq!(bound(69), Duration::from_millis(51));
+        assert_eq!(bound(200), Duration::from_millis(150));
+        assert_eq!(bound(10_000), Duration::from_millis(7_500));
+        // With the defaults, one timed-out round leaves a renewal margin.
+        let lease = Duration::from_secs(30);
+        assert!(2 * (lease / 3) + heartbeat_round_bound_for(lease / 3) < lease);
     }
 
     #[tokio::test(start_paused = true)]

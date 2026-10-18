@@ -264,6 +264,54 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     observer&.close
   end
 
+  # SM-1444: a round falls due one interval after the previous round started, also after a failed
+  # round replaces the connection. So one timed-out round does not move the next round toward the end
+  # of the lease. The lease is 2.3 intervals, shorter than the default of 3. The row lock makes the
+  # first round end on the server at about 1.4 intervals. The fixed schedule sends the next round at
+  # 2 intervals, inside the lease. A schedule that starts again after the failed round sends it at
+  # about 2.4 intervals, after the lease.
+  it "keeps a renewal margin after one timed-out heartbeat round" do
+    interval = 1.0
+    task_id = queue.enqueue("margin", {}).task_id
+    release = Concurrent::Event.new
+    started = Concurrent::Event.new
+    cancelled = nil
+    lapsed = []
+    subject = worker(lease: 2.3, heartbeat: interval).handle("margin") do |_payload, context|
+      started.set
+      release.wait(30)
+      cancelled = context.cancellation.cancelled?
+      {}
+    end
+    blocker = ScratchDatabase.connect
+    running(subject) do
+      expect(started.wait(10)).to be(true)
+      handler_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      blocker.exec("BEGIN")
+      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      sleep [0, handler_started + 1.6 * interval - Process.clock_gettime(Process::CLOCK_MONOTONIC)].max
+      blocker.exec("COMMIT")
+      # Run past the end of the lease from the claim, so only a renewal keeps the task. The stored
+      # lease must not lapse before that renewal.
+      until Process.clock_gettime(Process::CLOCK_MONOTONIC) >= handler_started + 2.6 * interval
+        lapsed << blocker.exec_params(
+          "SELECT expires_at <= clock_timestamp() FROM workhorse.task_runtime WHERE task_id = $1", [task_id]
+        ).getvalue(0, 0)
+        sleep 0.02
+      end
+      release.set
+      wait_until { state(task_id) != "active" }
+    ensure
+      release.set
+    end
+    expect(lapsed).not_to be_empty
+    expect(lapsed.uniq).to eq(["f"])
+    expect(cancelled).to be(false)
+    expect(state(task_id)).to eq("succeeded")
+  ensure
+    blocker&.close
+  end
+
   it "fires due schedules in its namespaces during maintenance" do
     namespace = "rb-#{SecureRandom.hex(6)}"
     # :skip evaluates only the last maintenance window, so the missed minute needs :latest.

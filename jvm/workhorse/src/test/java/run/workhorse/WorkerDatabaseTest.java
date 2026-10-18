@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -632,6 +635,174 @@ class WorkerDatabaseTest {
     double oldest = samples.stream().flatMap(List::stream).mapToDouble(age -> age).max().orElse(0);
     assertTrue(oldest < 5 * intervalMs, "a heartbeat statement ran for " + oldest + " ms");
     assertEquals("succeeded", status(taskId).state());
+  }
+
+  /**
+   * SM-1444: a round falls due one interval after the previous round started, also after a failed
+   * round replaces the connection. So one timed-out round does not move the next round toward the
+   * end of the lease. The lease is 2.3 intervals, shorter than the default of 3. The row lock makes
+   * the first round end on the server at about 1.4 intervals. The fixed schedule sends the next
+   * round at 2 intervals, inside the lease. A schedule that starts again after the failed round
+   * sends it at about 2.5 intervals, after the lease.
+   */
+  @Test
+  void keepsARenewalMarginAfterOneTimedOutHeartbeatRound() throws Exception {
+    long intervalMs = 1_000;
+    UUID taskId = enqueue("margin", Map.of());
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicReference<Boolean> cancelled = new AtomicReference<>();
+    Worker worker =
+        worker()
+            .lease(Duration.ofMillis(2_300))
+            .heartbeat(Duration.ofMillis(intervalMs))
+            .handle(
+                "margin",
+                Object.class,
+                (ctx, payload) -> {
+                  started.countDown();
+                  release.await(30, TimeUnit.SECONDS);
+                  cancelled.set(ctx.isCancelled());
+                  return Map.of();
+                })
+            .build();
+    ExecutorService runner = Executors.newSingleThreadExecutor();
+    List<Boolean> lapsed = new ArrayList<>();
+    try (Connection blocker = ScratchDatabase.connect()) {
+      var run = runner.submit(worker::runOnce);
+      assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
+      long handlerStarted = System.nanoTime();
+      blocker.setAutoCommit(false);
+      try (PreparedStatement lock =
+          blocker.prepareStatement(
+              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
+        lock.setString(1, taskId.toString());
+        lock.execute();
+      }
+      sleepUntil(handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 16 / 10));
+      blocker.commit();
+      blocker.setAutoCommit(true);
+      // Run past the end of the lease from the claim, so only a renewal keeps the task. The stored
+      // lease must not lapse before that renewal.
+      long until = handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 26 / 10);
+      try (PreparedStatement expired =
+          blocker.prepareStatement(
+              "SELECT expires_at <= clock_timestamp() FROM workhorse.task_runtime"
+                  + " WHERE task_id = ?::uuid")) {
+        expired.setString(1, taskId.toString());
+        while (System.nanoTime() - until < 0) {
+          try (ResultSet result = expired.executeQuery()) {
+            assertTrue(result.next(), "the task has a runtime row");
+            lapsed.add(result.getBoolean(1));
+          }
+          Thread.sleep(20);
+        }
+      }
+      release.countDown();
+      assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
+    } finally {
+      release.countDown();
+      runner.shutdownNow();
+    }
+    assertFalse(lapsed.isEmpty(), "the lease was sampled");
+    assertFalse(lapsed.contains(true), "the stored lease lapsed: " + lapsed);
+    assertEquals(false, cancelled.get(), "the handler lost its lease");
+    assertEquals("succeeded", status(taskId).state());
+  }
+
+  /**
+   * SM-1444: a round that ends after its next slot starts one overdue round at once, also when it
+   * replaces its connection. The interval is 40 ms, so the round bound equals the interval. The
+   * first heartbeat round commits only after its deadline, so it fails after its next slot. The
+   * overdue round then renews the lease at about 100 ms after the lease registered. A wait of 100
+   * ms before the new connection moves it to about 200 ms, after the lease of 180 ms. A lease of
+   * 120 ms has no margin by the rule (2 × 40 + 40 = 120), so the test cannot use it.
+   */
+  @Test
+  void startsAnOverdueRoundAtOnceAfterAFailedRoundReplacesItsConnection() throws Exception {
+    long intervalMs = 40;
+    UUID taskId = enqueue("overdue", Map.of());
+    CountDownLatch started = new CountDownLatch(1);
+    AtomicReference<Boolean> cancelled = new AtomicReference<>();
+    Worker worker =
+        Worker.builder(delayingFirstHeartbeatCommit(dataSource, intervalMs))
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .lease(Duration.ofMillis(180))
+            .heartbeat(Duration.ofMillis(intervalMs))
+            .handle(
+                "overdue",
+                Object.class,
+                (ctx, payload) -> {
+                  started.countDown();
+                  // Run past the end of the lease from the claim, so only a renewal keeps the task.
+                  Thread.sleep(400);
+                  cancelled.set(ctx.isCancelled());
+                  return Map.of();
+                })
+            .build();
+    assertTrue(worker.runOnce(), "the worker ran the task");
+    assertTrue(started.await(1, TimeUnit.SECONDS), "the handler started");
+    assertEquals(false, cancelled.get(), "the handler lost its lease");
+    assertEquals("succeeded", status(taskId).state());
+  }
+
+  /**
+   * A source over {@code source} whose first {@code COMMIT} after a heartbeat statement returns
+   * {@code delayMs} late, so that heartbeat round ends after its deadline.
+   */
+  private static DataSource delayingFirstHeartbeatCommit(DataSource source, long delayMs) {
+    AtomicBoolean delayed = new AtomicBoolean();
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) -> {
+              Object result;
+              try {
+                result = method.invoke(source, arguments);
+              } catch (InvocationTargetException error) {
+                throw error.getCause();
+              }
+              if (!method.getName().equals("getConnection")) {
+                return result;
+              }
+              Connection connection = (Connection) result;
+              AtomicBoolean heartbeat = new AtomicBoolean();
+              return Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (inner, call, values) -> {
+                    if (call.getName().equals("prepareStatement")
+                        && String.valueOf(values[0]).contains("heartbeat_many_v1")) {
+                      heartbeat.set(true);
+                    }
+                    boolean delay =
+                        call.getName().equals("commit")
+                            && heartbeat.getAndSet(false)
+                            && delayed.compareAndSet(false, true);
+                    Object answer;
+                    try {
+                      answer = call.invoke(connection, values);
+                    } catch (InvocationTargetException error) {
+                      throw error.getCause();
+                    }
+                    if (delay) {
+                      // After the commit, so no idle gap ends the session first.
+                      Thread.sleep(delayMs);
+                    }
+                    return answer;
+                  });
+            });
+  }
+
+  private static void sleepUntil(long nanoTime) throws InterruptedException {
+    long remaining = nanoTime - System.nanoTime();
+    if (remaining > 0) {
+      TimeUnit.NANOSECONDS.sleep(remaining);
+    }
   }
 
   @Test

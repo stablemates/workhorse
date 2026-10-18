@@ -19,6 +19,7 @@ import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
+import { heartbeatRoundBoundMs } from "./heartbeat-round.js";
 import { MAX_TIMER_DELAY_MS, monotonicNow } from "./timers.js";
 import type {
   ScheduleWaitRequest,
@@ -583,7 +584,9 @@ export class Worker {
   }
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
-  // The deadline of one heartbeat round on the reserved connection. It equals heartbeatMs.
+  // The deadline of one heartbeat round on the reserved connection (heartbeatRoundBoundMs). Rounds
+  // start on a fixed schedule, so after one timed-out round the next round still ends before the
+  // lease when 2 × heartbeatMs + heartbeatRoundMs < leaseMs, as with the defaults.
   private readonly heartbeatRoundMs: number;
   private readonly pollMs: number;
   private readonly dispatchPollMs: number;
@@ -654,6 +657,12 @@ export class Worker {
     }
   >();
   private heartbeatTimer: NodeJS.Timeout | undefined;
+  // True from the start of a round until it settles. A lease that registers during a round must
+  // not start a second round.
+  private heartbeatInFlight = false;
+  // The monotonic time when the next round falls due: one heartbeatMs after the previous round
+  // started, not after it ended. Undefined while no lease is registered.
+  private nextHeartbeatAt: number | undefined;
   private heartbeatChannel: WorkerHeartbeatChannel | undefined;
 
   // The reserved heartbeat connection, taken on first use. A queue that cannot lend one heartbeats
@@ -677,56 +686,76 @@ export class Worker {
     await channel?.close();
   }
 
+  // A round falls due one heartbeatMs after the previous round started. A round that ends after
+  // its next slot starts one overdue round at once, and the interval after it counts from that
+  // start, so missed slots are never replayed.
   private scheduleHeartbeatBatch(): void {
     if (this.heartbeatTimer !== undefined || this.heartbeatLeases.size === 0) return;
-    this.heartbeatTimer = setTimeout(() => {
-      this.heartbeatTimer = undefined;
-      const leases = [...this.heartbeatLeases.values()];
-      // A lease renewed by this round runs from the moment the request left, which can only be
-      // earlier than the database's renewal, so local lease windows never outlast the real ones.
-      const sentAt = monotonicNow();
-      const channel = this.reservedHeartbeatChannel();
-      // A round on the reserved connection is bounded by heartbeatRoundMs, so a statement stuck on
-      // it cannot hold back the next round.
-      const heartbeat = channel
-        ? channel.heartbeatMany(
+    const now = monotonicNow();
+    // A first lease that registers while an old round is in flight sets its slot now, so the end of
+    // that round does not move it.
+    this.nextHeartbeatAt ??= now + this.heartbeatMs;
+    if (this.heartbeatInFlight) return;
+    this.heartbeatTimer = setTimeout(
+      () => {
+        this.heartbeatTimer = undefined;
+        this.heartbeatInFlight = true;
+        this.runHeartbeatBatch();
+      },
+      Math.max(0, this.nextHeartbeatAt - now),
+    );
+    this.heartbeatTimer.unref();
+  }
+
+  private runHeartbeatBatch(): void {
+    const leases = [...this.heartbeatLeases.values()];
+    // A lease renewed by this round runs from the moment the request left, which can only be
+    // earlier than the database's renewal, so local lease windows never outlast the real ones.
+    const sentAt = monotonicNow();
+    this.nextHeartbeatAt = sentAt + this.heartbeatMs;
+    const channel = this.reservedHeartbeatChannel();
+    // A round on the reserved connection is bounded by heartbeatRoundMs, so a statement stuck on
+    // it cannot hold back the next round.
+    const heartbeat = channel
+      ? channel.heartbeatMany(
+          leases.map((lease) => lease.task),
+          this.workerId,
+          this.leaseMs,
+          this.heartbeatRoundMs,
+        )
+      : this.queue.heartbeatMany
+        ? this.queue.heartbeatMany(
             leases.map((lease) => lease.task),
             this.workerId,
             this.leaseMs,
-            this.heartbeatRoundMs,
           )
-        : this.queue.heartbeatMany
-          ? this.queue.heartbeatMany(
-              leases.map((lease) => lease.task),
-              this.workerId,
-              this.leaseMs,
-            )
-          : Promise.all(
-              leases.map(
-                async (lease) =>
-                  [
-                    lease.task.id,
-                    await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
-                  ] as const,
-              ),
-            ).then((statuses) => new Map(statuses));
-      void heartbeat
-        .then(
-          (statuses) => {
-            for (const lease of leases) {
-              if (this.heartbeatLeases.get(lease.task.id) !== lease) continue;
-              lease.status(statuses.get(lease.task.id) ?? "stale", sentAt);
-            }
-          },
-          () => {
-            // A failed round proves nothing about ownership, so every task keeps running and the
-            // next round retries. Each attempt's lease watchdog aborts it once its last accepted
-            // renewal is a full lease old.
-          },
-        )
-        .finally(() => this.scheduleHeartbeatBatch());
-    }, this.heartbeatMs);
-    this.heartbeatTimer.unref();
+        : Promise.all(
+            leases.map(
+              async (lease) =>
+                [
+                  lease.task.id,
+                  await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
+                ] as const,
+            ),
+          ).then((statuses) => new Map(statuses));
+    void heartbeat
+      .then(
+        (statuses) => {
+          for (const lease of leases) {
+            if (this.heartbeatLeases.get(lease.task.id) !== lease) continue;
+            lease.status(statuses.get(lease.task.id) ?? "stale", sentAt);
+          }
+        },
+        () => {
+          // A failed round proves nothing about ownership, so every task keeps running and the
+          // next round retries. Each attempt's lease watchdog aborts it once its last accepted
+          // renewal is a full lease old.
+        },
+      )
+      .finally(() => {
+        this.heartbeatInFlight = false;
+        this.scheduleHeartbeatBatch();
+      });
   }
 
   private addHeartbeatLease(
@@ -740,9 +769,11 @@ export class Worker {
     this.scheduleHeartbeatBatch();
     return () => {
       if (this.heartbeatLeases.get(task.id) === lease) this.heartbeatLeases.delete(task.id);
-      if (this.heartbeatLeases.size === 0 && this.heartbeatTimer !== undefined) {
+      if (this.heartbeatLeases.size === 0) {
         clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = undefined;
+        // The next first lease starts a new schedule.
+        this.nextHeartbeatAt = undefined;
       }
       void this.releaseHeartbeatChannel();
     };
@@ -789,7 +820,7 @@ export class Worker {
       );
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
-    this.heartbeatRoundMs = this.heartbeatMs;
+    this.heartbeatRoundMs = heartbeatRoundBoundMs(this.heartbeatMs);
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
     this.dispatchPollMs =
       options.pollMs ??

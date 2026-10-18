@@ -1035,6 +1035,55 @@ async fn a_heartbeat_statement_that_waits_on_a_row_lock_ends_on_the_server_by_it
     assert!(oldest < limit, "a heartbeat statement ran for {oldest} ms: {samples:?}");
 }
 
+// SM-1444: a round falls due one interval after the previous round started, so one timed-out
+// round does not move the next round toward the end of the lease. The lease is 2.3 intervals,
+// shorter than the default of 3. The row lock makes the first round end on the server at about 1.4
+// intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A schedule
+// that waits one interval after the failed round ends sends it at about 2.4 intervals, after the
+// lease.
+#[tokio::test]
+async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
+    let Some(harness) = harness("worker_heartbeat_margin").await else { return };
+    let task = harness.enqueue("rust.margin", json!({}), EnqueueOptions::default()).await;
+    let interval = Duration::from_secs(1);
+    let worker = harness.worker(WorkerOptions {
+        lease_duration: Duration::from_millis(2300),
+        heartbeat_interval: Some(interval),
+        ..options()
+    });
+    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let (reasons, mut reason) = mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = release.clone();
+    worker.handle("rust.margin", move |_: Value, context: HandlerContext| {
+        let _ = started.send(());
+        let (gate, reasons) = (gate.clone(), reasons.clone());
+        async move {
+            gate.notified().await;
+            let _ = reasons.send(context.cancellation().reason());
+            Ok::<Value, HandlerError>(json!({}))
+        }
+    });
+    let (stop, running) = run(&worker);
+    running_handlers.recv().await.unwrap();
+    let handler_started = tokio::time::Instant::now();
+
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    lock.execute("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", &[&task])
+        .await
+        .unwrap();
+    tokio::time::sleep_until(handler_started + interval * 16 / 10).await;
+    lock.commit().await.unwrap();
+    // Run past the end of the lease from the claim, so only a renewal keeps the task.
+    tokio::time::sleep_until(handler_started + interval * 26 / 10).await;
+    release.notify_one();
+    assert_eq!(reason.recv().await, Some(None), "the handler lost its lease");
+    harness.wait_for(task, TaskState::Succeeded).await;
+    stop.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
     let Some(harness) = harness("worker_unwind").await else { return };

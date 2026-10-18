@@ -15,7 +15,7 @@ module Stablemates
         # +settle+ takes a status other than +accepted+; +fail+ takes an error +settle+ raised.
         Member = Data.define(:worker_id, :task, :lease_ms, :interval, :renew, :settle, :fail, :logger)
 
-        # A round that did not finish within its interval.
+        # A round that did not finish by its deadline.
         class RoundTimeout < StandardError; end
 
         STRINGS = PG::TypeMapAllStrings.new
@@ -27,6 +27,16 @@ module Stablemates
         # this size every budget of +round_timeouts+ is at least 1 ms, and the budgets still fit.
         MINIMUM_REMAINING = 0.008
         private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING
+
+        # The deadline of one round, in seconds, for an +interval+ in seconds. It is three quarters
+        # of the interval, so that one timed-out round leaves a renewal margin when 2 × interval +
+        # bound < lease. Below an interval of 200 ms the bound is at least min(50 ms, interval). Up
+        # to 50 ms the bound thus equals the interval, as before SM-1444, and a timed-out round
+        # leaves about no margin. It is at least 1 ms. Every SDK uses the same formula.
+        def self.round_bound(interval)
+          milliseconds = (interval * 1000).round
+          [1, milliseconds * 3 / 4, [50, milliseconds].min].max / 1000.0
+        end
 
         @dedicated = {}.compare_by_identity
         @dedicated_lock = Mutex.new
@@ -43,6 +53,8 @@ module Stablemates
           @members = {}
           @wake = Concurrent::Event.new
           @thread = nil
+          # The worker that the next dedicated round sends first. Only the heartbeat thread uses it.
+          @rotation = 0
         end
 
         # Adds +member+ and returns a callable that removes it. Removing twice is harmless. A member
@@ -71,6 +83,9 @@ module Stablemates
         private
 
         def run
+          # The start of the latest round, on the monotonic clock. A new connection keeps it, so a
+          # failed round does not start a new schedule.
+          @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           if @dedicated
             run_dedicated
           else
@@ -98,32 +113,43 @@ module Stablemates
         end
 
         # Runs rounds until no member remains, and returns true then. A round falls due one shortest
-        # member interval after the previous one; a wake recomputes that from the current members.
-        # A failed round raises only from a dedicated connection, so the caller can replace it.
+        # member interval after the previous round started; a wake recomputes that from the current
+        # members. A round that ends after its next slot starts one overdue round at once, and the
+        # interval after it counts from that start, so missed slots are never replayed. A failed
+        # round raises only from a dedicated connection, so the caller can replace it.
+        #
+        # A round sends one statement for each worker. On the dedicated connection, all of them
+        # share one deadline: the round start plus +round_bound+. A statement that would start after
+        # it waits for the next round, so a slow statement of one worker cannot delay the renewal of
+        # another past it. Each round starts with the next worker (+ordered_groups+), so a worker
+        # whose statement is always slow cannot keep another from its turn. A borrowing heartbeat
+        # has no deadline, and sends every statement.
         def rounds
-          previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           loop do
             interval = @lock.synchronize { @members.each_value.map(&:interval).min }
             return true if interval.nil? && stop_if_idle
 
-            remaining = previous + (interval || 0) - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            remaining = @previous + (interval || 0) - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             if remaining.positive?
               @wake.wait(remaining)
               @wake.reset
               next
             end
-            previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            # The deadline starts before the payloads are built, so serialization counts against it.
+            deadline = @previous + round_bound(interval)
             members = @lock.synchronize { @members.values }
             return true if members.empty? && stop_if_idle
 
-            members.group_by(&:worker_id).each do |worker_id, group|
+            ordered_groups(members).each do |worker_id, group|
               sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
               leases = group.map do |member|
                 {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
               end
               params = [worker_id, JSON.generate(leases)]
-              # The round's deadline started at +sent_at+, so serialization counts against it.
-              timeout = round_bound(interval) - (Process.clock_gettime(Process::CLOCK_MONOTONIC) - sent_at)
+              timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              break if @dedicated && !timeout.positive?
+
               rows = begin
                 yield SqlCatalogue::HEARTBEAT_MANY_V1, params, timeout
               rescue RoundTimeout, PG::Error
@@ -139,9 +165,20 @@ module Stablemates
           end
         end
 
-        # The deadline of one round, in seconds, for the shortest member +interval+. It equals the
-        # interval.
-        def round_bound(interval) = interval
+        # The statements of one round, one for each worker, as [worker_id, members] pairs. On the
+        # dedicated connection, each round starts one worker later than the round before it.
+        def ordered_groups(members)
+          groups = members.group_by(&:worker_id).to_a
+          return groups unless @dedicated && groups.size > 1
+
+          first = @rotation % groups.size
+          @rotation = first + 1
+          groups.rotate(first)
+        end
+
+        # The deadline of one round, in seconds, for the shortest member +interval+
+        # (Heartbeat.round_bound).
+        def round_bound(interval) = Heartbeat.round_bound(interval)
 
         def settle(group, statuses, sent_at)
           group.each do |member|

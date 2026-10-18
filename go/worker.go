@@ -252,7 +252,9 @@ type Worker struct {
 	cohorts           int
 	leaseDuration     time.Duration
 	heartbeatInterval time.Duration
-	// heartbeatRoundBound is the deadline of one heartbeat round. It equals heartbeatInterval.
+	// heartbeatRoundBound is the deadline of one heartbeat round (heartbeatRoundBoundFor). Rounds
+	// start on a fixed schedule, so after one timed-out round the next round still ends before the
+	// lease when 2 × heartbeatInterval + heartbeatRoundBound < leaseDuration, as with the defaults.
 	heartbeatRoundBound time.Duration
 	pollInterval        time.Duration
 	maintenanceInterval time.Duration
@@ -478,7 +480,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		cohorts:                    cohorts,
 		leaseDuration:              leaseDuration,
 		heartbeatInterval:          heartbeatInterval,
-		heartbeatRoundBound:        heartbeatInterval,
+		heartbeatRoundBound:        heartbeatRoundBoundFor(heartbeatInterval),
 		pollInterval:               pollInterval,
 		maintenanceInterval:        maintenanceInterval,
 		maintenanceRoutineInterval: maintenanceRoutineInterval,
@@ -2327,7 +2329,23 @@ func (worker *Worker) registeredHeartbeats(members []*heartbeatMember) map[*hear
 	return registered
 }
 
+// heartbeatRoundBoundFor is the deadline of one heartbeat round for interval. It is three quarters
+// of the interval, so that one timed-out round leaves a renewal margin when 2 × interval + bound <
+// lease. Below an interval of 200 ms the bound is at least min(50 ms, interval). Up to 50 ms the
+// bound thus equals the interval, as before SM-1444, and a timed-out round leaves about no margin.
+// It is at least 1 ms, in whole milliseconds rounded down. Every SDK uses the same formula.
+func heartbeatRoundBoundFor(interval time.Duration) time.Duration {
+	threeQuarters := interval / time.Millisecond * 3 / 4 * time.Millisecond
+	return max(time.Millisecond, threeQuarters, min(50*time.Millisecond, interval))
+}
+
+// runHeartbeats sends one round at a time. A round falls due one heartbeatInterval after the
+// previous round started, not after it ended. A round that ends after its next slot starts one
+// overdue round at once, and the interval after it counts from that start, so missed slots are
+// never replayed. A wake that finds members starts no early round. time.Now carries a monotonic
+// reading, so a wall clock step does not move the schedule.
 func (worker *Worker) runHeartbeats() {
+	next := time.Now().Add(worker.heartbeatInterval)
 	timer := time.NewTimer(worker.heartbeatInterval)
 	defer timer.Stop()
 	for {
@@ -2346,8 +2364,13 @@ func (worker *Worker) runHeartbeats() {
 			return
 		}
 		worker.heartbeatMu.Unlock()
+		if wait := time.Until(next); wait > 0 {
+			timer.Reset(wait)
+			continue
+		}
+		next = time.Now().Add(worker.heartbeatInterval)
 		worker.refreshOwnershipMany(members)
-		timer.Reset(worker.heartbeatInterval)
+		timer.Reset(max(0, time.Until(next)))
 	}
 }
 

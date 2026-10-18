@@ -1217,12 +1217,14 @@ reservation releases it.
 - `runOnce()` takes one when the first attempt registers its lease, before the handler starts, and
   closes it with the last lease.
 
-`heartbeatMs` bounds each round on the reservation, as
-[Heartbeat round deadline](#heartbeat-round-deadline) describes. The workers on the pool take turns
-on the reservation: a round starts only when the round before it has ended, and the wait counts
-against its deadline. If a round passes its deadline, or if its statement fails, the round releases
-the client with an error. node-postgres then destroys the connection and does not return it to the
-pool. The next round connects a new one.
+`heartbeatRoundMs` bounds each round on the reservation, as [Heartbeat round
+deadline](#heartbeat-round-deadline) describes. It is at most `heartbeatMs`, and up to 50 ms it
+equals `heartbeatMs`. The workers on the pool take turns on the reservation: a round starts only
+when the round before it has ended, and the wait counts against its deadline. If a statement of a
+round fails or passes the deadline, the round releases the client with an error. node-postgres then
+destroys the connection and does not return it to the pool. If a round passes its deadline while it
+waits for a connect, it sends nothing on that client, and the next round takes the client. A failed
+round asks the pool for the replacement when it ends.
 
 The reservation listens for the `error` event of the client while it holds the client. An error
 between rounds destroys the client in the same way, for example when PostgreSQL terminates the
@@ -1242,7 +1244,7 @@ fails the round and discards the connection. Their heartbeat connections work as
   behind.
 - A Python worker takes its dedicated heartbeat connection from the supplied pool.
 - A Rust worker reserves one pooled heartbeat connection unless `WorkerOptions::shared_heartbeats`
-  is set. It bounds a round on that connection by one heartbeat interval. It discards the connection
+  is set. It bounds a round on that connection by `heartbeat_round_bound`. It discards the connection
   if the round fails. A round under `shared_heartbeats` borrows a connection like any other
   statement. That round has no bound.
 
@@ -1259,10 +1261,15 @@ Each bounded round does these steps, all before one deadline:
 
 1. Builds the lease payload. The deadline starts before this step, so serialization counts
    against it.
-2. Waits for its turn on the connection (TypeScript and Go, where workers share the connection),
-   and takes the connection, or a new one after a failed round. Ruby and JVM hold their connection
-   between rounds, and take a new one before the round starts. In Rust, a new connection that is
-   not ready by the deadline continues to connect, and the next round takes it.
+2. Waits for its turn on the connection (TypeScript and Go, where workers share the connection), and
+   takes the connection, or a new one after a failed round. In TypeScript, Go, and Python, a failed
+   round starts the replacement when it ends, so the connect starts before the next round. If the
+   replacement is not ready, a TypeScript round waits for it until its own deadline, and a Go or
+   Python round starts its own checkout. A Rust round starts the replacement inside its own
+   deadline. If the connect is not ready by the deadline, it continues, and each later round waits
+   for the same connect until its own deadline. A pool without a wait timeout can keep that connect
+   pending for several rounds. Ruby and JVM hold their connection between rounds, and take a new one
+   in their loop before the next round waits for its slot.
 3. Sends `BEGIN`.
 4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
    as its own statement, so that both values apply to the statements after it.
@@ -1308,17 +1315,38 @@ JVM, a deadlock fails the round, and a later round sends again. A round
 that fails or passes its deadline discards its connection, because the worker cannot know its state.
 As before, a failed round changes no lease: every task continues, and the next round tries again.
 
-Each SDK keeps the deadline in one named value. This change keeps the bound that each SDK used
-before:
+Each SDK keeps the deadline in one named value, and computes it with one helper that uses the same
+formula in every SDK:
 
-| SDK        | Named value             | Deadline                                               | Where the round runs                                                                            |
-| ---------- | ----------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| TypeScript | `heartbeatRoundMs`      | `heartbeatMs`                                          | the reservation (`ReservedConnection`)                                                          |
-| Go         | `heartbeatRoundBound`   | `HeartbeatInterval`                                    | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`       |
-| Python     | `_heartbeat_round_ms`   | `heartbeat_ms`                                         | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline |
-| Rust       | `heartbeat_round_bound` | `heartbeat_interval`                                   | the reserved connection                                                                         |
-| Ruby       | `round_bound`           | the shortest member interval                           | the dedicated connection                                                                        |
-| JVM        | `roundBoundNanos`       | the shortest member interval plus 1 ms, at least 50 ms | the dedicated connection; each read gets a network timeout of the time that remains             |
+`round bound = max(1 ms, interval × 3 / 4, min(50 ms, interval))`
+
+The bound depends on the interval:
+
+| Interval          | Round bound                                              | Example                  |
+| ----------------- | -------------------------------------------------------- | ------------------------ |
+| Up to 50 ms       | the interval, as before SM-1444                          | 10 ms gives 10 ms        |
+| 51 ms to 66 ms    | 50 ms                                                    | 66 ms gives 50 ms        |
+| 67 ms to 199 ms   | three quarters of the interval, or 50 ms if that is more | 69 ms gives 51 ms        |
+| 200 ms and longer | three quarters of the interval                           | 10,000 ms gives 7,500 ms |
+
+Thus no interval gets a shorter bound than it had before SM-1444, unless the bound is still at
+least 50 ms. A short interval still leaves time for a round.
+
+| SDK        | Named value             | Helper                      | Interval                     | Where the round runs                                                                            |
+| ---------- | ----------------------- | --------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| TypeScript | `heartbeatRoundMs`      | `heartbeatRoundBoundMs`     | `heartbeatMs`                | the reservation (`ReservedConnection`)                                                          |
+| Go         | `heartbeatRoundBound`   | `heartbeatRoundBoundFor`    | `HeartbeatInterval`          | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`       |
+| Python     | `_heartbeat_round_ms`   | `heartbeat_round_bound_ms`  | `heartbeat_ms`               | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline |
+| Rust       | `heartbeat_round_bound` | `heartbeat_round_bound_for` | `heartbeat_interval`         | the reserved connection                                                                         |
+| Ruby       | `round_bound`           | `Heartbeat.round_bound`     | the shortest member interval | the dedicated connection                                                                        |
+| JVM        | `roundBoundNanos`       | `roundBoundNanos`           | the shortest member interval | the dedicated connection; each read gets a network timeout of the time that remains             |
+
+**Short intervals.** A round fails before its heartbeat if less than 8 ms remains at the settings
+statement. Near this minimum, renewal depends on the load of the host and on the driver. The payload,
+the wait for the connection, and `BEGIN` use part of the bound first. In one trace, an async
+psycopg worker with an interval of 10 ms had a median of 8.59 ms left at the settings statement.
+More than half of its rounds failed before the heartbeat. Workhorse does not state a smallest
+interval that always renews.
 
 Rounds under `sharedHeartbeats` (TypeScript), `shared_heartbeats` (Python, Rust, Ruby), and the
 JVM's shared heartbeats do not change. They have no client deadline and no server timeouts. The
@@ -1329,11 +1357,97 @@ second connection and can be lost, so the server timeouts do not depend on it.
 
 A round that reaches its deadline renews no lease in it, however many leases the round holds. The
 exception is a `COMMIT` that PostgreSQL has already started: it can finish later and renew the
-stored leases, but the worker does not count that renewal. With
-the default settings (`leaseMs` 30,000 and `heartbeatMs` 10,000), the next round starts one
-interval after the timed-out round ends, at about the end of the lease. Thus about 0 s of margin
-remains after one timed-out round, in every SDK. Ruby and JVM leave their loop when a dedicated round
-fails, and the new loop starts a new schedule. SM-1444 owns that schedule.
+stored leases, but the worker does not count that renewal. The next round still falls due on the
+schedule that [Heartbeat schedule](#heartbeat-schedule) describes.
+
+#### Heartbeat schedule
+
+Each heartbeat scheduler starts its rounds on a fixed schedule. A scheduler is the loop that sends
+the rounds of one worker, or of every worker on one pool in Ruby and JVM. Thus a slow or failed round
+does not move later rounds toward the end of the lease. Before SM-1444, the next round fell due one
+interval after a failed round ended. So one timed-out round left about 0 s of margin with the
+defaults.
+
+The scheduler follows these rules in every SDK:
+
+1. A round falls due one heartbeat interval after the previous round started, not after it ended.
+   The first round falls due one interval after the first lease registers.
+2. One round is in flight at a time. A lease that registers during a round joins the next round. The
+   TypeScript worker keeps an explicit flag, `heartbeatInFlight`, because a new lease can schedule a
+   timer while a round runs.
+3. If a round ends after its next slot, the scheduler starts one overdue round at once. The next
+   slot is one interval after the start of that overdue round. The scheduler sends no round for the
+   other missed slots.
+4. A wake of the loop starts no early round. Go, Python, and Rust wake the loop when the last lease
+   leaves, so that it can stop.
+5. A replaced connection keeps the schedule. Ruby (`@previous`) and JVM (`previous`) keep the start
+   of the latest round in the heartbeat object, outside the loop that replaces a failed connection.
+   After a failed round, JVM takes a new connection at once. If the pool refuses a connection, JVM
+   waits 100 ms, or until the next slot if that is sooner (`retryWaitNanos`), before it asks again.
+6. When no lease remains, the scheduler stops. The next lease starts a new schedule. In TypeScript,
+   a lease that registers while the round of an earlier lease is in flight gets its slot one
+   interval after it registers.
+7. The schedule uses a monotonic clock: `monotonicNow()` in TypeScript, the monotonic reading of
+   `time.Now()` in Go, `time.monotonic()` in Python, `tokio::time::Instant` in Rust,
+   `CLOCK_MONOTONIC` in Ruby, and `System.nanoTime()` in JVM.
+
+A replacement connection never starts a second round. Each SDK opens at most one replacement at a
+time:
+
+| SDK        | Where the replacement opens                                                     | Bound on the open                                                   |
+| ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| TypeScript | when the failed round ends, in `ReservedConnection.reserve`, asynchronously     | the `connectionTimeoutMillis` of the pool (none by default)         |
+| Go         | when the failed round ends, in `heartbeatConnection.replace`, a goroutine       | one round bound                                                     |
+| Python     | when the failed round ends, in `_replace_heartbeat_connection`, on its thread   | the `timeout` of a psycopg pool (30 s by default); none for asyncpg |
+| Rust       | in the next round, inside its deadline (`replacement_connection`), a Tokio task | the wait timeout of the deadpool pool (none by default)             |
+| Ruby       | in the loop of the heartbeat thread, before the next round waits for its slot   | the checkout timeout of the connection pool                         |
+| JVM        | in the loop of the heartbeat thread, before the next round waits for its slot   | the `getConnection` timeout of the `DataSource`                     |
+
+In TypeScript, Go, and Python, the open does not hold the scheduler. The next round starts at its
+slot. If the replacement is not ready, the round waits for it (TypeScript) or starts its own
+checkout (Go and Python), in both cases only until its own deadline. A Rust connect that is not
+ready by the deadline continues, and each later round waits for it until its own deadline. A pool
+without a wait timeout can keep it pending for several rounds. In Ruby and JVM, the heartbeat thread
+opens the connection itself. If the open ends after the next slot, the next round is overdue, and it
+starts when the open ends. Only one round is in flight in each case.
+
+A Ruby or JVM round sends one statement for each worker on the pool, and JVM also one for each 100
+leases. On the dedicated connection, all statements of one round share one deadline: the start of
+the round plus the round bound. A statement that would start after that deadline is not sent, and
+its leases wait for the next round. Thus a slow statement of one worker cannot move the renewal of
+another worker past the margin. Each dedicated round starts with the next statement in turn
+(`ordered_groups` in Ruby, `nextFirstBatch` in JVM). So a statement that is always slow cannot keep
+a later statement from its turn. A shared round has no deadline, and sends every statement.
+
+**Margin rule.** After one timed-out round, the next round falls due two intervals after the start
+of the last accepted round. That round ends by its deadline. So an attempt keeps its lease after one
+timed-out round when `2 × interval + round bound < lease`. This rule gives a margin only where the
+bound is below the interval. From an interval of 200 ms up, the round bound is three quarters of the
+interval. The default interval is one third of the lease. The rule then leaves one quarter of the
+interval for timer delay and for the answer to reach the watchdog. Below an interval of 200 ms the
+bound is larger, so the margin at the default ratio is smaller. Up to an interval of 50 ms, the
+bound equals the interval. A timed-out round then leaves about 0 ms of margin, as before SM-1444.
+
+A round that uses its whole bound of one interval ends at the next slot. The scheduler then starts
+the next round at once, as one overdue round. Only one round is in flight at a time.
+
+| Value (defaults)                             | Milliseconds |
+| -------------------------------------------- | ------------ |
+| Lease (`leaseMs`)                            | 30,000       |
+| Heartbeat interval (`leaseMs / 3`)           | 10,000       |
+| Round bound (three quarters of the interval) | 7,500        |
+| Start of the round after the timed-out round | 20,000       |
+| Latest end of that round                     | 27,500       |
+| Margin before the watchdog expires           | 2,500        |
+
+The worker accepts any heartbeat interval shorter than the lease. It does not reject or warn about
+an interval that breaks the margin rule. For example, take an interval of 20,000 ms and a lease of
+30,000 ms. If the round at 20,000 ms times out, the next round falls due at 40,000 ms. The lease
+ended at 30,000 ms, so one timed-out round gives no margin.
+
+Rounds without a client deadline (`sharedHeartbeats` in TypeScript, `shared_heartbeats` in Python,
+Rust, and Ruby, and the shared heartbeats of JVM) follow the same schedule. They have no round
+bound, so a slow shared round can delay the next round past the margin.
 
 ### Cancellation
 

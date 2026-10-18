@@ -255,7 +255,7 @@ describe("reserved heartbeat connection", () => {
     expect(clients[1]!.release).toHaveBeenCalledExactlyOnceWith();
   });
 
-  it("bounds a connect that waits behind an exhausted pool and releases the late client", async () => {
+  it("bounds a connect that waits behind an exhausted pool and keeps the late client for the next round", async () => {
     let lend!: (client: ReturnType<typeof fakeClient>) => void;
     const late = fakeClient();
     const pool = {
@@ -273,10 +273,39 @@ describe("reserved heartbeat connection", () => {
     await expect(connection.run((client) => client.query("SELECT 1"), 20)).rejects.toThrow(
       /within 20 ms/,
     );
+    // The round sent nothing on the late client, so the client stays clean. The connect continues
+    // outside the deadline, and the next round takes it instead of asking the pool again.
     lend(late);
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
 
-    await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-    expect(late.query).not.toHaveBeenCalled();
+    expect(pool.connect).toHaveBeenCalledOnce();
+    expect(late.release).not.toHaveBeenCalled();
+    expect(late.query).toHaveBeenCalled();
+    await connection.close();
+  });
+
+  it("opens the replacement when a failed round ends, before the next round", async () => {
+    const first = fakeClient();
+    const second = fakeClient();
+    first.query.mockRejectedValue(new Error("the heartbeat failed"));
+    const clients = [first, second];
+    const pool = {
+      options: { max: 10 },
+      query: vi.fn<Queryable["query"]>(async () => emptyResult),
+      connect: vi.fn<() => Promise<ReturnType<typeof fakeClient>>>(async () => clients.shift()!),
+    };
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    await expect(connection.run((client) => client.query("SELECT 1"), 1_000)).rejects.toThrow(
+      /the heartbeat failed/,
+    );
+    // The failed round destroyed its client and asked for the replacement as it ended.
+    expect(first.release).toHaveBeenCalledOnce();
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    expect(second.query).toHaveBeenCalled();
+    await connection.close();
   });
 
   it("closes without waiting for a reservation stuck behind an exhausted pool", async () => {

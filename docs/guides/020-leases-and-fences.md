@@ -105,24 +105,28 @@ More detail: [Task lifecycle: Terminal transitions](../architecture/lifecycle.md
 The worker sends heartbeats for you. A timer in the worker sends one heartbeat round at a time. Each
 round renews each lease that the worker has. You do not call a heartbeat function.
 
+Each round falls due one heartbeat interval after the previous round started, not after it ended.
+Thus a slow or failed round does not move the next round toward the end of the lease.
+
 If a round fails because of a network error, the tasks continue to run. The next round tries again.
 One failed round does not change who owns a task.
 
 A heartbeat renews only a lease that is still live when PostgreSQL checks it. A late heartbeat cannot
 start an expired lease again.
 
-A round on the reserved connection also has a deadline of one heartbeat interval. If the heartbeat
-waits too long, PostgreSQL ends it before the deadline. The round then renews no lease, and its
+A round on the reserved connection also has a deadline that is shorter than one heartbeat interval.
+If the heartbeat waits too long, PostgreSQL ends it before the deadline. The round then renews no lease, and its
 heartbeat holds no row lock after the deadline. Only a commit that PostgreSQL has already started
 can still finish later.
 
 **Example.** The heartbeat at 10 s moved the expiry of the invoice task to 40 s. The heartbeat
 interval is 10 s.
 
-1. At 20 s, worker A sends the next heartbeat round. Its deadline is 30 s.
+1. At 20 s, worker A sends the next heartbeat round. Its deadline is 27.5 s.
 2. The heartbeat waits for a row lock, because another transaction holds the lock.
-3. At about 25 s, PostgreSQL ends the heartbeat. The round renews no lease.
-4. At about 35 s, worker A sends the next round. The lock is free, so PostgreSQL renews the lease.
+3. At about 24 s, PostgreSQL ends the heartbeat. The round renews no lease.
+4. At 30 s, one interval after the failed round started, worker A sends the next round. The lock is
+   free, so PostgreSQL renews the lease before it expires at 40 s.
 
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
@@ -140,7 +144,20 @@ worker. A Rust task stops its heartbeats when its handler returns.
 - One `UPDATE ... FROM` renews every matching row.
 - The function returns `(ordinal, task_id, status)` in input order.
 
-**Round deadline.** A round on the reserved connection sends `heartbeat_many_v1` in its own
+**Schedule.** A round falls due one heartbeat interval after the previous round started. Only one
+round is in flight at a time. A round that ends after its next slot starts one overdue round, and
+the scheduler does not replay the other missed slots.
+
+**Round deadline.** The deadline of a round on the reserved connection is
+`max(1 ms, interval × 3 / 4, min(50 ms, interval))`. From an interval of 200 ms up, that is three
+quarters of the interval. Up to 50 ms, it equals the interval, as before SM-1444. After one
+timed-out round, an attempt keeps its lease when `2 × interval + round deadline < lease`. This rule
+gives a margin only where the deadline is below the interval. The defaults meet it. Up to an interval
+of 50 ms, a timed-out round leaves about 0 ms of margin. Near the 8 ms minimum of the settings
+statement, renewal depends on the host load and the driver. The worker does not reject settings
+that do not meet the rule.
+
+A round on the reserved connection sends `heartbeat_many_v1` in its own
 transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
 before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
 the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
@@ -170,7 +187,7 @@ moments come before the database renews, so the local countdown never ends after
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.
 
-More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat) and [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline).
+More detail: [Task lifecycle: Heartbeat](../architecture/lifecycle.md#heartbeat), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), and [Task lifecycle: Heartbeat schedule](../architecture/lifecycle.md#heartbeat-schedule).
 
 </details>
 

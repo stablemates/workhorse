@@ -143,7 +143,8 @@ function boundOnServer(client: Queryable, deadline: number, expired: () => boole
  * for the rounds before it, the connect, and the transaction. A round that passes the deadline
  * destroys the connection, and server timeouts end its heartbeat and its idle waits by the same
  * deadline (`boundOnServer`). The timeouts are transaction-scoped, so the connection stays safe
- * behind a transaction-mode pooler. The next round reconnects.
+ * behind a transaction-mode pooler. A failed round opens the replacement when it ends, outside the
+ * deadline of the next round.
  *
  * Rounds take turns, because every worker on the pool sends its rounds here and one session runs
  * one transaction at a time.
@@ -239,6 +240,8 @@ export class ReservedConnection {
     });
     this.turn = Promise.all([previous, own]).then(() => undefined);
     let pending: Promise<ReservedClient> | undefined;
+    // True once the round sends a statement on the client.
+    let lent = false;
     let expired = false;
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
@@ -254,14 +257,21 @@ export class ReservedConnection {
       if (expired) return timedOut;
       pending = this.acquire();
       const client = await pending;
-      // A client lent after the deadline is only destroyed; its renewal would arrive too late.
+      // A client that arrives after the deadline sends nothing; the next round takes it.
       if (expired) return timedOut;
+      lent = true;
       return operation(boundOnServer(client, deadline, () => expired));
     })();
     try {
       return await Promise.race([renewal, timedOut]);
     } catch (error) {
-      if (pending !== undefined) this.discard(pending, error);
+      // A client that sent a statement has an unknown state. A connect that the round only waited
+      // for is still clean, so the next round takes it.
+      if (pending !== undefined && lent) this.discard(pending, error);
+      // Rounds start on a fixed schedule, so the next round can start soon after this one. Opening
+      // the replacement now starts the connect before that round, which waits for it only if it is
+      // still pending. acquire() opens at most one connect at a time.
+      this.reserve();
       throw error;
     } finally {
       clearTimeout(timer);

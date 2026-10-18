@@ -36,8 +36,8 @@ public final class Heartbeat {
   private static final long RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
 
   /**
-   * The shortest network timeout of a dedicated round. A round is bounded by the shortest member
-   * interval (ADR 0071), but a socket timeout of a few milliseconds would fail healthy rounds.
+   * The shortest deadline of a round, when the interval allows it. A short interval thus still
+   * leaves time for the round.
    */
   private static final long MIN_ROUND_TIMEOUT_MS = 50;
 
@@ -94,7 +94,16 @@ public final class Heartbeat {
   private final Map<List<Object>, Member> members = new LinkedHashMap<>();
   private @Nullable Thread thread;
 
-  private Heartbeat(DataSource dataSource, boolean dedicated) {
+  /**
+   * The start of the latest round, a {@link System#nanoTime} value. Only the heartbeat thread uses
+   * it. A new connection keeps it, so a failed round does not start a new schedule.
+   */
+  private long previous;
+
+  /** The batch that the next dedicated round sends first. Only the heartbeat thread uses it. */
+  private int rotation;
+
+  Heartbeat(DataSource dataSource, boolean dedicated) {
     this.dataSource = dataSource;
     this.dedicated = dedicated;
   }
@@ -154,6 +163,7 @@ public final class Heartbeat {
   }
 
   private void run() {
+    previous = System.nanoTime();
     if (!dedicated) {
       ConnectionSource source = ConnectionSource.of(dataSource);
       try {
@@ -172,10 +182,21 @@ public final class Heartbeat {
       return;
     }
     // Holds one connection across rounds. A round that fails discards the connection, and the
-    // next round checks out a new one. A pool that refuses a connection leaves the lease watchdog
-    // to cover the rounds that keep failing.
+    // next round checks out a new one at once: rounds waits for the slot itself, and starts one
+    // overdue round at once. A pool that refuses a connection is asked again after a wait, and the
+    // lease watchdog covers the rounds that keep failing.
     while (true) {
-      try (Held held = new Held(dataSource.getConnection())) {
+      Held held;
+      try {
+        held = new Held(dataSource.getConnection());
+      } catch (SQLException | RuntimeException error) {
+        if (stopIfIdle()) {
+          return;
+        }
+        waitFor(retryWaitNanos(previous, shortestIntervalNanos(), System.nanoTime()));
+        continue;
+      }
+      try (held) {
         if (rounds(
             (timeoutNanos, statement, parameters) ->
                 held.round(timeoutNanos, statement, parameters))) {
@@ -183,26 +204,37 @@ public final class Heartbeat {
         }
       } catch (SQLException | RuntimeException error) {
         // The next pass checks out a new connection, unless no member is left to renew.
-        lock.lock();
-        try {
-          if (stopIfIdleLocked()) {
-            return;
-          }
-        } finally {
-          lock.unlock();
+        if (stopIfIdle()) {
+          return;
         }
       }
-      waitFor(RETRY_NANOS);
+    }
+  }
+
+  private boolean stopIfIdle() {
+    lock.lock();
+    try {
+      return stopIfIdleLocked();
+    } finally {
+      lock.unlock();
     }
   }
 
   /**
    * Runs rounds until no member remains, and returns {@code true} then. A round falls due one
-   * shortest member interval after the previous one. A dedicated round that fails throws, so the
-   * caller can replace the connection; a borrowing round that fails is skipped.
+   * shortest member interval after the previous round started. A round that ends after its next
+   * slot starts one overdue round at once, and the interval after it counts from that start, so
+   * missed slots are never replayed. A dedicated round that fails throws, so the caller can replace
+   * the connection; a borrowing round that fails is skipped.
+   *
+   * <p>A round sends one statement for each worker and each {@link #ROUND_LIMIT} leases ({@link
+   * #batches}). On the dedicated connection, all of them share one deadline: the round start plus
+   * {@link #roundBoundNanos}. A statement that would start after it waits for the next round, so a
+   * slow statement cannot delay another renewal past it. Each round starts with the next batch, so
+   * a batch that is always slow cannot keep a later batch from its turn. A borrowing round has no
+   * deadline, and sends every batch.
    */
   private boolean rounds(Round round) throws SQLException {
-    long previous = System.nanoTime();
     while (true) {
       List<Member> due;
       long interval = Long.MAX_VALUE;
@@ -227,45 +259,120 @@ public final class Heartbeat {
         lock.unlock();
       }
       previous = System.nanoTime();
-      Map<String, List<Member>> byWorker = new LinkedHashMap<>();
-      for (Member member : due) {
-        byWorker.computeIfAbsent(member.workerId(), ignored -> new ArrayList<>()).add(member);
-      }
-      for (Map.Entry<String, List<Member>> entry : byWorker.entrySet()) {
-        List<Member> group = entry.getValue();
-        for (int start = 0; start < group.size(); start += ROUND_LIMIT) {
-          List<Member> chunk = group.subList(start, Math.min(group.size(), start + ROUND_LIMIT));
-          long sentAt = System.nanoTime();
-          List<Row> rows;
-          try {
-            String payload = leases(chunk);
-            // The round's deadline started at sentAt, so serialization counts against it.
-            long remaining = roundBoundNanos(interval) - (System.nanoTime() - sentAt);
-            rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V1, entry.getKey(), payload);
-          } catch (SQLException | RuntimeException error) {
-            if (dedicated) {
-              throw error;
-            }
-            continue;
-          }
-          Map<String, String> statuses = new HashMap<>();
-          for (Row row : rows) {
-            statuses.put(row.requiredText("task_id"), row.requiredText("status"));
-          }
-          settle(chunk, statuses, sentAt);
-        }
-      }
+      // The deadline starts before the payloads are built, so serialization counts against it.
+      long deadline = previous + roundBoundNanos(interval);
+      List<Batch> batches = batches(due);
+      sendBatches(batches, nextFirstBatch(batches.size()), deadline, round);
     }
   }
 
   /**
-   * The deadline of one round for the shortest member interval {@code intervalNanos}: the interval
-   * plus 1 ms, and at least the shortest round timeout.
+   * One {@code heartbeat_many_v1} statement: the leases of one worker, at most {@link
+   * #ROUND_LIMIT}.
    */
-  private static long roundBoundNanos(long intervalNanos) {
-    return Math.max(
-        TimeUnit.MILLISECONDS.toNanos(MIN_ROUND_TIMEOUT_MS),
-        intervalNanos + TimeUnit.MILLISECONDS.toNanos(1));
+  record Batch(String workerId, List<Member> members) {}
+
+  /** The statements of one round, in member order: one for each worker and each 100 leases. */
+  static List<Batch> batches(List<Member> due) {
+    Map<String, List<Member>> byWorker = new LinkedHashMap<>();
+    for (Member member : due) {
+      byWorker.computeIfAbsent(member.workerId(), ignored -> new ArrayList<>()).add(member);
+    }
+    List<Batch> batches = new ArrayList<>();
+    for (Map.Entry<String, List<Member>> entry : byWorker.entrySet()) {
+      List<Member> group = entry.getValue();
+      for (int start = 0; start < group.size(); start += ROUND_LIMIT) {
+        batches.add(
+            new Batch(
+                entry.getKey(), group.subList(start, Math.min(group.size(), start + ROUND_LIMIT))));
+      }
+    }
+    return batches;
+  }
+
+  /**
+   * The batch that a dedicated round sends first. It moves by one each round, so no batch is always
+   * last. A borrowing round always starts with the first batch, because it sends every batch.
+   */
+  int nextFirstBatch(int count) {
+    if (!dedicated || count == 0) {
+      return 0;
+    }
+    int first = Math.floorMod(rotation, count);
+    rotation = first + 1;
+    return first;
+  }
+
+  /**
+   * Sends {@code batches} in order from {@code first}. On the dedicated connection a batch that
+   * would start after {@code deadline} is not sent, and a failed batch throws. A borrowing round
+   * sends every batch and skips a failed one.
+   */
+  void sendBatches(List<Batch> batches, int first, long deadline, Round round) throws SQLException {
+    for (int index = 0; index < batches.size(); index++) {
+      Batch batch = batches.get((first + index) % batches.size());
+      long sentAt = System.nanoTime();
+      if (dedicated && deadline - sentAt <= 0) {
+        return;
+      }
+      List<Row> rows;
+      try {
+        String payload = leases(batch.members());
+        long remaining = deadline - System.nanoTime();
+        rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V1, batch.workerId(), payload);
+      } catch (SQLException | RuntimeException error) {
+        if (dedicated) {
+          throw error;
+        }
+        continue;
+      }
+      Map<String, String> statuses = new HashMap<>();
+      for (Row row : rows) {
+        statuses.put(row.requiredText("task_id"), row.requiredText("status"));
+      }
+      settle(batch.members(), statuses, sentAt);
+    }
+  }
+
+  /**
+   * The deadline of one round for the shortest member interval {@code intervalNanos}. It is three
+   * quarters of the interval, so that one timed-out round leaves a renewal margin when {@code 2 ×
+   * interval + bound < lease}. Below an interval of 200 ms the bound is at least {@code min(50 ms,
+   * interval)}. Up to 50 ms the bound thus equals the interval, as before SM-1444, and a timed-out
+   * round leaves about no margin. It is at least 1 ms, in whole milliseconds rounded down. Every
+   * SDK uses the same formula.
+   */
+  static long roundBoundNanos(long intervalNanos) {
+    long intervalMs = TimeUnit.NANOSECONDS.toMillis(intervalNanos);
+    long boundMs =
+        Math.max(1, Math.max(intervalMs * 3 / 4, Math.min(MIN_ROUND_TIMEOUT_MS, intervalMs)));
+    return TimeUnit.MILLISECONDS.toNanos(boundMs);
+  }
+
+  /**
+   * The wait before a new connection after a failed round. It ends at the next slot when that is
+   * sooner than {@link #RETRY_NANOS}, so the retry does not delay the next round. After the slot,
+   * it is {@link #RETRY_NANOS}, so a pool that keeps refusing is not asked in a loop.
+   */
+  static long retryWaitNanos(long previous, long intervalNanos, long now) {
+    long untilSlot = previous + intervalNanos - now;
+    return untilSlot > 0 ? Math.min(RETRY_NANOS, untilSlot) : RETRY_NANOS;
+  }
+
+  /** The shortest member interval, or {@link #RETRY_NANOS} when no member is left. */
+  private long shortestIntervalNanos() {
+    lock.lock();
+    try {
+      long interval = RETRY_NANOS;
+      boolean first = true;
+      for (Member member : members.values()) {
+        interval = first ? member.intervalNanos() : Math.min(interval, member.intervalNanos());
+        first = false;
+      }
+      return interval;
+    } finally {
+      lock.unlock();
+    }
   }
 
   private static String leases(List<Member> chunk) {
@@ -326,7 +433,7 @@ public final class Heartbeat {
     return true;
   }
 
-  private interface Round {
+  interface Round {
     /** Sends one statement within {@code timeoutNanos}, the time left of the round's bound. */
     List<Row> send(
         long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)

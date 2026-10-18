@@ -47,6 +47,7 @@ from ._heartbeat_round import (
     ROUND_COMMIT as _ROUND_COMMIT,
     ROUND_ROLLBACK as _ROUND_ROLLBACK,
     ROUND_TIMEOUTS as _ROUND_TIMEOUTS,
+    heartbeat_round_bound_ms as _heartbeat_round_bound_ms,
 )
 from ._notifications import (
     NotificationConnectionFactory as _NotificationConnectionFactory,
@@ -1373,8 +1374,10 @@ class Worker:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
         self.heartbeat_ms = heartbeat_ms if heartbeat_ms is not None else max(100, lease_ms // 3)
-        # The deadline of one round on the dedicated connection. It equals heartbeat_ms.
-        self._heartbeat_round_ms = self.heartbeat_ms
+        # The deadline of one round on the dedicated connection (heartbeat_round_bound_ms). Rounds
+        # start on a fixed schedule, so after one timed-out round the next round still ends before
+        # the lease when 2 * heartbeat_ms + _heartbeat_round_ms < lease_ms, as with the defaults.
+        self._heartbeat_round_ms = _heartbeat_round_bound_ms(self.heartbeat_ms)
         if not 0 < self.heartbeat_ms < self.lease_ms:
             raise ValueError("heartbeat_ms must be positive and less than lease_ms")
         if (
@@ -1468,6 +1471,8 @@ class Worker:
         # Counts the cleanups of the slot. A round that started before a cleanup closes its
         # connection instead of putting it back, because nothing would close it later.
         self._heartbeat_generation = 0
+        # True while a replacement connection that a failed round started is still opening.
+        self._heartbeat_replacing = False
         self._notification_connection_factory: _NotificationConnectionFactory | None = (
             _psycopg_pool_notification_factory(pool)
         )
@@ -1502,14 +1507,22 @@ class Worker:
         return unregister
 
     def _run_heartbeats(self) -> None:
+        # A round falls due one heartbeat_ms after the previous round started, not after it ended.
+        # A round that ends after its next slot starts one overdue round at once, and the interval
+        # after it counts from that start, so missed slots are never replayed. A wake that finds
+        # members starts no early round.
+        next_at = monotonic() + self.heartbeat_ms / 1000
         while True:
-            if self._heartbeat_wake.wait(self.heartbeat_ms / 1000):
+            wait = next_at - monotonic()
+            if wait > 0 and self._heartbeat_wake.wait(wait):
                 self._heartbeat_wake.clear()
             with self._heartbeat_lock:
                 members = list(self._heartbeat_members.values())
                 if not members:
                     self._heartbeat_thread = None
                     return
+            if monotonic() < next_at:
+                continue
             leases = [
                 {
                     "taskId": task.id,
@@ -1519,6 +1532,7 @@ class Worker:
                 for task in (member.task for member in members)
             ]
             sent_at = monotonic()
+            next_at = sent_at + self.heartbeat_ms / 1000
             try:
                 rows = self._heartbeat_rows(
                     (self.worker_id, json.dumps(leases, separators=(",", ":"))),
@@ -1623,6 +1637,7 @@ class Worker:
                 # The heartbeat thread stopped waiting, so nothing counts this renewal.
                 with suppress(Exception):
                     close()
+                self._replace_heartbeat_connection(generation)
                 return
             with self._heartbeat_connection_lock:
                 if self._heartbeat_connection is None and self._heartbeat_generation == generation:
@@ -1635,6 +1650,43 @@ class Worker:
         except BaseException as error:
             heartbeat_round.finish()
             heartbeat_round.result.set_exception(error)
+            self._replace_heartbeat_connection(generation)
+
+    def _replace_heartbeat_connection(self, generation: int) -> None:
+        """Open the connection for the next round after a round discarded its connection.
+
+        Opening it here starts the connect before the next round. Rounds start on a fixed
+        schedule, so the next round can start soon after a failed round ends. With a short
+        interval, a connect inside each deadline could then fail every later round.
+        """
+        factory = cast(_HeartbeatExecutorFactory, self._heartbeat_executor_factory)
+        with self._heartbeat_connection_lock:
+            # One replacement opens at a time, so a pool that cannot lend one gets one wait.
+            if (
+                self._heartbeat_replacing
+                or self._heartbeat_connection is not None
+                or self._heartbeat_generation != generation
+            ):
+                return
+            self._heartbeat_replacing = True
+        connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
+        try:
+            connection = factory()
+        except Exception:
+            # The next round connects again inside its own deadline.
+            return
+        finally:
+            with self._heartbeat_connection_lock:
+                self._heartbeat_replacing = False
+                if (
+                    connection is not None
+                    and self._heartbeat_connection is None
+                    and self._heartbeat_generation == generation
+                ):
+                    self._heartbeat_connection, connection = connection, None
+        if connection is not None:
+            with suppress(Exception):
+                connection[1]()
 
     def _close_heartbeat_connection(self) -> None:
         with self._heartbeat_connection_lock:
