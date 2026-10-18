@@ -23,6 +23,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -37,7 +39,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +47,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
@@ -55,9 +57,13 @@ import org.jspecify.annotations.Nullable;
  * Claims tasks from PostgreSQL and runs their handlers under renewed leases. The counterpart of
  * Ruby's {@code Stablemates::Workhorse::Worker} (ADR 0103, "Worker surface").
  *
- * <p>Each handler runs on its own virtual thread, or on the caller's {@link ExecutorService}. A
- * semaphore with {@link #concurrency} permits bounds the claimed tasks. Every write an attempt
- * makes carries its fence token, so an attempt that lost its lease cannot change the task.
+ * <p>Each handler runs on its own virtual thread, or on the caller's {@link ExecutorService}. The
+ * slot accounting bounds the claimed tasks at {@link #concurrency}. Every write an attempt makes
+ * carries its fence token, so an attempt that lost its lease cannot change the task.
+ *
+ * <p>On a fast-tier queue (ADR 0077), a completion also claims the next tasks in the same
+ * statement, and the slots split into {@link #cohorts}. A batch handler from {@link
+ * Builder#handleBatch} receives the tasks of one queue together, and each task settles on its own.
  *
  * <p>{@link #run} blocks until {@link #stop}. A stopping worker claims nothing new and waits up to
  * {@code shutdownGrace} for running handlers. It then cancels the rest with {@link
@@ -80,6 +86,8 @@ public final class Worker implements AutoCloseable {
   private static final long EXPIRATION_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
   private static final long DEREGISTER_NANOS = TimeUnit.SECONDS.toNanos(1);
   private static final long NEVER = Long.MIN_VALUE;
+  private static final long TIER_PROBE_NANOS = TimeUnit.SECONDS.toNanos(30);
+  private static final int COMPLETION_BATCH_LIMIT = 100;
   private static final int MAX_RETRY_DELAY_MS = Integer.MAX_VALUE;
   private static final int CAUSE_DEPTH = 16;
   private static final String REDACTED_NAME = "RedactedTaskError";
@@ -110,6 +118,7 @@ public final class Worker implements AutoCloseable {
   private final String workerId;
   private final int concurrency;
   private final int refillBatch;
+  private final int cohorts;
   private final @Nullable ExecutorService executor;
   private final long leaseMs;
   private final long heartbeatMs;
@@ -128,11 +137,33 @@ public final class Worker implements AutoCloseable {
   private final System.Logger logger;
   private final JsonCodec codec;
   private final Map<String, Registration> handlers;
+  private final Map<String, BatchCoordinator> coordinators;
   private final Heartbeat heartbeat;
   private final @Nullable String sdkVersion;
   private final String hostname;
 
-  private final Semaphore permits;
+  /**
+   * Guards the slot accounting of each run, the queue tiers, and the claim order, which handler
+   * threads share with the dispatch loop.
+   */
+  private final ReentrantLock stateLock = new ReentrantLock();
+
+  /** The queues that rejected a fast-tier statement, each until its next probe. */
+  private final Map<String, Long> fullTierUntil = new HashMap<>();
+
+  /** The queues that answered a fast-tier statement. */
+  private final Set<String> fastTierQueues = new HashSet<>();
+
+  private final Slots slots;
+
+  private long dispatchSequence;
+
+  /** Guards {@link #pendingCompletions}. */
+  private final ReentrantLock completionLock = new ReentrantLock();
+
+  /** The completions that wait for the next statement of each key. */
+  private final Map<CompletionKey, List<PendingCompletion>> pendingCompletions = new HashMap<>();
+
   private final Wake wake = new Wake();
   private final AtomicLong stopVersion = new AtomicLong();
   private final AtomicBoolean locallyPaused = new AtomicBoolean();
@@ -178,6 +209,22 @@ public final class Worker implements AutoCloseable {
    */
   volatile @Nullable Runnable beforeDeadlineReset;
 
+  /**
+   * A test hook that receives each {@code complete_many_and_claim_v1} statement that PostgreSQL
+   * accepted. It is {@code null} in production, and no public API sets it.
+   */
+  volatile @Nullable Consumer<FusedStatement> fusedStatementHook;
+
+  /** One fused statement: its completions, its claim limit, and the tasks it claimed. */
+  record FusedStatement(int completions, int claimLimit, int claimed) {}
+
+  private void reportFused(int completions, int claimLimit, int claimed) {
+    Consumer<FusedStatement> hook = fusedStatementHook;
+    if (hook != null) {
+      hook.accept(new FusedStatement(completions, claimLimit, claimed));
+    }
+  }
+
   private volatile UUID instanceId = UUID.randomUUID();
   private volatile boolean draining;
 
@@ -197,6 +244,11 @@ public final class Worker implements AutoCloseable {
     this.concurrency = builder.concurrency;
     // A claim waits for a quarter of the slots, so at most four claims are in flight.
     this.refillBatch = (concurrency + 3) / 4;
+    this.cohorts = builder.cohorts != null ? builder.cohorts : defaultCohorts(concurrency);
+    if (cohorts > concurrency) {
+      throw new IllegalArgumentException("cohorts must be between 1 and concurrency");
+    }
+    this.slots = new Slots(concurrency, refillBatch, cohorts);
     this.executor = builder.executor;
     this.leaseMs = builder.leaseMs;
     this.heartbeatMs =
@@ -219,6 +271,20 @@ public final class Worker implements AutoCloseable {
     this.logger = builder.logger;
     this.codec = builder.codec;
     this.handlers = Map.copyOf(builder.handlers);
+    Map<String, BatchCoordinator> batches = new HashMap<>();
+    for (Map.Entry<String, Registration> entry : handlers.entrySet()) {
+      Registration registration = entry.getValue();
+      BatchOptions options = registration.batchOptions;
+      BatchHandler<?> batchHandler = registration.batchHandler;
+      if (options != null && batchHandler != null) {
+        if (options.maxSize() > concurrency) {
+          throw new IllegalArgumentException("maxSize must not exceed worker concurrency");
+        }
+        batches.put(
+            entry.getKey(), new BatchCoordinator(this, entry.getKey(), options, batchHandler));
+      }
+    }
+    this.coordinators = Map.copyOf(batches);
     this.queue =
         new Queue(
             connections,
@@ -227,7 +293,6 @@ public final class Worker implements AutoCloseable {
         builder.sharedHeartbeats
             ? Heartbeat.borrowing(dataSource)
             : Heartbeat.dedicated(dataSource);
-    this.permits = new Semaphore(concurrency);
     this.sdkVersion = Worker.class.getPackage().getImplementationVersion();
     this.hostname = localHostname();
   }
@@ -267,6 +332,19 @@ public final class Worker implements AutoCloseable {
   /** The most tasks this worker runs at once. */
   public int concurrency() {
     return concurrency;
+  }
+
+  /** The number of slot cohorts that fast-tier dispatch splits the concurrency into. */
+  public int cohorts() {
+    return cohorts;
+  }
+
+  /**
+   * The cohorts of a worker without the option: one below concurrency 8, and otherwise one for each
+   * 8 slots, from 2 to 8. A {@code DataSource} reports no pool size, so the pool does not lower it.
+   */
+  static int defaultCohorts(int concurrency) {
+    return concurrency < 8 ? 1 : Math.clamp((concurrency + 7) / 8, 2, 8);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -440,10 +518,22 @@ public final class Worker implements AutoCloseable {
     final List<RuntimeException> maintenanceErrors = new CopyOnWriteArrayList<>();
     final ConcurrentLinkedQueue<ClaimResult> results = new ConcurrentLinkedQueue<>();
 
-    /** False once the stop abandons claims in flight. A late claim then releases its permits. */
+    /** False once the stop abandons claims in flight. A late claim then releases its slots. */
     final AtomicBoolean claimsOpen = new AtomicBoolean(true);
 
     final long generation;
+
+    // The dispatch progress of this run. Each field changes under the state lock, because
+    // fast-tier completions read and change it too.
+    @Nullable Listener listener;
+    int empty;
+    @Nullable EmptyWait emptyWait;
+    boolean passEnded;
+    boolean claimedAny;
+    @Nullable RuntimeException claimError;
+
+    /** False once the dispatch loop ends, so completions stop claiming with it. */
+    boolean open = true;
 
     @Nullable Thread maintenance;
 
@@ -459,20 +549,93 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  /** What one claim returned. */
-  private record ClaimResult(
-      int limit, List<Claimed> claimed, long wakeVersion, @Nullable RuntimeException error) {}
+  /**
+   * The worker's slot accounting, which the dispatch loop and fast-tier completions share. Every
+   * field changes under {@link #stateLock}. A slot is busy while its task is admitted, reserved
+   * while a claim for it is in flight, and handed over once a completion claimed a task into it.
+   * Handed-over slots count as free, because the task that fills them is already admitted. On the
+   * fast tier the slots split into cohorts (ADR 0076). The accounting outlives a run, so a handler
+   * that an incomplete stop abandoned keeps its slot in the next run.
+   */
+  private static final class Slots {
+    final int concurrency;
+    final int refillBatch;
+    final int[] capacity;
+    final int[] busy;
+    final int[] handedOver;
+    final int[] reserved;
+    final int[] claims;
+    int busyTotal;
+    int handedOverTotal;
+    int reservedTotal;
+    int wholeClaims;
 
-  /** One claimed task with its payload text and the monotonic time its claim left. */
-  private record Claimed(ClaimedTask task, String payload, long startedAt, TierRead tier) {}
+    Slots(int concurrency, int refillBatch, int cohorts) {
+      this.concurrency = concurrency;
+      this.refillBatch = refillBatch;
+      // Spreads the remainder over the first cohorts, so sizes differ by at most one slot.
+      this.capacity = new int[cohorts];
+      for (int cohort = 0; cohort < cohorts; cohort++) {
+        capacity[cohort] = concurrency / cohorts + (cohort < concurrency % cohorts ? 1 : 0);
+      }
+      this.busy = new int[cohorts];
+      this.handedOver = new int[cohorts];
+      this.reserved = new int[cohorts];
+      this.claims = new int[cohorts];
+    }
+
+    int free() {
+      return concurrency - busyTotal + handedOverTotal - reservedTotal;
+    }
+
+    int cohortFree(int cohort) {
+      return capacity[cohort] - busy[cohort] + handedOver[cohort] - reserved[cohort];
+    }
+
+    /** The cohort with the most free slots, the lowest index on a tie. */
+    int roomiest() {
+      int best = 0;
+      for (int cohort = 1; cohort < capacity.length; cohort++) {
+        if (cohortFree(cohort) > cohortFree(best)) {
+          best = cohort;
+        }
+      }
+      return best;
+    }
+  }
 
   /**
-   * One shared, deferred read of whether a queue is on the fast tier, for the tasks of one claim.
-   * {@code claim_many_v1} claims a fast-tier queue through {@code fast_claim_v1}, so its tasks
-   * carry no tier marker. A handler's first durable call runs the read, once the heartbeat renews
-   * the lease, and not the claim, where a slow read would spend leases that nothing renews yet. The
-   * tier cannot change while the queue has live tasks, so one read holds for every task of the
-   * claim. A failed read is not kept, so the next durable call reads again.
+   * One plain claim: its limit, its cohort ({@link #WHOLE} for the whole worker), and the slots it
+   * reserved in that cohort.
+   */
+  private record ClaimPlan(int limit, int cohort, int cohortLimit) {}
+
+  private static final int WHOLE = -1;
+
+  /** What one claim returned. */
+  private record ClaimResult(
+      ClaimPlan plan, List<Claimed> claimed, long wakeVersion, @Nullable RuntimeException error) {}
+
+  /**
+   * One claimed task with its payload text, the monotonic time its claim left, its tier read, and
+   * whether a fast-tier statement claimed it. Only such a task completes through the fused
+   * statement.
+   */
+  record Claimed(
+      ClaimedTask task,
+      String payload,
+      long startedAt,
+      BooleanSupplier fastTier,
+      boolean fastClaimed) {}
+
+  /**
+   * One shared, deferred read of whether a queue is on the fast tier, for the tasks of one {@code
+   * claim_many_v1} call. That function claims a fast-tier queue through {@code fast_claim_v1}, so a
+   * queue that moved to the fast tier during the probe interval returns tasks with no tier marker.
+   * A handler's first durable call runs the read, once the heartbeat renews the lease, and not the
+   * claim, where a slow read would spend leases that nothing renews yet. The tier cannot change
+   * while the queue has live tasks, so one read holds for every task of the claim. A failed read is
+   * not kept, so the next durable call reads again. A fast answer ends the probe interval.
    */
   private final class TierRead {
     private final String queueName;
@@ -492,6 +655,9 @@ public final class Worker implements AutoCloseable {
             if (queueName.equals(control.text("queue_name"))) {
               found = "fast".equals(control.text("tier"));
             }
+          }
+          if (found) {
+            markFastTier(queueName);
           }
           fast = found;
         }
@@ -609,33 +775,42 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Keeps the slots full without one serial claim round trip for each task (ADR 0076). A claim
-   * reserves the permits it asks for, so claimed tasks never exceed the concurrency. With no claim
-   * in flight, any free slot starts one. While one is in flight, another starts only once the free
-   * slots reach the refill batch, so a busy worker claims in batches.
+   * reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no claim in
+   * flight, any free slot starts one. While one is in flight, another starts only once the free
+   * slots reach the refill batch, so a busy worker claims in batches. A fast-tier completion claims
+   * too, from the same accounting (ADR 0077). On the fast tier the slots split into cohorts, and
+   * plain claims leave one at a time, each for the roomiest cohort.
    */
   private boolean dispatch(boolean continuous, RunState run, @Nullable Listener listener) {
+    stateLock.lock();
+    try {
+      run.listener = listener;
+    } finally {
+      stateLock.unlock();
+    }
     int inFlight = 0;
-    int empty = 0;
-    EmptyWait emptyWait = null;
-    boolean passEnded = false;
-    boolean claimedAny = false;
-    RuntimeException claimError = null;
     try {
       while (true) {
         wake.reset();
         ClaimResult result;
         while ((result = run.results.poll()) != null) {
           inFlight--;
-          Progress progress = settleClaim(result, run, empty, emptyWait, listener);
-          empty = progress.empty;
-          emptyWait = progress.emptyWait;
-          passEnded |= progress.passEnded;
-          claimedAny |= progress.claimedAny;
-          if (progress.error != null && claimError == null) {
-            claimError = progress.error;
-          }
+          settleClaim(result, run);
         }
         refreshRegistrationIfDue(run);
+        RuntimeException claimError;
+        boolean passEnded;
+        int empty;
+        EmptyWait emptyWait;
+        stateLock.lock();
+        try {
+          claimError = run.claimError;
+          passEnded = run.passEnded;
+          empty = run.empty;
+          emptyWait = run.emptyWait;
+        } finally {
+          stateLock.unlock();
+        }
         if (stopRequested(run.version)
             || !run.errors.isEmpty()
             || claimError != null
@@ -649,8 +824,14 @@ public final class Worker implements AutoCloseable {
           if (!continuous) {
             break;
           }
-          // A pause ends the empty wait, so a resume claims at once.
-          emptyWait = null;
+          // A pause ends the empty wait, so a resume claims at once. A release wait ignores the
+          // wake of the resume, so it must end here.
+          stateLock.lock();
+          try {
+            run.emptyWait = null;
+          } finally {
+            stateLock.unlock();
+          }
           wake.await(dispatchWait(empty, listener));
           continue;
         }
@@ -658,13 +839,20 @@ public final class Worker implements AutoCloseable {
           long remaining = emptyWait.deadline - System.nanoTime();
           Long seen = emptyWait.version;
           if (remaining <= 0 || (seen != null && seen != wake.version())) {
-            emptyWait = null;
+            stateLock.lock();
+            try {
+              if (emptyWait.equals(run.emptyWait)) {
+                run.emptyWait = null;
+              }
+            } finally {
+              stateLock.unlock();
+            }
           } else {
             wake.await(remaining);
           }
           continue;
         }
-        if (claimable(inFlight)) {
+        if (planClaim(inFlight) != null) {
           if (continuous) {
             startMaintenance(run);
           } else {
@@ -672,19 +860,23 @@ public final class Worker implements AutoCloseable {
               break;
             }
           }
-          while (claimable(inFlight)) {
-            int limit = permits.availablePermits();
-            if (!permits.tryAcquire(limit)) {
-              break;
-            }
+          ClaimPlan plan;
+          long wakeVersion = wake.version();
+          while ((plan = reserveClaim(inFlight)) != null) {
             inFlight++;
-            startClaim(limit, wake.version(), empty > 0, run);
+            startClaim(plan, wakeVersion, empty > 0, run);
           }
         }
         wake.await(dispatchWait(empty, listener));
       }
     } finally {
       run.deadline = shutdownDeadline(run);
+      stateLock.lock();
+      try {
+        run.open = false;
+      } finally {
+        stateLock.unlock();
+      }
       // Tasks that an in-flight claim returns hold leases, so they run before the drain. The wait
       // ends at the shutdown deadline, but it lasts one unwind window at least, so a zero grace
       // still takes a claim that is about to return. A claim that returns later is not run: its
@@ -712,47 +904,113 @@ public final class Worker implements AutoCloseable {
           continue;
         }
         inFlight--;
-        Progress progress = settleClaim(result, run, empty, emptyWait, listener);
-        claimedAny |= progress.claimedAny;
-        if (progress.error != null && claimError == null) {
-          claimError = progress.error;
-        }
+        settleClaim(result, run);
       }
     }
-    if (claimError != null) {
-      throw claimError;
+    stateLock.lock();
+    try {
+      if (run.claimError != null) {
+        throw run.claimError;
+      }
+      return run.claimedAny;
+    } finally {
+      stateLock.unlock();
     }
-    return claimedAny;
   }
 
-  private boolean claimable(int inFlight) {
-    int free = permits.availablePermits();
-    return free > 0 && (inFlight == 0 || free >= refillBatch);
+  private @Nullable ClaimPlan planClaim(int inFlight) {
+    stateLock.lock();
+    try {
+      return claimPlan(inFlight);
+    } finally {
+      stateLock.unlock();
+    }
   }
 
-  /** The dispatch state that one returned claim changes. */
-  private record Progress(
-      int empty,
-      @Nullable EmptyWait emptyWait,
-      boolean passEnded,
-      boolean claimedAny,
-      @Nullable RuntimeException error) {}
-
-  /** Admits the tasks one claim returned, and records whether it made progress. */
-  private Progress settleClaim(
-      ClaimResult result,
-      RunState run,
-      int empty,
-      @Nullable EmptyWait emptyWait,
-      @Nullable Listener listener) {
-    permits.release(result.limit - result.claimed.size());
-    boolean handled = false;
-    // A claimed task holds a lease, so it runs even when the loop is stopping or failed.
-    for (Claimed claimed : result.claimed) {
-      admit(claimed, run);
-      handled |= handlers.containsKey(claimed.task.type());
+  /**
+   * Plans the next plain claim and reserves its slots under one lock, so a fused completion cannot
+   * reserve the same free slots in between.
+   */
+  private @Nullable ClaimPlan reserveClaim(int inFlight) {
+    stateLock.lock();
+    try {
+      ClaimPlan plan = claimPlan(inFlight);
+      if (plan != null) {
+        slots.reservedTotal += plan.limit;
+        if (plan.cohort == WHOLE) {
+          slots.wholeClaims++;
+        } else {
+          slots.claims[plan.cohort]++;
+          slots.reserved[plan.cohort] += plan.cohortLimit;
+        }
+      }
+      return plan;
+    } finally {
+      stateLock.unlock();
     }
-    RuntimeException error = result.error;
+  }
+
+  /** Gives back the slots a plain claim reserved. The caller holds {@link #stateLock}. */
+  private void unreserve(ClaimPlan plan) {
+    slots.reservedTotal -= plan.limit;
+    if (plan.cohort == WHOLE) {
+      slots.wholeClaims--;
+    } else {
+      slots.claims[plan.cohort]--;
+      slots.reserved[plan.cohort] -= plan.cohortLimit;
+    }
+  }
+
+  /**
+   * Plans the next plain claim, or returns {@code null}. With one cohort, or while a queue answers
+   * on the full tier, a claim takes every free slot of the worker. Otherwise one claim at a time
+   * leaves, for the roomiest cohort. The caller holds {@link #stateLock}.
+   */
+  private @Nullable ClaimPlan claimPlan(int inFlight) {
+    int free = slots.free();
+    if (free <= 0) {
+      return null;
+    }
+    if (cohorts == 1 || !fullTierUntil.isEmpty()) {
+      if (inFlight > 0 && free < slots.refillBatch) {
+        return null;
+      }
+      return new ClaimPlan(free, WHOLE, free);
+    }
+    if (inFlight > 0) {
+      return null;
+    }
+    int cohort = slots.roomiest();
+    int cohortLimit = Math.min(free, slots.cohortFree(cohort));
+    if (fastTierQueues.containsAll(queueNames)) {
+      return cohortLimit > 0 ? new ClaimPlan(cohortLimit, cohort, cohortLimit) : null;
+    }
+    // A claim that still has to learn a queue's tier reserves every free slot, so a queue that
+    // answers on the full tier fills them all.
+    return new ClaimPlan(free, cohort, Math.max(0, cohortLimit));
+  }
+
+  /**
+   * Admits the tasks one claim returned, gives back its unused slots, and records whether it made
+   * progress.
+   */
+  private void settleClaim(ClaimResult result, RunState run) {
+    stateLock.lock();
+    try {
+      unreserve(result.plan);
+      // A claimed task holds a lease, so it runs even when the loop is stopping or failed.
+      for (Claimed claimed : result.claimed) {
+        admit(claimed, result.plan.cohort, run);
+      }
+      settleClaimProgress(run, result.claimed, result.wakeVersion, result.error);
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  /** Records whether a returned plain claim made progress. The caller holds {@link #stateLock}. */
+  private void settleClaimProgress(
+      RunState run, List<Claimed> claimed, long wakeVersion, @Nullable RuntimeException error) {
     if (error instanceof IsolationLevelException isolation) {
       // The pool runs above read committed. The worker logs it and claims again after the wait.
       log(
@@ -760,38 +1018,44 @@ public final class Worker implements AutoCloseable {
           "workhorse.worker.claim_isolation",
           "Claims need read committed isolation; configure the pool at read committed",
           Map.of("workhorse.isolation_level", isolation.isolationLevel()));
-      int next = empty + 1;
-      return new Progress(
-          next,
-          new EmptyWait(System.nanoTime() + dispatchWait(next, listener), null),
-          false,
-          false,
-          null);
+      run.empty++;
+      run.emptyWait =
+          new EmptyWait(System.nanoTime() + dispatchWait(run.empty, run.listener), null);
+      return;
     }
     if (error != null) {
-      return new Progress(empty, emptyWait, false, false, error);
+      if (run.claimError == null) {
+        run.claimError = error;
+      }
+      return;
+    }
+    boolean handled = false;
+    for (Claimed task : claimed) {
+      handled |= handlers.containsKey(task.task.type());
     }
     if (handled) {
-      return new Progress(0, null, false, true, null);
+      run.empty = 0;
+      run.claimedAny = true;
+      run.emptyWait = null;
+      return;
     }
     // A claim that only handed its tasks back made no progress, so it backs off as an empty claim
     // does instead of spinning on a task that no handler here runs.
-    int next = empty + 1;
-    long deadline = System.nanoTime() + dispatchWait(next, listener);
-    EmptyWait wait;
-    if (result.claimed.isEmpty()) {
-      wait = emptyWait != null ? emptyWait : new EmptyWait(deadline, result.wakeVersion);
-    } else if (emptyWait == null || emptyWait.version != null) {
+    run.empty++;
+    run.passEnded = true;
+    long deadline = System.nanoTime() + dispatchWait(run.empty, run.listener);
+    if (claimed.isEmpty()) {
+      if (run.emptyWait == null) {
+        run.emptyWait = new EmptyWait(deadline, wakeVersion);
+      }
+    } else if (run.emptyWait == null || run.emptyWait.version != null) {
       // A release wait. Each release notifies the queue, so a wake does not end this wait.
-      wait = new EmptyWait(deadline, null);
-    } else {
-      wait = emptyWait;
+      run.emptyWait = new EmptyWait(deadline, null);
     }
-    return new Progress(next, wait, true, false, null);
   }
 
-  /** Runs one claim on its own virtual thread. The dispatch loop already took its permits. */
-  private void startClaim(int limit, long wakeVersion, boolean backingOff, RunState run) {
+  /** Runs one claim on its own virtual thread. The dispatch loop already reserved its slots. */
+  private void startClaim(ClaimPlan plan, long wakeVersion, boolean backingOff, RunState run) {
     // The notification delay spreads idle workers that one notification woke together. A worker
     // whose last claim found work would claim now anyway, so it skips the delay.
     boolean delayed = notified.getAndSet(false) && backingOff;
@@ -809,14 +1073,15 @@ public final class Worker implements AutoCloseable {
                 // A worker paused or stopped during the delay sends no claim.
                 boolean withdrawn = delayed && (stopRequested(run.version) || isPaused());
                 if (!withdrawn) {
-                  claimAcrossQueues(limit, claimed);
+                  claimAcrossQueues(
+                      plan.limit, claimed, plan.cohort == WHOLE ? plan.limit : plan.cohortLimit);
                 }
               } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
               } catch (RuntimeException failure) {
                 error = failure;
               } finally {
-                run.results.add(new ClaimResult(limit, claimed, wakeVersion, error));
+                run.results.add(new ClaimResult(plan, claimed, wakeVersion, error));
                 wake.signal();
                 if (!run.claimsOpen.get()) {
                   releaseLateClaims(run);
@@ -828,13 +1093,26 @@ public final class Worker implements AutoCloseable {
   /**
    * Claims from each queue at most once, starting one queue further on each call. Appends to {@code
    * claimed} as each queue answers, so a later queue's error keeps the leases already taken.
+   * Fast-tier queues together give at most {@code fastLimit} tasks, the free slots of one cohort.
    */
-  private void claimAcrossQueues(int limit, List<Claimed> claimed) {
+  private void claimAcrossQueues(int limit, List<Claimed> claimed, int fastLimit) {
     int size = queueNames.size();
     int start = (int) Math.floorMod(nextQueueIndex.getAndIncrement(), (long) size);
     for (int offset = 0; offset < size && claimed.size() < limit; offset++) {
       String name = queueNames.get((start + offset) % size);
-      long startedAt = System.nanoTime();
+      claim(name, limit - claimed.size(), fastLimit - claimed.size(), claimed);
+    }
+  }
+
+  private void claim(String name, int limit, int fastLimit, List<Claimed> claimed) {
+    long startedAt = System.nanoTime();
+    List<Row> fast = claimFast(name, limit, fastLimit, startedAt);
+    List<Claimed> tasks = new ArrayList<>();
+    if (fast != null) {
+      for (Row row : fast) {
+        tasks.add(claimed(row, name, startedAt, Worker::fastTier, true));
+      }
+    } else {
       TierRead tier = new TierRead(name);
       List<Row> rows =
           withConnection(
@@ -844,18 +1122,110 @@ public final class Worker implements AutoCloseable {
                       SqlCatalogue.CLAIM_MANY_V1,
                       name,
                       workerId,
-                      Integer.toString(limit - claimed.size()),
+                      Integer.toString(limit),
                       Long.toString(leaseMs)));
       for (Row row : rows) {
-        ClaimedTask task = claimedTask(row, name);
-        String payload = row.text("payload");
-        claimed.add(new Claimed(task, payload == null ? "null" : payload, startedAt, tier));
-        log(
-            System.Logger.Level.DEBUG,
-            "workhorse.task.claimed",
-            "Task claimed",
-            taskAttributes(task));
+        tasks.add(claimed(row, name, startedAt, tier::fast, false));
       }
+    }
+    claimed.addAll(tasks);
+    logClaimed(tasks);
+  }
+
+  /** The tier read of a task that a fast-tier statement claimed. */
+  private static boolean fastTier() {
+    return true;
+  }
+
+  private static Claimed claimed(
+      Row row, String queueName, long startedAt, BooleanSupplier tier, boolean fastClaimed) {
+    String payload = row.text("payload");
+    return new Claimed(
+        claimedTask(row, queueName),
+        payload == null ? "null" : payload,
+        startedAt,
+        tier,
+        fastClaimed);
+  }
+
+  private void logClaimed(List<Claimed> tasks) {
+    for (Claimed task : tasks) {
+      log(
+          System.Logger.Level.DEBUG,
+          "workhorse.task.claimed",
+          "Task claimed",
+          taskAttributes(task.task));
+    }
+  }
+
+  /**
+   * Claims through the fast tier, or returns {@code null} when the queue is on the full tier. The
+   * fast claim is {@code complete_many_and_claim_v1} with no completions. A full-tier queue rejects
+   * it, and the worker then claims that queue through {@code claim_many_v1} until the next probe.
+   */
+  private @Nullable List<Row> claimFast(String name, int limit, int fastLimit, long sentAt) {
+    stateLock.lock();
+    try {
+      Long until = fullTierUntil.get(name);
+      if (until != null && until - sentAt > 0) {
+        return null;
+      }
+    } finally {
+      stateLock.unlock();
+    }
+    int claimLimit = Math.min(limit, fastLimit);
+    if (claimLimit <= 0) {
+      return List.of();
+    }
+    List<Row> rows;
+    try {
+      rows =
+          withConnection(
+              connection ->
+                  Sql.fencedRows(
+                      connection,
+                      SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
+                      workerId,
+                      new String[0],
+                      new String[0],
+                      new String[0],
+                      name,
+                      Integer.toString(claimLimit),
+                      Long.toString(leaseMs)));
+    } catch (FastTierUnsupportedException fullTier) {
+      markFullTier(name, sentAt);
+      return null;
+    }
+    markFastTier(name);
+    // A claim that finds nothing still returns one row, with every claim column null.
+    List<Row> claimed = new ArrayList<>();
+    for (Row row : rows) {
+      if (row.text("task_id") != null) {
+        claimed.add(row);
+      }
+    }
+    reportFused(0, claimLimit, claimed.size());
+    return claimed;
+  }
+
+  /** Claims a queue that rejected a fast-tier statement through {@code claim_many_v1}. */
+  private void markFullTier(String name, long sentAt) {
+    stateLock.lock();
+    try {
+      fullTierUntil.put(name, sentAt + TIER_PROBE_NANOS);
+      fastTierQueues.remove(name);
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  private void markFastTier(String name) {
+    stateLock.lock();
+    try {
+      fullTierUntil.remove(name);
+      fastTierQueues.add(name);
+    } finally {
+      stateLock.unlock();
     }
   }
 
@@ -912,14 +1282,19 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * Gives back the permits of claims that returned after the stop abandoned them. Their tasks do
-   * not run: their leases expire, and recovery returns them to the queue. Each result is polled
-   * once, so the claim thread and the dispatch loop never release the same permits twice.
+   * Gives back the slots of claims that returned after the stop abandoned them. Their tasks do not
+   * run: their leases expire, and recovery returns them to the queue. Each result is polled once,
+   * so the claim thread and the dispatch loop never release the same slots twice.
    */
   private void releaseLateClaims(RunState run) {
     ClaimResult late;
     while ((late = run.results.poll()) != null) {
-      permits.release(late.limit);
+      stateLock.lock();
+      try {
+        unreserve(late.plan);
+      } finally {
+        stateLock.unlock();
+      }
     }
   }
 
@@ -1068,6 +1443,10 @@ public final class Worker implements AutoCloseable {
    * unwind window. Returns the number of handlers abandoned after that window.
    */
   private int drain(long deadline) {
+    // A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
+    for (BatchCoordinator coordinator : coordinators.values()) {
+      coordinator.flush();
+    }
     waitUntilIdle(deadline);
     List<Active> remaining = new ArrayList<>(active);
     if (!remaining.isEmpty()) {
@@ -1083,7 +1462,7 @@ public final class Worker implements AutoCloseable {
         // The caller's executor never started this task, and now never runs its handler. The
         // drain frees its slot here, because an executor can discard a queued runnable.
         active.remove(task);
-        permits.release();
+        releaseSlot(task);
         continue;
       }
       // The flag goes up before the ownership is read. An attempt that publishes its ownership
@@ -1284,11 +1663,21 @@ public final class Worker implements AutoCloseable {
   // ---------------------------------------------------------------------------------------------
   // Execution
 
-  /** One admitted task: its cancellation token, its lease ownership, and its handler thread. */
-  private static final class Active {
+  /**
+   * One admitted task: its cancellation token, its lease ownership, its handler thread, its slot
+   * cohort, and its claim order.
+   */
+  static final class Active {
     final Claimed claimed;
+    private final RunState run;
+    final int cohort;
+    final long order;
+
+    /** Whether a fused completion handed this task's slot over. It changes under the state lock. */
+    boolean handedOver;
+
     final TaskCancellation cancellation = new TaskCancellation();
-    final AtomicReference<@Nullable Ownership> ownership = new AtomicReference<>();
+    private final AtomicReference<@Nullable Ownership> ownership = new AtomicReference<>();
 
     /** Set by the drain for an attempt that still runs at the end of the unwind window. */
     final AtomicBoolean abandoned = new AtomicBoolean();
@@ -1301,8 +1690,21 @@ public final class Worker implements AutoCloseable {
     private static final int STARTED = 1;
     private static final int ABANDONED = 2;
 
-    Active(Claimed claimed) {
+    private Active(Claimed claimed, RunState run, int cohort, long order) {
       this.claimed = claimed;
+      this.run = run;
+      this.cohort = cohort;
+      this.order = order;
+    }
+
+    /** The task this attempt runs. */
+    ClaimedTask task() {
+      return claimed.task;
+    }
+
+    /** The order dispatch admitted this attempt in. */
+    long order() {
+      return order;
     }
 
     /** Starts the attempt, unless the drain abandoned it first. */
@@ -1354,12 +1756,29 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  /** A handler and the type its payload decodes as. */
-  private record Registration(Type payloadType, Handler<?> handler) {}
+  /**
+   * A handler and the type its payload decodes as. A batch registration has its options and its
+   * batch handler instead of a handler.
+   */
+  private record Registration(
+      Type payloadType,
+      @Nullable Handler<?> handler,
+      @Nullable BatchOptions batchOptions,
+      @Nullable BatchHandler<?> batchHandler) {}
 
-  /** Gives a claimed task a handler thread. Its permit stays taken until the handler returns. */
-  private void admit(Claimed claimed, RunState run) {
-    Active task = new Active(claimed);
+  /**
+   * Gives a claimed task a slot and a handler thread. The caller holds {@link #stateLock}, so the
+   * slot and the reservation it came from change together. The task joins {@code cohort} while that
+   * cohort has a free slot, and the roomiest cohort otherwise. A claimed task always runs, even
+   * after stop or pause: its lease is already held.
+   */
+  private void admit(Claimed claimed, int cohort, RunState run) {
+    int chosen = cohort == WHOLE || slots.cohortFree(cohort) <= 0 ? slots.roomiest() : cohort;
+    slots.busy[chosen]++;
+    slots.busyTotal++;
+    // Dispatch assigns the claim order here. A batch coordinator cannot read the arrival order off
+    // its own lock, because handler threads reach that lock in scheduler order.
+    Active task = new Active(claimed, run, chosen, dispatchSequence++);
     active.add(task);
     Runnable body = () -> runClaimedTask(task, run);
     try {
@@ -1372,9 +1791,25 @@ public final class Worker implements AutoCloseable {
       // A task the executor refused never runs, so the drain must not wait for it. Its lease
       // expires, and recovery returns it to the queue.
       active.remove(task);
-      permits.release();
+      releaseSlot(task);
       run.errors.add(error);
       stopVersion.incrementAndGet();
+    }
+  }
+
+  /** Frees the slot of an attempt that ended or never started. */
+  private void releaseSlot(Active task) {
+    stateLock.lock();
+    try {
+      slots.busy[task.cohort]--;
+      slots.busyTotal--;
+      if (task.handedOver) {
+        task.handedOver = false;
+        slots.handedOver[task.cohort]--;
+        slots.handedOverTotal--;
+      }
+    } finally {
+      stateLock.unlock();
     }
   }
 
@@ -1393,7 +1828,7 @@ public final class Worker implements AutoCloseable {
       stopVersion.incrementAndGet();
     } finally {
       active.remove(task);
-      permits.release();
+      releaseSlot(task);
       wake.signal();
     }
   }
@@ -1453,15 +1888,21 @@ public final class Worker implements AutoCloseable {
     }
     String encoded;
     try {
-      @SuppressWarnings("unchecked")
-      Handler<@Nullable Object> handler = (Handler<@Nullable Object>) registration.handler;
       Object result;
       task.enterHandler();
       try {
         Object payload = codec.decode(task.claimed.payload, registration.payloadType);
         TaskContext context =
-            new TaskContext(this, claimed, cancellation, arbiter, task.claimed.tier::fast);
-        result = handler.handle(context, payload);
+            new TaskContext(this, claimed, cancellation, arbiter, task.claimed.fastTier);
+        BatchCoordinator coordinator = coordinators.get(claimed.type());
+        if (coordinator != null) {
+          result = coordinator.run(task, payload, context);
+        } else {
+          @SuppressWarnings("unchecked")
+          Handler<@Nullable Object> handler =
+              (Handler<@Nullable Object>) Objects.requireNonNull(registration.handler);
+          result = handler.handle(context, payload);
+        }
       } finally {
         task.leaveHandler();
       }
@@ -1492,12 +1933,15 @@ public final class Worker implements AutoCloseable {
     if (finishSuspended(claimed, ownership, arbiter)) {
       return;
     }
-    complete(claimed, encoded, arbiter);
+    complete(task, encoded, arbiter);
   }
 
-  private void complete(ClaimedTask task, String encoded, Arbiter arbiter) {
+  private void complete(Active active, String encoded, Arbiter arbiter) {
+    ClaimedTask task = active.claimed.task;
     boolean accepted =
-        "t".equals(fencedRow(SqlCatalogue.COMPLETE_V1, task, encoded).text("accepted"));
+        active.claimed.fastClaimed
+            ? completeFast(active, encoded)
+            : "t".equals(fencedRow(SqlCatalogue.COMPLETE_V1, task, encoded).text("accepted"));
     Map<String, @Nullable Object> attributes = taskAttributes(task);
     attributes.put("workhorse.complete.accepted", accepted);
     if (accepted) {
@@ -1647,6 +2091,410 @@ public final class Worker implements AutoCloseable {
       current = current.getCause();
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Fast-tier completion
+
+  /**
+   * The fused claim that one fast-tier completion reserved: its limit, its cohort, and the wake
+   * version when it reserved. A zero limit reserves nothing.
+   */
+  private record CompletionClaim(int limit, int cohort, long wakeVersion) {}
+
+  /** The statement key of batched completions: one statement for each queue and cohort. */
+  private record CompletionKey(String queue, int cohort) {}
+
+  /**
+   * One completion that waits for a batched {@code complete_many_and_claim_v1} statement. The
+   * statement's sender fills {@code accepted}, {@code claimed}, {@code fullTier}, or {@code error},
+   * and then counts down {@code done}. {@code lead} makes a waiting completion the sender of the
+   * next statement.
+   */
+  private static final class PendingCompletion {
+    final ClaimedTask task;
+    final String encoded;
+    final int limit;
+    final CountDownLatch done = new CountDownLatch(1);
+    volatile boolean accepted;
+    volatile List<Claimed> claimed = List.of();
+    volatile boolean fullTier;
+    volatile @Nullable Throwable error;
+    volatile boolean lead;
+
+    PendingCompletion(ClaimedTask task, String encoded, int limit) {
+      this.task = task;
+      this.encoded = encoded;
+      this.limit = limit;
+    }
+
+    void await() {
+      boolean interrupted = false;
+      while (true) {
+        try {
+          done.await();
+          break;
+        } catch (InterruptedException error) {
+          interrupted = true;
+        }
+      }
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  /**
+   * Completes a fast-tier attempt through the batched statement, and refills its slot. Completions
+   * of one queue and cohort that arrive while its statement is in flight share the next one. The
+   * statement also claims tasks into the slots that this call set aside. A queue that left the fast
+   * tier after the claim rejects that statement, so the attempt completes through {@code
+   * complete_v1} instead.
+   */
+  private boolean completeFast(Active task, String encoded) {
+    ClaimedTask claimed = task.claimed.task;
+    CompletionClaim reservation = reserveCompletionClaim(task);
+    PendingCompletion pending = new PendingCompletion(claimed, encoded, reservation.limit);
+    try {
+      sendBatchedCompletion(pending, new CompletionKey(claimed.queue(), reservation.cohort));
+    } finally {
+      settleCompletionClaim(task, reservation, pending.error != null ? null : pending.claimed);
+    }
+    Throwable error = pending.error;
+    if (error != null) {
+      throw unchecked(error);
+    }
+    if (pending.fullTier) {
+      return "t".equals(fencedRow(SqlCatalogue.COMPLETE_V1, claimed, encoded).text("accepted"));
+    }
+    return pending.accepted;
+  }
+
+  /**
+   * Sets aside the slots that a completion's fused claim can fill (ADR 0076). The claim asks for
+   * the free slots of the task's cohort plus the slot the task leaves. It claims nothing while the
+   * worker stops, pauses, or waits after an empty claim, and it waits for the refill batch while
+   * another claim for the cohort is in flight.
+   */
+  private CompletionClaim reserveCompletionClaim(Active task) {
+    RunState run = task.run;
+    int cohort = task.cohort;
+    stateLock.lock();
+    try {
+      CompletionClaim idle = new CompletionClaim(0, cohort, wake.version());
+      if (!run.open
+          || stopRequested(run.version)
+          || !run.errors.isEmpty()
+          || isPaused()
+          || run.claimError != null
+          || run.emptyWait != null) {
+        return idle;
+      }
+      int limit = Math.min(slots.free(), slots.cohortFree(cohort)) + 1;
+      boolean claiming = slots.wholeClaims > 0 || slots.claims[cohort] > 0;
+      if (limit <= 0 || (claiming && limit < slots.refillBatch)) {
+        return idle;
+      }
+      slots.reservedTotal += limit;
+      slots.reserved[cohort] += limit;
+      task.handedOver = true;
+      slots.handedOverTotal++;
+      slots.handedOver[cohort]++;
+      return new CompletionClaim(limit, cohort, idle.wakeVersion);
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  /**
+   * Releases a fused claim's reservation and starts the tasks it claimed in its cohort. {@code
+   * claimed} is {@code null} when the completion failed.
+   */
+  private void settleCompletionClaim(
+      Active task, CompletionClaim reservation, @Nullable List<Claimed> claimed) {
+    if (reservation.limit == 0) {
+      return;
+    }
+    RunState run = task.run;
+    stateLock.lock();
+    try {
+      slots.reservedTotal -= reservation.limit;
+      slots.reserved[reservation.cohort] -= reservation.limit;
+      // A claimed task took over this handler's slot. Without one, the slot stays this handler's
+      // until it returns.
+      if ((claimed == null || claimed.isEmpty()) && task.handedOver) {
+        task.handedOver = false;
+        slots.handedOverTotal--;
+        slots.handedOver[reservation.cohort]--;
+      }
+      boolean handled = false;
+      if (claimed != null) {
+        for (Claimed next : claimed) {
+          admit(next, reservation.cohort, task.run);
+          handled |= handlers.containsKey(next.task.type());
+        }
+      }
+      if (handled) {
+        run.claimedAny = true;
+        run.empty = 0;
+      } else if (claimed != null && claimed.isEmpty() && queueNames.size() == 1) {
+        // The fused claim asks one queue only, so it proves that queue empty when this worker has
+        // no other.
+        run.empty++;
+        run.passEnded = true;
+        if (run.emptyWait == null) {
+          run.emptyWait =
+              new EmptyWait(
+                  System.nanoTime() + dispatchWait(run.empty, run.listener),
+                  reservation.wakeVersion);
+        }
+      }
+    } finally {
+      stateLock.unlock();
+    }
+    wake.signal();
+  }
+
+  /**
+   * Sends a completion in the next statement of its key, and waits for its result. One statement
+   * for each key is in flight. The first completion sends its own at once. Those that arrive
+   * meanwhile wait, and the first of them sends them all together when the statement returns.
+   */
+  private void sendBatchedCompletion(PendingCompletion pending, CompletionKey key) {
+    List<PendingCompletion> batch;
+    completionLock.lock();
+    try {
+      List<PendingCompletion> waiting = pendingCompletions.get(key);
+      if (waiting == null) {
+        pendingCompletions.put(key, new ArrayList<>());
+        batch = List.of(pending);
+      } else {
+        waiting.add(pending);
+        batch = null;
+      }
+    } finally {
+      completionLock.unlock();
+    }
+    if (batch == null) {
+      pending.await();
+      if (!pending.lead) {
+        return;
+      }
+      completionLock.lock();
+      try {
+        batch = pendingCompletions.put(key, new ArrayList<>());
+      } finally {
+        completionLock.unlock();
+      }
+    }
+    try {
+      flushCompletions(key.queue, Objects.requireNonNull(batch));
+    } finally {
+      completionLock.lock();
+      try {
+        List<PendingCompletion> waiting = Objects.requireNonNull(pendingCompletions.get(key));
+        if (waiting.isEmpty()) {
+          pendingCompletions.remove(key);
+        } else {
+          PendingCompletion next = waiting.get(0);
+          next.lead = true;
+          next.done.countDown();
+        }
+      } finally {
+        completionLock.unlock();
+      }
+    }
+  }
+
+  /**
+   * Completes a batch in statements within the protocol's array and claim limits. A failed
+   * statement fails only the completions it carried.
+   */
+  private void flushCompletions(String queueName, List<PendingCompletion> batch) {
+    int start = 0;
+    while (start < batch.size()) {
+      int finish = start;
+      int claimLimit = 0;
+      while (finish < batch.size()
+          && finish - start < COMPLETION_BATCH_LIMIT
+          && claimLimit + batch.get(finish).limit <= COMPLETION_BATCH_LIMIT) {
+        claimLimit += batch.get(finish).limit;
+        finish++;
+      }
+      List<PendingCompletion> chunk = new ArrayList<>(batch.subList(start, finish));
+      start = finish;
+      try {
+        sendCompletionChunk(queueName, chunk, claimLimit);
+      } catch (Throwable error) {
+        for (PendingCompletion member : chunk) {
+          member.error = error;
+        }
+      } finally {
+        for (PendingCompletion member : chunk) {
+          member.done.countDown();
+        }
+      }
+    }
+  }
+
+  /**
+   * Sends one {@code complete_many_and_claim_v1} statement and answers every completion in it. The
+   * chunk names its tasks in task ID order, as a heartbeat names its leases, so the two statements
+   * lock shared runtime rows in the same order. A deadlock between the fused claim and another
+   * worker's lease rolls the statement back with 40P01, and the fenced write sends it again.
+   */
+  private void sendCompletionChunk(
+      String queueName, List<PendingCompletion> chunk, int claimLimit) {
+    chunk.sort((left, right) -> left.task.id().toString().compareTo(right.task.id().toString()));
+    List<String> ids = new ArrayList<>();
+    List<String> fences = new ArrayList<>();
+    List<String> results = new ArrayList<>();
+    for (PendingCompletion member : chunk) {
+      ids.add(member.task.id().toString());
+      fences.add(Long.toString(member.task.fenceToken()));
+      results.add(member.encoded);
+    }
+    long sentAt = System.nanoTime();
+    List<Row> rows;
+    try {
+      rows =
+          withConnection(
+              connection ->
+                  Sql.fencedRows(
+                      connection,
+                      SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
+                      workerId,
+                      Sql.textArray(ids),
+                      Sql.textArray(fences),
+                      Sql.textArray(results),
+                      queueName,
+                      Integer.toString(claimLimit),
+                      Long.toString(leaseMs)));
+    } catch (FastTierUnsupportedException fullTier) {
+      markFullTier(queueName, sentAt);
+      for (PendingCompletion member : chunk) {
+        member.fullTier = true;
+      }
+      return;
+    }
+    markFastTier(queueName);
+    // Only the first row carries the accepted completions. A statement that claims nothing still
+    // returns that row, with every claim column null.
+    Set<UUID> accepted = new java.util.HashSet<>();
+    if (!rows.isEmpty() && rows.get(0).text("accepted") != null) {
+      accepted.addAll(Rows.uuids(rows.get(0), "accepted"));
+    }
+    List<Claimed> claimed = new ArrayList<>();
+    for (Row row : rows) {
+      if (row.text("task_id") != null) {
+        claimed.add(claimed(row, queueName, sentAt, Worker::fastTier, true));
+      }
+    }
+    logClaimed(claimed);
+    reportFused(chunk.size(), claimLimit, claimed.size());
+    // Claimed tasks go to the completions in order, each up to the slots it reserved.
+    int offset = 0;
+    for (PendingCompletion member : chunk) {
+      member.accepted = accepted.contains(member.task.id());
+      int end = Math.min(claimed.size(), offset + member.limit);
+      member.claimed = List.copyOf(claimed.subList(offset, end));
+      offset = end;
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Batch delivery
+
+  /**
+   * Whether the worker drains and every task of {@code taskType} it admitted from {@code queueName}
+   * has reached its batch coordinator, as {@code entered} records. No later member can join a batch
+   * then. The caller holds the coordinator's lock.
+   */
+  boolean batchArrivalsComplete(String taskType, String queueName, Set<Active> entered) {
+    if (!draining) {
+      return false;
+    }
+    for (Active task : active) {
+      ClaimedTask claimed = task.claimed.task;
+      if (claimed.type().equals(taskType)
+          && claimed.queue().equals(queueName)
+          && !entered.contains(task)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  boolean draining() {
+    return draining;
+  }
+
+  /**
+   * Records a batch's dispatch or failure evidence. A write failure only logs, because the evidence
+   * must not decide the members' outcomes.
+   */
+  void recordBatchEvidence(
+      SqlCatalogue.Statement statement,
+      String phase,
+      UUID batchId,
+      String taskType,
+      List<ClaimedTask> tasks,
+      boolean full) {
+    List<String> ids = new ArrayList<>();
+    List<String> attempts = new ArrayList<>();
+    List<String> fences = new ArrayList<>();
+    for (ClaimedTask task : tasks) {
+      ids.add(task.id().toString());
+      attempts.add(Integer.toString(task.attempt()));
+      fences.add(Long.toString(task.fenceToken()));
+    }
+    try {
+      List<Row> rows =
+          withConnection(
+              connection ->
+                  Sql.fencedRows(
+                      connection,
+                      statement,
+                      batchId.toString(),
+                      Sql.textArray(ids),
+                      Sql.textArray(attempts),
+                      Sql.textArray(fences),
+                      workerId));
+      Long recorded = rows.isEmpty() ? null : rows.get(0).longValue("recorded");
+      if (recorded == null || recorded != tasks.size()) {
+        throw new WorkhorseException("PostgreSQL did not record every batch member");
+      }
+    } catch (RuntimeException error) {
+      Map<String, @Nullable Object> attributes = batchAttributes(taskType, tasks, full);
+      attributes.put("workhorse.handler.batch.evidence_phase", phase);
+      attributes.put("error.type", error.getClass().getName());
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.handler.batch_evidence_failed",
+          "Batch execution evidence could not be persisted",
+          attributes);
+    }
+  }
+
+  /** Logs one batch as it starts. */
+  void recordBatchDispatch(String taskType, List<ClaimedTask> tasks, boolean full, long lingerMs) {
+    Map<String, @Nullable Object> attributes = batchAttributes(taskType, tasks, full);
+    attributes.put("workhorse.handler.batch.linger_ms", lingerMs);
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.handler.batch_dispatched",
+        "Task batch dispatched",
+        attributes);
+  }
+
+  private static Map<String, @Nullable Object> batchAttributes(
+      String taskType, List<ClaimedTask> tasks, boolean full) {
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put("workhorse.queue.name", tasks.get(0).queue());
+    attributes.put("workhorse.task.type", taskType);
+    attributes.put("workhorse.handler.batch.full", full);
+    attributes.put("workhorse.handler.batch.size", tasks.size());
+    return attributes;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2378,6 +3226,7 @@ public final class Worker implements AutoCloseable {
     private @Nullable Consumer<Throwable> onNotificationError;
     private System.Logger logger = System.getLogger(Worker.class.getName());
     private JsonCodec codec = JsonCodec.standard();
+    private @Nullable Integer cohorts;
     private final Map<String, Registration> handlers = new LinkedHashMap<>();
 
     private Builder(DataSource dataSource) {
@@ -2510,6 +3359,19 @@ public final class Worker implements AutoCloseable {
       return this;
     }
 
+    /**
+     * The slot cohorts of fast-tier dispatch (ADR 0076), from 1 to the concurrency. Each cohort can
+     * have one fused completion statement in flight for each queue. The default is 1 below
+     * concurrency 8, and otherwise one cohort for each 8 slots, from 2 to 8.
+     */
+    public Builder cohorts(int cohorts) {
+      if (cohorts < 1 || cohorts > 100) {
+        throw new IllegalArgumentException("cohorts must be between 1 and concurrency");
+      }
+      this.cohorts = cohorts;
+      return this;
+    }
+
     /** Chooses each retry delay in place of the persisted retry policy. The default is unset. */
     public Builder retryDelay(RetryDelay retryDelay) {
       this.retryDelay = Objects.requireNonNull(retryDelay, "retryDelay");
@@ -2553,7 +3415,9 @@ public final class Worker implements AutoCloseable {
           taskType,
           new Registration(
               Objects.requireNonNull(payloadType, "payloadType"),
-              Objects.requireNonNull(handler, "handler")));
+              Objects.requireNonNull(handler, "handler"),
+              null,
+              null));
       return this;
     }
 
@@ -2563,7 +3427,29 @@ public final class Worker implements AutoCloseable {
       if (taskType.isEmpty()) {
         throw new IllegalArgumentException("taskType must be a non-empty String");
       }
-      handlers.put(taskType, new Registration(handler.payloadType(), handler));
+      handlers.put(taskType, new Registration(handler.payloadType(), handler, null, null));
+      return this;
+    }
+
+    /**
+     * Registers a batch handler for {@code taskType}. Each claimed task waits up to {@code
+     * options.linger()} for others of its queue, and at most {@code options.maxSize()} run in one
+     * call. Once the worker stops, a batch waits only for tasks it already claimed. Every task
+     * still holds its own lease and settles on its own. A second registration replaces the first,
+     * whether it is a batch handler or a handler.
+     */
+    public <P extends @Nullable Object> Builder handleBatch(
+        String taskType, Class<P> payloadType, BatchOptions options, BatchHandler<P> handler) {
+      if (taskType.isEmpty()) {
+        throw new IllegalArgumentException("taskType must be a non-empty String");
+      }
+      handlers.put(
+          taskType,
+          new Registration(
+              Objects.requireNonNull(payloadType, "payloadType"),
+              null,
+              Objects.requireNonNull(options, "options"),
+              Objects.requireNonNull(handler, "handler")));
       return this;
     }
 
@@ -2571,7 +3457,8 @@ public final class Worker implements AutoCloseable {
      * Builds the worker.
      *
      * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.8
-     * @throws IllegalArgumentException if the heartbeat is not less than the lease
+     * @throws IllegalArgumentException if the heartbeat is not less than the lease, the cohorts
+     *     exceed the concurrency, or a batch handler's maximum size exceeds the concurrency
      */
     public Worker build() {
       return new Worker(this);

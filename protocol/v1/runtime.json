@@ -467,7 +467,8 @@
       "python": "TaskValueSizeLimitError",
       "go": "TaskValueSizeLimitError",
       "rust": "TaskValueSizeLimitError",
-      "ruby": "Stablemates::Workhorse::ValueSizeLimitError"
+      "ruby": "Stablemates::Workhorse::ValueSizeLimitError",
+      "java": "ValueSizeLimitException"
     },
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },

@@ -3,6 +3,12 @@ package dev.stablemates.workhorse.conformance;
 import static dev.stablemates.workhorse.conformance.Failure.check;
 
 import dev.stablemates.workhorse.AlreadyWaitingException;
+import dev.stablemates.workhorse.BatchFailed;
+import dev.stablemates.workhorse.BatchHandler;
+import dev.stablemates.workhorse.BatchHandlerItem;
+import dev.stablemates.workhorse.BatchHandlerOutcome;
+import dev.stablemates.workhorse.BatchOptions;
+import dev.stablemates.workhorse.BatchSucceeded;
 import dev.stablemates.workhorse.BudgetDefinition;
 import dev.stablemates.workhorse.CancelResult;
 import dev.stablemates.workhorse.CancelStatus;
@@ -58,7 +64,7 @@ import org.jspecify.annotations.Nullable;
  */
 final class RuntimeFixtures {
   /** The JVM slices that are still open. A listed fixture names one of them. */
-  static final Set<String> OPEN_SLICES = Set.of("SM-1388", "SM-1392");
+  static final Set<String> OPEN_SLICES = Set.of("SM-1392");
 
   /**
    * RuntimeFixtures fixtures that need a surface an open JVM slice owns, by fixture ID. Each one is
@@ -67,11 +73,7 @@ final class RuntimeFixtures {
   private static final Map<String, String> GAPS =
       Map.of(
           "enqueue-trace-context-reaches-handler",
-          "needs the worker's OpenTelemetry handler span, which SM-1392 owns",
-          "priority-ordered-mixed-batch",
-          "needs batch handler delivery, which SM-1388 owns",
-          "oversized-fast-tier-result-fails-through-the-retry-policy",
-          "needs the fast task tier, which SM-1388 owns");
+          "needs the worker's OpenTelemetry handler span, which SM-1392 owns");
 
   private static final Map<CancellationReason, String> CANCEL_NAMES =
       Map.of(
@@ -128,6 +130,7 @@ final class RuntimeFixtures {
         case "heartbeat-failure" -> heartbeatFailure(fixture);
         case "maintenance-phase-error" -> maintenancePhaseError(fixture);
         case "slot-refill" -> slotRefill(fixture);
+        case "batch" -> batch(fixture);
         case "suspension-replay" -> suspensionReplay(fixture);
         case "lease-loss" -> leaseLoss(fixture);
         case "replay-conflict" -> replayConflict(fixture);
@@ -1315,6 +1318,17 @@ final class RuntimeFixtures {
    */
   private void oversizedResult(Map<String, @Nullable Object> fixture) throws Exception {
     String name = queueName(fixture);
+    if ("fast".equals(fixture.get("tier"))) {
+      synchronized (connection) {
+        Sql.rows(
+            connection,
+            SqlCatalogue.SET_QUEUE_TIER_V1,
+            name,
+            "fast",
+            "runtime-fixture",
+            String.valueOf(fixture.get("id")));
+      }
+    }
     int maxAttempts = Math.toIntExact((Long) fixture.get("maxAttempts"));
     UUID taskId =
         enqueue(
@@ -1365,6 +1379,91 @@ final class RuntimeFixtures {
               + fitting.get("attempt")
               + ": "
               + fitting.get("errorName"));
+    }
+  }
+
+  /**
+   * One batch handler receives every task, highest priority first. Each member settles on its own:
+   * one succeeds, one retries, and one fails. The handler pauses the worker, so the first pass ends
+   * after one batch, and the second pass runs the retry.
+   */
+  private void batch(Map<String, @Nullable Object> fixture) throws Exception {
+    String name = queueName(fixture);
+    Map<String, UUID> taskIds = new LinkedHashMap<>();
+    for (Object entry : (List<?>) fixture.get("tasks")) {
+      Map<String, @Nullable Object> task = Runner.object(entry, "task");
+      String key = String.valueOf(task.get("key"));
+      Map<String, @Nullable Object> payload = new LinkedHashMap<>();
+      payload.put("key", key);
+      payload.put("outcome", task.get("outcome"));
+      taskIds.put(
+          key,
+          enqueue(
+              taskType(fixture),
+              payload,
+              options(name)
+                  .priority(Runner.intValue(task.get("priority")))
+                  .maxAttempts(Runner.intValue(task.get("maxAttempts")))
+                  .retryPolicy(Map.of("type", "fixed", "delayMs", 0))));
+    }
+    List<String> seen = new CopyOnWriteArrayList<>();
+    AtomicReference<@Nullable Worker> holder = new AtomicReference<>();
+    BatchHandler<Object> handler =
+        items -> {
+          Worker subject = holder.get();
+          if (subject != null) {
+            subject.pause();
+          }
+          List<BatchHandlerOutcome> outcomes = new ArrayList<>();
+          for (BatchHandlerItem<Object> item : items) {
+            Map<String, @Nullable Object> payload = Runner.object(item.payload(), "payload");
+            seen.add(String.valueOf(payload.get("key")));
+            int attempt = item.context().task().attempt();
+            if ("succeed".equals(payload.get("outcome")) || attempt > 1) {
+              outcomes.add(new BatchSucceeded(Map.of("attempt", attempt)));
+            } else {
+              outcomes.add(
+                  new BatchFailed(
+                      new IllegalStateException(
+                          payload.get("outcome") + " on attempt " + attempt)));
+            }
+          }
+          return outcomes;
+        };
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          worker(pool, fixture)
+              .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
+              .handleBatch(
+                  taskType(fixture),
+                  Object.class,
+                  new BatchOptions(
+                      Math.toIntExact((Long) fixture.get("batchMaxSize")), Duration.ofMillis(100)),
+                  handler)
+              .build();
+      holder.set(subject);
+      check(subject.runOnce(), "the first run delivered no batch");
+      check(
+          Matcher.same(seen, fixture.get("expectedHandlerOrder")),
+          "handler order " + seen + ", want " + fixture.get("expectedHandlerOrder"));
+      batchStates(taskIds, object(fixture, "expectedAfterFirstRun"), "first");
+      subject.resume();
+      check(subject.runOnce(), "the second run delivered no batch");
+      batchStates(taskIds, object(fixture, "expectedAfterSecondRun"), "second");
+    }
+  }
+
+  private void batchStates(
+      Map<String, UUID> taskIds, Map<String, @Nullable Object> expected, String run) {
+    for (Map.Entry<String, @Nullable Object> entry : expected.entrySet()) {
+      Map<String, @Nullable Object> want = Runner.object(entry.getValue(), "state");
+      UUID taskId = taskIds.get(entry.getKey());
+      check(taskId != null, "the fixture names no task " + entry.getKey());
+      Map<String, @Nullable Object> actual = state(taskId);
+      check(
+          Matcher.same(want.get("state"), actual.get("state"))
+              && Matcher.same(want.get("attempt"), actual.get("attempt")),
+          "after the " + run + " run " + entry.getKey() + " is " + actual + ", want " + want);
     }
   }
 
@@ -1745,6 +1844,12 @@ final class RuntimeFixtures {
                   + taskId
                   + "' UNION ALL SELECT state::text, current_attempt, error->>'name' FROM"
                   + " workhorse.task_outcome WHERE task_id = '"
+                  + taskId
+                  + "' UNION ALL SELECT state, attempt, NULL FROM workhorse.fast_task_runtime"
+                  + " WHERE task_id = '"
+                  + taskId
+                  + "' UNION ALL SELECT state, attempt, error->>'name' FROM"
+                  + " workhorse.fast_task_outcome WHERE task_id = '"
                   + taskId
                   + "'");
     }

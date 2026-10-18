@@ -663,7 +663,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fast task tier with one outcome row per task",
-    jvm: { planned: "SM-1388" },
+    jvm: {
+      file: "dev/stablemates/workhorse/WorkerFastTierDatabaseTest.java",
+      test: "runsFastTierTasksAndRecordsOneFastOutcomeRowForEach",
+    },
     ruby: {
       file: "integration/worker_fast_tier_spec.rb",
       example: "runs fast-tier tasks and records one fast_task_outcome row for each",
@@ -678,7 +681,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
-    jvm: { planned: "SM-1388" },
+    jvm: {
+      file: "dev/stablemates/workhorse/WorkerFastTierDatabaseTest.java",
+      test: "fusesEachCompletionWithARefillClaimBoundedByItsSlotCohort",
+    },
     ruby: {
       file: "integration/worker_fast_tier_spec.rb",
       example: "fuses each completion with a refill claim bounded by its slot cohort",
@@ -896,7 +902,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
-    jvm: { planned: "SM-1388" },
+    jvm: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     ruby: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
     typescript: { file: "integration-batch-handlers.test.ts", pattern: "batch" },
@@ -1736,7 +1742,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Dispatch cohorts",
-    jvm: { planned: "SM-1388" },
+    jvm: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      pattern: "Math.clamp((concurrency + 7) / 8, 2, 8)",
+    },
     rust: {
       value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
       file: "rust/src/worker/mod.rs",

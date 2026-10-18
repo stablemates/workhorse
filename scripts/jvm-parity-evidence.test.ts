@@ -37,7 +37,7 @@ describe("JVM parity evidence", () => {
 
   it("reads the declared fixtures, the expected-unsupported list, and the test methods", () => {
     expect(state.declared.has("scenarios/fast-tier")).toBe(true);
-    expect(state.unsupported.get("runtime/priority-ordered-mixed-batch")).toBe("SM-1388");
+    expect(state.unsupported.get("runtime/enqueue-trace-context-reaches-handler")).toBe("SM-1392");
     expect(state.tests.get(test.file)?.has(test.test)).toBe(true);
     expect(
       state.tests
@@ -88,7 +88,10 @@ describe("JVM parity evidence", () => {
 
   it("rejects a fixture the JVM runner lists as expected unsupported", () => {
     expect(
-      jvmEvidenceProblems([row({ fixtures: ["runtime/priority-ordered-mixed-batch"] })], state),
+      jvmEvidenceProblems([row({ fixtures: ["runtime/priority-ordered-mixed-batch"] })], {
+        ...state,
+        unsupported: new Map([["runtime/priority-ordered-mixed-batch", "SM-1388"]]),
+      }),
     ).toEqual([
       "Probe: runtime/priority-ordered-mixed-batch is expected unsupported in the JVM lane (SM-1388), so the cell cannot be Supported",
     ]);
