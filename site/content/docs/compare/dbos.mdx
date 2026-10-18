@@ -39,7 +39,7 @@ differ in six areas:
   database. Your application tables must be in that database. With Workhorse, a task and your data
   commit in one transaction in your application database.
 - **Languages.** DBOS has libraries for Python, TypeScript, Go, and Java. Workhorse has workers in
-  TypeScript, Python, Go, Rust, and Ruby.
+  TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin.
 
 Each cell links its source. A Workhorse cell links the page that explains the feature.
 
@@ -70,7 +70,6 @@ DBOS is the better choice in these cases:
   attempts, interval, and backoff rate. An async DBOS step can also have a
   [timeout for each attempt](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/step-tutorial.md#L107-L122).
   In Workhorse, the task has one retry policy and one execution timeout for all its checkpoints.
-- Your services use Java. DBOS has a library for Java, and Workhorse has no SDK for Java.
 - You want to develop without a PostgreSQL server. DBOS
   [uses SQLite by default](https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/python/tutorials/database-connection.md#L10-L12)
   for its system database. Workhorse needs PostgreSQL.

@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 344" width="960" height="344" role="img" aria-labelledby="limitations-language-parts-light-title limitations-language-parts-light-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 392" width="960" height="392" role="img" aria-labelledby="limitations-language-parts-light-title limitations-language-parts-light-desc">
 <title id="limitations-language-parts-light-title">Each language runs the queue; only TypeScript changes the schema</title>
-<desc id="limitations-language-parts-light-desc">TypeScript, Python, Go, Rust, and Ruby each have a transactional queue client, a complete worker runtime, and an Admin operator client. Schema installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages runs the CLI as a deployment step.</desc>
+<desc id="limitations-language-parts-light-desc">TypeScript, Python, Go, Rust, Ruby, and the JVM SDK for Java and Kotlin each have a transactional queue client, a complete worker runtime, and an Admin operator client. Schema installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages runs the CLI as a deployment step.</desc>
 <defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
-<rect width="960" height="344" fill="#f9fafb"/>
+<rect width="960" height="392" fill="#f9fafb"/>
 <text x="264" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">queue client</text>
 <text x="452" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">worker runtime</text>
 <text x="640" y="44" fill="#6d7277" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">Admin client</text>
@@ -65,5 +65,16 @@
 <rect x="552" y="260" width="176" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
 <text x="640" y="282" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
 <text x="828" y="282" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
-<text x="24" y="328" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run the TypeScript CLI as a deployment step. Pin it to the SDK version of your application.</text>
+<text x="24" y="331" fill="#1a2027" font-size="11" font-family="Geist" font-weight="600" text-anchor="start">JVM</text>
+<rect x="176" y="308" width="176" height="36" rx="6" fill="#f9fafb"/>
+<rect x="176" y="308" width="176" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="264" y="330" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
+<rect x="364" y="308" width="176" height="36" rx="6" fill="#f9fafb"/>
+<rect x="364" y="308" width="176" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="452" y="330" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
+<rect x="552" y="308" width="176" height="36" rx="6" fill="#f9fafb"/>
+<rect x="552" y="308" width="176" height="36" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="640" y="330" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">yes</text>
+<text x="828" y="330" fill="#6d7277" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">not in this SDK</text>
+<text x="24" y="376" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run the TypeScript CLI as a deployment step. Pin it to the SDK version of your application.</text>
 </svg>

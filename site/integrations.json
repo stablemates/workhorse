@@ -293,7 +293,7 @@
       "name": "Dashboard",
       "category": "operator-tools",
       "tier": "verified",
-      "summary": "Embeds the operator interface in a TypeScript, Python, Go, Rust, or Ruby HTTP server.",
+      "summary": "Embeds the operator interface in a TypeScript, Python, Go, Rust, Ruby, Java, or Kotlin HTTP server.",
       "boundary": "The dashboard reads PostgreSQL through the versioned dashboard contract and owns no authorization of its own.",
       "package": "@stablemates/workhorse-dashboard",
       "peer": "react",

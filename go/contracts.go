@@ -85,7 +85,7 @@ type contractReference struct {
 }
 
 // checkContractSchema requires every reference to name the root schema or one root definition. The
-// libraries behind the five SDKs resolve those two forms alike, and both name a schema position the
+// validators behind the six SDKs resolve those two forms alike, and both name a schema position the
 // profile walk checked.
 func checkContractSchema(schema any, path string) error {
 	var references []contractReference

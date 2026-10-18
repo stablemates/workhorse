@@ -1753,7 +1753,8 @@ sends a notification, so the continuous loop starts a release wait that a notifi
 ##### Continuous loop
 
 The continuous loop is TypeScript `Worker.run()`, Python `Worker.run()` and `AsyncWorker.run()`, Go
-`Worker.Run`, Rust `Worker::run`, and Ruby `Worker#run`. All five do the same steps:
+`Worker.Run`, Rust `Worker::run`, Ruby `Worker#run`, and JVM `Worker.run()`. All six do the same
+steps:
 
 1. The worker claims a task that it has no handler for. The claim counts as empty.
 2. The loop starts a release wait. Its deadline is the next empty wait: the base poll interval
@@ -1798,9 +1799,10 @@ that returns only tasks of unregistered types releases them and does not change 
 ##### Single-pass call
 
 The single-pass call is TypeScript `runOnce()`, Python `run_once()` and `AsyncWorker.run_once()`,
-Go `Worker.RunOnce`, Rust `Worker::run_once`, and Ruby `Worker#run_once`. It opens no listener, so a
-notification does not affect it. [ADR 0099](../decisions/0099-report-a-released-only-single-pass-as-no-progress.md)
-gives all five SDKs one result and one wait rule:
+Go `Worker.RunOnce`, Rust `Worker::run_once`, Ruby `Worker#run_once`, and JVM `Worker.runOnce()`. It
+opens no listener, so a notification does not affect it.
+[ADR 0099](../decisions/0099-report-a-released-only-single-pass-as-no-progress.md)
+gives all six SDKs one result and one wait rule:
 
 1. The call returns `true` only if a handler ran. If the call released every task that it claimed,
    it returns `false`, as a call that claimed no task does.
@@ -1820,7 +1822,7 @@ call that waited for it could not claim again:
 - The second call also returns `false`. It writes a second `released` event, because it claims the
   task again at once.
 
-The TypeScript, Python, Go, Rust, and Ruby runners make both calls before a worker that has the
+The TypeScript, Python, Go, Rust, Ruby, and JVM runners make both calls before a worker that has the
 handler runs the task.
 
 ### Terminal transitions

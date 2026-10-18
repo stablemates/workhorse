@@ -23,10 +23,10 @@ Separating workers from the web tier used to mean the operator dashboard could n
 runtime state from process-local `Worker` objects, so it only ever knew about workers sharing its
 own process.
 
-The worker registry removes that constraint. By default, TypeScript, Python, Go, Rust, and Ruby
-workers upsert `workhorse.worker_registry` on their configured cadence. Each row holds declared
-concurrency, busy slots, and drain state, together with the client protocol version and the SDK the
-worker runs. Each refresh reads the operator-requested pause flag in the same round trip. A
+The worker registry removes that constraint. By default, TypeScript, Python, Go, Rust, Ruby, Java,
+and Kotlin workers upsert `workhorse.worker_registry` on their configured cadence. Each row holds
+declared concurrency, busy slots, and drain state, together with the client protocol version and the
+SDK the worker runs. Each refresh reads the operator-requested pause flag in the same round trip. A
 dashboard mounted anywhere reads the fleet from that relation, which is also how an operator sees
 that a rolling deploy is running two builds at once.
 

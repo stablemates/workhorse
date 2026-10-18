@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="pgbouncer-budget-dark-title pgbouncer-budget-dark-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 336" width="960" height="336" role="img" aria-labelledby="pgbouncer-budget-dark-title pgbouncer-budget-dark-desc">
 <title id="pgbouncer-budget-dark-title">Four workers on a pool of 20 keep some connections for themselves</title>
-<desc id="pgbouncer-budget-dark-desc">Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat connections in the pool, so 16 remain. Their four listeners are outside the pool.</desc>
+<desc id="pgbouncer-budget-dark-desc">Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat connections in the pool, so 16 remain. Their four listeners are outside the pool. Java and Kotlin workers keep four listeners and one heartbeat connection, so 15 remain.</desc>
 <defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="960" height="280" fill="#04080e"/>
+<rect width="960" height="336" fill="#04080e"/>
 <text x="24" y="40" fill="#f2f4f5" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">one pool of 20</text>
 <text x="24" y="55" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">four workers</text>
 <text x="200" y="44" fill="#95999d" font-size="8" font-family="Geist Mono" font-weight="400" text-anchor="middle">0</text>
@@ -34,5 +34,13 @@
 <rect x="344" y="184" width="576" height="40" rx="6" fill="#04080e"/>
 <rect x="344" y="184" width="576" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
 <text x="632" y="208" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">16 for claims and handlers</text>
-<text x="24" y="264" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The four Rust listeners are outside the pool, so the server or the pooler must accept four more clients.</text>
+<text x="24" y="265" fill="#f2f4f5" font-size="10" font-family="Geist Mono">Java, Kotlin</text>
+<rect x="200" y="240" width="176" height="40" rx="6" fill="#04080e"/>
+<rect x="200" y="240" width="176" height="40" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
+<text x="288" y="258" fill="#f2f4f5" font-size="10" font-weight="600" font-family="Geist" text-anchor="middle">5 kept</text>
+<text x="288" y="272" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">4 listeners · 1 heartbeat</text>
+<rect x="380" y="240" width="540" height="40" rx="6" fill="#04080e"/>
+<rect x="380" y="240" width="540" height="40" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="650" y="264" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">15 for claims and handlers</text>
+<text x="24" y="320" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The four Rust listeners are outside the pool, so the server or the pooler must accept four more clients.</text>
 </svg>

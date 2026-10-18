@@ -4,7 +4,7 @@ description: "Asynq vs Workhorse: a Go task queue on Redis, and a PostgreSQL tas
 ---
 
 Asynq is a task queue for Go that keeps its work in Redis. Workhorse is a durable task queue for
-PostgreSQL, with workers in Go and four other languages. This page compares the two products, row by
+PostgreSQL, with workers in Go and six other languages. This page compares the two products, row by
 row, and tells you when Asynq is the better choice.
 
 ## Compare Workhorse and Asynq
@@ -29,8 +29,8 @@ dashboard. They differ in six areas:
   server reads its queues by weight, or in strict order.
 - **Telemetry.** Workhorse gives OpenTelemetry traces and metrics. Asynq exports queue metrics to
   Prometheus and has no OpenTelemetry integration.
-- **Languages.** Asynq is a Go library. Workhorse has workers in TypeScript, Python, Go, Rust, and
-  Ruby.
+- **Languages.** Asynq is a Go library. Workhorse has workers in TypeScript, Python, Go, Rust, Ruby,
+  Java, and Kotlin.
 
 Each cell links its source. A Workhorse cell links the page that explains the feature.
 

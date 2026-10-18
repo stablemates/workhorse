@@ -144,7 +144,7 @@ module Stablemates
 
       private
 
-      # A reference names the root schema or one root definition. The libraries behind the five SDKs
+      # A reference names the root schema or one root definition. The validators behind the six SDKs
       # resolve those two forms alike, and both name a schema position the profile check visited. The
       # check runs before +valid?+, so +valid?+ cannot fail on the schema.
       def check_references(schema, path)

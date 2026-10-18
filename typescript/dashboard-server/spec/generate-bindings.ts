@@ -311,7 +311,7 @@ function inputSchemas(contract: DashboardContract): Record<string, Schema | null
 
 /**
  * The shared task group statements, by their base name. Every backend runs the same text, so the
- * five backends answer the task group procedures with the same JSON.
+ * six backends answer the task group procedures with the same JSON.
  */
 const sharedStatements: ReadonlyArray<readonly [string, string]> = [
   ["taskGroups", dashboardTaskGroupsStatement],

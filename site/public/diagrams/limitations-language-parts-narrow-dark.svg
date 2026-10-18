@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 344" width="400" height="344" role="img" aria-labelledby="limitations-language-parts-narrow-dark-title limitations-language-parts-narrow-dark-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="limitations-language-parts-narrow-dark-title limitations-language-parts-narrow-dark-desc">
 <title id="limitations-language-parts-narrow-dark-title">Each language runs the queue; only TypeScript changes the schema</title>
-<desc id="limitations-language-parts-narrow-dark-desc">TypeScript, Python, Go, Rust, and Ruby each have a transactional queue client, a complete worker runtime, and an Admin operator client. Schema installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages runs the CLI as a deployment step.</desc>
+<desc id="limitations-language-parts-narrow-dark-desc">TypeScript, Python, Go, Rust, Ruby, and the JVM SDK for Java and Kotlin each have a transactional queue client, a complete worker runtime, and an Admin operator client. Schema installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages runs the CLI as a deployment step.</desc>
 <defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="344" fill="#04080e"/>
+<rect width="400" height="400" fill="#04080e"/>
 <text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">TypeScript</text>
 <rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
 <rect x="112" y="24" width="264" height="42" rx="6" fill="rgba(252,152,76,0.08)" stroke="#fc984c" stroke-width="1.4"/>
@@ -28,6 +28,11 @@
 <rect x="112" y="248" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
 <text x="244" y="267" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">queue · worker · Admin</text>
 <text x="244" y="281" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no schema tools</text>
-<text x="24" y="312" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run the TypeScript CLI as a</text>
-<text x="24" y="327" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">deployment step.</text>
+<text x="24" y="329" fill="#f2f4f5" font-size="9" font-family="Geist Mono">JVM</text>
+<rect x="112" y="304" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="304" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="323" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">queue · worker · Admin</text>
+<text x="244" y="337" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">no schema tools</text>
+<text x="24" y="368" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">Run the TypeScript CLI as a</text>
+<text x="24" y="383" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">deployment step.</text>
 </svg>

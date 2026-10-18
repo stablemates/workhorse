@@ -25,8 +25,8 @@ again. Both have groups of jobs with callbacks, and a free dashboard. They diffe
 - **Limits and telemetry.** Workhorse has rate limits across all workers and cancellation of a
   running task. Solid Queue has neither. Workhorse sends OpenTelemetry traces and metrics. For
   Solid Queue, a gem from the OpenTelemetry project sends Active Job traces, but no metrics.
-- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
-  protocol. Solid Queue runs Active Job jobs in Ruby.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin on
+  one SQL protocol. Solid Queue runs Active Job jobs in Ruby.
 - **Databases.** Solid Queue runs on MySQL, MariaDB, PostgreSQL, and SQLite. Workhorse runs on
   PostgreSQL only.
 

@@ -20,9 +20,9 @@ differ in five areas:
 - **Free and paid features.** Workhorse has task dependencies, signal waits, and concurrency limits
   across all workers in its free library. River has these in River Pro, its paid edition. River has
   no rate limits.
-- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
-  protocol. River has workers in Go, Ruby, Rust, and TypeScript, and a Python client that inserts
-  jobs only.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin on
+  one SQL protocol. River has workers in Go, Ruby, Rust, and TypeScript, and a Python client that
+  inserts jobs only.
 - **Databases.** River also runs on SQLite. Workhorse runs on PostgreSQL only.
 - **Transactional handlers.** River can complete a job in the transaction of the handler's writes. A
   Workhorse handler commits its own writes, and delivery is at least once. Only the low-level

@@ -368,8 +368,8 @@ More detail: [Data model: Rollup cadence](https://github.com/stablemates/workhor
 Telemetry is the traces, logs, and metrics that a process sends to a monitoring backend. Workhorse
 sends its telemetry through the standard OpenTelemetry APIs of each language. Your application
 selects the SDK, the log handler, and the backend. Telemetry does not change the behavior of the
-queue. TypeScript, Python, Go, Rust, and Ruby workers use the same span and metric names. Thus, one
-set of dashboards can show a fleet with workers in several languages.
+queue. TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin workers use the same span and metric
+names. Thus, one set of dashboards can show a fleet with workers in several languages.
 
 A telemetry provider is the one destination in a process for Workhorse traces, metrics, and logs.
 If no provider is registered, Workhorse discards these records. The queue and the worker operate

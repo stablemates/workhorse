@@ -224,7 +224,7 @@ executor that only counts empty polls fails on every run instead of once under l
 
 ### Durable replay conflicts
 
-All five SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
+All six SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
 Thus workers require schema version 54 or newer. The current floor, 72, includes it.

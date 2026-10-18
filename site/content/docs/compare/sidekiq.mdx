@@ -6,7 +6,7 @@ description: "Sidekiq vs Workhorse: a Ruby task queue on Redis, and a PostgreSQL
 Sidekiq is a task queue for Ruby that keeps its work in Redis. It has a free open source edition and
 two paid editions, Sidekiq Pro and Sidekiq Enterprise. Workhorse is a durable task queue that keeps
 its work in PostgreSQL. It enqueues a task in your transaction, continues a task after a worker
-crash, and runs workers in five languages. This page compares the two products, row by row, and
+crash, and runs workers in seven languages. This page compares the two products, row by row, and
 tells you when Sidekiq is the better choice.
 
 ## Compare Workhorse and Sidekiq
@@ -27,7 +27,7 @@ a set of failed tasks that an operator can run again. They differ in five areas:
   result of one part of the handler. When the task runs again, the handler uses the stored result.
   A Sidekiq iterable job stores a cursor and continues from it.
 - **Languages.** Sidekiq runs jobs in Ruby only. Workhorse has workers in TypeScript, Python, Go,
-  Rust, and Ruby.
+  Rust, Ruby, Java, and Kotlin.
 
 A Sidekiq cell describes the open source edition. If Sidekiq Pro or Sidekiq Enterprise has more,
 the cell also names that edition and its status. Each cell links its source. A Workhorse cell links the page that explains the feature.

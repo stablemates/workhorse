@@ -24,11 +24,11 @@ due.
    routine is now due, so PostgreSQL runs it after the rollup.
 3. Some seconds later, a third worker offers the pass. No routine is due, so the pass does no work.
 
-TypeScript, Python, Go, Rust, and Ruby workers all offer the same pass. PostgreSQL sets the order of
-the routines: statistics, partition preparation, history retention, terminal cleanup, and registry
-cleanup. Terminal cleanup deletes finished tasks. Each routine has its own due check and its own
-lock. Thus a fleet that runs only Python or Go workers keeps the same evidence and partitions as a
-TypeScript fleet.
+TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin workers all offer the same pass. PostgreSQL
+sets the order of the routines: statistics, partition preparation, history retention, terminal
+cleanup, and registry cleanup. Terminal cleanup deletes finished tasks. Each routine has its own due
+check and its own lock. Thus a fleet that runs only Python or Go workers keeps the same evidence and
+partitions as a TypeScript fleet.
 
 If you add workers, the destructive work does not increase. For each due routine, one worker runs
 it, and the other workers do no work. A fleet without TypeScript workers still prepares partitions,
