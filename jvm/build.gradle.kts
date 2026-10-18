@@ -60,6 +60,8 @@ subprojects {
     outputs.upToDateWhen { false }
     inputs.file(schema)
     systemProperty("workhorse.schema", schema.path)
+    // The train version, which a test compares with the `sdk_version` that a worker registers.
+    systemProperty("workhorse.version", project.version.toString())
     testLogging {
       events("failed", "skipped")
       exceptionFormat = TestExceptionFormat.FULL
@@ -133,6 +135,19 @@ configure(subprojects.filter { it.name in publishedArtifacts }) {
   extensions.configure<JavaPluginExtension> {
     withSourcesJar()
     withJavadocJar()
+  }
+
+  // Each published jar names its artifact and the train version in its manifest, so a person or a
+  // tool that holds only the jar can tell which release it is. The worker reads its `sdk_version`
+  // from `version.properties` instead (`run.workhorse.internal.SdkVersion`), because a named module
+  // does not see these entries. `scripts/check-jvm-release.ts` checks both entries in each jar.
+  tasks.withType<Jar>().configureEach {
+    manifest {
+      attributes(
+        "Implementation-Title" to project.name,
+        "Implementation-Version" to project.version.toString(),
+      )
+    }
   }
 
   // Central requires a `-javadoc.jar`. A doclint warning about a missing comment does not fail the

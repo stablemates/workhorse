@@ -15,6 +15,8 @@
  *    feature variant in its module metadata. The core has the OpenTelemetry API and the Servlet
  *    API. The starter has each Spring module that a class-path condition guards, and it requires
  *    nothing beyond the core and Spring Boot's auto-configuration and JDBC modules.
+ * 7. A jar manifest does not name its artifact as `Implementation-Title` and the train version as
+ *    `Implementation-Version`.
  *
  * The signing key comes from one of two places. By default the check generates a throwaway key in
  * a temporary GnuPG home and discards it at the end. That is the dry run of ADR 0103: it signs with
@@ -108,6 +110,8 @@ function optionalDependencies(artifact: Artifact): [feature: string, coordinates
 
 /** The files each artifact publishes, after `<artifact>-<version>`. */
 const artifactFiles = [".jar", "-sources.jar", "-javadoc.jar", ".pom", ".module"] as const;
+/** The jars of each artifact, after `<artifact>-<version>`. Each one has a manifest. */
+const jarFiles = [".jar", "-sources.jar", "-javadoc.jar"] as const;
 /** The files Central requires beside each published file. */
 const companionSuffixes = [".asc", ".md5", ".sha1"] as const;
 /** Gradle writes these too. Central does not require them, and accepts them. */
@@ -316,6 +320,60 @@ export function pomProblems(artifact: Artifact, pom: string, version: string): s
     }
   }
   return problems;
+}
+
+/**
+ * The main attributes of a jar manifest. A line that starts with a space continues the line before
+ * it, because the JAR format wraps each line at 72 bytes. A blank line ends the main section.
+ */
+export function manifestAttributes(manifest: string): Map<string, string> {
+  const lines: string[] = [];
+  for (const line of manifest.split(/\r\n|\r|\n/)) {
+    if (line === "") break;
+    if (line.startsWith(" ") && lines.length > 0) {
+      lines[lines.length - 1] += line.slice(1);
+    } else {
+      lines.push(line);
+    }
+  }
+  const attributes = new Map<string, string>();
+  for (const line of lines) {
+    const separator = line.indexOf(": ");
+    if (separator > 0) attributes.set(line.slice(0, separator), line.slice(separator + 2));
+  }
+  return attributes;
+}
+
+/** The problems with the manifest of one of an artifact's jars. */
+export function manifestProblems(
+  artifact: Artifact,
+  jar: string,
+  manifest: string,
+  version: string,
+): string[] {
+  const attributes = manifestAttributes(manifest);
+  const problems: string[] = [];
+  for (const [name, value] of [
+    ["Implementation-Title", artifact],
+    ["Implementation-Version", version],
+  ] as const) {
+    const declared = attributes.get(name);
+    if (declared !== value) {
+      problems.push(`the ${jar} manifest has ${name} ${declared}, not ${value}`);
+    }
+  }
+  return problems;
+}
+
+/** Reads `META-INF/MANIFEST.MF` from a jar with the JDK's archiver. */
+async function readManifest(jar: string, temporary: string): Promise<string> {
+  const directory = await mkdtemp(path.join(temporary, "manifest-"));
+  await run("jar", ["--extract", "--file", jar, "META-INF/MANIFEST.MF"], { cwd: directory });
+  try {
+    return await readFile(path.join(directory, "META-INF", "MANIFEST.MF"), "utf8");
+  } catch {
+    return "";
+  }
 }
 
 interface ModuleMetadata {
@@ -712,6 +770,11 @@ export async function checkJvmRelease(options: {
         problems.push(
           ...moduleProblems(artifact, await readFile(`${base}.module`, "utf8"), version),
         );
+        for (const suffix of jarFiles) {
+          const jar = `${artifact}-${version}${suffix}`;
+          const manifest = await readManifest(`${base}${suffix}`, temporary);
+          problems.push(...manifestProblems(artifact, jar, manifest, version));
+        }
       }
       problems.push(...(await verifyStagedFiles(files, gnupgHome)));
     }
