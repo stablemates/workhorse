@@ -74,6 +74,8 @@ dependencies {
   testImplementation(libs.spring.boot.starter.test)
   testImplementation(libs.spring.boot.starter.jdbc)
   testImplementation(libs.spring.boot.jackson)
+  // The jackson-databind floor of the `jackson` feature, above the version of each tested BOM.
+  testImplementation(libs.jackson.databind)
   testImplementation(libs.spring.boot.health)
   testImplementation(libs.spring.web)
   testImplementation(libs.jakarta.servlet.api)
@@ -82,8 +84,10 @@ dependencies {
   testImplementation(libs.spring.boot.opentelemetry)
 }
 
-// The optional modules name no version, so each published variant takes the version that the
-// compile class path resolves from the Spring Boot floor.
+// Each published variant takes the version that the compile class path resolves. The Spring Boot
+// floor gives the version of each optional module that names none. jackson-databind names its
+// floor, 3.1.7, which is above the version of the Spring Boot floor (ADR 0103, "Amendment: the JVM
+// floors rise past their known advisories").
 extensions.configure<PublishingExtension> {
   publications.named<MavenPublication>("maven") {
     versionMapping { allVariants { fromResolutionOf("compileClasspath") } }

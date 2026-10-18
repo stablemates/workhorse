@@ -88,7 +88,14 @@ class QueueTelemetryDatabaseTest {
     assertEquals(caller.getSpanContext().getTraceId(), enqueue.getTraceId());
     assertEquals(caller.getSpanContext().getSpanId(), enqueue.getParentSpanId());
     assertEquals(
-        Map.of("traceparent", "00-" + enqueue.getTraceId() + "-" + enqueue.getSpanId() + "-01"),
+        Map.of(
+            "traceparent",
+            "00-"
+                + enqueue.getTraceId()
+                + "-"
+                + enqueue.getSpanId()
+                + "-"
+                + enqueue.getSpanContext().getTraceFlags().asHex()),
         storedTraceContext(result.taskId()));
     assertEquals(queueName, enqueue.getAttributes().get(AttributeKey.stringKey(Names.QUEUE_NAME)));
     assertEquals(

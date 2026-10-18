@@ -1545,3 +1545,50 @@ rule stays: claimed tasks never exceed `concurrency`, also with a caller `Execut
 `api/kotlin.txt` gains `cohorts`, `telemetry`, and `handleBatch` on `WorkerScope`. `api/java.txt`
 gains `DashboardAuthorization.response` and the `Response` class. The SM-1381 coordinator made these
 decisions during SM-1458.
+
+## Amendment: the JVM floors rise past their known advisories (2026-10-18)
+
+The SM-1465 scan resolves the class paths that the published POMs name. It found ten advisories in
+the floors of this record. A caller who resolves only the floors gets each vulnerable version. This
+amendment raises each floor to the first release that fixes its advisories.
+
+| Dependency                                                           | Old floor | New floor | Advisories that the new floor fixes                                                                                                       |
+| -------------------------------------------------------------------- | --------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| PgJDBC, `org.postgresql:postgresql`                                  | 42.7.8    | 42.7.12   | GHSA-98qh-xjc8-98pq (fixed in 42.7.11), GHSA-j92g-9f8w-j867 (fixed in 42.7.12)                                                            |
+| OpenTelemetry API, `io.opentelemetry:opentelemetry-api`              | 1.55.0    | 1.62.0    | GHSA-rcgg-9c38-7xpx                                                                                                                       |
+| `tools.jackson.core:jackson-databind`, the starter `jackson` feature | 3.1.5     | 3.1.7     | GHSA-gx83-3vf8-gh7j, GHSA-q4xh-88c3-wmh7, GHSA-wjgm-6hv5-3cvf (fixed in 3.1.6), GHSA-cxp5-3px4-pw24, GHSA-wv8q-qhhj-9h54 (fixed in 3.1.7) |
+| `tools.jackson.core:jackson-core`, through `jackson-databind`        | 3.1.5     | 3.1.7     | GHSA-7hhh-6rmp-j9qf, GHSA-p6pp-m3f8-5c89                                                                                                  |
+
+This amendment supersedes three statements of this record:
+
+- The PgJDBC floor is 42.7.12. It supersedes the 42.7.8 floor in "Three artifacts and their
+  dependencies" and in the Floors table. `PgjdbcVersion` refuses an older driver at run time. Its
+  error tells a Spring Boot application to use Spring Boot 4.0.8 or later, or to set
+  `postgresql.version`. Spring Boot 4.0.0 to 4.0.7 manage PgJDBC 42.7.8 to 42.7.11. Spring Boot
+  4.0.8 and 4.1.1 manage 42.7.13.
+- The JVM SDK compiles against `opentelemetry-api` 1.62.0, and the optional dependency names that
+  version. It supersedes the paragraph that starts "The JVM SDK compiles against" in the amendment
+  "the telemetry test holds the Java names to `api/telemetry.txt`". Spring Boot 4.1 manages 1.62.0.
+  Spring Boot 4.0 manages 1.55.0. The SDK uses no API that is newer than 1.55.0, so it also runs on
+  the version of the Spring Boot 4.0 BOM.
+- The starter's `jackson` feature names `jackson-databind` 3.1.7. Before this amendment, the
+  feature took its version from the Spring Boot floor. jackson-databind 3.1.7 requires jackson-core
+  3.1.7.
+
+The Spring Boot floor stays the 4.0 line, at 4.0.8 in the build. No Spring Boot BOM manages Jackson
+3.1.6 or later on 2026-10-18: 4.0.8 and 4.1.1 manage 3.1.5. A floor of 4.1 would therefore not fix
+Jackson, and the maintainer set the date of that raise. So the starter declares the Jackson floor
+itself. If an application imports the Spring Boot BOM as Maven dependency management, or through the
+Spring dependency management plugin for Gradle, the BOM selects the Jackson and OpenTelemetry
+versions, and the application controls them. A Gradle `platform` keeps the higher versions that the
+starter declares. The end-of-life dates of the Floors section and the raise to Spring Boot 4.1 do
+not change. The CI matrix does not change, because the floor lanes read the floors from the version
+catalog.
+
+ADR 0058 lets a dependency range narrow when a version is unusable, for example because of an
+unfixed advisory. It asks for one published minor of notice. No JVM artifact is published, so no
+caller has a version to keep, and no notice is necessary. The first publish carries these floors.
+`scripts/jvm-advisory-acceptances.json` accepts none of the ten advisories.
+
+The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
+SM-1467.

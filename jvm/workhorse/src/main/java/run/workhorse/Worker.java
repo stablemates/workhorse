@@ -3686,7 +3686,7 @@ public final class Worker implements AutoCloseable {
     /**
      * Builds the worker.
      *
-     * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.8
+     * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.12
      * @throws IllegalArgumentException if the heartbeat is not less than the lease, the cohorts
      *     exceed the concurrency, or a batch handler's maximum size exceeds the concurrency
      */

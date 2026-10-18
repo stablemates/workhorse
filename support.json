@@ -44,7 +44,7 @@
       "tested": [22, 24]
     },
     "pgjdbc": {
-      "minimum": "42.7.8"
+      "minimum": "42.7.12"
     },
     "postgres": {
       "endOfLife": {

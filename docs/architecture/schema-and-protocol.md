@@ -2346,7 +2346,7 @@ module does not export `run.workhorse.internal`, which holds the generated
 `SqlCatalogue`, the default codec, the contract validator, the heartbeat, and the listener. Each
 Workhorse exception extends the unchecked `WorkhorseException`, a `RuntimeException`. An invalid
 argument throws the standard `IllegalArgumentException` instead. The `Queue`, `Admin`, and
-`Worker` constructors throw `IllegalStateException` when PgJDBC is older than 42.7.8.
+`Worker` constructors throw `IllegalStateException` when PgJDBC is older than 42.7.12.
 
 ### JVM connection sources
 

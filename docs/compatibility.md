@@ -25,19 +25,19 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime     | Supported        | Minimum | End of life                                                    | Notes                                                                                           |
-| ----------- | ---------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Node.js     | 22, 24           | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
-| Python      | 3.12–3.14        | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
-| Go          | 1.25 and newer   | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
-| Rust        | 1.89 and newer   | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
-| Ruby        | 3.3, 3.4, 4.0    | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
-| Active Job  | 8.0, 8.1         | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
-| Java        | 21, 25, 27       | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
-| Kotlin      | 2.2 and newer    | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
-| Spring Boot | 4.0, 4.1         | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
-| PgJDBC      | 42.7.8 and newer | 42.7.8  | No date; the dependency range rule applies                     | The JDBC driver of every JVM module.                                                            |
-| PostgreSQL  | 15, 16, 17, 18   | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.                                         |
+| Runtime     | Supported         | Minimum | End of life                                                    | Notes                                                                                           |
+| ----------- | ----------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Node.js     | 22, 24            | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
+| Python      | 3.12–3.14         | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
+| Go          | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
+| Rust        | 1.89 and newer    | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
+| Ruby        | 3.3, 3.4, 4.0     | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
+| Active Job  | 8.0, 8.1          | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
+| Java        | 21, 25, 27        | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
+| Kotlin      | 2.2 and newer     | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
+| Spring Boot | 4.0, 4.1          | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
+| PgJDBC      | 42.7.12 and newer | 42.7.12 | No date; the dependency range rule applies                     | The JDBC driver of every JVM module.                                                            |
+| PostgreSQL  | 15, 16, 17, 18    | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.                                         |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
@@ -96,6 +96,15 @@ standard library. The build itself uses a newer Kotlin compiler.
 The Spring Boot starter compiles against the Spring Boot floor. The `jvm` CI job tests it on the
 floor. The `spring-boot` CI job tests the same jar on the newest tested Spring Boot line. A weekly
 CI job tests it on the next Spring Boot snapshot. That CI job does not block a release.
+
+The JVM floors exclude the releases with the advisories that ADR 0103 lists. The core and the
+starter declare the OpenTelemetry API 1.62.0 as an optional dependency. The `jackson` feature of the
+starter declares `jackson-databind` 3.1.7. Spring Boot 4.0.0 to 4.0.7 manage a PgJDBC release below
+the floor, so the starter needs Spring Boot 4.0.8 or later, or a `postgresql.version` override. If
+an application imports the Spring Boot BOM as Maven dependency management, or through the Spring
+dependency management plugin for Gradle, the BOM selects the Jackson and OpenTelemetry versions,
+which can be lower than these floors. A Gradle `platform` keeps the higher versions that the starter
+declares.
 
 The core declares the Jakarta Servlet API as an optional dependency for the dashboard backend. Its
 floor is Jakarta Servlet 6.0. CI tests the dashboard backend in the Tomcat release that the newest

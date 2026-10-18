@@ -11,8 +11,11 @@ import java.util.regex.Pattern;
  * it starts, and refuses a driver below the floor of ADR 0103.
  */
 public final class PgjdbcVersion {
-  /** The lowest PgJDBC release that the SDK supports. */
-  public static final String FLOOR = "42.7.8";
+  /**
+   * The lowest PgJDBC release that the SDK supports: the first release that fixes
+   * GHSA-98qh-xjc8-98pq and GHSA-j92g-9f8w-j867.
+   */
+  public static final String FLOOR = "42.7.12";
 
   private static final Pattern RELEASE = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)");
 
@@ -54,7 +57,14 @@ public final class PgjdbcVersion {
       if (found[index] != floor[index]) {
         if (found[index] < floor[index]) {
           throw new IllegalStateException(
-              "Workhorse needs PgJDBC " + FLOOR + " or later, but found PgJDBC " + version);
+              "Workhorse needs PgJDBC "
+                  + FLOOR
+                  + " or later, but found PgJDBC "
+                  + version
+                  + ". In Spring Boot, use Spring Boot 4.0.8 or later, or set the"
+                  + " postgresql.version property to "
+                  + FLOOR
+                  + " or later.");
         }
         return;
       }

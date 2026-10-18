@@ -63,7 +63,7 @@ public final class Admin {
   /**
    * An admin on {@code connections}.
    *
-   * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.8, or
+   * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.12, or
    *     reports a version that the SDK cannot read
    */
   public Admin(ConnectionSource connections) {
