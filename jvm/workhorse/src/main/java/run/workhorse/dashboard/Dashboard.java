@@ -9,7 +9,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.math.BigInteger;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -26,7 +25,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import org.jspecify.annotations.Nullable;
@@ -35,6 +33,7 @@ import run.workhorse.ConnectionSource;
 import run.workhorse.JsonCodec;
 import run.workhorse.internal.Compatibility;
 import run.workhorse.internal.Json;
+import run.workhorse.internal.SdkVersion;
 
 /**
  * A Jakarta Servlet filter that serves one embedded dashboard and its {@code dashboard/v1} RPC
@@ -524,23 +523,10 @@ public final class Dashboard implements Filter {
     }
   }
 
-  /**
-   * The SDK version that the build writes into {@code version.properties} from {@code
-   * project.version}, or {@code unknown} when the resource is absent.
-   */
+  /** The SDK version from {@link SdkVersion}, or {@code unknown} when the build wrote none. */
   static String version() {
-    try (InputStream stream =
-        Dashboard.class.getResourceAsStream("/run/workhorse/version.properties")) {
-      if (stream == null) {
-        return "unknown";
-      }
-      Properties properties = new Properties();
-      properties.load(new InputStreamReader(stream, StandardCharsets.UTF_8));
-      String version = properties.getProperty("version", "").trim();
-      return version.isEmpty() ? "unknown" : version;
-    } catch (IOException error) {
-      return "unknown";
-    }
+    String version = SdkVersion.current();
+    return version == null ? "unknown" : version;
   }
 
   /** Escapes the characters that could close the inline script of the runtime configuration. */

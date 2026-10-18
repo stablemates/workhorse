@@ -19,18 +19,15 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import org.jspecify.annotations.Nullable;
 import run.workhorse.internal.Json;
+import run.workhorse.internal.SdkVersion;
 
 /**
  * {@link Telemetry} on an OpenTelemetry instance. The only SDK class that names an OpenTelemetry
@@ -42,7 +39,7 @@ import run.workhorse.internal.Json;
  */
 public final class OpenTelemetryTelemetry implements Telemetry {
   private static final TextMapPropagator PROPAGATOR = W3CTraceContextPropagator.getInstance();
-  private static final @Nullable String VERSION = version();
+  private static final @Nullable String VERSION = SdkVersion.current();
 
   private static final TextMapGetter<Map<String, String>> GETTER =
       new TextMapGetter<>() {
@@ -204,22 +201,6 @@ public final class OpenTelemetryTelemetry implements Telemetry {
       builder.put(key, number.longValue());
     } else {
       builder.put(key, value.toString());
-    }
-  }
-
-  /** The SDK version that the build writes into {@code version.properties}, or {@code null}. */
-  private static @Nullable String version() {
-    try (InputStream stream =
-        OpenTelemetryTelemetry.class.getResourceAsStream("/run/workhorse/version.properties")) {
-      if (stream == null) {
-        return null;
-      }
-      Properties properties = new Properties();
-      properties.load(new InputStreamReader(stream, StandardCharsets.UTF_8));
-      String version = properties.getProperty("version", "").trim();
-      return version.isEmpty() ? null : version;
-    } catch (IOException error) {
-      return null;
     }
   }
 

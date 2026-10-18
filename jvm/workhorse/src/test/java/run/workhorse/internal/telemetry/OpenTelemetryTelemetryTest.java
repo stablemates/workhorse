@@ -18,7 +18,9 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import run.workhorse.internal.SdkVersion;
 import run.workhorse.testing.RecordingOpenTelemetry;
+import run.workhorse.testing.WithoutVersionResource;
 
 /** The OpenTelemetry backend without PostgreSQL: trace context, span parents, and instruments. */
 // A scope only makes a span current, so a try block never reads it.
@@ -203,6 +205,51 @@ class OpenTelemetryTelemetryTest {
             .next()
             .getValue());
     recording.assertGoverned(Telemetry.TRACE_ATTRIBUTE_COUNT_LIMIT);
+  }
+
+  @Test
+  void namesTheSdkVersionAsTheInstrumentationVersion() {
+    assertNotNull(SdkVersion.current());
+    recordOneSpanAndOneMetric(telemetry);
+    assertEquals(
+        SdkVersion.current(),
+        recording.spans(Names.SPAN_ENQUEUE).get(0).getInstrumentationScopeInfo().getVersion());
+    for (MetricData metric : recording.metrics()) {
+      assertEquals(SdkVersion.current(), metric.getInstrumentationScopeInfo().getVersion());
+    }
+  }
+
+  @Test
+  void namesNoInstrumentationVersionWithoutTheVersionResource() throws Exception {
+    try (WithoutVersionResource loader = new WithoutVersionResource()) {
+      assertNull(loader.getResource(WithoutVersionResource.RESOURCE));
+      Class<?> backend = loader.sdkClass(OpenTelemetryTelemetry.class.getName());
+      Object hidden = backend.getMethod("of", OpenTelemetry.class).invoke(null, recording.sdk());
+      Class<?> telemetryType = loader.sdkClass(Telemetry.class.getName());
+      Class<?> instrumentType = loader.sdkClass(Instrument.class.getName());
+      Object claimed = instrumentType.getField(Instrument.TASKS_CLAIMED.name()).get(null);
+      try (AutoCloseable span =
+          (AutoCloseable)
+              telemetryType
+                  .getMethod("span", String.class, Map.class)
+                  .invoke(hidden, Names.SPAN_ENQUEUE, Map.of())) {
+        telemetryType
+            .getMethod("add", instrumentType, double.class, Map.class)
+            .invoke(hidden, claimed, 1.0, Map.of());
+      }
+    }
+    assertNull(
+        recording.spans(Names.SPAN_ENQUEUE).get(0).getInstrumentationScopeInfo().getVersion());
+    assertFalse(recording.metrics().isEmpty());
+    for (MetricData metric : recording.metrics()) {
+      assertNull(metric.getInstrumentationScopeInfo().getVersion());
+    }
+  }
+
+  private static void recordOneSpanAndOneMetric(Telemetry telemetry) {
+    try (TelemetrySpan span = telemetry.span(Names.SPAN_ENQUEUE, Map.of())) {
+      telemetry.add(Instrument.TASKS_CLAIMED, 1, Map.of());
+    }
   }
 
   @Test
