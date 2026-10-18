@@ -299,8 +299,8 @@ time, because UTC has no clock changes.
 - If several cron fields give the same instant, Workhorse creates one occurrence.
 
 An `H` field gives a schedule a fixed offset, so that schedules do not all fire at the same time.
-PostgreSQL calculates this offset. Thus, TypeScript, Python, Go, Rust, and Ruby workers get the
-same occurrence.
+PostgreSQL calculates this offset. Thus, TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin
+workers get the same occurrence.
 
 <details>
 <summary>Reference: cron dialect</summary>

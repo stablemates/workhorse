@@ -16,8 +16,9 @@ in four areas:
 - **Steps inside a task.** A Workhorse handler can store the result of each named step. When the
   task runs again, the handler skips the steps that completed. It can also wait for a timer or a
   signal without a worker slot. In pg-boss, a retry runs the whole handler again.
-- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
-  protocol. pg-boss is one Node.js library. Other runtimes can call its HTTP proxy or write SQL.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin on
+  one SQL protocol. pg-boss is one Node.js library. Other runtimes can call its HTTP proxy or write
+  SQL.
 - **Databases.** pg-boss also runs on CockroachDB, Citus, and PGlite. Workhorse runs on PostgreSQL
   only.
 - **Transactional handlers.** A pg-boss worker can commit the writes of a handler and the result of

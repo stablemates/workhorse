@@ -410,9 +410,9 @@ remove, retype, or reinterpret a shipped view, so a core release remains compati
 dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
 from the minor line to the major line; see [Retention and removal](#retention-and-removal).
 
-The shared browser bundle carries no SDK version. The TypeScript, Python, Go, or Rust host supplies its
-own published version when it renders the application, so the dashboard reports the package that
-serves it and a version-only release does not change the bundle.
+The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, or JVM
+host supplies its own published version when it renders the application, so the dashboard reports
+the package that serves it and a version-only release does not change the bundle.
 
 While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
 not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
@@ -529,9 +529,9 @@ The release notes announce a `dashboard/v2` transition and give its upgrade step
 backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
 and `Sunset` response headers do not apply.
 
-The five language lines float independently, and each is governed on its own surfaces: a Go `/v2`
-does not move the TypeScript, Python, Rust, or Ruby major. Only a protocol break moves all five at
-once.
+The six language lines float independently, and each is governed on its own surfaces: a Go `/v2`
+does not move the TypeScript, Python, Rust, Ruby, or JVM major. Only a protocol break moves all six
+at once.
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
@@ -541,7 +541,7 @@ their own rule, in a minor and only on upstream end of life; see [Raising a floo
 `sql-catalogues:check` and `dashboard-spec:check` regenerate an artifact and diff it. A diff alone
 says only that something moved, because regenerating rewrites the artifact whether a procedure was
 added or removed. Each check therefore compares against a separate promise file that accumulates:
-the generator may add an entry and may never drop one. The five language checks need no such file,
+the generator may add an entry and may never drop one. The seven language checks need no such file,
 because their snapshots in [`api/`](../api/README.md) are not regenerated from the surface they
 describe.
 
@@ -573,7 +573,7 @@ function a release actually touches.
 `scripts/generate-sql-catalogues.ts` derives the set from the readers rather than from a hand list,
 so a new read governs its target on the next generate:
 
-- The manifest's statement catalogue, which is the SQL all four SDKs send. `assertNoInlineTypeScriptSql`
+- The manifest's statement catalogue, which is the SQL all six SDKs send. `assertNoInlineTypeScriptSql`
   and the Python binding check keep it the only source of SDK statements.
 - The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
   `python/src/workhorse/dashboard`, each of which builds its own SQL.
@@ -676,8 +676,10 @@ Six gates hold the tag, and each is met with evidence rather than with an assert
    ([ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)).
 3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
    against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
-   registries in all five languages, Rust from crates.io and Ruby from RubyGems included
-   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)).
+   registries of all six SDKs, Rust from crates.io, Ruby from RubyGems, and the JVM artifacts from
+   Maven Central included ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
+   [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
+   [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across
    daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
    kill with clean recovery.
@@ -728,9 +730,9 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 - **Task payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
   and other Workhorse metadata are kept beside the payload, never merged into it.
 - **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
-  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, Go, and Rust
-  backends. Applications should embed a shipped backend rather than call those procedures as a
-  public operator API.
+  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, Go,
+  Rust, Ruby, and JVM backends. Applications should embed a shipped backend rather than call those
+  procedures as a public operator API.
 
 <picture>
   <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../site/public/diagrams/schema-compatibility-narrow-dark.png">
@@ -739,14 +741,14 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   <img src="../site/public/diagrams/schema-compatibility-light.png" width="960" alt="schemaCompatibilityRefusal tests in this order; the first failed test decides">
 </picture>
 
-The TypeScript, Python, Go, and Rust clients and workers implement this protocol. Python runs the same
-canonical SQL fixtures and request mapping through Psycopg, plus transaction integration through
-Psycopg async and asyncpg. Its synchronous and asynchronous workers share one lifecycle core; the
-asynchronous surface uses native Psycopg or asyncpg query and notification connections. The Go
-worker supports bounded multi-queue dispatch, fenced ownership, cooperative
-cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile
-and exercise external module consumers before a release can create the module tag. The Rust crate
-runs every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`, and
+The TypeScript, Python, Go, Rust, Ruby, and JVM clients and workers implement this protocol. Python
+runs the same canonical SQL fixtures and request mapping through Psycopg, plus transaction
+integration through Psycopg async and asyncpg. Its synchronous and asynchronous workers share one
+lifecycle core; the asynchronous surface uses native Psycopg or asyncpg query and notification
+connections. The Go worker supports bounded multi-queue dispatch, fenced ownership, cooperative
+cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile and
+exercise external module consumers before a release can create the module tag. The Rust crate runs
+every `protocol/v1` fixture category through `rust/tests/protocol_conformance.rs`, and
 `rust/tests/conformance/expected-unsupported.json` lists no exception.
 
 ## Release process

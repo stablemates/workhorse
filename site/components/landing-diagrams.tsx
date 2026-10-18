@@ -595,7 +595,7 @@ export function FleetOperationsDiagram() {
         <div className="shrink-0">
           <Chip tone="accent">incident script</Chip>
           <p className="mt-2 text-[12.5px] text-fd-muted-foreground">
-            TypeScript, Python, Go, Rust, or Ruby
+            TypeScript, Python, Go, Rust, Ruby, Java, or Kotlin
           </p>
         </div>
         <LabeledWire label="audited request" className="w-16" />

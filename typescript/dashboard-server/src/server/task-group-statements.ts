@@ -5,7 +5,8 @@ import { dashboardTaskGroupEventLimit } from "../wire.js";
  *
  * The group list calls `dashboard_task_groups_v1`. The detail and the cancel are one statement each
  * over the task group functions. `spec/generate-bindings.ts` copies these texts into the Go,
- * Python, Rust, and Ruby bindings, so the five backends send the same SQL and return the same JSON.
+ * Python, Rust, Ruby, and Java bindings, so the six backends send the same SQL and return the same
+ * JSON.
  *
  * Each statement takes one parameter, `$1`, the procedure input as `jsonb`. It returns one row with
  * one `result` column.

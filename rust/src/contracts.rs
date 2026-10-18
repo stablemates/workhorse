@@ -95,8 +95,8 @@ const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const DEFINITION_NAME: &str = "^[A-Za-z_][-A-Za-z0-9._]*$";
 const DEFINITION_REFERENCE_PREFIX: &str = "#/$defs/";
 
-/// Requires every reference to name the root schema or one root definition. The libraries behind
-/// the five SDKs resolve those two forms alike, and both name a schema position the profile walk
+/// Requires every reference to name the root schema or one root definition. The validators behind
+/// the six SDKs resolve those two forms alike, and both name a schema position the profile walk
 /// checked.
 fn check_contract_profile(schema: &Value) -> Result<(), String> {
     let mut references = Vec::new();

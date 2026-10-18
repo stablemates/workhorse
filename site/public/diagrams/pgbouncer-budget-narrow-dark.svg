@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 232" width="400" height="232" role="img" aria-labelledby="pgbouncer-budget-narrow-dark-title pgbouncer-budget-narrow-dark-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 288" width="400" height="288" role="img" aria-labelledby="pgbouncer-budget-narrow-dark-title pgbouncer-budget-narrow-dark-desc">
 <title id="pgbouncer-budget-narrow-dark-title">Four workers on a pool of 20 keep some connections for themselves</title>
-<desc id="pgbouncer-budget-narrow-dark-desc">Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat connections in the pool, so 16 remain. Their four listeners are outside the pool.</desc>
+<desc id="pgbouncer-budget-narrow-dark-desc">Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat connections in the pool, so 16 remain. Their four listeners are outside the pool. Java and Kotlin workers keep four listeners and one heartbeat connection, so 15 remain.</desc>
 <defs><marker id="arrow-dark" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ced1d4"/></marker></defs>
-<rect width="400" height="232" fill="#04080e"/>
+<rect width="400" height="288" fill="#04080e"/>
 <text x="24" y="49" fill="#f2f4f5" font-size="9" font-family="Geist Mono">TS, Go, Ruby</text>
 <rect x="112" y="24" width="264" height="42" rx="6" fill="#04080e"/>
 <rect x="112" y="24" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
@@ -18,5 +18,10 @@
 <rect x="112" y="136" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
 <text x="244" y="155" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">16 remain</text>
 <text x="244" y="169" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">4 kept: 4 heartbeats</text>
-<text x="24" y="200" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The Rust listeners are outside the pool.</text>
+<text x="24" y="217" fill="#f2f4f5" font-size="9" font-family="Geist Mono">Java, Kotlin</text>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#04080e"/>
+<rect x="112" y="192" width="264" height="42" rx="6" fill="#0a1017" stroke="#f2f4f5" stroke-width="1"/>
+<text x="244" y="211" fill="#f2f4f5" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">15 remain</text>
+<text x="244" y="225" fill="#ced1d4" font-size="9" font-family="Geist Mono" text-anchor="middle">5 kept: 4 listeners, 1 heartbeat</text>
+<text x="24" y="256" fill="#ced1d4" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">The Rust listeners are outside the pool.</text>
 </svg>

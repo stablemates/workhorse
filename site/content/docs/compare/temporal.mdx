@@ -32,7 +32,7 @@ and a dashboard. They differ in five areas:
   completes on one Worker Deployment Version. Workhorse gives two patterns in application code: a
   version checkpoint, or one queue for each version.
 - **Languages.** Temporal has SDKs for Go, Java, .NET, PHP, Python, Ruby, Rust, and TypeScript.
-  Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+  Workhorse has workers in TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin.
 
 Temporal also runs single jobs without a Workflow. It calls these
 [Standalone Activities](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/evaluate/features/job-queue.mdx#L17-L19).
@@ -60,7 +60,7 @@ Temporal is the better choice in these cases:
   [Queries and Updates](https://github.com/temporalio/documentation/blob/15a0f373952e1542d044fe094c9686a2abea182d/docs/encyclopedia/workflow-message-passing/workflow-message-passing.mdx#L18-L24)
   for this. A Workhorse signal delivers data to a waiting task and returns no value from the
   handler.
-- Your services use Java, .NET, or PHP. Workhorse has no SDK for these languages.
+- Your services use .NET or PHP. Workhorse has no SDK for these languages.
 - You do not want to run the workflow service yourself. You can host the Temporal server and its
   database yourself, or
   [use Temporal Cloud](https://github.com/temporalio/temporal/blob/v1.32.1/docs/architecture/README.md#L61).

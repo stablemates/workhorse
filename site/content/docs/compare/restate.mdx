@@ -71,7 +71,6 @@ Restate is the better choice in these cases:
   [sends each retry to the deployment that started the invocation](https://github.com/restatedev/docs-restate/blob/5d7f07f2d9e52961b133e9ad2eae0d615c5d47e7/docs/services/versioning.mdx#L6-L39).
   You keep the old deployment until its invocations finish. Workhorse gives two patterns in
   application code: a version checkpoint, or one queue for each version.
-- Your services use Java or Kotlin. Workhorse has no SDK for these languages.
 - Your application does not use PostgreSQL. The Restate Server keeps its own state and needs no
   external database. Workhorse needs PostgreSQL.
 - You do not want to run the workflow server yourself. Restate operates

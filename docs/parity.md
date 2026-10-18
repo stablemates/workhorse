@@ -29,9 +29,9 @@ today. The integer semantics below compare the other four SDKs.
 The JVM SDK is the sixth SDK ([ADR
 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)). Its
 `JVM` column describes the `workhorse` artifact, which Java, Kotlin, and Spring callers use. Its
-client, `Admin` client, dashboard backend, worker runtime, and durable handler context are tested
-today. Its fast task tier, batch delivery, and OpenTelemetry support are Planned. Each Planned cell
-links the open Issue that owns it.
+client, `Admin` client, dashboard backend, worker runtime, durable handler context, fast task tier,
+batch delivery, and OpenTelemetry support are tested today. Every JVM cell of the capability tables
+below is Supported. No JVM version is published yet.
 
 ## Client (enqueue side)
 

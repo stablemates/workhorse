@@ -13,7 +13,9 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
  * "Budget the connections that each worker holds": four workers on one pool of 20. TypeScript, Go,
  * and Ruby workers share one listener and one heartbeat connection. Each Python worker takes its
  * own listener and heartbeat connection from the pool. Each Rust worker takes a heartbeat
- * connection from the pool and opens its listener outside the pool.
+ * connection from the pool and opens its listener outside the pool. Each Java or Kotlin worker
+ * takes its own listener from its `DataSource`, and the workers on one `DataSource` share one
+ * heartbeat connection.
  *
  * Check each fact against its source before you change a label.
  */
@@ -155,7 +157,8 @@ const budgetDescription =
   "Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one " +
   "listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep " +
   "four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat " +
-  "connections in the pool, so 16 remain. Their four listeners are outside the pool.";
+  "connections in the pool, so 16 remain. Their four listeners are outside the pool. Java and " +
+  "Kotlin workers keep four listeners and one heartbeat connection, so 15 remain.";
 
 const CONNECTION = 36;
 const BAR_LEFT = 200;
@@ -164,6 +167,7 @@ const budgets: readonly (readonly [language: string, kept: number, keptSub: stri
   ["TypeScript, Go, Ruby", 2, "1 + 1"],
   ["Python", 8, "4 listeners · 4 heartbeats"],
   ["Rust", 4, "4 heartbeats"],
+  ["Java, Kotlin", 5, "4 listeners · 1 heartbeat"],
 ];
 
 /** The budget diagram: one bar of 20 connections for each language. */
@@ -241,6 +245,7 @@ export const poolerBudgetNarrow = {
         ["TS, Go, Ruby", "backend", "18 remain", "2 kept: 1 listener, 1 heartbeat"],
         ["Python", "backend", "12 remain", "8 kept: 4 listeners, 4 heartbeats"],
         ["Rust", "backend", "16 remain", "4 kept: 4 heartbeats"],
+        ["Java, Kotlin", "backend", "15 remain", "5 kept: 4 listeners, 1 heartbeat"],
       ],
       ["The Rust listeners are outside the pool."],
     );

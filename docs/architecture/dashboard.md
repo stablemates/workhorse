@@ -744,8 +744,8 @@ The input limits are:
 
 `typescript/dashboard-server/src/server/task-group-statements.ts` holds the SQL of the three
 procedures. `typescript/dashboard-server/spec/generate-bindings.ts` copies it into the Go, Python,
-Rust, and Ruby bindings. Thus the five backends send the same SQL for the list and the detail. The
-cancel uses a different path in TypeScript, as [Cancel](#cancel) describes. The statements call
+Rust, Ruby, and Java bindings. Thus the six backends send the same SQL for the list and the detail.
+The cancel uses a different path in TypeScript, as [Cancel](#cancel) describes. The statements call
 only functions and name no task group table. Thus the task group tables are not a governed dashboard
 read ([Task groups: Reads](task-groups.md#reads)).
 

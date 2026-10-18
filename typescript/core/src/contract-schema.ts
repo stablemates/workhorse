@@ -63,7 +63,7 @@ interface SchemaReference {
   readonly reference: string;
 }
 
-// A reference names the root schema or one root definition. The libraries behind the five SDKs
+// A reference names the root schema or one root definition. The validators behind the six SDKs
 // resolve those two forms alike, and both name a schema position the profile walk checked.
 function assertContractSchema(schema: Json): void {
   const references: SchemaReference[] = [];

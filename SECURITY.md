@@ -69,7 +69,9 @@ line alone.
 
 The five lines are the nine `@stablemates/workhorse*` npm packages, released in lockstep; the
 `stablemates-workhorse` Python distribution; the `github.com/stablemates/workhorse/go` module; the
-`workhorse` Rust crate; and the `stablemates-workhorse` Ruby gem.
+`workhorse` Rust crate; and the `stablemates-workhorse` Ruby gem. The three `run.workhorse` JVM
+artifacts for Java and Kotlin become the sixth line at their first published version. No JVM version
+is published yet.
 [`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes and the release
 process.
 

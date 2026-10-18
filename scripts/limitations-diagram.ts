@@ -3,10 +3,11 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
 /**
  * The diagram of `site/content/docs/limitations.mdx`. It uses the names of that page.
  *
- * "Run the schema tools from the TypeScript package": Python, Go, Rust, and Ruby have
- * transactional queue clients, complete worker runtimes, and `Admin` operator clients. Schema
- * installation and migration, the `workhorse` admin CLI, and the TUI are only in the TypeScript
- * package. This limit stays at 1.0.0. The workaround runs the CLI as a deployment step.
+ * "Run the schema tools from the TypeScript package": Python, Go, Rust, Ruby, and the JVM SDK have
+ * transactional queue clients, complete worker runtimes, and `Admin` operator clients. The JVM SDK
+ * serves Java and Kotlin. Schema installation and migration, the `workhorse` admin CLI, and the TUI
+ * are only in the TypeScript package. This limit stays at 1.0.0. The workaround runs the CLI as a
+ * deployment step.
  *
  * Check each fact against its source before you change a label.
  */
@@ -15,12 +16,12 @@ type Kind = "focal" | "backend" | "store" | "external";
 
 const title = "Each language runs the queue; only TypeScript changes the schema";
 const description =
-  "TypeScript, Python, Go, Rust, and Ruby each have a transactional queue client, a complete " +
-  "worker runtime, and an Admin operator client. Schema installation and migration, the workhorse " +
-  "admin CLI, and the TUI are only in the TypeScript package. A deployment with many languages " +
-  "runs the CLI as a deployment step.";
+  "TypeScript, Python, Go, Rust, Ruby, and the JVM SDK for Java and Kotlin each have a " +
+  "transactional queue client, a complete worker runtime, and an Admin operator client. Schema " +
+  "installation and migration, the workhorse admin CLI, and the TUI are only in the TypeScript " +
+  "package. A deployment with many languages runs the CLI as a deployment step.";
 
-const languages = ["TypeScript", "Python", "Go", "Rust", "Ruby"] as const;
+const languages = ["TypeScript", "Python", "Go", "Rust", "Ruby", "JVM"] as const;
 const parts = ["queue client", "worker runtime", "Admin client", "schema tools · CLI · TUI"];
 
 const COL = 176;
@@ -75,6 +76,7 @@ const events: readonly (readonly [label: string, kind: Kind, name: string, sub: 
   ["Go", "backend", "queue · worker · Admin", "no schema tools"],
   ["Rust", "backend", "queue · worker · Admin", "no schema tools"],
   ["Ruby", "backend", "queue · worker · Admin", "no schema tools"],
+  ["JVM", "backend", "queue · worker · Admin", "no schema tools"],
 ];
 
 /** The language diagram for screens up to 600 px wide: one language on each line. */
