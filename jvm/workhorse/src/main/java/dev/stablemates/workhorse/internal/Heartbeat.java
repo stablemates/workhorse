@@ -3,7 +3,9 @@ package dev.stablemates.workhorse.internal;
 import dev.stablemates.workhorse.ConnectionSource;
 import java.lang.ref.WeakReference;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -38,6 +40,20 @@ public final class Heartbeat {
    * interval (ADR 0071), but a socket timeout of a few milliseconds would fail healthy rounds.
    */
   private static final long MIN_ROUND_TIMEOUT_MS = 50;
+
+  /**
+   * A round with less time than this left fails before it sends its heartbeat. At this size every
+   * server budget is at least 1 ms, and the budgets still fit in the time left.
+   */
+  private static final long MIN_REMAINING_NANOS = TimeUnit.MILLISECONDS.toNanos(8);
+
+  /**
+   * Sets both server timeouts for the current transaction only. {@code SET LOCAL} cannot take a
+   * bind parameter, and {@code set_config(..., true)} has the same scope.
+   */
+  private static final String ROUND_TIMEOUTS =
+      "SELECT set_config('statement_timeout', ?, true), "
+          + "set_config('idle_in_transaction_session_timeout', ?, true)";
 
   private static final ReentrantLock DEDICATED_LOCK = new ReentrantLock();
   // Weak values: a heartbeat holds its DataSource, so a strong value would keep the weak key
@@ -161,10 +177,8 @@ public final class Heartbeat {
     while (true) {
       try (Held held = new Held(dataSource.getConnection())) {
         if (rounds(
-            (timeoutNanos, statement, parameters) -> {
-              held.bound(timeoutNanos);
-              return Sql.rows(held.connection, statement, parameters);
-            })) {
+            (timeoutNanos, statement, parameters) ->
+                held.round(timeoutNanos, statement, parameters))) {
           return;
         }
       } catch (SQLException | RuntimeException error) {
@@ -224,8 +238,10 @@ public final class Heartbeat {
           long sentAt = System.nanoTime();
           List<Row> rows;
           try {
-            rows =
-                round.send(interval, SqlCatalogue.HEARTBEAT_MANY_V1, entry.getKey(), leases(chunk));
+            String payload = leases(chunk);
+            // The round's deadline started at sentAt, so serialization counts against it.
+            long remaining = roundBoundNanos(interval) - (System.nanoTime() - sentAt);
+            rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V1, entry.getKey(), payload);
           } catch (SQLException | RuntimeException error) {
             if (dedicated) {
               throw error;
@@ -240,6 +256,16 @@ public final class Heartbeat {
         }
       }
     }
+  }
+
+  /**
+   * The deadline of one round for the shortest member interval {@code intervalNanos}: the interval
+   * plus 1 ms, and at least the shortest round timeout.
+   */
+  private static long roundBoundNanos(long intervalNanos) {
+    return Math.max(
+        TimeUnit.MILLISECONDS.toNanos(MIN_ROUND_TIMEOUT_MS),
+        intervalNanos + TimeUnit.MILLISECONDS.toNanos(1));
   }
 
   private static String leases(List<Member> chunk) {
@@ -301,22 +327,29 @@ public final class Heartbeat {
   }
 
   private interface Round {
-    /** Sends one statement within {@code timeoutNanos}, the shortest member interval. */
+    /** Sends one statement within {@code timeoutNanos}, the time left of the round's bound. */
     List<Row> send(
         long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)
         throws SQLException;
   }
 
   /**
-   * The dedicated connection. It runs in autocommit, with a network timeout of one round, and it
-   * restores both before it goes back to the pool. A round that overruns the timeout fails, and
-   * PgJDBC closes the connection, so a stalled connection cannot stop renewal.
+   * The dedicated connection. It runs in autocommit between rounds, and it restores its autocommit
+   * mode and network timeout before it goes back to the pool.
+   *
+   * <p>One deadline bounds each round: every read gets a network timeout of the time that remains,
+   * so a stalled round fails, and PgJDBC closes the connection. Closing a connection does not stop
+   * its statement, because PostgreSQL notices a closed client only when it next writes to it. So
+   * the round also sets server timeouts that end the heartbeat, and a transaction whose client
+   * stopped before {@code COMMIT}, by the deadline. A {@code COMMIT} that PostgreSQL has already
+   * started can still finish later. Both settings end with the transaction, so the connection keeps
+   * no session state.
    */
   private static final class Held implements AutoCloseable {
     private final Connection connection;
     private final boolean restoreAutoCommit;
     private final int previousTimeout;
-    private int current = -1;
+    private boolean bounded;
 
     Held(Connection connection) throws SQLException {
       this.connection = connection;
@@ -332,22 +365,82 @@ public final class Heartbeat {
       }
     }
 
-    /** Bounds the next round by {@code timeoutNanos}, or by the shortest round timeout. */
-    void bound(long timeoutNanos) throws SQLException {
-      long milliseconds =
-          Math.max(MIN_ROUND_TIMEOUT_MS, TimeUnit.NANOSECONDS.toMillis(timeoutNanos) + 1);
-      int timeout = (int) Math.min(Integer.MAX_VALUE, milliseconds);
-      if (timeout != current) {
-        connection.setNetworkTimeout(Runnable::run, timeout);
-        current = timeout;
+    /**
+     * Sends {@code statement} in its own transaction within {@code timeoutNanos}. A round that
+     * fails rolls back; a connection that cannot roll back is aborted, because its state is not
+     * known.
+     */
+    List<Row> round(
+        long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)
+        throws SQLException {
+      long deadline = System.nanoTime() + timeoutNanos;
+      boundUntil(deadline);
+      connection.setAutoCommit(false);
+      try {
+        long setAt = System.nanoTime();
+        long remaining = deadline - setAt;
+        if (remaining < MIN_REMAINING_NANOS) {
+          throw new SQLTimeoutException("Heartbeat round reached its deadline");
+        }
+        // PostgreSQL measures statement_timeout for each statement and the idle timeout for each
+        // idle gap, and restarts both every time. While the round can hold a row lock, it has one
+        // idle gap before the heartbeat, the heartbeat, and one idle gap before COMMIT. So the
+        // heartbeat gets one half, each gap one eighth, and the last quarter is kept for COMMIT.
+        long milliseconds = TimeUnit.NANOSECONDS.toMillis(remaining);
+        try (PreparedStatement timeouts = connection.prepareStatement(ROUND_TIMEOUTS)) {
+          timeouts.setString(1, Long.toString(Math.max(1, milliseconds / 2)));
+          timeouts.setString(2, Long.toString(Math.max(1, milliseconds / 8)));
+          timeouts.execute();
+        }
+        // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
+        if (System.nanoTime() - setAt > remaining / 4) {
+          throw new SQLTimeoutException("Heartbeat round settings took too long");
+        }
+        boundUntil(deadline);
+        List<Row> rows = Sql.rows(connection, statement, parameters);
+        boundUntil(deadline);
+        connection.commit();
+        // A COMMIT that ends after the deadline does not count as a renewal.
+        if (System.nanoTime() - deadline >= 0) {
+          throw new SQLTimeoutException("Heartbeat round reached its deadline");
+        }
+        return rows;
+      } catch (SQLException | RuntimeException error) {
+        try {
+          if (!connection.isClosed()) {
+            boundUntil(deadline);
+            connection.rollback();
+          }
+        } catch (SQLException rollback) {
+          // The rollback keeps the round's deadline. A connection that cannot finish it in time
+          // has a state the round cannot know.
+          connection.abort(Runnable::run);
+        }
+        throw error;
+      } finally {
+        if (!connection.isClosed()) {
+          connection.setAutoCommit(true);
+        }
       }
+    }
+
+    /** Bounds the next read by the time left before {@code deadline}, a nanoTime value. */
+    private void boundUntil(long deadline) throws SQLException {
+      long remaining = deadline - System.nanoTime();
+      if (remaining <= 0) {
+        throw new SQLTimeoutException("Heartbeat round reached its deadline");
+      }
+      int timeout =
+          (int) Math.min(Integer.MAX_VALUE, Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)));
+      connection.setNetworkTimeout(Runnable::run, timeout);
+      bounded = true;
     }
 
     @Override
     public void close() throws SQLException {
       try {
         if (!connection.isClosed()) {
-          if (current >= 0) {
+          if (bounded) {
             connection.setNetworkTimeout(Runnable::run, previousTimeout);
           }
           if (restoreAutoCommit) {

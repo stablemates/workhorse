@@ -1099,18 +1099,18 @@ lock that the settlement holds, for example the `FOR UPDATE` lock of `expire_own
    row until the last heartbeat statement that waits on the row ends.
 5. Then a later claim takes the task. The skip does not change the row, so the task is not lost.
 
-More than one heartbeat statement can wait on the row. A TypeScript round on the reserved
-connection can take longer than `heartbeatMs`. Then the worker destroys that connection
-([Heartbeat connection](#heartbeat-connection)). The next round runs on another pooled connection.
+Each bounded heartbeat round has one deadline, and server timeouts end the heartbeat statement by
+that deadline ([Heartbeat round deadline](#heartbeat-round-deadline)). Thus a heartbeat statement waits on the row
+for at most the rest of its round, and at most one heartbeat statement of a worker waits at a time.
+The skip then lasts until that statement ends. A round that reaches its deadline rolls back, so it
+renews no lease in it.
 
-PostgreSQL does not stop the abandoned statement. With `client_connection_check_interval` at 0,
+Before SM-1442, a round that passed its bound only closed its connection. PostgreSQL does not stop
+a statement when its client closes the connection: with `client_connection_check_interval` at 0,
 which is the default, it does not check for a closed client while a statement runs. The abandoned
-statements wait on the row lock and hold it in turn. Thus, if heartbeat statements are slower than
-`heartbeatMs`, the skip lasts until that queue drains.
-
-In the SM-1434 fault-injection check, each heartbeat statement took 300 ms longer, with a
-`heartbeatMs` of 50 ms. Up to 5 statements were active at the same time. The queue took about
-1.5 s to drain.
+statements then waited on the row lock and held it in turn. In the SM-1434 fault-injection check,
+each heartbeat statement took 300 ms longer, with a `heartbeatMs` of 50 ms. Up to 5 statements were
+active at the same time, and the queue took about 1.5 s to drain.
 
 A settlement can be an execution timeout, a failure that retries with no delay, a release through
 `release_owned_v1`, or lease recovery through `recover_expired_v1`. Each can leave the row `ready`
@@ -1118,8 +1118,7 @@ while the heartbeat of the old owner waits for it.
 
 The worker does not wait for a heartbeat round that is in flight when an attempt ends. Thus
 `runOnce()` can return before that heartbeat commits, and the next `runOnce()` can claim no task
-(SM-1434). Whether a heartbeat may wait for the row lock of a settlement is an open decision
-(SM-1439).
+(SM-1434). SM-1443 changes the heartbeat so that it does not wait for the row lock of a settlement.
 
 #### Lease watchdog
 
@@ -1218,17 +1217,20 @@ reservation releases it.
 - `runOnce()` takes one when the first attempt registers its lease, before the handler starts, and
   closes it with the last lease.
 
-`heartbeatMs` bounds each round on the reservation. If a round exceeds the bound, or if its
-statement fails, the round releases the client with an error. node-postgres then destroys the
-connection and does not return it to the pool. This is the client-side cancel. The next round
-connects a new one.
+`heartbeatMs` bounds each round on the reservation, as
+[Heartbeat round deadline](#heartbeat-round-deadline) describes. The workers on the pool take turns
+on the reservation: a round starts only when the round before it has ended, and the wait counts
+against its deadline. If a round passes its deadline, or if its statement fails, the round releases
+the client with an error. node-postgres then destroys the connection and does not return it to the
+pool. The next round connects a new one.
 
 The reservation listens for the `error` event of the client while it holds the client. An error
 between rounds destroys the client in the same way, for example when PostgreSQL terminates the
 backend of an idle worker. That error changes no lease. A checked-out node-postgres client has no
 listener of its own. Without this listener, the error would end the process.
 
-The reservation uses no session `SET`. Thus the reservation is safe under transaction pooling.
+The reservation keeps no session state. Its round timeouts are transaction-local
+(`set_config(..., true)`), so the reservation is safe under transaction pooling.
 
 The Go, Python, and Rust drivers report a lost connection only on the next statement. That statement
 fails the round and discards the connection. Their heartbeat connections work as follows:
@@ -1243,6 +1245,95 @@ fails the round and discards the connection. Their heartbeat connections work as
   is set. It bounds a round on that connection by one heartbeat interval. It discards the connection
   if the round fails. A round under `shared_heartbeats` borrows a connection like any other
   statement. That round has no bound.
+
+#### Heartbeat round deadline
+
+A worker stops waiting for a bounded heartbeat round at its deadline. Closing the connection does
+not stop the statement on the server. So each bounded round also sets server timeouts that end the
+heartbeat statement, and any idle wait inside its transaction, by the same deadline. Thus a slow
+heartbeat statement cannot keep its row locks, or renew a lease, after the worker gave up on it.
+The one exception is a `COMMIT` that PostgreSQL has already started, as this section describes
+below.
+
+Each bounded round does these steps, all before one deadline:
+
+1. Builds the lease payload. The deadline starts before this step, so serialization counts
+   against it.
+2. Waits for its turn on the connection (TypeScript and Go, where workers share the connection),
+   and takes the connection, or a new one after a failed round. Ruby and JVM hold their connection
+   between rounds, and take a new one before the round starts. In Rust, a new connection that is
+   not ready by the deadline continues to connect, and the next round takes it.
+3. Sends `BEGIN`.
+4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
+   as its own statement, so that both values apply to the statements after it.
+5. Sends the unchanged `heartbeat_many_v1` statement.
+6. Sends `COMMIT`. The worker counts the renewals only after `COMMIT` succeeds.
+
+PostgreSQL measures `statement_timeout` for each statement and
+`idle_in_transaction_session_timeout` for each idle gap, and it restarts both every time. While the
+round can hold a row lock, it has one idle gap before step 5, step 5, and one idle gap before step 6.
+So the budgets are set from the time that remains at step 4, in whole milliseconds:
+
+| Budget                                | Share of the time that remains | Least value |
+| ------------------------------------- | ------------------------------ | ----------- |
+| `statement_timeout` (`$1`)            | one half                       | 1 ms        |
+| `idle_in_transaction_session_timeout` | one eighth, for each idle gap  | 1 ms        |
+| Kept for `COMMIT`                     | one quarter                    | none        |
+
+The heartbeat and both idle gaps together end within three quarters of the time that remains. The
+settings statement in step 4 also uses time, so it may use at most the last quarter. If it takes
+longer, the round fails before it sends the heartbeat. If less than 8 ms remains at step 4, the
+round also fails before it sends the heartbeat. At 8 ms each budget
+is at least 1 ms, so no positive budget becomes 0, which would turn the timeout off.
+
+The worker sends no command after the deadline. If an idle gap passes its budget,
+`idle_in_transaction_session_timeout` ends the session, and PostgreSQL releases its row locks. The
+round then fails, and the worker discards the connection. On a connection that workers share, each
+other worker loses at most that one round, and each attempt keeps its own watchdog deadline.
+
+No setting bounds `COMMIT` on the supported PostgreSQL versions, which start at 15. A `COMMIT` that
+PostgreSQL has already started can thus finish after the deadline, and keep its row locks until
+then. The worker checks the deadline again after `COMMIT`, and does not count a renewal that ends
+after it.
+
+Some drivers prepare a statement in a cycle of its own, and PostgreSQL restarts the statement timer
+after that cycle. Go and Rust prepare the heartbeat statement before step 4, so the preparation
+uses none of its budget. asyncpg does the same on the first use of a statement on each connection,
+and psycopg when it prepares a statement automatically. In those two cases the preparation is not
+inside the budget.
+
+A failed statement rolls back while time remains. In TypeScript, Go, and Python, a deadlock
+(`40P01`) is then sent again in a new transaction with the time that remains. In Rust, Ruby, and
+JVM, a deadlock fails the round, and a later round sends again. A round
+that fails or passes its deadline discards its connection, because the worker cannot know its state.
+As before, a failed round changes no lease: every task continues, and the next round tries again.
+
+Each SDK keeps the deadline in one named value. This change keeps the bound that each SDK used
+before:
+
+| SDK        | Named value             | Deadline                                               | Where the round runs                                                                            |
+| ---------- | ----------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| TypeScript | `heartbeatRoundMs`      | `heartbeatMs`                                          | the reservation (`ReservedConnection`)                                                          |
+| Go         | `heartbeatRoundBound`   | `HeartbeatInterval`                                    | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`       |
+| Python     | `_heartbeat_round_ms`   | `heartbeat_ms`                                         | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline |
+| Rust       | `heartbeat_round_bound` | `heartbeat_interval`                                   | the reserved connection                                                                         |
+| Ruby       | `round_bound`           | the shortest member interval                           | the dedicated connection                                                                        |
+| JVM        | `roundBoundNanos`       | the shortest member interval plus 1 ms, at least 50 ms | the dedicated connection; each read gets a network timeout of the time that remains             |
+
+Rounds under `sharedHeartbeats` (TypeScript), `shared_heartbeats` (Python, Rust, Ruby), and the
+JVM's shared heartbeats do not change. They have no client deadline and no server timeouts. The
+worker waits for the statement, so it never leaves an abandoned heartbeat statement.
+
+The Go driver also sends a cancel request when a deadline interrupts a query. That request needs a
+second connection and can be lost, so the server timeouts do not depend on it.
+
+A round that reaches its deadline renews no lease in it, however many leases the round holds. The
+exception is a `COMMIT` that PostgreSQL has already started: it can finish later and renew the
+stored leases, but the worker does not count that renewal. With
+the default settings (`leaseMs` 30,000 and `heartbeatMs` 10,000), the next round starts one
+interval after the timed-out round ends, at about the end of the lease. Thus about 0 s of margin
+remains after one timed-out round, in every SDK. Ruby and JVM leave their loop when a dedicated round
+fails, and the new loop starts a new schedule. SM-1444 owns that schedule.
 
 ### Cancellation
 

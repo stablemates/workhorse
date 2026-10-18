@@ -230,8 +230,11 @@ must still give the same guarantees.
 
 ### Connection poolers
 
-Every production statement is self-contained. No code path issues `SET`, holds a cursor, or takes a
-session-level advisory lock. Thus `pool_mode = transaction` serves every queue operation.
+Every production statement is self-contained. No code path changes a session setting, holds a
+cursor, or takes a session-level advisory lock. Two code paths set transaction-local values only:
+a migration step takes its lock behind `SET LOCAL lock_timeout`, and a heartbeat round sets its
+timeouts with `set_config(..., true)`. Those values end with the transaction. Thus
+`pool_mode = transaction` serves every queue operation.
 
 Two kinds of session state are the exceptions. `integration-pooling.test.ts` runs each pooler and
 pool mode as a separate lane to prove the boundary.
@@ -264,8 +267,9 @@ lock. No production path is affected. The session forms exist only in test harne
 #### Heartbeat connection
 
 The reserved heartbeat connection of the TypeScript worker holds no session state. It runs only
-`heartbeat_many_v1`, and it bounds each round on the client. It never issues `SET`. It works in
-every pool mode.
+`heartbeat_many_v1`, each time in its own transaction. Each round has one deadline on the client,
+and transaction-local server timeouts that end the heartbeat by the same deadline
+([Heartbeat round deadline](lifecycle.md#heartbeat-round-deadline)). It works in every pool mode.
 
 #### Connection budgets per language
 

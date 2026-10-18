@@ -246,12 +246,14 @@ type Worker struct {
 	fullTierMu    sync.Mutex
 	fullTierUntil map[string]time.Time
 	// fastTierQueues holds the queues whose last claim PostgreSQL answered on the fast tier.
-	fastTierQueues      map[string]struct{}
-	workerID            string
-	concurrency         int
-	cohorts             int
-	leaseDuration       time.Duration
-	heartbeatInterval   time.Duration
+	fastTierQueues    map[string]struct{}
+	workerID          string
+	concurrency       int
+	cohorts           int
+	leaseDuration     time.Duration
+	heartbeatInterval time.Duration
+	// heartbeatRoundBound is the deadline of one heartbeat round. It equals heartbeatInterval.
+	heartbeatRoundBound time.Duration
 	pollInterval        time.Duration
 	maintenanceInterval time.Duration
 	// maintenanceRoutineInterval and lastRoutineOffer gate the slow routines. RunOnce and the
@@ -476,6 +478,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		cohorts:                    cohorts,
 		leaseDuration:              leaseDuration,
 		heartbeatInterval:          heartbeatInterval,
+		heartbeatRoundBound:        heartbeatInterval,
 		pollInterval:               pollInterval,
 		maintenanceInterval:        maintenanceInterval,
 		maintenanceRoutineInterval: maintenanceRoutineInterval,
@@ -2354,6 +2357,8 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
+	// The round's deadline starts before the payload is built, so serialization counts against it.
+	roundStart := time.Now()
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	requests := make([]lease, 0, len(members))
 	// Task ID order matches the order a batched completion locks its rows in.
@@ -2376,8 +2381,8 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	reserved := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
 	var rows []Row
-	// The round is bounded by the heartbeat interval, so a statement that stalls cannot hold the
-	// batch past the next round. Every attempt keeps running: its own watchdog decides when a
+	// The round is bounded by heartbeatRoundBound, on the client and on the server, so a statement
+	// that stalls cannot hold the batch past the next round. Every attempt keeps running: its own watchdog decides when a
 	// renewal is too old to trust.
 	sentAt := time.Now()
 	round := func(ctx context.Context, executor Executor) error {
@@ -2391,12 +2396,13 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		)
 		return roundError
 	}
+	bound := worker.heartbeatRoundBound - time.Since(roundStart)
 	if reserved == nil {
-		queryContext, cancel := context.WithTimeout(roundContext, worker.heartbeatInterval)
-		err = round(queryContext, NewPGXExecutor(worker.pool))
+		queryContext, cancel := context.WithTimeout(roundContext, bound)
+		err = runBoundedOnPool(queryContext, worker.pool, round)
 		cancel()
 	} else {
-		err = reserved.run(roundContext, worker.heartbeatInterval, round)
+		err = reserved.run(roundContext, bound, round)
 	}
 	if err != nil {
 		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)

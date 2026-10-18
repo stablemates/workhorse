@@ -19,7 +19,14 @@ module Stablemates
         class RoundTimeout < StandardError; end
 
         STRINGS = PG::TypeMapAllStrings.new
-        private_constant :STRINGS
+        # Sets both server timeouts for the current transaction only. SET LOCAL cannot take a bind
+        # parameter, and set_config(..., true) has the same scope.
+        ROUND_TIMEOUTS = "SELECT set_config('statement_timeout', $1, true), " \
+          "set_config('idle_in_transaction_session_timeout', $2, true)"
+        # A round with less time than this left, in seconds, fails before it sends its heartbeat. At
+        # this size every budget of +round_timeouts+ is at least 1 ms, and the budgets still fit.
+        MINIMUM_REMAINING = 0.008
+        private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING
 
         @dedicated = {}.compare_by_identity
         @dedicated_lock = Mutex.new
@@ -114,8 +121,11 @@ module Stablemates
               leases = group.map do |member|
                 {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
               end
+              params = [worker_id, JSON.generate(leases)]
+              # The round's deadline started at +sent_at+, so serialization counts against it.
+              timeout = round_bound(interval) - (Process.clock_gettime(Process::CLOCK_MONOTONIC) - sent_at)
               rows = begin
-                yield SqlCatalogue::HEARTBEAT_MANY_V1, [worker_id, JSON.generate(leases)], interval
+                yield SqlCatalogue::HEARTBEAT_MANY_V1, params, timeout
               rescue RoundTimeout, PG::Error
                 raise if @dedicated
 
@@ -128,6 +138,10 @@ module Stablemates
             end
           end
         end
+
+        # The deadline of one round, in seconds, for the shortest member +interval+. It equals the
+        # interval.
+        def round_bound(interval) = interval
 
         def settle(group, statuses, sent_at)
           group.each do |member|
@@ -171,22 +185,64 @@ module Stablemates
           end
         end
 
-        # Sends one round without blocking past +timeout+ seconds.
+        # Sends one round in its own transaction, without blocking past +timeout+ seconds.
+        #
+        # Closing a connection does not stop its statement: PostgreSQL notices a closed client only
+        # when it next writes to it. So the server must end a round that the client stopped waiting
+        # for. The timeouts (+round_timeouts+) end the heartbeat, and a transaction whose client
+        # stopped before COMMIT, by the deadline. A COMMIT that PostgreSQL has already started can
+        # still finish later. Both settings end with the transaction, so the connection keeps no
+        # session state. Any failure discards the connection, which rolls back.
         def bounded_rows(connection, sql, params, timeout)
-          connection.send_query_params(sql, params, 0, STRINGS)
-          raise RoundTimeout unless connection.block(timeout)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+          bounded_result(connection, "BEGIN", [], deadline).clear
+          set_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          remaining = deadline - set_at
+          raise RoundTimeout if remaining < MINIMUM_REMAINING
 
-          result = connection.get_last_result
-          begin
+          bounded_result(connection, ROUND_TIMEOUTS, round_timeouts(remaining), deadline).clear
+          # The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
+          raise RoundTimeout if Process.clock_gettime(Process::CLOCK_MONOTONIC) - set_at > remaining / 4
+
+          result = bounded_result(connection, sql, params, deadline)
+          rows = begin
             result.type_map = STRINGS
             result.to_a
           ensure
             result.clear
           end
+          bounded_result(connection, "COMMIT", [], deadline).clear
+          # A COMMIT that ends after the deadline does not count as a renewal.
+          raise RoundTimeout unless deadline > Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+          rows
         end
 
-        # A connection that overran a round still runs its statement, so it cannot go back to the
-        # pool. A pool without +discard_current_connection+ gets the connection back closed, and
+        # The server budgets for the rest of a round with +remaining+ seconds left, in whole
+        # milliseconds. PostgreSQL measures +statement_timeout+ for each statement and
+        # +idle_in_transaction_session_timeout+ for each idle gap, and restarts both every time.
+        # While the round can hold a row lock, it has one idle gap before the heartbeat, the
+        # heartbeat, and one idle gap before COMMIT. So the heartbeat gets one half, each gap one
+        # eighth, and the last quarter is kept for COMMIT. No setting bounds COMMIT itself.
+        def round_timeouts(remaining)
+          milliseconds = (remaining * 1000).floor
+          [[1, milliseconds / 2].max.to_s, [1, milliseconds / 8].max.to_s]
+        end
+
+        # Sends one statement and waits for its result until +deadline+, a monotonic time. Nothing
+        # is sent after the deadline.
+        def bounded_result(connection, sql, params, deadline)
+          raise RoundTimeout unless deadline > Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+          connection.send_query_params(sql, params, 0, STRINGS)
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          raise RoundTimeout unless remaining.positive? && connection.block(remaining)
+
+          connection.get_last_result
+        end
+
+        # A connection that overran a round can still hold its transaction until the server
+        # timeouts end it, so it cannot go back to the pool. A pool without +discard_current_connection+ gets the connection back closed, and
         # its owner reconnects it before reuse.
         def discard(connection)
           if @source.respond_to?(:discard_current_connection)

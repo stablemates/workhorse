@@ -218,6 +218,52 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(state(long_id)).to eq("succeeded")
   end
 
+  # SM-1442: closing a connection does not stop its statement, so each round that timed out used to
+  # leave one more backend waiting on the same row lock. PostgreSQL now ends the round's transaction
+  # by the round's deadline.
+  it "ends a heartbeat statement that waits on a row lock on the server, by its round's deadline" do
+    interval = 0.2
+    task_id = queue.enqueue("bounded", {}).task_id
+    release = Concurrent::Event.new
+    started = Concurrent::Event.new
+    subject = worker(lease: 30, heartbeat: interval).handle("bounded") do
+      started.set
+      release.wait(30)
+      {}
+    end
+    samples = []
+    blocker = ScratchDatabase.connect
+    observer = ScratchDatabase.connect
+    running(subject) do
+      expect(started.wait(10)).to be(true)
+      blocker.exec("BEGIN")
+      blocker.exec_params("SELECT FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [task_id])
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 8 * interval
+      while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+        samples << observer.exec(<<~SQL).column_values(0).map { |age| Float(age) }
+          SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000
+            FROM pg_stat_activity
+           WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
+             AND query LIKE '%workhorse.heartbeat_many_v1%'
+        SQL
+        sleep 0.02
+      end
+      blocker.exec("COMMIT")
+      release.set
+      wait_until { state(task_id) == "succeeded" }
+    ensure
+      release.set
+    end
+    expect(samples.any?(&:any?)).to be(true)
+    expect(samples.map(&:size).max).to be <= 1
+    # A statement ends by its round's deadline. The slack allows for a slow host, and stays far below
+    # the 1.6 s that the lock was held.
+    expect(samples.flatten.max).to be < 5 * interval * 1000
+  ensure
+    blocker&.close
+    observer&.close
+  end
+
   it "fires due schedules in its namespaces during maintenance" do
     namespace = "rb-#{SecureRandom.hex(6)}"
     # :skip evaluates only the last maintenance window, so the missed minute needs :latest.

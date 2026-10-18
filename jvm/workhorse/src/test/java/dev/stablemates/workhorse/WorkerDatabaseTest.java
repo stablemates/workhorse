@@ -561,6 +561,79 @@ class WorkerDatabaseTest {
     assertNull(status.result());
   }
 
+  /**
+   * SM-1442: closing a connection does not stop its statement, so each round that timed out used to
+   * leave one more backend waiting on the same row lock. PostgreSQL now ends the round's
+   * transaction by the round's deadline.
+   */
+  @Test
+  void endsAHeartbeatStatementThatWaitsOnARowLockOnTheServerByItsDeadline() throws Exception {
+    long intervalMs = 200;
+    UUID taskId = enqueue("bounded", Map.of());
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Worker worker =
+        worker()
+            .lease(Duration.ofSeconds(30))
+            .heartbeat(Duration.ofMillis(intervalMs))
+            .handle(
+                "bounded",
+                Object.class,
+                (ctx, payload) -> {
+                  started.countDown();
+                  release.await(30, TimeUnit.SECONDS);
+                  return Map.of();
+                })
+            .build();
+    ExecutorService runner = Executors.newSingleThreadExecutor();
+    List<List<Double>> samples = new ArrayList<>();
+    try (Connection blocker = ScratchDatabase.connect();
+        Connection observer = ScratchDatabase.connect()) {
+      var run = runner.submit(worker::runOnce);
+      assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
+      blocker.setAutoCommit(false);
+      try (PreparedStatement lock =
+          blocker.prepareStatement(
+              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
+        lock.setString(1, taskId.toString());
+        lock.execute();
+      }
+      long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(8 * intervalMs);
+      try (PreparedStatement active =
+          observer.prepareStatement(
+              "SELECT extract(epoch FROM clock_timestamp() - query_start) * 1000"
+                  + " FROM pg_stat_activity WHERE datname = current_database()"
+                  + " AND pid <> pg_backend_pid() AND state = 'active'"
+                  + " AND query LIKE '%workhorse.heartbeat_many_v1%'")) {
+        while (System.nanoTime() < until) {
+          List<Double> sample = new ArrayList<>();
+          try (ResultSet result = active.executeQuery()) {
+            while (result.next()) {
+              sample.add(result.getDouble(1));
+            }
+          }
+          samples.add(sample);
+          Thread.sleep(20);
+        }
+      }
+      blocker.commit();
+      release.countDown();
+      assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
+    } finally {
+      release.countDown();
+      runner.shutdownNow();
+    }
+    assertTrue(samples.stream().anyMatch(sample -> !sample.isEmpty()), "a heartbeat waited");
+    assertTrue(
+        samples.stream().mapToInt(List::size).max().orElse(0) <= 1,
+        "at most one heartbeat statement at a time: " + samples);
+    // A statement ends by its round's deadline. The slack allows for a slow host, and stays far
+    // below the 1.6 s that the lock was held.
+    double oldest = samples.stream().flatMap(List::stream).mapToDouble(age -> age).max().orElse(0);
+    assertTrue(oldest < 5 * intervalMs, "a heartbeat statement ran for " + oldest + " ms");
+    assertEquals("succeeded", status(taskId).state());
+  }
+
   @Test
   void recoversAnExpiredLeaseInMaintenanceAndRunsTheTaskAgain() throws Exception {
     UUID taskId = enqueue("orphan", Map.of());

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -492,7 +493,8 @@ func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 	}
 }
 
-// terminateHeartbeatSession ends the backend the reserved connection sent its last heartbeat on.
+// terminateHeartbeatSession ends the backend the reserved connection sent its last heartbeat on. A
+// round ends with the commit of its transaction, and no other worker statement sends one.
 func terminateHeartbeatSession(t *testing.T, ctx context.Context, observer *pgx.Conn) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -504,7 +506,7 @@ func terminateHeartbeatSession(t *testing.T, ctx context.Context, observer *pgx.
 			 FROM pg_stat_activity
 			 WHERE datname = current_database()
 			   AND pid <> pg_backend_pid()
-			   AND query LIKE '%heartbeat_many_v1%'
+			   AND (query LIKE '%heartbeat_many_v1%' OR lower(query) = 'commit')
 			 LIMIT 1`,
 		).Scan(&terminated)
 		if err == nil && terminated {
@@ -618,7 +620,8 @@ func TestWorkerWatchdogCancelsAHandlerAfterALeaseWithoutAnAcceptedHeartbeat(t *t
 	}
 }
 
-// heartbeatSessionPID waits for a backend other than the observer's that last ran a heartbeat,
+// heartbeatSessionPID waits for a backend other than the observer's that last ran a heartbeat or its
+// commit,
 // skipping the session named by previous, and returns its pid.
 func heartbeatSessionPID(t *testing.T, ctx context.Context, observer *pgx.Conn, previous uint32) uint32 {
 	t.Helper()
@@ -632,7 +635,7 @@ func heartbeatSessionPID(t *testing.T, ctx context.Context, observer *pgx.Conn, 
 			 WHERE datname = current_database()
 			   AND pid <> pg_backend_pid()
 			   AND pid <> $1
-			   AND query LIKE '%heartbeat_many_v1%'
+			   AND (query LIKE '%heartbeat_many_v1%' OR lower(query) = 'commit')
 			 LIMIT 1`,
 			previous,
 		).Scan(&pid)
@@ -833,4 +836,152 @@ func TestHeldConnectionFailureHelper(t *testing.T) {
 	t.Cleanup(pool.Close)
 	holdLendableConnections(t, ctx, pool)
 	t.Fatal("held-connection failure")
+}
+
+// TestWorkerEndsATimedOutHeartbeatStatementOnTheServer pins the server bound of a heartbeat round
+// (SM-1442). Closing a connection does not stop its statement, so each round that timed out used to
+// leave one more backend waiting on the same row lock. PostgreSQL now ends the transaction by the
+// round's deadline, on the reserved connection and on a shared round alike.
+func TestWorkerEndsATimedOutHeartbeatStatementOnTheServer(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "reserved"
+		if shared {
+			name = "shared"
+		}
+		t.Run(name, func(t *testing.T) {
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-bound-"+name)
+			ctx := context.Background()
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			observer := observeDatabase(t, ctx, databaseURL)
+			blocker := observeDatabase(t, ctx, databaseURL)
+
+			const interval = 200 * time.Millisecond
+			queueName := "go-worker-heartbeat-bound-" + name
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+			taskID, err := queue.Enqueue(ctx, "heartbeat-bound", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+				Queue:               queueName,
+				WorkerID:            "heartbeat-bound-worker-" + name,
+				LeaseDuration:       30 * time.Second,
+				HeartbeatInterval:   interval,
+				PollInterval:        5 * time.Millisecond,
+				MaintenanceInterval: time.Second,
+				SharedHeartbeats:    shared,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan struct{})
+			release := make(chan struct{})
+			worker.Handle("heartbeat-bound", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+				close(started)
+				<-release
+				return nil, nil
+			})
+			workerResult := make(chan error, 1)
+			go func() {
+				processed, err := worker.RunOnce(ctx)
+				if err == nil && !processed {
+					err = errors.New("worker did not process the heartbeat-bound task")
+				}
+				workerResult <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				close(release)
+				t.Fatal("worker did not start the handler")
+			}
+
+			// Hold the task's row lock, so every heartbeat round waits until its deadline.
+			if _, err := blocker.Exec(ctx, "BEGIN"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := blocker.Exec(
+				ctx, "SELECT FROM workhorse.task_runtime WHERE task_id = $1::uuid FOR UPDATE", taskID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			maxCount, maxAge, seen := 0, 0.0, false
+			until := time.Now().Add(8 * interval)
+			for time.Now().Before(until) {
+				var count int
+				var age float64
+				if err := observer.QueryRow(
+					ctx,
+					`SELECT count(*)::int,
+					        COALESCE(max(extract(epoch FROM clock_timestamp() - query_start) * 1000), 0)::float8
+					   FROM pg_stat_activity
+					  WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
+					    AND query LIKE '%workhorse.heartbeat_many_v1%'`,
+				).Scan(&count, &age); err != nil {
+					t.Fatal(err)
+				}
+				seen = seen || count > 0
+				maxCount, maxAge = max(maxCount, count), max(maxAge, age)
+				time.Sleep(20 * time.Millisecond)
+			}
+			if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			if err := <-workerResult; err != nil {
+				t.Fatal(err)
+			}
+			if !seen {
+				t.Fatal("no heartbeat statement waited on the locked row")
+			}
+			if maxCount > 1 {
+				t.Fatalf("%d heartbeat statements were active at once; want at most 1", maxCount)
+			}
+			// A statement ends by its round's deadline. The slack allows for a slow host, and stays
+			// far below the 1.6 s that the lock was held.
+			if limit := float64(5 * interval / time.Millisecond); maxAge >= limit {
+				t.Fatalf("a heartbeat statement ran for %.0f ms; want less than %.0f ms", maxAge, limit)
+			}
+		})
+	}
+}
+
+// TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline pins the server side of the bound
+// alone. pgx also sends a cancel request when a deadline interrupts a query, but that request needs
+// a second connection and can be lost. PostgreSQL ends the statement first, at half of the time
+// left, so the error is the server's statement timeout and not the client's deadline.
+func TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "heartbeat-server-bound")
+	ctx := context.Background()
+	conn := observeDatabase(t, ctx, databaseURL)
+	var before string
+	if err := conn.QueryRow(ctx, "SELECT current_setting('statement_timeout')").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	roundContext, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := workhorse.ServerBoundedQueryForTest(roundContext, conn, "SELECT pg_sleep(5)")
+	elapsed := time.Since(started)
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "57014" {
+		t.Fatalf("expected the server's statement timeout (57014), received %v", err)
+	}
+	if roundContext.Err() != nil {
+		t.Fatalf("the client deadline passed first, after %s", elapsed)
+	}
+	// The transaction rolled back, so its timeout ended with it and the session is clean.
+	var timeout string
+	if err := conn.QueryRow(ctx, "SELECT current_setting('statement_timeout')").Scan(&timeout); err != nil {
+		t.Fatal(err)
+	}
+	if timeout != before {
+		t.Fatalf("the round's statement_timeout %s outlived its transaction", timeout)
+	}
 }

@@ -58,8 +58,9 @@ PgBouncer and PgCat, each with `pool_mode = session` and `pool_mode = transactio
 | Session-level advisory locks                           | Yes    | Yes               | Unsafe: no exclusion, leaks   | Yes                           | Unsafe: no exclusion, leaks   |
 | Session state (`SET`, `PREPARE`, temporary tables)     | Yes    | Yes               | Unsafe: leaks between clients | Yes                           | Unsafe: leaks between clients |
 
-**Statements.** No production code path issues `SET`, holds a cursor, or takes a session-level
-advisory lock.
+**Statements.** No production code path changes a session setting, holds a cursor, or takes a
+session-level advisory lock. A migration step and a heartbeat round set transaction-local values
+only, and those values end with the transaction.
 
 **Locks.** Every Workhorse advisory lock uses `pg_advisory_xact_lock`, `pg_try_advisory_xact_lock`,
 or `pg_advisory_xact_lock_shared`. That includes the schema-migration lock.
@@ -268,10 +269,11 @@ below 3. Ruby raises unless the pool size is an integer of at least 3.
 | Ruby       | `shared_heartbeats` |
 
 **Bounded rounds.** The TypeScript worker bounds each round on the reserved connection by
-`heartbeatMs`. A round that exceeds the bound, or fails, destroys the connection. The next round
-connects a new one. The connection runs only `heartbeat_many_v1` and never issues `SET`.
+`heartbeatMs`. The round sends `heartbeat_many_v1` in its own transaction, and transaction-local
+server timeouts make PostgreSQL end the heartbeat by the same deadline. A round that passes the
+deadline, or fails, destroys the connection. The next round connects a new one.
 
-More detail: [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection).
+More detail: [Task lifecycle: Heartbeat connection](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-connection) and [Task lifecycle: Heartbeat round deadline](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#heartbeat-round-deadline).
 
 </details>
 

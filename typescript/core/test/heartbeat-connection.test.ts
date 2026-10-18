@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { QueryResult } from "pg";
@@ -39,6 +40,20 @@ function asDatabase(
   return database as Queryable & ConstructorParameters<typeof ReservedConnection>[0];
 }
 
+/** The statements a client received, in order. */
+function sent(client: ReturnType<typeof fakeClient>): string[] {
+  return client.query.mock.calls.map(([text]) => text);
+}
+
+const ROUND_TIMEOUTS =
+  "SELECT set_config('statement_timeout', $1, true), " +
+  "set_config('idle_in_transaction_session_timeout', $2, true)";
+
+/** One statement of a round, in the transaction that bounds it on the server. */
+function bounded(statement: string): string[] {
+  return ["BEGIN", ROUND_TIMEOUTS, statement, "COMMIT"];
+}
+
 function never(): Promise<never> {
   return new Promise<never>(() => {
     // A statement stuck behind a lock never answers.
@@ -68,8 +83,160 @@ describe("reserved heartbeat connection", () => {
 
     expect(pool.connect).toHaveBeenCalledTimes(1);
     expect(pool.query).not.toHaveBeenCalled();
-    expect(clients[0]!.query).toHaveBeenCalledTimes(2);
+    expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 2")]);
     expect(clients[0]!.release).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("rolls back a statement that fails, so the session is clean for a resend", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    const deadlock = Object.assign(new Error("deadlock detected"), { code: "40P01" });
+
+    await expect(
+      connection.run(async (client) => {
+        clients[0]!.query.mockImplementation(async (text) => {
+          if (text === "SELECT 1") throw deadlock;
+          return emptyResult;
+        });
+        return client.query("SELECT 1");
+      }, 250),
+    ).rejects.toBe(deadlock);
+
+    expect(sent(clients[0]!)).toEqual(["BEGIN", ROUND_TIMEOUTS, "SELECT 1", "ROLLBACK"]);
+    await connection.close();
+  });
+
+  it("sets server budgets that fit in the time left, with a quarter kept for the commit", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
+    await connection.close();
+
+    const [statementMs, idleMs] = (clients[0]!.query.mock.calls[1]![1] as string[]).map(Number);
+    // The heartbeat and the idle gaps on each side of it, at their longest, end within 3/4 of the
+    // round, which was at most 1,000 ms when the budgets were set.
+    expect(statementMs! + 2 * idleMs!).toBeLessThanOrEqual(750);
+    expect(statementMs).toBeGreaterThan(450);
+    expect(idleMs).toBeGreaterThan(110);
+  });
+
+  it("never sets a positive budget to zero on a short round", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    await connection.run((client) => client.query("SELECT 1"), 12);
+    await connection.close();
+
+    const budgets = (clients[0]!.query.mock.calls[1]![1] as string[]).map(Number);
+    expect(Math.min(...budgets)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("fails before the heartbeat when the settings take longer than the commit quarter", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    const round = connection.run(async (client) => {
+      clients[0]!.query.mockImplementation(async (text) => {
+        if (text === ROUND_TIMEOUTS) await sleep(60);
+        return emptyResult;
+      });
+      return client.query("SELECT 1");
+    }, 200);
+    await expect(round).rejects.toThrow(/deadline/);
+    await connection.close();
+
+    expect(sent(clients[0]!)).toEqual(["BEGIN", ROUND_TIMEOUTS, "ROLLBACK"]);
+  });
+
+  it("sends no command after the deadline, even when an answer arrives late", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    let answer!: () => void;
+    const late = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    const round = connection.run(async (client) => {
+      clients[0]!.query.mockImplementation(async (text) => {
+        if (text === "BEGIN") await late;
+        return emptyResult;
+      });
+      return client.query("SELECT 1");
+    }, 20);
+    await expect(round).rejects.toThrow(/within 20 ms/);
+    answer();
+    await sleep(10);
+    await connection.close();
+
+    expect(sent(clients[0]!)).toEqual(["BEGIN"]);
+  });
+
+  it("runs one round at a time, so transactions of two workers never mix", async () => {
+    const { pool, clients } = fakePool();
+    const database = asDatabase(pool);
+    const first = holdHeartbeatConnection(database)!;
+    const second = holdHeartbeatConnection(database)!;
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    const slow = first.run(async (client) => {
+      await client.query("SELECT 1");
+      await answered;
+    }, 1_000);
+    const next = second.run((client) => client.query("SELECT 2"), 1_000);
+    await vi.waitFor(() => expect(sent(clients[0]!)).toContain("SELECT 1"));
+    expect(sent(clients[0]!)).not.toContain("SELECT 2");
+    answer();
+    await Promise.all([slow, next]);
+    await first.close();
+    await second.close();
+
+    expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 2")]);
+  });
+
+  it("counts the wait for the round before it against the deadline", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+
+    const stuck = connection.run(() => never(), 100);
+    await expect(connection.run((client) => client.query("SELECT 2"), 20)).rejects.toThrow(
+      /within 20 ms/,
+    );
+    await expect(stuck).rejects.toThrow(/within 100 ms/);
+    await connection.close();
+
+    expect(clients.flatMap((client) => sent(client))).not.toContain("SELECT 2");
+  });
+
+  it("keeps the connection of the round ahead when a waiting round expires", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    const ahead = connection.run(async (client) => {
+      await client.query("SELECT 1");
+      await answered;
+    }, 1_000);
+    await vi.waitFor(() => expect(sent(clients[0]!)).toContain("SELECT 1"));
+    await expect(connection.run((client) => client.query("SELECT 2"), 20)).rejects.toThrow(
+      /within 20 ms/,
+    );
+    // The round after the expired one still waits for the round ahead.
+    const after = connection.run((client) => client.query("SELECT 3"), 1_000);
+    await sleep(10);
+    expect(sent(clients[0]!)).not.toContain("SELECT 3");
+    answer();
+    await Promise.all([ahead, after]);
+    await connection.close();
+
+    expect(clients[0]!.release).toHaveBeenCalledExactlyOnceWith();
+    expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 3")]);
   });
 
   it("destroys a client whose round outlives the timeout and reconnects for the next round", async () => {
@@ -84,7 +251,7 @@ describe("reserved heartbeat connection", () => {
     await connection.close();
 
     expect(pool.connect).toHaveBeenCalledTimes(2);
-    expect(clients[1]!.query).toHaveBeenCalledOnce();
+    expect(sent(clients[1]!)).toEqual(bounded("SELECT 1"));
     expect(clients[1]!.release).toHaveBeenCalledExactlyOnceWith();
   });
 
@@ -227,7 +394,7 @@ describe("shared heartbeat connection", () => {
     await second.close();
 
     expect(pool.connect).toHaveBeenCalledOnce();
-    expect(clients[0]!.query).toHaveBeenCalledTimes(2);
+    expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 2")]);
     expect(clients[0]!.release).toHaveBeenCalledExactlyOnceWith();
 
     const next = holdHeartbeatConnection(database)!;

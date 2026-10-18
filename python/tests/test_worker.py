@@ -1443,8 +1443,8 @@ def test_worker_reports_its_own_deadline_settlement_before_a_later_stale_heartbe
         original_expire = worker._expire_owned_task
         heartbeat_statuses: list[object] = []
 
-        def observed_heartbeat_rows(parameters: Any) -> Any:
-            rows = original_heartbeat_rows(parameters)
+        def observed_heartbeat_rows(*arguments: Any) -> Any:
+            rows = original_heartbeat_rows(*arguments)
             heartbeat_statuses.extend(row["status"] for row in rows)
             heartbeat_answered.set()
             return rows
