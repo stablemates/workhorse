@@ -1,0 +1,123 @@
+---
+title: "Workhorse compared with GoodJob"
+description: "GoodJob vs Workhorse: two task queues that keep work in PostgreSQL. Compare their features, find when GoodJob is the better choice, and move a Rails job to Workhorse."
+---
+
+Workhorse is a durable task queue for PostgreSQL. GoodJob is an Active Job backend for Rails that
+keeps its work in PostgreSQL. Neither product needs a broker. The Ruby gem of Workhorse also has an
+Active Job adapter. Thus a Rails application can run the same job classes on either product. This
+page compares the two products, row by row, and tells you when GoodJob is the better choice.
+
+## Compare Workhorse and GoodJob
+
+The two products share the base of a PostgreSQL queue. Both enqueue in the transaction of the
+application. Both have delays, cron schedules, priorities, and retries. If a worker process stops,
+both run the job again. Both have queue pause, failed jobs that you can run again, groups of jobs
+with callbacks, and a free dashboard. They differ in five areas:
+
+- **Steps inside a task.** A Workhorse handler stores the result of each named step when the step
+  completes. It can also wait for a timer or a signal without a worker slot. GoodJob uses Active
+  Job Continuations. A continuation saves its progress at some points: before an isolated step,
+  when the worker stops, and when a step raises an error. It has no signal wait.
+- **Limits.** GoodJob limits and throttles the jobs of each label across all processes. No GoodJob
+  setting limits a whole queue. Workhorse has concurrency limits and rate limits for a queue and for
+  each key, across all workers.
+- **A running job.** Workhorse sends a cancel request to a running task, and the handler gets an
+  abort signal. In GoodJob, a force discard marks a running job as discarded, but the job does not
+  stop.
+- **Telemetry.** Workhorse sends OpenTelemetry traces and metrics. For GoodJob, a gem from the
+  OpenTelemetry project sends Active Job traces, but no metrics.
+- **Languages.** Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby on one SQL
+  protocol. GoodJob runs Active Job jobs in Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="goodjob" />
+
+## When GoodJob is the better choice
+
+GoodJob is the better choice in these cases:
+
+- Your application is a Rails application, and Active Job and the GoodJob extensions give all the
+  features that your jobs need.
+- You want the dashboard in the same gem as the backend. The GoodJob dashboard is a Rails engine in
+  the `good_job` gem.
+
+Workhorse is the better choice in these cases:
+
+- A task has steps that are slow or costly to repeat, or it waits for a timer, a signal, or a
+  person.
+- A running task must get a cancel request, or a whole queue needs a limit. The handler gets the
+  request and must stop itself.
+- More than one language must enqueue tasks or run workers on the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from GoodJob
+
+Move one job class at a time. The [Active Job adapter](/docs/active-job) runs your job classes on
+Workhorse, so the callers do not change. Keep the `good_job` process running until the GoodJob
+queues are empty. The [migration guide](/docs/migrate) gives the full procedure.
+
+**Example.** A Rails application sends a receipt for each order. A maximum of three receipt jobs
+for one account can run at the same time.
+
+1. In GoodJob, a concurrency rule on the job class sets `perform_limit`. Its label is the account
+   of the order.
+2. In Workhorse, the job class sets a concurrency key with `workhorse_options`.
+3. A concurrency policy for the `mail` queue sets three active tasks for each key. PostgreSQL keeps
+   the policy, so every worker obeys it.
+
+Before the move, with GoodJob:
+
+```ruby
+class SendReceiptJob < ApplicationJob
+  include GoodJob::ActiveJobExtensions::Concurrency
+  self.queue_adapter = :good_job
+  queue_as :mail
+  good_job_concurrency_rule(
+    label: -> { "account-#{arguments.first.account_id}" },
+    apply_label: true,
+    perform_limit: 3
+  )
+
+  def perform(order)
+    ReceiptMailer.with(order: order).receipt.deliver_now
+  end
+end
+```
+
+After the move, with Workhorse:
+
+```ruby
+class SendReceiptJob < ApplicationJob
+  self.queue_adapter = :stablemates_workhorse
+  queue_as :mail
+  workhorse_options concurrency_key: ->(job) { "account-#{job.arguments.first.account_id}" }
+
+  def perform(order)
+    ReceiptMailer.with(order: order).receipt.deliver_now
+  end
+end
+
+# Once for each deploy, with the queue client of the application.
+queue.sync_concurrency_policies("workers", [
+  Stablemates::Workhorse::ConcurrencyPolicyDefinition.new(queue: "mail", max_active: 20, max_active_per_key: 3)
+], prune: false)
+```
+
+`ApplicationJob` must include `Stablemates::Workhorse::ActiveJob::Options` before a job can call
+`workhorse_options`. A GoodJob rule applies to each job with its label, also in other job classes.
+A Workhorse policy applies to a queue. Thus, put the jobs that share a limit in one
+queue. GoodJob runs a lower priority number first, and Workhorse runs a higher number first. Thus,
+examine each `priority` when you move a job.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Run Rails jobs on Workhorse](/docs/active-job) gives the adapter, the worker script, and the
+  retry rules.
+- [Concurrency policies](/docs/concurrency-policies) explains the limits for a queue and for each
+  key.

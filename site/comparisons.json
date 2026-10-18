@@ -1448,8 +1448,7 @@
       "name": "GoodJob",
       "aliases": ["good_job"],
       "category": "database-queue",
-      "page": "planned",
-      "issue": "SM-1375",
+      "page": "published",
       "version": "4.22.1",
       "checked": "2026-10-17",
       "repository": "https://github.com/bensheldon/good_job",
@@ -1462,6 +1461,34 @@
           "version": "4.22.1",
           "evidence": "\"The ActiveRecord parent class inherited by GoodJob::Job (default: ActiveRecord::Base).\" configuration.rb#L43-L44: DEFAULT_ENQUEUE_AFTER_TRANSACTION_COMMIT = false"
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "Active Job set(wait:) and set(wait_until:). The adapter stores the scheduled time.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/lib/good_job/adapter.rb#L174-L178",
+          "version": "4.22.1",
+          "evidence": "def enqueue_at(active_job, timestamp) ... (README.md#L11: \"Complete support for async, queues, delays, priorities, timeouts, and retries\")"
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Cron schedules in config.good_job.cron. Cron on more than one process does not enqueue a duplicate job.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L790-L831",
+          "version": "4.22.1",
+          "evidence": "GoodJob can enqueue Active Job jobs on a recurring basis that can be used as a replacement for cron. ... Enabling cron on multiple processes will not enqueue duplicate jobs; GoodJob's cron uses unique indexes to ensure that only a single job is enqueued for a given time interval."
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "A lower number runs first. The default is 0.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L519-L523",
+          "version": "4.22.1",
+          "evidence": "Smaller `priority` values have higher priority and run first (default: `0`), in accordance with Active Job's definition of priority."
+        },
+        "enqueue-deduplication": {
+          "status": "Partial",
+          "note": "A concurrency rule with total_limit drops a new job while unfinished jobs with the same label fill the limit. enqueue_limit counts only jobs that do not run yet.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/lib/good_job/active_job_extensions/concurrency.rb#L455-L478",
+          "version": "4.22.1",
+          "evidence": "def _good_job_concurrency_before_enqueue ... exceeded = rule.evaluate(self, :enqueue) ... throw :abort if exceeded (README.md#L577-L579: \"Maximum number of unfinished jobs with this label to allow.\" total_limit: 1. README.md#L689: \"`total_limit` counts unfinished jobs, `enqueue_limit` excludes claimed/performing jobs\")"
+        },
         "debounce-throttle": {
           "status": "Partial",
           "note": "enqueue_throttle throttles each label in a time period. No option gives debounce.",
@@ -1469,12 +1496,40 @@
           "version": "4.22.1",
           "evidence": "The concurrency rule options are total_limit, enqueue_limit, perform_limit, enqueue_throttle, perform_throttle, and key. # Maximum number of jobs with this label to be enqueued within the time period, looking backwards from now. Must be [count, period]. README.md#L689: \"Throttles count enqueued jobs or executions within their time window, including finished ones.\""
         },
+        "task-dependencies": {
+          "status": "Partial",
+          "note": "A batch enqueues a callback job when all its jobs finish. No API makes a job wait for jobs outside its batch.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L853-L855",
+          "version": "4.22.1",
+          "evidence": "Batches track a set of jobs, and enqueue an optional callback job when all of the jobs have finished (succeeded or discarded). (Looked at the README and app/models/good_job/batch.rb: no option makes a job start after a job outside its batch.)"
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "Active Job retry_on gives the retries and the backoff. By default, GoodJob does not retry a failed job without retry_on.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L1131-L1175",
+          "version": "4.22.1",
+          "evidence": "By default, GoodJob relies on Active Job's retry functionality. ... retry_on StandardError, wait: :polynomially_longer, attempts: Float::INFINITY ... By default, jobs will not be retried unless `retry_on` is configured. This can be overridden by setting `GoodJob.retry_on_unhandled_error` to `true`; GoodJob will then retry the failing job immediately and infinitely"
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "If a process stops during a job, after a SIGKILL or a power failure too, GoodJob runs the job again.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L1216",
+          "version": "4.22.1",
+          "evidence": "Jobs will be automatically retried if the process is interrupted while performing a job and the job is unable to finish before the timeout or as the result of a `SIGKILL` or power failure."
+        },
+        "cancellation": {
+          "status": "Not supported",
+          "note": "Force discard in the dashboard marks a running job as discarded, but the job does not stop.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/config/locales/en.yml#L136",
+          "version": "4.22.1",
+          "evidence": "confirm_force_discard: Are you sure you want to force discard this job? The job will be marked as discarded but the running job will not be stopped - it will, however, not be retried on failures. (app/helpers/good_job/application_helper.rb#L62: force_discard: %w[running])"
+        },
         "concurrency-limits": {
           "status": "Partial",
           "note": "perform_limit and total_limit apply to each label across all processes. No setting limits a whole queue.",
           "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L565-L597",
           "version": "4.22.1",
-          "evidence": "# Maximum number of jobs with this label to be concurrently performed (excludes enqueued jobs). Can be an Integer or Lambda/Proc. perform_limit: 1,"
+          "evidence": "# Maximum number of jobs with this label to be concurrently performed (excludes enqueued jobs). Can be an Integer or Lambda/Proc. perform_limit: 1, (README.md#L689: \"Rules apply across job classes to jobs carrying the resolved label.\")"
         },
         "rate-limits": {
           "status": "Partial",
@@ -1484,11 +1539,18 @@
           "evidence": "# Maximum number of jobs with this label to be performed within the time period, looking backwards from now. Must be [count, period]. perform_throttle: [100, 1.hour],"
         },
         "checkpoints": {
-          "status": "Supported",
-          "note": "Uses Rails Active Job Continuations. GoodJob supports interrupting and resuming them.",
-          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/CHANGELOG.md#L563",
+          "status": "Partial",
+          "note": "Active Job Continuations skip completed steps. They save progress before an isolated step, when the worker stops, or when a step raises an error.",
+          "source": "https://github.com/rails/rails/blob/v8.1.4/activejob/lib/active_job/continuation.rb#L144-L174",
           "version": "4.22.1",
-          "evidence": "\"Add GoodJob::Adapter#stopping to support Active Job continuations feature\". Rails v8.1.4 continuation.rb#L18-L20: \"If a job is interrupted, previously completed steps will be skipped.\""
+          "evidence": "When interrupted, the job will automatically retry with the progress serialized in the job data under the +continuation+ key. ... it ensures that progress is serialized back into the job data before the step starts. (GoodJob adapter.rb#L236-L248: def stopping? \"to support job continuations/iterations\". CHANGELOG.md#L563: \"Add GoodJob::Adapter#stopping to support Active Job continuations feature\".)"
+        },
+        "durable-waits": {
+          "status": "Partial",
+          "note": "No signal wait. Before an isolated step, a continuation ends its run and resumes after the resume_options delay of its job class.",
+          "source": "https://github.com/rails/rails/blob/v8.1.4/activejob/lib/active_job/continuation.rb#L157-L183",
+          "version": "4.22.1",
+          "evidence": "You can specify that a step should always run in its own execution by passing the +isolated: true+ option. ... :resume_options - Options to pass to +retry_job+ when resuming the job. Defaults to { wait: 5.seconds }. (Looked at the GoodJob README: no API makes a running job wait for a signal.)"
         },
         "dashboard": {
           "status": "Supported",
@@ -1497,12 +1559,40 @@
           "version": "4.22.1",
           "evidence": "README \"### Dashboard\" section with \"Dashboard UI\" screenshot. Line 14: \"a powerful Web Dashboard\"."
         },
+        "dead-letters": {
+          "status": "Supported",
+          "note": "GoodJob keeps finished jobs for 14 days by default. Retry a discarded job from the dashboard or with retry_job.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/app/models/good_job/job.rb#L668-L671",
+          "version": "4.22.1",
+          "evidence": "# Retry a job that has errored and been discarded. ... def retry_job (README.md#L1574: \"By default, GoodJob will preserve job records for 14 days after they are run, regardless of whether they succeed or raised an exception.\" application_helper.rb#L60: retry: %w[discarded])"
+        },
+        "queue-pause": {
+          "status": "Supported",
+          "note": "Pause a queue or a job class. A pause is a setting in the database. Turn the feature on with enable_pauses.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L1825-L1849",
+          "version": "4.22.1",
+          "evidence": "GoodJob allows for pausing jobs by queue or job class. This feature is currently opt-in ... config.good_job.enable_pauses = true ... GoodJob.pause(queue: \"default\") ... GoodJob.unpause(queue: \"default\") (app/models/good_job/setting.rb#L62-L80: pause saves a GoodJob::Setting record with the PAUSES key.)"
+        },
+        "opentelemetry": {
+          "status": "Partial",
+          "note": "Traces only. The OpenTelemetry project publishes an Active Job instrumentation gem that traces enqueue, perform, retry, and step events. It has no metrics.",
+          "source": "https://github.com/open-telemetry/opentelemetry-ruby-contrib/blob/opentelemetry-instrumentation-active_job/v0.13.0/instrumentation/active_job/README.md#L59-L72",
+          "version": "4.22.1",
+          "evidence": "This instrumentation now relies entirely on `ActiveSupport::Notifications` and registers a custom Subscriber that listens to relevant events to report as spans. ... enqueue.active_job: Creates an egress span with kind producer ... perform.active_job: Creates an ingress span with kind consumer (Looked at lib/: no meter or metric. The contrib repository has no GoodJob package. GoodJob v4.22.1 itself sends Active Support notification events, README.md#L1572.)"
+        },
         "worker-languages": {
           "value": "Ruby",
           "note": "Jobs are Active Job classes in a Rails application.",
           "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L7",
           "version": "4.22.1",
           "evidence": "\"GoodJob is a multithreaded, Postgres-based, Active Job backend for Ruby on Rails.\""
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "The README documents no client for another language.",
+          "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L7",
+          "version": "4.22.1",
+          "evidence": "GoodJob is a multithreaded, Postgres-based, Active Job backend for Ruby on Rails. (Looked at the README: Active Job is the only way to enqueue.)"
         },
         "infrastructure": {
           "value": "PostgreSQL",
@@ -1517,7 +1607,72 @@
           "version": "4.22.1",
           "evidence": "spec.license = \"MIT\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "batch-enqueue",
+          "group": "producing",
+          "label": "Enqueue many tasks in one call",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Atomic batch enqueue"
+            },
+            "page": "/docs/enqueue",
+            "note": "Up to 1,000 tasks commit or roll back together."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "GoodJob::Bulk.enqueue inserts the jobs with one INSERT statement. If the block raises an exception, no job is inserted.",
+            "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L833-L851",
+            "version": "4.22.1",
+            "evidence": "GoodJob's Bulk-enqueue functionality can buffer and enqueue multiple jobs at once, using a single INSERT statement. ... # If an exception is raised within this block, no jobs will be inserted."
+          }
+        },
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "A batch enqueues an on_finish, on_success, or on_discard callback job. A job can add jobs to its batch.",
+            "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/README.md#L933-L939",
+            "version": "4.22.1",
+            "evidence": "Batch callbacks are Active Job jobs that are enqueued at certain events during the execution of jobs within the batch: `:finish` - Enqueued when all jobs in the batch have finished, after all retries. ... `:success` ... `:discard` - Enqueued immediately the first time a job in the batch is discarded. (README.md#L989: batch.add { WorkJob.perform_later('f') } inside a job of the batch.)"
+          }
+        },
+        {
+          "id": "active-job",
+          "group": "languages",
+          "label": "Runs Rails Active Job jobs",
+          "kind": "text",
+          "workhorse": {
+            "value": "Yes",
+            "source": "docs/parity.md",
+            "page": "/docs/active-job",
+            "note": "The Ruby gem has an adapter. Some features need a native handler."
+          },
+          "cell": {
+            "value": "Yes",
+            "note": "GoodJob is an Active Job backend. Its extensions are modules for Active Job classes.",
+            "source": "https://github.com/bensheldon/good_job/blob/v4.22.1/lib/active_job/queue_adapters/good_job_adapter.rb#L6",
+            "version": "4.22.1",
+            "evidence": "class GoodJobAdapter < GoodJob::Adapter (README.md#L251: ActiveJob::Base.queue_adapter = :good_job. README.md#L550-L555: include GoodJob::ActiveJobExtensions::Concurrency in an Active Job class.)"
+          }
+        }
+      ]
     },
     {
       "slug": "procrastinate",
