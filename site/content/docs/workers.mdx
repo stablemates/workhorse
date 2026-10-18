@@ -24,7 +24,7 @@ worker and how it owns a task. It also shows how to size, stop, and watch a work
 Thus, `Worker.handle` connects one task type to one async function. The call returns the worker, so
 you can chain calls and serve many task types with one worker.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, {
@@ -90,6 +90,28 @@ you can chain calls and serve many task types with one worker.
     worker = Stablemates::Workhorse::Worker.new(pool, queues: ["email", "billing"], concurrency: worker_concurrency)
     worker.handle("email.send") { |payload, _context| Mailer.send(payload) }
     worker.run
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues("email", "billing")
+            .concurrency(workerConcurrency)
+            .handle("email.send", Map.class, (context, payload) -> mailer.send(payload))
+            .build();
+    worker.run();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker =
+      workhorseWorker(dataSource) {
+        queues = listOf("email", "billing")
+        concurrency = workerConcurrency
+        handle<Map<String, Any?>>("email.send") { _, payload -> mailer.send(payload) }
+      }
+    worker.run()
     ```
   </Tab>
 </Tabs>
@@ -452,7 +474,7 @@ More detail: [Task lifecycle: Queue set](https://github.com/stablemates/workhors
 Most workers need only a few options. The options below set the size, the lease, the identity, the
 retry delay, and the schedules of one worker.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, {
@@ -501,6 +523,28 @@ retry delay, and the schedules of one worker.
       concurrency: worker_concurrency,
       lease: worker_lease,
       worker_id: "email-worker-1")
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues("email", "billing")
+            .concurrency(workerConcurrency)
+            .lease(workerLease)
+            .workerId("email-worker-1")
+            .build();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker =
+      workhorseWorker(dataSource) {
+        queues = listOf("email", "billing")
+        concurrency = workerConcurrency
+        lease = workerLease
+        workerId = "email-worker-1"
+      }
     ```
   </Tab>
 </Tabs>
@@ -622,7 +666,7 @@ shutdown.
 In TypeScript, `defineWorkerProcess` describes the adapter and the workers. The `workhorse worker`
 CLI loads the compiled definition and adds signal handling and supervision.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     export default defineWorkerProcess({
@@ -675,6 +719,28 @@ CLI loads the compiled definition and adds signal handling and supervision.
     worker = Stablemates::Workhorse::Worker.new(pool, queues: ["email", "billing"], concurrency: worker_concurrency)
     worker.handle("email.send") { |payload, _context| Mailer.send(payload) }
     Stablemates::Workhorse.run_worker_process(worker)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues("email", "billing")
+            .concurrency(workerConcurrency)
+            .handle("email.send", Map.class, (context, payload) -> mailer.send(payload))
+            .build();
+    WorkerProcess.runWorkerProcess(worker);
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker =
+      workhorseWorker(dataSource) {
+        queues = listOf("email", "billing")
+        concurrency = workerConcurrency
+        handle<Map<String, Any?>>("email.send") { _, payload -> mailer.send(payload) }
+      }
+    WorkerProcess.runWorkerProcess(worker)
     ```
   </Tab>
 </Tabs>

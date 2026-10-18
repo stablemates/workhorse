@@ -30,7 +30,7 @@ returns the ID of the task. `runAt` is the earliest time at which a worker can c
 is not an exact time. If an operator pauses the queue, or no worker is available, a worker claims
 the task later. A worker never claims the task before `runAt`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("email.send", { to: "person@example.com" });
@@ -83,11 +83,30 @@ the task later. A worker never claims the task before `runAt`.
     queue.enqueue("invoice.remind", {"invoiceId" => invoice_id}, queue: "billing", run_at: reminder_date)
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue("email.send", Map.of("to", "person@example.com"));
+    queue.enqueue(
+        "invoice.remind",
+        Map.of("invoiceId", invoiceId),
+        EnqueueOptions.builder().queue("billing").runAt(reminderDate).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend("email.send", mapOf("to" to "person@example.com"))
+    queue.enqueueSuspend(
+      "invoice.remind",
+      mapOf("invoiceId" to invoiceId),
+      EnqueueOptions.builder().queue("billing").runAt(reminderDate).build(),
+    )
+    ```
+  </Tab>
 </Tabs>
 
 `EnqueueOptions` holds the other settings that a task can have when Workhorse accepts it:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("report.generate", { month: "2026-08" }, {
@@ -145,6 +164,39 @@ the task later. A worker never claims the task before `runAt`.
       execution_timeout: 120)
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "report.generate",
+        Map.of("month", "2026-08"),
+        EnqueueOptions.builder()
+            .queue("reports")
+            .tags("tenant:acme")
+            .concurrencyKey("acme")
+            .priority(10)
+            .maxAttempts(5)
+            .deadline(endOfMonth)
+            .executionTimeout(Duration.ofMinutes(2))
+            .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "report.generate",
+      mapOf("month" to "2026-08"),
+      EnqueueOptions.builder()
+        .queue("reports")
+        .tags("tenant:acme")
+        .concurrencyKey("acme")
+        .priority(10)
+        .maxAttempts(5)
+        .deadline(endOfMonth)
+        .executionTimeout(Duration.ofMinutes(2))
+        .build(),
+    )
+    ```
+  </Tab>
 </Tabs>
 
 Each option has its own page: [retries](/docs/retries), [deadlines](/docs/deadlines),
@@ -183,7 +235,7 @@ task.
 To enqueue in your transaction, give the open transaction to the enqueue call. Then commit one
 time.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await client.query("BEGIN");
@@ -236,6 +288,31 @@ time.
       transaction.exec_params("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email])
       Stablemates::Workhorse::Queue.new(transaction).enqueue("account.created", {"accountId" => id})
     end
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    connection.setAutoCommit(false);
+    try (PreparedStatement insert =
+        connection.prepareStatement("INSERT INTO account (id, email) VALUES (?, ?)")) {
+      insert.setString(1, id);
+      insert.setString(2, email);
+      insert.executeUpdate();
+    }
+    queue.enqueue(connection, "account.created", Map.of("accountId", id));
+    connection.commit();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    connection.autoCommit = false
+    connection.prepareStatement("INSERT INTO account (id, email) VALUES (?, ?)").use { insert ->
+      insert.setString(1, id)
+      insert.setString(2, email)
+      insert.executeUpdate()
+    }
+    queue.enqueueSuspend("account.created", mapOf("accountId" to id), connection = connection)
+    connection.commit()
     ```
   </Tab>
 </Tabs>
@@ -877,7 +954,7 @@ second argument can be a transaction. Divide very large input into several calls
 If a caller can repeat part of the batch, give each request an idempotency key. Then a repeated
 request gets the existing task, and Workhorse does not make a duplicate.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const taskIds = await queue.enqueueMany(recipients.map((recipient) => ({
@@ -928,6 +1005,34 @@ request gets the existing task, and Workhorse does not make a duplicate.
     results = queue.enqueue_many(requests)
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    List<EnqueueResult> results =
+        queue.enqueueMany(
+            recipients.stream()
+                .map(
+                    recipient ->
+                        EnqueueRequest.of(
+                            "email.digest",
+                            Map.of("to", recipient.email()),
+                            EnqueueOptions.builder().queue("mail").build()))
+                .toList());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val results =
+      queue.enqueueManySuspend(
+        recipients.map { recipient ->
+          EnqueueRequest.of(
+            "email.digest",
+            mapOf("to" to recipient.email),
+            EnqueueOptions.builder().queue("mail").build(),
+          )
+        },
+      )
+    ```
+  </Tab>
 </Tabs>
 
 <details>
@@ -953,7 +1058,7 @@ one concurrency budget cover all these queues.
 To pause or resume a full queue, use `Admin`. Each change records an audit identity: an actor, a
 reason, and a request ID.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await admin.pauseQueue("billing", { actor, reason, requestId });
@@ -990,6 +1095,18 @@ reason, and a request ID.
     audit = Stablemates::Workhorse::AdminAudit.new(actor: actor, reason: reason, request_id: request_id)
     admin.pause_queue("billing", audit: audit)
     admin.resume_queue("billing", audit: audit.with(request_id: resume_request_id))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    admin.pauseQueue("billing", new AdminAudit(actor, reason, requestId));
+    admin.resumeQueue("billing", new AdminAudit(actor, reason, resumeRequestId));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    admin.pauseQueueSuspend("billing", AdminAudit(actor, reason, requestId))
+    admin.resumeQueueSuspend("billing", AdminAudit(actor, reason, resumeRequestId))
     ```
   </Tab>
 </Tabs>

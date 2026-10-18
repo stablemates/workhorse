@@ -33,3 +33,6 @@ include("workhorse", "workhorse-kotlin", "workhorse-spring-boot-starter")
 
 // The reader behind `api/java.txt` and `api/kotlin.txt`. It is a build tool, not an artifact.
 include("api-snapshot")
+
+// The Java and Kotlin snippets of the documentation, compiled and run. It is never published.
+include("examples")

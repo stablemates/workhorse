@@ -31,7 +31,7 @@ A principal is the identity that the `authorize` callback returns. If the callba
 request, the dashboard serves nothing. Each language has its own host. Use the host for the
 language of your application.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     In TypeScript, `createDashboardHost` takes a database pool that you own. It returns a handler
     for Fetch requests.
@@ -155,34 +155,56 @@ language of your application.
     ```
 
   </Tab>
-</Tabs>
+  <Tab value="Java">
+    In Java, `run.workhorse.dashboard.Dashboard` is a Jakarta Servlet filter over a
+    `ConnectionSource`. Register it for `/*`. It serves the requests under its path, and it passes
+    each other request to the next filter.
 
-In Java, `run.workhorse.dashboard.Dashboard` is a Jakarta Servlet filter over a
-`ConnectionSource`. Register it for `/*`. It serves the requests under its path, and it passes each
-other request to the next filter.
+    ```java
+    Dashboard dashboard =
+        Dashboard.builder(
+                ConnectionSource.of(dataSource),
+                request -> {
+                  String username = applicationAdminSession(request);
+                  return username != null
+                      ? DashboardAuthorization.principal(username)
+                      : DashboardAuthorization.deny();
+                })
+            .path("/workhorse")
+            .environment("production")
+            .allowedHosts(List.of("ops.example.com"))
+            .build();
+    servletContext
+        .addFilter("workhorse-dashboard", dashboard)
+        .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/*");
+    ```
 
-```java
-Dashboard dashboard =
-    Dashboard.builder(
-            ConnectionSource.of(dataSource),
-            request -> {
-              String username = applicationAdminSession(request);
-              return username != null
-                  ? DashboardAuthorization.principal(username)
-                  : DashboardAuthorization.deny();
-            })
+  </Tab>
+  <Tab value="Kotlin">
+    A Kotlin application uses the same Java API.
+
+    ```kotlin
+    val dashboard =
+      Dashboard.builder(ConnectionSource.of(dataSource)) { request ->
+          val username = applicationAdminSession(request)
+          if (username != null) DashboardAuthorization.principal(username)
+          else DashboardAuthorization.deny()
+        }
         .path("/workhorse")
         .environment("production")
-        .allowedHosts(List.of("ops.example.com"))
-        .build();
-servletContext
-    .addFilter("workhorse-dashboard", dashboard)
-    .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/*");
-```
+        .allowedHosts(listOf("ops.example.com"))
+        .build()
+    servletContext
+      .addFilter("workhorse-dashboard", dashboard)
+      .addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), false, "/*")
+    ```
 
-A Kotlin application uses the same Java API. A Spring Boot application sets
-`workhorse.dashboard.enabled=true` and defines one `DashboardAuthorizer` bean. The starter then
-registers the filter, and the `workhorse.dashboard.*` properties set its options.
+  </Tab>
+</Tabs>
+
+A Spring Boot application sets `workhorse.dashboard.enabled=true` and defines one
+`DashboardAuthorizer` bean. The starter then registers the filter, and the `workhorse.dashboard.*`
+properties set its options.
 
 All six hosts serve the same browser bundle and the same `dashboard/v1` procedures. Only the HTTP
 adapter changes with the language. PostgreSQL keeps the operator behavior the same in each host.
