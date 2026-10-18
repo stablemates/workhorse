@@ -2302,10 +2302,10 @@
         },
         "opentelemetry": {
           "status": "Supported",
-          "note": "Core defines a telemetry interface. The official bullmq-otel package gives traces and metrics.",
-          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/telemetry/getting-started.md#L5-L11",
+          "note": "Core defines a telemetry interface. The official bullmq-otel package gives traces and metrics. Metrics are off until you set enableMetrics.",
+          "source": "https://github.com/taskforcesh/bullmq/blob/v6.3.16/docs/gitbook/guide/telemetry/metrics.md#L1-L18",
           "version": "6.3.16",
-          "evidence": "\"adding the `bullmq-otel` package... This module provides a working implementation of BullMQ's telemetry interface for the OpenTelemetry standard.\" npm: bullmq-otel repository github.com/taskforcesh/bullmq-otel, MIT."
+          "evidence": "\"In addition to traces, BullMQ also supports collecting metrics through OpenTelemetry.\" ... \"To enable metrics collection, pass the `enableMetrics` option when creating the `BullMQOtel` instance\". metrics.md#L61-L68 lists the counters bullmq.jobs.completed and bullmq.jobs.failed. getting-started.md#L5-L11: \"adding the `bullmq-otel` package... This module provides a working implementation of BullMQ's telemetry interface for the OpenTelemetry standard.\" npm: bullmq-otel repository github.com/taskforcesh/bullmq-otel, MIT."
         },
         "worker-languages": {
           "value": "TypeScript, JavaScript, Python, Elixir, Rust, .NET",
@@ -2497,10 +2497,10 @@
         },
         "opentelemetry": {
           "status": "Supported",
-          "note": "The OpenTelemetry project publishes the instrumentation package, not the Celery project. The package supports Celery 4 and 5.",
-          "source": "https://github.com/open-telemetry/opentelemetry-python-contrib/blob/a22d03307b27d958ca9dc340a3514ae1898f63e7/instrumentation/opentelemetry-instrumentation-celery/src/opentelemetry/instrumentation/celery/package.py#L5",
+          "note": "The OpenTelemetry project publishes the instrumentation package, not the Celery project. The package supports Celery 4 and 5. It gives traces and a metric for the run time of each task.",
+          "source": "https://github.com/open-telemetry/opentelemetry-python-contrib/blob/a22d03307b27d958ca9dc340a3514ae1898f63e7/instrumentation/opentelemetry-instrumentation-celery/src/opentelemetry/instrumentation/celery/__init__.py#L142-L159",
           "version": "5.6.3",
-          "evidence": "opentelemetry-python-contrib v0.66b1: _instruments = (\"celery >= 4.0, < 6.0\",); __init__.py: \"Instrument `celery`_ to trace Celery applications.\" CeleryInstrumentor().instrument(). The Celery 5.6.3 docs do not mention OpenTelemetry."
+          "evidence": "opentelemetry-python-contrib v0.66b1: self._tracer = trace.get_tracer(...) ... meter = get_meter(...) ... self.create_celery_metrics(meter). __init__.py#L373-L380: meter.create_histogram(name=\"flower.task.runtime.seconds\", ... description=\"The time it took to run the task.\"). __init__.py#L4: \"Instrument `celery`_ to trace Celery applications.\" package.py#L5: _instruments = (\"celery >= 4.0, < 6.0\",). The Celery 5.6.3 docs do not mention OpenTelemetry."
         },
         "worker-languages": {
           "value": "Python",
