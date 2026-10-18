@@ -8,7 +8,8 @@ import java.util.Properties;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The SDK version that a worker registers as {@code sdk_version}.
+ * The SDK version that a worker registers as {@code sdk_version}. The dashboard and the
+ * OpenTelemetry backend read it here too, so this class is the only reader of the version resource.
  *
  * <p>The build writes {@code project.version}, the train version, into the class path resource
  * {@code run/workhorse/version.properties}. The other SDKs compile their version into a source
@@ -18,7 +19,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>If the resource is absent or empty, for example after a compile that did not run Gradle, the
  * version is {@code null}. The registry stores {@code NULL}, which tells an operator that the
- * version is unknown. A guessed string would look like a real version.
+ * version is unknown. A guessed string would look like a real version. Each caller picks its own
+ * value for {@code null}: the dashboard shows {@code unknown}, and the OpenTelemetry backend sets
+ * no instrumentation version.
  */
 public final class SdkVersion {
   private static final String RESOURCE = "/run/workhorse/version.properties";
