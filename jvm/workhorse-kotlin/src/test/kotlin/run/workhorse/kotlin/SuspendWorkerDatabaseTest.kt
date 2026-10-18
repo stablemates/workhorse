@@ -24,12 +24,17 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
 import run.workhorse.Admin
+import run.workhorse.BatchHandlerOutcome
+import run.workhorse.BatchOptions
+import run.workhorse.BatchSucceeded
 import run.workhorse.CancellationReason
 import run.workhorse.ConnectionSource
 import run.workhorse.EnqueueOptions
 import run.workhorse.Queue
 import run.workhorse.TaskCheckpoint
 import run.workhorse.Worker
+import run.workhorse.WorkhorseTelemetry
+import run.workhorse.testing.RecordingOpenTelemetry
 import run.workhorse.testing.ScratchDataSource
 import run.workhorse.testing.ScratchDatabase
 
@@ -207,6 +212,64 @@ class SuspendWorkerDatabaseTest {
     val done = state(taskId)
     assertEquals("succeeded", done.state)
     assertEquals("0", done.result)
+  }
+
+  // SM-1458: the scope has a property for each Worker.Builder option, and a batch registration.
+  @Test
+  fun setsTheCohortsOfTheWorker() {
+    val worker =
+      worker("kotlin-cohorts") {
+        concurrency = 4
+        cohorts = 2
+      }
+
+    assertEquals(2, worker.cohorts())
+  }
+
+  @Test
+  fun recordsTheHandlerSpanThroughTheTelemetryProperty() {
+    RecordingOpenTelemetry().use { recording ->
+      val taskId = enqueue("traced", mapOf("order" to 1L))
+      val worker =
+        worker("kotlin-telemetry") {
+          telemetry = WorkhorseTelemetry.of(recording.sdk())
+          handle<Map<String, Any?>>("traced") { _, _ -> "done" }
+        }
+
+      assertTrue(worker.runOnce())
+
+      assertEquals("succeeded", state(taskId).state)
+      assertEquals(1, recording.spans("workhorse.handler").size)
+    }
+  }
+
+  @Test
+  fun runsABatchHandlerWithAReifiedPayloadType() {
+    val first = enqueue("batched", mapOf("order" to 1L))
+    val second = enqueue("batched", mapOf("order" to 2L))
+    // A slow claim can split the tasks into two batches, so the test counts the members.
+    val members = AtomicInteger()
+    val worker =
+      worker("kotlin-batch") {
+        concurrency = 2
+        handleBatch<Map<String, Any?>>("batched", BatchOptions(2, Duration.ofMillis(200))) { items
+          ->
+          members.addAndGet(items.size)
+          items.map<_, BatchHandlerOutcome> { BatchSucceeded(it.payload()["order"]) }
+        }
+      }
+
+    worker.start()
+    try {
+      waitForState(first, "succeeded")
+      waitForState(second, "succeeded")
+    } finally {
+      worker.close()
+    }
+
+    assertEquals(2, members.get())
+    assertEquals("1", state(first).result)
+    assertEquals("2", state(second).result)
   }
 
   private fun <T : Any> present(value: T?, message: String): T =

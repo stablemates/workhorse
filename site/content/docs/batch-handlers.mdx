@@ -11,7 +11,7 @@ Each task in the call keeps its own lease, fence token, retry budget, checkpoint
 cancellation. Register a batch handler with `Worker.handleBatch` in TypeScript,
 `Worker.handle_batch` in Python, `Worker.HandleBatch` in Go, `Worker::handle_batch` in Rust,
 `Worker#handle_batch` in Ruby. In Java, use `Worker.Builder.handleBatch`. In Kotlin, call
-`handleBatch` in the `java { }` block of `workhorseWorker`.
+`handleBatch` in the `workhorseWorker` block.
 
 ## Send several tasks to one handler call
 

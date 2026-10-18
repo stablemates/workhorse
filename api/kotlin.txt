@@ -95,9 +95,12 @@ run.workhorse.kotlin.SuspendTaskGroupContext: public val java: run.workhorse.Tas
 
 @WorkhorseDsl public final class run.workhorse.kotlin.WorkerScope
 run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> register(taskType: String, payloadType: Class<P>, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> registerBatch(taskType: String, payloadType: Class<P>, options: run.workhorse.BatchOptions, handler: run.workhorse.BatchHandler<P>): Unit
 run.workhorse.kotlin.WorkerScope: public fun java(configure: run.workhorse.Worker.Builder.() -> Unit): Unit
 run.workhorse.kotlin.WorkerScope: public inline fun <reified P> handle(taskType: String, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: public inline fun <reified P> handleBatch(taskType: String, options: run.workhorse.BatchOptions, handler: run.workhorse.BatchHandler<P>): Unit
 run.workhorse.kotlin.WorkerScope: public var codec: run.workhorse.JsonCodec? = null
+run.workhorse.kotlin.WorkerScope: public var cohorts: Int? = null
 run.workhorse.kotlin.WorkerScope: public var concurrency: Int? = null
 run.workhorse.kotlin.WorkerScope: public var disableRegistry: Boolean? = null
 run.workhorse.kotlin.WorkerScope: public var executor: java.util.concurrent.ExecutorService? = null
@@ -117,6 +120,7 @@ run.workhorse.kotlin.WorkerScope: public var scheduleCatchupLimit: Int? = null
 run.workhorse.kotlin.WorkerScope: public var scheduleNamespaces: List<String>? = null
 run.workhorse.kotlin.WorkerScope: public var sharedHeartbeats: Boolean? = null
 run.workhorse.kotlin.WorkerScope: public var shutdownGrace: java.time.Duration? = null
+run.workhorse.kotlin.WorkerScope: public var telemetry: run.workhorse.WorkhorseTelemetry? = null
 run.workhorse.kotlin.WorkerScope: public var workerId: String? = null
 
 @DslMarker public annotation class run.workhorse.kotlin.WorkhorseDsl

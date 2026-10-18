@@ -53,6 +53,8 @@ dependencies {
   api(libs.kotlinx.coroutines.core)
 
   testImplementation(coreTests)
+  testImplementation(libs.opentelemetry.api)
+  testImplementation(libs.opentelemetry.sdk.testing)
   testImplementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootTestVersion"))
   testImplementation(project(":workhorse-spring-boot-starter"))
   testImplementation(libs.spring.boot.starter.test)

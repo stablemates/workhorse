@@ -2546,7 +2546,7 @@ The worker registers with `sdk_language` `java`, for Java and Kotlin alike. It r
 from the resource `run/workhorse/version.properties` in its jar, which the build writes with the
 train version. If that resource is absent or empty, `sdk_version` is `null`. The registry refresh
 interval defaults to 5 seconds. A maintenance failure
-ends the run, and `run` throws it. A registration failure only logs
+ends the run, and `run` throws it. This includes an `Error` from the pass. A registration failure only logs
 `workhorse.worker.registration_failed` and calls `onRegistrationError`.
 
 After `stop()`, the worker shuts down in this order:
@@ -2586,7 +2586,10 @@ The worker installs no JVM shutdown hook and traps no signal.
   refuses a lone surrogate. A result over the `result_max_bytes` of the task throws
   `ValueSizeLimitException`. The retry policy applies to each.
 - A `java.lang.Error` from an ordinary handler ends the run. The worker drains, and `run` throws
-  that error. The task is not settled, so its lease expires.
+  that error. The task is not settled, so its lease expires. Ruby treats an error outside
+  `StandardError` and Python treats a `BaseException` outside `Exception` the same way.
+- A failed Java `assert` throws `AssertionError`, which is an `Error`. Thus, when assertions are on,
+  it ends the run. A Python `AssertionError` is an `Exception`, so it fails only the attempt.
 - A batch handler is different. An `Error` from it fails each task in the batch, as the batch
   section describes.
 
@@ -2765,7 +2768,8 @@ Suspend handlers run on a coroutine dispatcher over a virtual-thread executor. A
 `SuspendHandlerContext` runs to its end before a coroutine cancellation reaches the handler. Thus a
 cancellation never interrupts the statement of a checkpoint, wait, child, or progress call. Only
 the operation that a checkpoint runs gets the interrupt. The `Queue` and `Admin` suspend wrappers
-run in `runInterruptible`.
+run in `runInterruptible`, except in a Spring transaction scope, as the Kotlin module section
+describes.
 
 A token cancellation cancels the handler's coroutine `Job`. A `CancellationException` reaches the
 worker as `CancelledException` when the token has a reason. The Kotlin module has no suspend batch
@@ -2834,9 +2838,15 @@ non-finite number or a lone surrogate.
 wrapper named after it, such as `enqueueSuspend` and `getTaskSuspend`. A wrapper takes
 `connection: Connection? = null` as its last parameter. `taskGroupSuspend` is the exception: its
 trailing block comes after `connection`. With a connection, a wrapper uses the caller form.
-A Java `Optional` result is a nullable type. The wrappers run the Java call in `runInterruptible` on
-another thread. Spring binds a transaction to its thread, so a wrapper in the source form does not
-join a Spring transaction. Give the transaction's connection, or call the Java method.
+A Java `Optional` result is a nullable type.
+
+Spring binds a transaction to its thread. If the
+calling thread is in a Spring transaction scope, a `Queue` or `Admin` wrapper with no `connection`
+calls the Java method on that thread. It then joins the active transaction, or runs in autocommit
+when no transaction is active. A cancellation does not interrupt that call. Every other wrapper call
+runs the Java call in `runInterruptible` on a virtual thread. The wrapper finds the scope through
+`TransactionSynchronizationManager.isSynchronizationActive` by reflection, so the module has no
+Spring dependency.
 
 Spring takes its coroutine transaction path only for a `ReactiveTransactionManager`. With a
 `DataSourceTransactionManager`, a `suspend` `@Transactional` method commits at its first
@@ -2847,8 +2857,11 @@ example with `runBlocking`.
 `workhorseWorker(dataSource) { … }` builds a `Worker` with a `WorkerScope`. Each scope property sets
 the `Worker.Builder` option of the same name, and `null` keeps the default.
 `handle<P>(taskType, SuspendHandler<P>)` registers a suspend handler with a reified payload type.
-The scope has no property for `cohorts`, `telemetry`, or `handleBatch`. `java { … }` reaches them
-on the `Worker.Builder`. A scope property overrides the same option that `java { … }` sets.
+
+The scope has one property for each `Worker.Builder` option, including `cohorts` and `telemetry`.
+`handleBatch<P>(taskType, BatchOptions, BatchHandler<P>)` registers the Java blocking batch handler
+with a reified payload type. The module has no suspend batch handler. `java { … }` configures the
+`Worker.Builder` directly. A scope property overrides the same option that `java { … }` sets.
 
 A suspend handler runs in a coroutine on a dispatcher over a virtual-thread executor. A token
 cancellation cancels the coroutine `Job`, and the handler thread waits until the coroutine ends.

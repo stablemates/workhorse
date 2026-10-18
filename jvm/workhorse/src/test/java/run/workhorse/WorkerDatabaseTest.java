@@ -887,6 +887,80 @@ class WorkerDatabaseTest {
     }
   }
 
+  /** The {@code Error} that {@link #failingTicks} throws. */
+  private static final class InjectedError extends Error {
+    private static final long serialVersionUID = 1L;
+
+    InjectedError() {
+      super("injected maintenance error");
+    }
+  }
+
+  /** A source over {@code source} that throws {@link InjectedError} for each maintenance tick. */
+  private static DataSource failingTicks(DataSource source) {
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) -> {
+              Object result;
+              try {
+                result = method.invoke(source, arguments);
+              } catch (InvocationTargetException error) {
+                throw error.getCause();
+              }
+              if (!method.getName().equals("getConnection")) {
+                return result;
+              }
+              Connection connection = (Connection) result;
+              return Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (inner, call, values) -> {
+                    if (call.getName().equals("prepareStatement")
+                        && String.valueOf(values[0]).contains("tick_v1")) {
+                      throw new InjectedError();
+                    }
+                    try {
+                      return call.invoke(connection, values);
+                    } catch (InvocationTargetException error) {
+                      throw error.getCause();
+                    }
+                  });
+            });
+  }
+
+  // ADR 0078 rule 4: a failed maintenance pass ends the run, also for an Error (SM-1458).
+  @Test
+  void endsTheRunWhenAMaintenancePassThrowsAnError() throws Exception {
+    Worker worker =
+        Worker.builder(failingTicks(dataSource))
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .maintenanceInterval(Duration.ofMillis(100))
+            .disableRegistry(true)
+            .build();
+    AtomicReference<@Nullable Throwable> failure = new AtomicReference<>();
+    Thread runner =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    worker.run();
+                  } catch (Throwable error) {
+                    failure.set(error);
+                  }
+                });
+    runner.join(Duration.ofSeconds(10));
+    boolean ended = !runner.isAlive();
+    worker.stop();
+    runner.join(WAIT);
+    assertTrue(ended, "the run ended after the failed maintenance pass");
+    assertTrue(
+        failure.get() instanceof InjectedError, "run threw the pass's Error: " + failure.get());
+  }
+
   @Test
   void recoversAnExpiredLeaseInMaintenanceAndRunsTheTaskAgain() throws Exception {
     UUID taskId = enqueue("orphan", Map.of());

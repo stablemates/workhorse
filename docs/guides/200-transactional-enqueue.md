@@ -434,9 +434,9 @@ class Accounts {
 If `create` throws an exception, Spring rolls back the transaction, and the task disappears with
 your row. Outside a transaction, each enqueue commits at once.
 
-In Kotlin, call the Java `queue.enqueue` from a `@Transactional` function that does not suspend.
-Spring binds a transaction to its thread. A suspend wrapper runs the call on another thread, so it
-does not join the transaction unless you give it the connection.
+In Kotlin, enqueue from a `@Transactional` function that does not suspend. Spring binds a
+transaction to its thread. Inside that function, a suspend wrapper with no connection, such as
+`enqueueSuspend` in `runBlocking`, runs on the calling thread. Thus it joins the transaction.
 
 Do not mark a `suspend` function `@Transactional` when the transaction manager uses JDBC. With a
 `DataSourceTransactionManager`, Spring commits that transaction at the first suspension point. Thus

@@ -220,9 +220,16 @@ authorize)` returns a `Dashboard.Builder` with these options and defaults:
 The Kotlin module adds no dashboard API. A Kotlin application uses the Java API.
 
 `DashboardAuthorizer.authorize(HttpServletRequest)` returns a sealed `DashboardAuthorization`:
-`principal(actor)`, `allow()`, or `deny()`. `Principal.actor` is the authenticated identity.
-`auditActor` names the actor only when `authorize` returns `allow()`. The JVM has no response
-result: `deny()` always answers 401 with `{"error":"Unauthorized"}`. If `authorize` throws a
+`principal(actor)`, `allow()`, `deny()`, or `response(status, headers, body)`. `Principal.actor` is
+the authenticated identity. `auditActor` names the actor only when `authorize` returns `allow()`.
+`deny()` answers 401 with `{"error":"Unauthorized"}`.
+
+`response` lets the authorizer give a
+complete denial or redirect, as Ruby's Rack response and Python's `DashboardResponse` do. The filter
+sends its status, headers, and body as-is. `response` copies the headers and the body, and throws
+`IllegalArgumentException` for a status outside 100 through 599.
+
+If `authorize` throws a
 checked exception other than `IOException` or `ServletException`, the filter wraps it in a
 `ServletException`.
 
@@ -233,7 +240,7 @@ that is not HTTP, to `chain.doFilter`. Thus the host's own servlets still answer
 The filter handles a request that it owns in this order:
 
 1. A non-empty `allowedHosts` refuses any other `Host` with 421, before `authorize` runs.
-2. `authorize` runs.
+2. `authorize` runs. A `deny()` or a `response` ends the request here.
 3. The schema compatibility check runs. The filter caches only a passing answer.
 4. The filter rejects a mutation that is not same-origin with 403, before it decodes the input. It
    then rejects a mutation on a read-only host with 403.

@@ -1477,3 +1477,71 @@ inside `runBlocking`. Spring's coroutine path applies only to a `ReactiveTransac
 this record keeps R2DBC out of scope.
 
 The SM-1381 coordinator chose this form during SM-1457.
+
+## Amendment: the JVM worker, Kotlin scope, and dashboard follow the reference SDKs (2026-10-18)
+
+SM-1398 found seven JVM behaviors that this record did not state. SM-1458 compared each one with
+Ruby, the reference SDK, and with Python. This amendment records the result. Three of the behaviors
+changed, so that the JVM matches the references.
+
+**A `java.lang.Error` from a handler ends the run.** An `Exception` fails the attempt. An `Error`
+does not settle the task. The worker drains, `run` throws the `Error`, and the lease expires.
+
+Ruby fails the attempt only for a `StandardError`, and ends the run for any other `Exception`.
+Python fails the attempt only for an `Exception`, and ends the run for any other `BaseException`.
+`Error` is the JVM class that matches those two. A batch handler is different in every SDK: an
+`Error` from it fails each task in the batch.
+
+One difference remains. A failed Java `assert` throws `AssertionError`, which is an `Error`. Thus,
+when assertions are on, it ends the run. A Python `AssertionError` is an `Exception`, so it fails
+only the attempt.
+
+**A failed maintenance pass ends the run.** ADR 0078 rule 4 decides this for every SDK. A phase
+error inside `tick_v1` is data in a row, so it does not end the run. The JVM worker recorded only a
+`RuntimeException` from a pass. An `Error` ended the pass thread with no record, and the run
+continued. The worker now records any `Throwable` from a pass, as Python does, and `run` throws it
+after the drain.
+
+**The heartbeat interval defaults to `max(100 ms, lease / 3)`.** The Worker surface section says
+only "a third of `lease`". Ruby, Python, and TypeScript use the same 100 ms floor. The round bound
+and the busy retry delay use the formulas that SM-1442, SM-1443, and SM-1444 gave every SDK. A round
+times out after `max(1 ms, 3/4 of the interval, min(50 ms, interval))`. A busy retry waits
+`base × (1 + random)`, with `base = min(100 ms, interval / 8)`.
+
+**The Kotlin `WorkerScope` covers every `Worker.Builder` option.** The Kotlin module section asks
+for one scope property for each option, but the scope had no `cohorts` and no `telemetry`. The scope
+now has both. `handleBatch<P>(taskType, BatchOptions, BatchHandler<P>)` registers the Java blocking
+batch handler with a reified payload type. The module adds no suspend batch handler. `java { … }`
+still configures the `Worker.Builder` directly.
+
+**The dashboard authorizer can give a complete response.** The Embedded dashboard backend section
+says that `authorize` returns a principal, an allow, or a deny, as Python's and Ruby's do. Ruby,
+Python, TypeScript, Go, and Rust also let the authorizer return a response, such as a redirect to a
+login page or a 403.
+
+`DashboardAuthorization.response(status, headers, body)` is now the fourth
+permitted result. The filter sends it as-is and does no other work for the request. The sealed
+interface gains a permit, so an exhaustive caller `switch` must add a case. No JVM artifact is
+published yet, so this change breaks no user.
+
+**Each `Queue` and `Admin` instance caches its compatibility check.** The Connection model section
+says that `Queue` caches the check "for each `ConnectionSource`, as Python's `Queue` caches it for
+each executor". Each Python `Queue` owns one executor, so its cache belongs to the instance. Ruby
+caches on each `Queue` and `Admin` instance too. No SDK keys a cache by its connection pool.
+
+The JVM
+caches once for the instance's source, and once for each caller `Connection` that reaches it. This
+amendment replaces the sentence with that rule.
+
+**Slot accounting bounds concurrency.** The Concurrency section says that a `Semaphore` with
+`concurrency` permits bounds the handlers. The worker uses slot accounting under its state lock
+instead, as Ruby and Python do.
+
+A slot is busy while its handler runs. It is reserved while a claim for it is in flight. It is
+handed over once a fused completion claimed a task into it. Each cohort has its own capacity. A
+semaphore cannot express the reserved and handed-over slots or the cohorts. The
+rule stays: claimed tasks never exceed `concurrency`, also with a caller `ExecutorService`.
+
+`api/kotlin.txt` gains `cohorts`, `telemetry`, and `handleBatch` on `WorkerScope`. `api/java.txt`
+gains `DashboardAuthorization.response` and the `Response` class. The SM-1381 coordinator made these
+decisions during SM-1458.

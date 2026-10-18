@@ -204,6 +204,9 @@ public final class Dashboard implements Filter {
       case DashboardAuthorization.Deny deny -> {
         return json(401, Map.of("error", "Unauthorized"));
       }
+      case DashboardAuthorization.Response response -> {
+        return new Reply(response.status(), response.headers(), response.body());
+      }
       case DashboardAuthorization.Allow allow -> actor = auditActor;
       case DashboardAuthorization.Principal principal -> actor = principal.actor();
     }
@@ -646,7 +649,10 @@ public final class Dashboard implements Filter {
     void send(HttpServletResponse response) throws IOException {
       response.setStatus(status);
       headers.forEach(response::setHeader);
-      response.setContentLength(body.length);
+      // An authorizer's response can state its own length, for example for a HEAD request.
+      if (headers.keySet().stream().noneMatch("Content-Length"::equalsIgnoreCase)) {
+        response.setContentLength(body.length);
+      }
       response.getOutputStream().write(body);
     }
   }
