@@ -1,14 +1,14 @@
 package consumer
 
-import dev.stablemates.workhorse.Admin
-import dev.stablemates.workhorse.ConnectionSource
-import dev.stablemates.workhorse.EnqueueOptions
-import dev.stablemates.workhorse.Queue
-import dev.stablemates.workhorse.TaskState
-import dev.stablemates.workhorse.kotlin.WorkerScope
-import dev.stablemates.workhorse.kotlin.enqueueSuspend
-import dev.stablemates.workhorse.kotlin.getTaskSuspend
-import dev.stablemates.workhorse.kotlin.workhorseWorker
+import run.workhorse.Admin
+import run.workhorse.ConnectionSource
+import run.workhorse.EnqueueOptions
+import run.workhorse.Queue
+import run.workhorse.TaskState
+import run.workhorse.kotlin.WorkerScope
+import run.workhorse.kotlin.enqueueSuspend
+import run.workhorse.kotlin.getTaskSuspend
+import run.workhorse.kotlin.workhorseWorker
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
 import org.postgresql.ds.PGSimpleDataSource

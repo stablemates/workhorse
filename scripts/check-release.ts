@@ -179,7 +179,7 @@ async function checkNpmLine(files: ReleaseFiles, version: TrainVersion): Promise
     for (const [key, command] of Object.entries(install)) {
       // The schema download and pinned schema tool, a Gradle coordinate, and a Maven `<version>`.
       for (const match of command.matchAll(
-        /(?:\/download\/v|@stablemates\/workhorse@|dev\.stablemates:[\w-]+:)([^/\s"')]+)|<version>([^<]+)<\/version>/g,
+        /(?:\/download\/v|@stablemates\/workhorse@|run\.workhorse:[\w-]+:)([^/\s"')]+)|<version>([^<]+)<\/version>/g,
       )) {
         const declared = match[1] ?? match[2];
         if (declared !== version.semver) {

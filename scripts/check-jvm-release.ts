@@ -53,7 +53,7 @@ const jvmDirectory = path.join(root, "jvm");
 const stagingDirectory = path.join(jvmDirectory, "build", "staging-deploy");
 const consumerDirectory = path.join(jvmDirectory, "release-consumer");
 /** The Maven group of the three artifacts. */
-export const group = "dev.stablemates";
+export const group = "run.workhorse";
 const groupPath = group.replaceAll(".", "/");
 const consumerQueue = "release-consumer";
 const consumerTaskType = "release.consumer";

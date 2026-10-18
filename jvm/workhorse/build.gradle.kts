@@ -1,4 +1,4 @@
-// `workhorse`: the Java core, the named module `dev.stablemates.workhorse` (ADR 0103).
+// `workhorse`: the Java core, the named module `run.workhorse` (ADR 0103).
 
 description = "Workhorse for Java: the client, the worker, Admin, and the dashboard backend"
 
@@ -37,7 +37,7 @@ val withoutOpenTelemetry =
     group = "verification"
     testClassesDirs = testSources.output.classesDirs
     classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
-    filter { includeTestsMatching("dev.stablemates.workhorse.WithoutOpenTelemetryTest") }
+    filter { includeTestsMatching("run.workhorse.WithoutOpenTelemetryTest") }
     useJUnitPlatform { includeTags("without-opentelemetry") }
   }
 
@@ -55,7 +55,7 @@ val versionResource =
     inputs.property("version", value)
     outputs.dir(output)
     doLast {
-      val file = output.get().file("dev/stablemates/workhorse/version.properties").asFile
+      val file = output.get().file("run/workhorse/version.properties").asFile
       file.parentFile.mkdirs()
       file.writeText("version=$value\n")
     }
@@ -67,6 +67,6 @@ tasks.processResources {
   from(versionResource)
   from("../../dashboard/v1/bundle") {
     include("bundle.json", "read-surface-*.tar.gz")
-    into("dev/stablemates/workhorse/dashboard")
+    into("run/workhorse/dashboard")
   }
 }

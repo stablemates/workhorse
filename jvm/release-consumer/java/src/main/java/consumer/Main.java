@@ -1,13 +1,13 @@
 package consumer;
 
-import dev.stablemates.workhorse.Admin;
-import dev.stablemates.workhorse.ConnectionSource;
-import dev.stablemates.workhorse.EnqueueResult;
-import dev.stablemates.workhorse.Queue;
-import dev.stablemates.workhorse.QueueOptions;
-import dev.stablemates.workhorse.TaskDetail;
-import dev.stablemates.workhorse.TaskState;
-import dev.stablemates.workhorse.Worker;
+import run.workhorse.Admin;
+import run.workhorse.ConnectionSource;
+import run.workhorse.EnqueueResult;
+import run.workhorse.Queue;
+import run.workhorse.QueueOptions;
+import run.workhorse.TaskDetail;
+import run.workhorse.TaskState;
+import run.workhorse.Worker;
 import java.nio.file.Path;
 import java.util.Map;
 import org.postgresql.ds.PGSimpleDataSource;

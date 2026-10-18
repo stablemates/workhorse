@@ -1,8 +1,8 @@
 {
   "install": {
     "go": "go get github.com/stablemates/workhorse/go",
-    "gradle": "implementation(\"dev.stablemates:workhorse:0.8.0\")",
-    "maven": "<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>0.8.0</version></dependency>",
+    "gradle": "implementation(\"run.workhorse:workhorse:0.8.0\")",
+    "maven": "<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.8.0</version></dependency>",
     "node": "npm install @stablemates/workhorse",
     "python": "pip install stablemates-workhorse",
     "ruby": "bundle add stablemates-workhorse",

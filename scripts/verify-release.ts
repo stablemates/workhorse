@@ -48,7 +48,7 @@ export interface VerificationOptions {
   readonly crate?: string;
   /** go: a module proxy directory served ahead of proxy.golang.org. */
   readonly goProxy?: string;
-  /** maven: a staged Maven repository that serves `dev.stablemates` instead of Maven Central. */
+  /** maven: a staged Maven repository that serves `run.workhorse` instead of Maven Central. */
   readonly mavenRepo?: string;
 }
 
@@ -237,8 +237,8 @@ export function jdbcUrl(url: string): string {
 }
 
 /**
- * The Java consumer takes `dev.stablemates:workhorse`, and the Kotlin consumer takes
- * `dev.stablemates:workhorse-kotlin`. ADR 0103 makes each run a task end to end: each enqueues one
+ * The Java consumer takes `run.workhorse:workhorse`, and the Kotlin consumer takes
+ * `run.workhorse:workhorse-kotlin`. ADR 0103 makes each run a task end to end: each enqueues one
  * task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names, runs it, and checks that it
  * succeeded. Each prints the file name of the jar it loaded, then the task id.
  */

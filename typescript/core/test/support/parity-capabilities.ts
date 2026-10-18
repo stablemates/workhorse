@@ -136,7 +136,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "enqueuesInsideACallerTransactionThatCommits",
     },
     ruby: {
@@ -154,7 +154,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Atomic batch enqueue",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "aBatchCommitsAsOneStatement",
     },
     ruby: {
@@ -172,7 +172,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Task groups with completion callbacks",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
     },
     ruby: {
@@ -191,7 +191,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Delayed enqueue (`runAt` / `run_at`)",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -209,7 +209,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Priority",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -227,7 +227,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Tags and max attempts",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -245,7 +245,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Persisted retry policies",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -263,7 +263,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Absolute deadlines and execution timeouts",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -281,7 +281,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Enqueue idempotency",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "replaysAnIdempotentEnqueue",
     },
     ruby: {
@@ -299,7 +299,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Keyed debounce",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "replacesAPendingTaskInsideItsDebounceWindow",
     },
     ruby: {
@@ -317,7 +317,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Keyed throttle",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "coalescesRequestsInsideAThrottleWindow",
     },
     ruby: {
@@ -332,7 +332,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Task dependencies with terminal policies",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "blocksATaskOnItsDependencies",
     },
     ruby: {
@@ -350,7 +350,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Concurrency keys",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
     },
     ruby: {
@@ -365,7 +365,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Concurrency policy management",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesConcurrencyPolicies",
     },
     ruby: {
@@ -389,7 +389,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Rate-limit policy management",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesRateLimitPolicies",
     },
     ruby: {
@@ -413,7 +413,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Named budget management",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesBudgets",
     },
     ruby: {
@@ -437,7 +437,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Recurring schedule definition sync",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsAndPrunesScheduleDefinitions",
     },
     ruby: { file: "integration/client_spec.rb", example: "stores and prunes schedule definitions" },
@@ -449,7 +449,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Payload and result contracts",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "validatesAndStampsAContractedPayload",
     },
     ruby: {
@@ -467,7 +467,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Compatibility refusal before mutation",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "refusesAnIncompatibleSchemaBeforeAnyMutation",
     },
     ruby: {
@@ -632,7 +632,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Claiming and handler execution",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "completesATaskAndStoresItsResult",
     },
     ruby: { file: "integration/worker_spec.rb", example: "completes a task and stores its result" },
@@ -644,7 +644,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Bounded worker concurrency",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "runsAtMostConcurrencyHandlersOnVirtualThreads",
     },
     ruby: {
@@ -664,7 +664,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Fast task tier with one outcome row per task",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerFastTierDatabaseTest.java",
+      file: "run/workhorse/WorkerFastTierDatabaseTest.java",
       test: "runsFastTierTasksAndRecordsOneFastOutcomeRowForEach",
     },
     ruby: {
@@ -682,7 +682,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerFastTierDatabaseTest.java",
+      file: "run/workhorse/WorkerFastTierDatabaseTest.java",
       test: "fusesEachCompletionWithARefillClaimBoundedByItsSlotCohort",
     },
     ruby: {
@@ -764,7 +764,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Notification-assisted dispatch with polling",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "wakesAnIdleWorkerOnANotificationWellBeforeItsFallbackPoll",
     },
     ruby: {
@@ -791,7 +791,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Checkpoint input check",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aDifferentCheckpointInputFailsTheTaskWithoutRunningTheOperation",
     },
     ruby: {
@@ -816,7 +816,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "anAbsoluteTimerSuspendsUntilItsTimeAndThenReturns",
     },
     ruby: {
@@ -834,7 +834,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Signal and human-decision waits",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aSignalWaitSuspendsAndReturnsTheDeliveredPayload",
     },
     ruby: {
@@ -852,7 +852,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Linked child fan-out and result join",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "runChildrenReturnsEachOutcomeByName",
     },
     ruby: {
@@ -867,7 +867,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Task group reads and adds from a handler",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aMemberTaskReadsItsGroupAndAddsATaskToIt",
     },
     ruby: {
@@ -885,7 +885,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Latest-value progress reporting",
     jvm: {
-      file: "dev/stablemates/workhorse/DurableContextDatabaseTest.java",
+      file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "setProgressStoresTheLatestValueAndANewAttemptReadsIt",
     },
     ruby: {
@@ -912,7 +912,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Schedule firing (database cron evaluation)",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "firesDueSchedulesInItsNamespacesDuringMaintenance",
     },
     ruby: {
@@ -927,7 +927,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Worker fleet registration and remote pause",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "registersTheWorkerAndStopsClaimingWhileAnOperatorPausesIt",
     },
     ruby: {
@@ -945,7 +945,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Graceful stop and signal drain",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerProcessTest.java",
+      file: "run/workhorse/WorkerProcessTest.java",
       test: "drainsTheWorkerOnSigtermBeforeTheProcessExits",
     },
     ruby: {
@@ -960,7 +960,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Retention maintenance participation",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerDatabaseTest.java",
+      file: "run/workhorse/WorkerDatabaseTest.java",
       test: "runsTerminalStorageMaintenance",
     },
     ruby: {
@@ -975,7 +975,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "OpenTelemetry tracing and metrics",
     jvm: {
-      file: "dev/stablemates/workhorse/WorkerTelemetryDatabaseTest.java",
+      file: "run/workhorse/WorkerTelemetryDatabaseTest.java",
       test: "continuesTheEnqueuingTraceInTheHandlerSpanAndRecordsTheSharedMetrics",
     },
     ruby: {
@@ -1033,7 +1033,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task lookup, listing, and timeline",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsTasksWithFiltersProjectionAndACursor",
     },
     ruby: {
@@ -1048,7 +1048,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Queue health snapshot",
     jvm: {
-      file: "dev/stablemates/workhorse/QueueDatabaseTest.java",
+      file: "run/workhorse/QueueDatabaseTest.java",
       test: "readsTheQueueHealthSnapshot",
     },
     ruby: { file: "integration/client_spec.rb", example: "returns the queue health snapshot" },
@@ -1059,7 +1059,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cancellation requests",
-    jvm: { file: "dev/stablemates/workhorse/QueueDatabaseTest.java", test: "cancelsATask" },
+    jvm: { file: "run/workhorse/QueueDatabaseTest.java", test: "cancelsATask" },
     ruby: {
       file: "integration/client_spec.rb",
       example: "reports each PostgreSQL cancel disposition",
@@ -1072,7 +1072,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Queue pause, resume, and purge",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "pausesResumesAndPurgesAQueue",
     },
     ruby: { file: "integration/admin_spec.rb", example: "pauses, resumes, and purges a queue" },
@@ -1084,7 +1084,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Dead-letter listing and redrive",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsDeadLettersAndRedrivesOne",
     },
     ruby: { file: "integration/admin_spec.rb", example: "lists dead letters and redrives one" },
@@ -1096,7 +1096,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task group cancel",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
     },
     ruby: {
@@ -1114,7 +1114,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task group drift listing and repair",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
     },
     ruby: {
@@ -1129,7 +1129,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Checkpoint, wait, and human-decision reads",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "readsCheckpointsProgressAndWaits",
     },
     ruby: { file: "integration/admin_spec.rb", example: "reads checkpoints, progress, and waits" },
@@ -1141,7 +1141,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Durable operator worker pause",
     jvm: {
-      file: "dev/stablemates/workhorse/AdminDatabaseTest.java",
+      file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsWorkersAndPausesOne",
     },
     ruby: { file: "integration/admin_spec.rb", example: "lists workers and pauses one" },
@@ -1153,7 +1153,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Embedded dashboard backend",
     jvm: {
-      file: "dev/stablemates/workhorse/dashboard/DashboardConformanceTest.java",
+      file: "run/workhorse/dashboard/DashboardConformanceTest.java",
       test: "answersEverySharedExchangeAndReportsThePoliciesBehindAQueue",
     },
     ruby: {
@@ -1437,7 +1437,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Worker concurrency",
     jvm: {
       value: "1",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private int concurrency = 1;",
     },
     rust: { value: "1", file: "rust/src/worker/mod.rs", pattern: "concurrency: 1," },
@@ -1462,7 +1462,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Lease duration",
     jvm: {
       value: "30,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long leaseMs = 30_000;",
     },
     rust: {
@@ -1495,7 +1495,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Heartbeat interval",
     jvm: {
       value: "Lease duration / 3",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "Math.max(100, leaseMs / 3)",
     },
     rust: {
@@ -1524,7 +1524,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Claim poll interval (subscription live)",
     jvm: {
       value: "5,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "NOTIFICATION_POLL_MS = 5_000",
     },
     rust: {
@@ -1557,7 +1557,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Claim poll interval (polling only)",
     jvm: {
       value: "250 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "DEFAULT_POLL_MS = 250",
     },
     rust: {
@@ -1590,7 +1590,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Empty-claim backoff ceiling",
     jvm: {
       value: "5,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "MAX_EMPTY_POLL_MS = 5_000",
     },
     rust: {
@@ -1623,7 +1623,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Maintenance tick interval",
     jvm: {
       value: "1,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long maintenanceMs = 1_000;",
     },
     rust: {
@@ -1656,7 +1656,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Maintenance routine offer interval",
     jvm: {
       value: "60,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long routineMs = 60_000;",
     },
     rust: {
@@ -1689,7 +1689,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Worker registry interval",
     jvm: {
       value: "5,000 ms",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long registryMs = 5_000;",
     },
     rust: {
@@ -1722,7 +1722,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Schedule catch-up limit",
     jvm: {
       value: "100",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private int scheduleCatchupLimit = 100;",
     },
     rust: { value: "100", file: "rust/src/worker/mod.rs", pattern: "schedule_catchup_limit: 100," },
@@ -1747,7 +1747,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Dispatch cohorts",
     jvm: {
       value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "Math.clamp((concurrency + 7) / 8, 2, 8)",
     },
     rust: {
@@ -1780,7 +1780,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Shutdown grace, then",
     jvm: {
       value: "25,000 ms, then abandon the handlers",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private long shutdownGraceMs = 25_000;",
     },
     rust: {
@@ -1813,7 +1813,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Handler retry delay override",
     jvm: {
       value: "`retryDelay`, unset",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Worker.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "private @Nullable RetryDelay retryDelay;",
     },
     rust: {
@@ -1846,7 +1846,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Queue of a handler task group add without a queue",
     jvm: {
       value: "The queue of the member task",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Queue.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
       pattern: "request.options().toBuilder().queue(task.queue()).build())",
     },
     rust: {
@@ -1879,7 +1879,7 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
     setting: "Queue of a child task request without a queue",
     jvm: {
       value: "The queue of the parent task",
-      file: "jvm/workhorse/src/main/java/dev/stablemates/workhorse/Queue.java",
+      file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
       pattern: 'input.put("queue", storedQueue == null ? parent.queue() : storedQueue);',
     },
     rust: {

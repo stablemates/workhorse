@@ -20,10 +20,10 @@ const version = "0.8.0";
 /** Every file a complete staging directory holds, without the optional checksums. */
 function stagedFiles(artifacts: readonly string[] = publishedArtifacts): string[] {
   return artifacts.flatMap((artifact) => [
-    `dev/stablemates/${artifact}/maven-metadata.xml`,
-    `dev/stablemates/${artifact}/maven-metadata.xml.sha1`,
+    `run/workhorse/${artifact}/maven-metadata.xml`,
+    `run/workhorse/${artifact}/maven-metadata.xml.sha1`,
     ...[".jar", "-sources.jar", "-javadoc.jar", ".pom", ".module"].flatMap((suffix) => {
-      const file = `dev/stablemates/${artifact}/${version}/${artifact}-${version}${suffix}`;
+      const file = `run/workhorse/${artifact}/${version}/${artifact}-${version}${suffix}`;
       return [file, `${file}.asc`, `${file}.md5`, `${file}.sha1`, `${file}.sha256`];
     }),
   ]);
@@ -35,7 +35,7 @@ function pom(
   overrides: Record<string, string> = {},
 ): string {
   const fields = {
-    groupId: "dev.stablemates",
+    groupId: "run.workhorse",
     artifactId: artifact,
     version,
     name: artifact,
@@ -155,12 +155,12 @@ describe("the staging directory", () => {
   it("refuses the API snapshot reader and every module outside the three artifacts", () => {
     const files = [
       ...stagedFiles(),
-      `dev/stablemates/api-snapshot/${version}/api-snapshot-${version}.jar`,
+      `run/workhorse/api-snapshot/${version}/api-snapshot-${version}.jar`,
       `org/example/other/1.0/other-1.0.jar`,
     ];
     expect(stagedFileProblems(files, version)).toEqual([
-      `the staging directory holds dev/stablemates/api-snapshot/${version}/api-snapshot-${version}.jar, but api-snapshot must never publish`,
-      "the staging directory holds org/example/other/1.0/other-1.0.jar, outside dev.stablemates",
+      `the staging directory holds run/workhorse/api-snapshot/${version}/api-snapshot-${version}.jar, but api-snapshot must never publish`,
+      "the staging directory holds org/example/other/1.0/other-1.0.jar, outside run.workhorse",
     ]);
   });
 
@@ -173,16 +173,16 @@ describe("the staging directory", () => {
     );
     const problems = stagedFileProblems(files, version);
     expect(problems).toContain(
-      "the staging directory holds dev/stablemates/workhorse-kotlin/0.7.1/workhorse-kotlin-0.7.1.pom, which is not version 0.8.0",
+      "the staging directory holds run/workhorse/workhorse-kotlin/0.7.1/workhorse-kotlin-0.7.1.pom, which is not version 0.8.0",
     );
     expect(problems).toContain("workhorse-kotlin 0.8.0 has no workhorse-kotlin-0.8.0.jar");
   });
 
   it("names a missing signature, checksum, or javadoc jar", () => {
     const missing = new Set([
-      "dev/stablemates/workhorse/0.8.0/workhorse-0.8.0.jar.asc",
-      "dev/stablemates/workhorse-spring-boot-starter/0.8.0/workhorse-spring-boot-starter-0.8.0.pom.md5",
-      "dev/stablemates/workhorse-kotlin/0.8.0/workhorse-kotlin-0.8.0-javadoc.jar",
+      "run/workhorse/workhorse/0.8.0/workhorse-0.8.0.jar.asc",
+      "run/workhorse/workhorse-spring-boot-starter/0.8.0/workhorse-spring-boot-starter-0.8.0.pom.md5",
+      "run/workhorse/workhorse-kotlin/0.8.0/workhorse-kotlin-0.8.0-javadoc.jar",
     ]);
     expect(
       stagedFileProblems(
@@ -199,7 +199,7 @@ describe("the staging directory", () => {
   it("leaves the maven-metadata.xml files out of the Central bundle", () => {
     const bundle = bundleFiles(stagedFiles());
     expect(bundle.some((file) => file.includes("maven-metadata.xml"))).toBe(false);
-    expect(bundle).toContain("dev/stablemates/workhorse/0.8.0/workhorse-0.8.0.jar.asc");
+    expect(bundle).toContain("run/workhorse/workhorse/0.8.0/workhorse-0.8.0.jar.asc");
   });
 });
 
@@ -225,10 +225,10 @@ describe("the published POMs", () => {
   });
 
   it("refuses a module that requires another version of the core", () => {
-    const kotlin = pom("workhorse-kotlin", dependency("dev.stablemates", "workhorse", "0.7.1"));
+    const kotlin = pom("workhorse-kotlin", dependency("run.workhorse", "workhorse", "0.7.1"));
     expect(pomProblems("workhorse-kotlin", kotlin, version)).toEqual([
-      "the workhorse-kotlin POM requires dev.stablemates:workhorse 0.7.1, not 0.8.0",
-      "the workhorse-kotlin POM requires dev.stablemates:workhorse 0.7.1",
+      "the workhorse-kotlin POM requires run.workhorse:workhorse 0.7.1, not 0.8.0",
+      "the workhorse-kotlin POM requires run.workhorse:workhorse 0.7.1",
     ]);
   });
 

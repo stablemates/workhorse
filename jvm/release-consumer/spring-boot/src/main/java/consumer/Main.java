@@ -1,13 +1,13 @@
 package consumer;
 
-import dev.stablemates.workhorse.Admin;
-import dev.stablemates.workhorse.EnqueueOptions;
-import dev.stablemates.workhorse.HandlerContext;
-import dev.stablemates.workhorse.Queue;
-import dev.stablemates.workhorse.TaskDetail;
-import dev.stablemates.workhorse.TaskHandler;
-import dev.stablemates.workhorse.TaskState;
-import dev.stablemates.workhorse.spring.WorkhorseProperties;
+import run.workhorse.Admin;
+import run.workhorse.EnqueueOptions;
+import run.workhorse.HandlerContext;
+import run.workhorse.Queue;
+import run.workhorse.TaskDetail;
+import run.workhorse.TaskHandler;
+import run.workhorse.TaskState;
+import run.workhorse.spring.WorkhorseProperties;
 import java.lang.reflect.Type;
 import java.nio.file.Path;
 import java.util.List;

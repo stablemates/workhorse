@@ -483,19 +483,19 @@ any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records th
 [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
 add the Rust, Ruby, Java, and Kotlin APIs.
 
-| Governed surface                                    | A breaking change is                                                                                                                                                                                                                                                                             | Enforced by                                                 |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                                                                                           | `sql-catalogues:check`, which classifies the change         |
-| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                                                                                                | `typescript-api:check`, against `api/typescript.txt`        |
-| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                                                                                                | `python-api:check`, against `api/python.txt`                |
-| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                                                                                       | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
-| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking.                                                                       | `rust-api:check`, against `api/rust.txt`                    |
-| Ruby API                                            | The same for code that runs rather than compiles, across the public constants under `Stablemates::Workhorse` and the Active Job adapter, with their `Data` members and method signatures. A `:nodoc:` constant is private.                                                                       | `ruby-api:check`, against `api/ruby.txt`                    |
-| Java API                                            | The same, across every public and protected declaration in an exported package of `workhorse` and `workhorse-spring-boot-starter`, with its signature and nullness. It also covers every `workhorse.*` property with its type and default. `dev.stablemates.workhorse.internal` is not exported. | `java-api:check`, against `api/java.txt`                    |
-| Kotlin API                                          | The same, across every public declaration of `workhorse-kotlin`, with its default arguments, `suspend` modifiers, and reified type parameters.                                                                                                                                                   | `kotlin-api:check`, against `api/kotlin.txt`                |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                                                                                                    | `cli-surface:check`, against `api/cli.txt`                  |
-| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                                                                                                   | `dashboard-spec:check`, which classifies the change         |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                                                                                                | `telemetry-surface:check`, against `api/telemetry.txt`      |
+| Governed surface                                    | A breaking change is                                                                                                                                                                                                                                                                 | Enforced by                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds.                                                                                               | `sql-catalogues:check`, which classifies the change         |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                                                                                                                    | `typescript-api:check`, against `api/typescript.txt`        |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                                                                                                                    | `python-api:check`, against `api/python.txt`                |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                                                                                                                           | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
+| Rust API                                            | The same, across the public items reachable from the `workhorse` crate root under any published feature, auto and derived traits included. Removing or renaming a feature, or moving an item behind one, is also breaking.                                                           | `rust-api:check`, against `api/rust.txt`                    |
+| Ruby API                                            | The same for code that runs rather than compiles, across the public constants under `Stablemates::Workhorse` and the Active Job adapter, with their `Data` members and method signatures. A `:nodoc:` constant is private.                                                           | `ruby-api:check`, against `api/ruby.txt`                    |
+| Java API                                            | The same, across every public and protected declaration in an exported package of `workhorse` and `workhorse-spring-boot-starter`, with its signature and nullness. It also covers every `workhorse.*` property with its type and default. `run.workhorse.internal` is not exported. | `java-api:check`, against `api/java.txt`                    |
+| Kotlin API                                          | The same, across every public declaration of `workhorse-kotlin`, with its default arguments, `suspend` modifiers, and reified type parameters.                                                                                                                                       | `kotlin-api:check`, against `api/kotlin.txt`                |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                                                                                        | `cli-surface:check`, against `api/cli.txt`                  |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                                                                                       | `dashboard-spec:check`, which classifies the change         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                                                                                    | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
@@ -834,8 +834,8 @@ directory:
 - `crate` resolves `workhorse = "=X.Y.Z"` from crates.io and checks the locked package ID.
 - `go` resolves the module through `proxy.golang.org` with no direct fallback and runs
   `go mod verify`.
-- `maven` builds the Java consumer of `dev.stablemates:workhorse` and the Kotlin consumer of
-  `dev.stablemates:workhorse-kotlin` from `jvm/release-consumer` against Maven Central. Each
+- `maven` builds the Java consumer of `run.workhorse:workhorse` and the Kotlin consumer of
+  `run.workhorse:workhorse-kotlin` from `jvm/release-consumer` against Maven Central. Each
   consumer runs one task in the database that `WORKHORSE_VERIFY_DATABASE_URL` names, and checks
   that it succeeded. That database must have the Workhorse schema. Each consumer prints the file
   name of the jar it loaded, which must name the version, and the id of the task.
@@ -855,7 +855,7 @@ substitutes the artifact about to ship for the registry release:
 - `--go-proxy <directory>` serves a file module proxy ahead of `proxy.golang.org`. It skips the
   checksum database for this module only, which has never seen the unpublished version, and uses a
   scratch module cache.
-- `--maven-repo <directory>` makes the consumers take `dev.stablemates` only from the staging
+- `--maven-repo <directory>` makes the consumers take `run.workhorse` only from the staging
   directory that `pnpm jvm:package-check` writes. They take every other module from Maven Central.
 
 A check the artifact cannot satisfy therefore fails the rehearsal, not the train after the tag.
@@ -1044,16 +1044,16 @@ gem.
 
 ### JVM artifacts
 
-The JVM SDK publishes three artifacts to Maven Central from `jvm/`: `dev.stablemates:workhorse`,
-`dev.stablemates:workhorse-kotlin`, and `dev.stablemates:workhorse-spring-boot-starter`
+The JVM SDK publishes three artifacts to Maven Central from `jvm/`: `run.workhorse:workhorse`,
+`run.workhorse:workhorse-kotlin`, and `run.workhorse:workhorse-spring-boot-starter`
 ([ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
 The three always carry one version. Like the crate and the gem, they have no tag of their own and
 publish from the npm `v*` tag. The stage is ready, but no version is published yet. The first
 publish waits for the maintainer steps at the end of this section.
 
-A Gradle build adds the core with `implementation("dev.stablemates:workhorse:0.8.0")`. A Maven
+A Gradle build adds the core with `implementation("run.workhorse:workhorse:0.8.0")`. A Maven
 build adds
-`<dependency><groupId>dev.stablemates</groupId><artifactId>workhorse</artifactId><version>0.8.0</version></dependency>`.
+`<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.8.0</version></dependency>`.
 For the Kotlin module or the starter, replace the artifact ID with `workhorse-kotlin` or
 `workhorse-spring-boot-starter`. `support.json` states the two commands as `install.gradle` and
 `install.maven`.
@@ -1101,8 +1101,8 @@ therefore ends the run before the GitHub release exists.
 A maintainer must do these steps before the first publish. SM-1384 records them. Nothing in this
 repository performs them.
 
-1. Register the domain `stablemates.dev`, and verify the namespace `dev.stablemates` in the Central
-   Portal with a DNS TXT record.
+1. Verify the namespace `run.workhorse` in the Central Portal with a DNS TXT record on the domain
+   `workhorse.run`.
 2. Generate a Portal user token.
 3. Generate an OpenPGP key for signing only, and publish its public key to `keyserver.ubuntu.com`
    and `keys.openpgp.org`.

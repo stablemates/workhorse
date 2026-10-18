@@ -37,7 +37,7 @@ dependencies {
   testImplementation(coreTests)
 }
 
-tasks.jar { manifest { attributes("Automatic-Module-Name" to "dev.stablemates.workhorse.kotlin") } }
+tasks.jar { manifest { attributes("Automatic-Module-Name" to "run.workhorse.kotlin") } }
 
 // A Kotlin 2.2 caller must resolve no newer standard library through this module (ADR 0103,
 // "Floors"). The check fails if the runtime class path, which holds the module's own dependencies,

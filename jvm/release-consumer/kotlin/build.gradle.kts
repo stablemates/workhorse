@@ -8,7 +8,7 @@ val workhorseVersion: String by project
 val pgjdbcVersion: String by project
 
 dependencies {
-  implementation("dev.stablemates:workhorse-kotlin:$workhorseVersion")
+  implementation("run.workhorse:workhorse-kotlin:$workhorseVersion")
   implementation("org.postgresql:postgresql:$pgjdbcVersion")
 }
 

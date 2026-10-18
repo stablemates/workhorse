@@ -355,7 +355,7 @@ category through `rust/tests/protocol_conformance.rs`, and
 `protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`.
 `ruby/spec/conformance/expected-unsupported.json` lists each fixture the Ruby SDK cannot pass yet,
 with the Issue that owns it. The JVM suite runs every `protocol/v1` fixture through
-`jvm/workhorse/src/test/java/dev/stablemates/workhorse/conformance/ProtocolConformanceTest.java`.
+`jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`.
 `jvm/workhorse/src/test/resources/conformance/expected-unsupported.json` lists each fixture that
 needs a surface of an open JVM slice, with that slice.
 
