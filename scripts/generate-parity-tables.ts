@@ -11,10 +11,12 @@ import {
   type ActiveJobParityCell,
   type ParityCell,
   type ParityDefaultRow,
+  type JvmParityCell,
   type ParityRow,
   type RubyParityCell,
   type RustParityCell,
 } from "../typescript/core/test/support/parity-capabilities.js";
+import { jvmEvidenceProblems, readJvmEvidenceState } from "./jvm-parity-evidence.js";
 import { repositoryRoot } from "./packages.js";
 import {
   activeJobEvidenceProblems,
@@ -34,7 +36,7 @@ const tables = [
 
 const productColumns = ["PostgreSQL", "Dashboard", "CLI"] as const;
 
-function status(cell: ParityCell | RustParityCell | RubyParityCell): string {
+function status(cell: ParityCell | RustParityCell | RubyParityCell | JvmParityCell): string {
   if ("absent" in cell) return "Absent";
   // Reference-style so the reader reaches the Issue; the definitions are generated below.
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
@@ -54,9 +56,14 @@ function rustCell(row: ParityRow, table: "client" | "worker" | "operator"): Rust
   throw new Error(`Rust ${table} row "${row.capability}" needs a cell`);
 }
 
+function jvmCell(row: ParityRow, table: "client" | "worker" | "operator"): JvmParityCell {
+  if (row.jvm) return row.jvm;
+  throw new Error(`JVM ${table} row "${row.capability}" needs a cell`);
+}
+
 function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
   return renderCells([
-    ["Capability", "TypeScript", "Python", "Go", "Rust", "Ruby"],
+    ["Capability", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM"],
     ...rows.map((row) => [
       row.capability,
       status(row.typescript),
@@ -64,20 +71,28 @@ function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "o
       status(row.go),
       status(rustCell(row, table)),
       status(row.ruby),
+      status(jvmCell(row, table)),
     ]),
   ]);
 }
 
 /** A default renders its value, or Absent when the language has no such setting. */
-function defaultValue(cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"]): string {
+function defaultValue(
+  cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"] | ParityDefaultRow["jvm"],
+): string {
   if (cell === undefined || "absent" in cell) return "Absent";
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
   return cell.value;
 }
 
+function jvmDefault(row: ParityDefaultRow): NonNullable<ParityDefaultRow["jvm"]> {
+  if (row.jvm) return row.jvm;
+  throw new Error(`JVM default "${row.setting}" needs a cell`);
+}
+
 function renderDefaultsTable(): string {
   return renderCells([
-    ["Setting", "TypeScript", "Python", "Go", "Rust", "Ruby"],
+    ["Setting", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM"],
     ...PARITY_DEFAULT_ROWS.map((row) => [
       row.setting,
       defaultValue(row.typescript),
@@ -85,6 +100,7 @@ function renderDefaultsTable(): string {
       defaultValue(row.go),
       defaultValue(row.rust ?? { planned: "SM-878" }),
       defaultValue(row.ruby),
+      defaultValue(jvmDefault(row)),
     ]),
   ]);
 }
@@ -158,6 +174,15 @@ if (rubyProblems.length > 0) {
   throw new Error(`Ruby parity cells lack executed evidence:\n${rubyProblems.join("\n")}`);
 }
 
+// Both modes refuse a JVM row without a cell, and a JVM Supported cell the JVM suite does not back.
+const jvmProblems = jvmEvidenceProblems(
+  tables.flatMap(([, rows]) => rows),
+  readJvmEvidenceState(repositoryRoot),
+);
+if (jvmProblems.length > 0) {
+  throw new Error(`JVM parity cells lack executed evidence:\n${jvmProblems.join("\n")}`);
+}
+
 const current = await readFile(documentPath, "utf8");
 const generatedLanguages = tables.reduce(
   (document, [name, rows]) => replaceGeneratedTable(document, name, rows, name),
@@ -197,11 +222,22 @@ const plannedItems = [
   ...new Set(
     [
       ...tables.flatMap(([name, rows]) =>
-        rows.flatMap((row) => [row.typescript, row.python, row.go, rustCell(row, name), row.ruby]),
+        rows.flatMap((row) => [
+          row.typescript,
+          row.python,
+          row.go,
+          rustCell(row, name),
+          row.ruby,
+          jvmCell(row, name),
+        ]),
       ),
       ...ACTIVE_JOB_PARITY_ROWS.flatMap((row) => [row.defaultJob, row.typedJob]),
       ...PRODUCT_PARITY_ROWS.flatMap((row) => [row.postgresql, row.dashboard, row.cli]),
-      ...PARITY_DEFAULT_ROWS.flatMap((row) => [row.rust ?? { planned: "SM-878" }, row.ruby]),
+      ...PARITY_DEFAULT_ROWS.flatMap((row) => [
+        row.rust ?? { planned: "SM-878" },
+        row.ruby,
+        jvmDefault(row),
+      ]),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();

@@ -314,7 +314,8 @@
           "python": "CheckpointConflictError",
           "go": "CheckpointConflictError",
           "rust": "CheckpointConflictError",
-          "ruby": "Stablemates::Workhorse::ConflictError"
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
         }
       },
       {
@@ -327,7 +328,8 @@
           "python": "WaitConflictError",
           "go": "WaitConflictError",
           "rust": "WaitConflictError",
-          "ruby": "Stablemates::Workhorse::ConflictError"
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
         }
       },
       {
@@ -340,7 +342,8 @@
           "python": "ChildConflictError",
           "go": "ChildConflictError",
           "rust": "ChildConflictError",
-          "ruby": "Stablemates::Workhorse::ConflictError"
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
         }
       },
       {
@@ -353,7 +356,8 @@
           "python": "ChildConflictError",
           "go": "ChildConflictError",
           "rust": "ChildConflictError",
-          "ruby": "Stablemates::Workhorse::ConflictError"
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
         }
       },
       {
@@ -366,7 +370,8 @@
           "python": "HumanWaitConflictError",
           "go": "HumanWaitConflictError",
           "rust": "HumanWaitConflictError",
-          "ruby": "Stablemates::Workhorse::ConflictError"
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
         }
       },
       {
@@ -379,7 +384,8 @@
           "python": "ChildLimitExceededError",
           "go": "ChildLimitExceededError",
           "rust": "Error",
-          "ruby": "Stablemates::Workhorse::LimitExceededError"
+          "ruby": "Stablemates::Workhorse::LimitExceededError",
+          "java": "LimitExceededException"
         }
       },
       {
@@ -392,7 +398,8 @@
           "python": "SignalWaitConflictError",
           "go": "SignalWaitConflictError",
           "rust": "Error",
-          "ruby": "Stablemates::Workhorse::AlreadyWaitingError"
+          "ruby": "Stablemates::Workhorse::AlreadyWaitingError",
+          "java": "AlreadyWaitingException"
         }
       },
       {
@@ -405,7 +412,8 @@
           "python": "Exception",
           "go": "Error",
           "rust": "Error",
-          "ruby": "StandardError"
+          "ruby": "StandardError",
+          "java": "Exception"
         }
       },
       {
@@ -418,7 +426,8 @@
           "python": "RedactedTaskError",
           "go": "RedactedTaskError",
           "rust": "RedactedTaskError",
-          "ruby": "RedactedTaskError"
+          "ruby": "RedactedTaskError",
+          "java": "RedactedTaskError"
         }
       }
     ]
@@ -438,7 +447,8 @@
       "python": "TaskValueSizeLimitError",
       "go": "TaskValueSizeLimitError",
       "rust": "TaskValueSizeLimitError",
-      "ruby": "Stablemates::Workhorse::ValueSizeLimitError"
+      "ruby": "Stablemates::Workhorse::ValueSizeLimitError",
+      "java": "ValueSizeLimitException"
     },
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },
@@ -475,7 +485,8 @@
       "python": "drain",
       "go": "cancel",
       "rust": "cancel",
-      "ruby": "cancel"
+      "ruby": "cancel",
+      "java": "cancel"
     },
     "expectedCancelled": {
       "state": "ready",
@@ -498,7 +509,8 @@
       "python": "drain",
       "go": "cancel",
       "rust": "cancel",
-      "ruby": "cancel"
+      "ruby": "cancel",
+      "java": "cancel"
     },
     "expectedCancelled": {
       "state": "succeeded",
