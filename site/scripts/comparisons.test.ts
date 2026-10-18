@@ -1,10 +1,13 @@
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
 import {
+  type ComparisonProduct,
+  type ComparisonRow,
   cellText,
   comparisons,
   hubCategories,
@@ -58,10 +61,80 @@ const forbiddenPhrases = [
 ];
 
 type Cell = Record<string, unknown>;
+type CompetitorCell = ComparisonProduct["cells"][string];
 
 /** The values that occur more than once. */
 const duplicates = (values: readonly string[]) =>
   values.filter((value, index) => values.indexOf(value) !== index);
+
+/** The own rows that every product of the workflow platform category states. */
+const workflowCategory = "workflow-platform";
+const workflowRows = ["deterministic-replay", "child-workflows", "code-versioning"];
+
+/** The fields of an own row that every product with that row id must state the same way. */
+const sharedRowFields = ["label", "group", "kind", "workhorse"] as const;
+
+/** The part of a product that the own row checks read. */
+interface OwnRowProduct {
+  readonly slug: string;
+  readonly category?: string;
+  readonly rows?: readonly ComparisonRow[];
+}
+
+/**
+ * The problems with own rows that two or more products share. Each product
+ * page shows the label and the Workhorse cell of its own copy, so two copies
+ * that differ make two pages disagree about Workhorse.
+ */
+function sharedRowErrors(products: readonly OwnRowProduct[]): string[] {
+  const first = new Map<string, { readonly slug: string; readonly row: ComparisonRow }>();
+  const errors: string[] = [];
+  for (const product of products) {
+    for (const row of product.rows ?? []) {
+      const earlier = first.get(row.id);
+      if (!earlier) {
+        first.set(row.id, { slug: product.slug, row });
+        continue;
+      }
+      for (const field of sharedRowFields) {
+        if (!isDeepStrictEqual(row[field], earlier.row[field])) {
+          errors.push(
+            `${product.slug}.${row.id}: the ${field} differs from ${earlier.slug}.${row.id}`,
+          );
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+/** The workflow rows that a product of the workflow platform category does not state. */
+function workflowRowErrors(products: readonly OwnRowProduct[]): string[] {
+  return products
+    .filter((product) => product.category === workflowCategory)
+    .flatMap((product) => {
+      const ids = new Set((product.rows ?? []).map((row) => row.id));
+      return workflowRows
+        .filter((id) => !ids.has(id))
+        .map((id) => `${product.slug}: the workflow row "${id}" is missing`);
+    });
+}
+
+/**
+ * The OpenTelemetry cells that break the status rule of ADR 0104. A product
+ * with traces only is "Partial", and its note starts with "Traces only.".
+ */
+function telemetryNoteErrors(
+  products: readonly Pick<ComparisonProduct, "slug" | "cells">[],
+): string[] {
+  return products.flatMap((product) => {
+    const cell = product.cells.opentelemetry;
+    if (!cell || !("status" in cell) || cell.status !== "Partial") return [];
+    return cell.note?.startsWith("Traces only.")
+      ? []
+      : [`${product.slug}.opentelemetry: a Partial note does not start with "Traces only."`];
+  });
+}
 
 /** The problems with one competitor cell, each prefixed with `where`. */
 function competitorCellErrors(
@@ -447,6 +520,108 @@ describe("the comparison data", () => {
         .filter((category) => !comparisons.products.some((p) => p.category === category.id))
         .map((category) => category.id),
     ).toEqual([]);
+  });
+
+  it("rejects a shared own row whose label, group, kind, or Workhorse cell differs", () => {
+    const row: ComparisonRow = {
+      id: "child-workflows",
+      group: "model",
+      label: "Child workflows",
+      kind: "status",
+      workhorse: {
+        status: "Supported",
+        feature: { doc: "docs/features.md", row: "Child workflows" },
+      },
+    };
+    const pair = (copy: ComparisonRow) => [
+      { slug: "first", rows: [row] },
+      { slug: "second", rows: [copy] },
+    ];
+    expect(sharedRowErrors(pair({ ...row }))).toEqual([]);
+    const changes: readonly [Partial<ComparisonRow>, string][] = [
+      [{ label: "Sub-workflows" }, "label"],
+      [{ group: "operations" }, "group"],
+      [{ kind: "text" }, "kind"],
+      [{ workhorse: { ...row.workhorse, status: "Partial" } }, "workhorse"],
+      [{ workhorse: { ...row.workhorse, note: "Only one level." } }, "workhorse"],
+    ];
+    for (const [change, field] of changes) {
+      expect(sharedRowErrors(pair({ ...row, ...change }))).toEqual([
+        `second.child-workflows: the ${field} differs from first.child-workflows`,
+      ]);
+    }
+    // Two products that each own a different row share nothing.
+    expect(
+      sharedRowErrors([
+        { slug: "first", rows: [row] },
+        { slug: "second", rows: [{ ...row, id: "task-groups", label: "Task groups" }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("rejects a workflow platform without the three workflow rows", () => {
+    // This test lists the IDs separately, so a shorter `workflowRows` fails this test.
+    const ids = ["deterministic-replay", "child-workflows", "code-versioning"];
+    const rows = ids.map((id): ComparisonRow => ({
+      id,
+      group: "model",
+      label: id,
+      kind: "status",
+      workhorse: { status: "Supported", feature: { doc: "docs/features.md", row: id } },
+    }));
+    expect(workflowRowErrors([{ slug: "flow", category: workflowCategory, rows }])).toEqual([]);
+    for (const missing of ids) {
+      const rest = rows.filter((row) => row.id !== missing);
+      expect(workflowRowErrors([{ slug: "flow", category: workflowCategory, rows: rest }])).toEqual(
+        [`flow: the workflow row "${missing}" is missing`],
+      );
+    }
+    expect(workflowRowErrors([{ slug: "flow", category: workflowCategory }])).toEqual(
+      ids.map((id) => `flow: the workflow row "${id}" is missing`),
+    );
+    // A product of another category needs none of them.
+    expect(workflowRowErrors([{ slug: "queue", category: "database-queue" }])).toEqual([]);
+  });
+
+  it("states each shared own row the same way, and the workflow rows on every workflow platform", () => {
+    expect(sharedRowErrors(comparisons.products)).toEqual([]);
+    expect(workflowRowErrors(comparisons.products)).toEqual([]);
+    expect(comparisons.products.some((product) => product.category === workflowCategory)).toBe(
+      true,
+    );
+  });
+
+  it('starts the note of each Partial OpenTelemetry cell with "Traces only."', () => {
+    const cell: CompetitorCell = {
+      status: "Partial",
+      note: "Traces only. A middleware exports spans.",
+      source: "https://github.com/owner/repo/blob/v1.2.3/README.md",
+      version: "1.2.3",
+      evidence: "spans",
+    };
+    /** One product whose OpenTelemetry cell is `cell` with `change` applied. */
+    const product = (change: { readonly status?: "Supported"; readonly note?: string }) => [
+      { slug: "example", cells: { opentelemetry: { ...cell, ...change } } },
+    ];
+    expect(telemetryNoteErrors(product({}))).toEqual([]);
+    const error = 'example.opentelemetry: a Partial note does not start with "Traces only."';
+    for (const note of ["Spans only.", "It has traces only.", "", undefined]) {
+      expect(telemetryNoteErrors(product({ note }))).toEqual([error]);
+    }
+    // The rule is for Partial cells only.
+    expect(
+      telemetryNoteErrors(product({ status: "Supported", note: "Traces and metrics." })),
+    ).toEqual([]);
+
+    expect(telemetryNoteErrors(comparisons.products)).toEqual([]);
+    expect(
+      comparisons.products.some(
+        (entry) =>
+          entry.cells.opentelemetry !== undefined &&
+          "status" in entry.cells.opentelemetry &&
+          entry.cells.opentelemetry.status === "Partial",
+      ),
+    ).toBe(true);
   });
 
   it("states each Workhorse status as docs/features.md or docs/parity.md states it", async () => {
