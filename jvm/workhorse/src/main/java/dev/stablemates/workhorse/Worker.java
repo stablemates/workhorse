@@ -1,0 +1,2437 @@
+package dev.stablemates.workhorse;
+
+import dev.stablemates.workhorse.internal.ContractSchema;
+import dev.stablemates.workhorse.internal.Heartbeat;
+import dev.stablemates.workhorse.internal.Json;
+import dev.stablemates.workhorse.internal.JsonbSize;
+import dev.stablemates.workhorse.internal.Listener;
+import dev.stablemates.workhorse.internal.PgjdbcVersion;
+import dev.stablemates.workhorse.internal.Row;
+import dev.stablemates.workhorse.internal.Sql;
+import dev.stablemates.workhorse.internal.SqlCatalogue;
+import dev.stablemates.workhorse.internal.Values;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.lang.reflect.Type;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+import java.util.regex.Pattern;
+import javax.sql.DataSource;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Claims tasks from PostgreSQL and runs their handlers under renewed leases. The counterpart of
+ * Ruby's {@code Stablemates::Workhorse::Worker} (ADR 0103, "Worker surface").
+ *
+ * <p>Each handler runs on its own virtual thread, or on the caller's {@link ExecutorService}. A
+ * semaphore with {@link #concurrency} permits bounds the claimed tasks. Every write an attempt
+ * makes carries its fence token, so an attempt that lost its lease cannot change the task.
+ *
+ * <p>{@link #run} blocks until {@link #stop}. A stopping worker claims nothing new and waits up to
+ * {@code shutdownGrace} for running handlers. It then cancels the rest with {@link
+ * CancellationReason#SHUTDOWN}, interrupts their threads, and gives them one short unwind window.
+ * If a handler still runs after that window, {@code run} throws {@link
+ * ShutdownIncompleteException}. A handler that stops for the shutdown, by a {@link
+ * CancelledException} with that reason or by an {@link InterruptedException}, returns its task to
+ * the queue without charging the attempt.
+ *
+ * <p>The worker installs no JVM shutdown hook and traps no signal. The process owner calls {@link
+ * #stop} or {@link #close}, or calls {@link WorkerProcess#runWorkerProcess}.
+ */
+public final class Worker implements AutoCloseable {
+  private static final long MAX_EMPTY_POLL_MS = 5_000;
+  private static final long NOTIFICATION_POLL_MS = 5_000;
+  private static final long DEFAULT_POLL_MS = 250;
+  private static final long NOTIFICATION_CLAIM_DELAY_MS = 50;
+  private static final long UNWIND_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
+  private static final long IDLE_CHECK_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+  private static final long EXPIRATION_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
+  private static final long DEREGISTER_NANOS = TimeUnit.SECONDS.toNanos(1);
+  private static final long NEVER = Long.MIN_VALUE;
+  private static final int MAX_RETRY_DELAY_MS = Integer.MAX_VALUE;
+  private static final int CAUSE_DEPTH = 16;
+  private static final String REDACTED_NAME = "RedactedTaskError";
+  private static final String REDACTED_MESSAGE = "Task handler failed; details redacted";
+  private static final String GENERIC_NAME = "Exception";
+  private static final String LANGUAGE = "java";
+  private static final List<String> FORBIDDEN_NAME_CHARACTERS = List.of("*", ".", "<", " ");
+  private static final Pattern EXPONENT_NUMBER = Pattern.compile("\\d[eE]");
+
+  /** How the worker settled one attempt. The first submission wins. */
+  private enum Outcome {
+    COMPLETED,
+    FAILED,
+    RETRY,
+    LEASE_EXPIRED,
+    RELEASED,
+    DEADLINE_EXCEEDED,
+    ATTEMPT_TIMEOUT,
+    CANCELLED
+  }
+
+  private final DataSource dataSource;
+  private final ConnectionSource connections;
+  private final Queue queue;
+  private final List<String> queueNames;
+  private final String workerId;
+  private final int concurrency;
+  private final int refillBatch;
+  private final @Nullable ExecutorService executor;
+  private final long leaseMs;
+  private final long heartbeatMs;
+  private final long pollMs;
+  private final long notificationPollMs;
+  private final boolean pollingOnly;
+  private final long maintenanceMs;
+  private final long routineMs;
+  private final long registryMs;
+  private final List<String> scheduleNamespaces;
+  private final int scheduleCatchupLimit;
+  private final long shutdownGraceNanos;
+  private final @Nullable RetryDelay retryDelay;
+  private final @Nullable Consumer<Throwable> onRegistrationError;
+  private final @Nullable Consumer<Throwable> onNotificationError;
+  private final System.Logger logger;
+  private final JsonCodec codec;
+  private final Map<String, Registration> handlers;
+  private final Heartbeat heartbeat;
+  private final @Nullable String sdkVersion;
+  private final String hostname;
+
+  private final Semaphore permits;
+  private final Wake wake = new Wake();
+  private final AtomicLong stopVersion = new AtomicLong();
+  private final AtomicBoolean locallyPaused = new AtomicBoolean();
+  private final AtomicBoolean remotelyPaused = new AtomicBoolean();
+  private final AtomicBoolean notified = new AtomicBoolean();
+  private final AtomicBoolean registered = new AtomicBoolean();
+  private final AtomicLong nextQueueIndex = new AtomicLong();
+  private final AtomicLong lastMaintenanceAt = new AtomicLong(NEVER);
+  private final AtomicLong lastRoutineAt = new AtomicLong(NEVER);
+  // Each attempt is its own element: a retry of the same task can run beside an attempt that
+  // still unwinds, so a task ID does not identify one attempt.
+  private final Set<Active> active = ConcurrentHashMap.newKeySet();
+  private final Map<List<String>, ContractSchema> resultContracts = new ConcurrentHashMap<>();
+  private final ReentrantLock runLock = new ReentrantLock();
+  private final AtomicReference<@Nullable Thread> started = new AtomicReference<>();
+  private final AtomicReference<@Nullable Throwable> startedFailure = new AtomicReference<>();
+  private volatile long lastRegistryAt = NEVER;
+
+  /** The end of the shutdown grace of the current stop, or {@link #NEVER} before a stop. */
+  private final AtomicLong stopDeadline = new AtomicLong(NEVER);
+
+  /** Counts runs, so a registry write of an earlier run never reaches a later one. */
+  private final AtomicLong generation = new AtomicLong();
+
+  /**
+   * The latest registry write. Each write waits for the one before it, so they keep their order.
+   */
+  private final AtomicReference<@Nullable Thread> registryWrite = new AtomicReference<>();
+
+  private final ReentrantLock registryLock = new ReentrantLock();
+
+  /**
+   * A test hook that runs between the stop check and the deadline reset at the start of a run. A
+   * test holds the run there and calls {@link #stop} to reach the race of that window. It is {@code
+   * null} in production, and no public API sets it.
+   */
+  volatile @Nullable Runnable beforeDeadlineReset;
+
+  private volatile UUID instanceId = UUID.randomUUID();
+  private volatile boolean draining;
+
+  private Worker(Builder builder) {
+    PgjdbcVersion.require();
+    this.dataSource = builder.dataSource;
+    this.connections = ConnectionSource.of(dataSource);
+    this.queueNames = builder.queues;
+    this.workerId =
+        builder.workerId != null
+            ? builder.workerId
+            : localHostname()
+                + "-"
+                + ProcessHandle.current().pid()
+                + "-"
+                + HexFormat.of().formatHex(randomBytes(4));
+    this.concurrency = builder.concurrency;
+    // A claim waits for a quarter of the slots, so at most four claims are in flight.
+    this.refillBatch = (concurrency + 3) / 4;
+    this.executor = builder.executor;
+    this.leaseMs = builder.leaseMs;
+    this.heartbeatMs =
+        builder.heartbeatMs != null ? builder.heartbeatMs : Math.max(100, leaseMs / 3);
+    if (heartbeatMs >= leaseMs) {
+      throw new IllegalArgumentException("heartbeat must be positive and less than lease");
+    }
+    this.pollMs = builder.pollMs != null ? builder.pollMs : DEFAULT_POLL_MS;
+    this.notificationPollMs = builder.pollMs != null ? builder.pollMs : NOTIFICATION_POLL_MS;
+    this.pollingOnly = builder.pollingOnly;
+    this.maintenanceMs = builder.maintenanceMs;
+    this.routineMs = builder.routineMs;
+    this.registryMs = builder.disableRegistry ? 0 : builder.registryMs;
+    this.scheduleNamespaces = builder.scheduleNamespaces;
+    this.scheduleCatchupLimit = builder.scheduleCatchupLimit;
+    this.shutdownGraceNanos = TimeUnit.MILLISECONDS.toNanos(builder.shutdownGraceMs);
+    this.retryDelay = builder.retryDelay;
+    this.onRegistrationError = builder.onRegistrationError;
+    this.onNotificationError = builder.onNotificationError;
+    this.logger = builder.logger;
+    this.codec = builder.codec;
+    this.handlers = Map.copyOf(builder.handlers);
+    this.queue =
+        new Queue(
+            connections,
+            QueueOptions.builder().defaultQueue(queueNames.get(0)).codec(codec).build());
+    this.heartbeat =
+        builder.sharedHeartbeats
+            ? Heartbeat.borrowing(dataSource)
+            : Heartbeat.dedicated(dataSource);
+    this.permits = new Semaphore(concurrency);
+    this.sdkVersion = Worker.class.getPackage().getImplementationVersion();
+    this.hostname = localHostname();
+  }
+
+  /**
+   * A builder for a worker that claims through {@code dataSource}.
+   *
+   * <p>Each claim and each other statement borrows a connection for its own duration. Every worker
+   * on one {@code DataSource} shares one dedicated heartbeat connection, and each worker holds one
+   * listener connection while it runs. So the pool needs two held connections plus one for each
+   * claim in flight.
+   */
+  public static Builder builder(DataSource dataSource) {
+    return new Builder(dataSource);
+  }
+
+  /** The worker's ID in the fleet registry. */
+  public String workerId() {
+    return workerId;
+  }
+
+  /** The queues this worker claims from, in claim order. */
+  public List<String> queues() {
+    return queueNames;
+  }
+
+  /** The most tasks this worker runs at once. */
+  public int concurrency() {
+    return concurrency;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Lifecycle
+
+  /**
+   * Claims and runs tasks until {@link #stop}, then drains.
+   *
+   * @throws ShutdownIncompleteException if a handler still runs after the drain
+   * @throws WorkhorseException for the first error that ended the run
+   */
+  public void run() {
+    runFrom(stopVersion.get());
+  }
+
+  /**
+   * Claims and runs tasks until a claim finds no handled task, then drains. It opens no listener
+   * and does no startup maintenance pass.
+   *
+   * @return whether a handled task ran
+   */
+  public boolean runOnce() {
+    long version = stopVersion.get();
+    runLock.lock();
+    try {
+      return runLoop(false, version);
+    } finally {
+      runLock.unlock();
+    }
+  }
+
+  /**
+   * Runs {@link #run} on a worker-owned platform thread, and returns at once.
+   *
+   * @throws IllegalStateException if the worker already runs on its own thread
+   */
+  public void start() {
+    long version = stopVersion.get();
+    Thread thread =
+        new Thread(
+            () -> {
+              try {
+                runFrom(version);
+              } catch (Throwable error) {
+                startedFailure.set(error);
+              }
+            },
+            "workhorse-worker-" + workerId);
+    Thread previous = started.get();
+    if ((previous != null && previous.isAlive()) || !started.compareAndSet(previous, thread)) {
+      throw new IllegalStateException("the worker already runs on its own thread");
+    }
+    startedFailure.set(null);
+    thread.start();
+  }
+
+  /** Ends claiming. A running {@link #run} drains its handlers and returns. */
+  public void stop() {
+    long deadline = System.nanoTime() + shutdownGraceNanos;
+    stopDeadline.accumulateAndGet(deadline, (current, next) -> current == NEVER ? next : current);
+    stopVersion.incrementAndGet();
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.worker.stop_requested",
+        "Worker stop requested",
+        Map.of("workhorse.worker.active_slots", active.size()));
+    wakeDispatcher();
+  }
+
+  /**
+   * Stops the worker and waits for the drain. If the worker ran through {@link #start} and its run
+   * failed, this method throws that failure.
+   */
+  @Override
+  public void close() {
+    stop();
+    Thread thread = started.get();
+    if (thread != null && !thread.equals(Thread.currentThread())) {
+      boolean interrupted = false;
+      while (true) {
+        try {
+          thread.join();
+          break;
+        } catch (InterruptedException error) {
+          interrupted = true;
+        }
+      }
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    // Waits for a run on another thread to finish its drain.
+    runLock.lock();
+    try {
+      // Nothing to do while the lock is held.
+    } finally {
+      runLock.unlock();
+    }
+    Throwable failure = startedFailure.getAndSet(null);
+    if (failure instanceof RuntimeException runtime) {
+      throw runtime;
+    }
+    if (failure instanceof Error error) {
+      throw error;
+    }
+  }
+
+  /** Starts no claim until {@link #resume}. Running handlers continue. */
+  public void pause() {
+    locallyPaused.set(true);
+    log(System.Logger.Level.INFO, "workhorse.worker.paused", "Worker paused locally", Map.of());
+    wakeDispatcher();
+  }
+
+  /** Ends a local pause. An operator's remote pause stays. */
+  public void resume() {
+    locallyPaused.set(false);
+    log(System.Logger.Level.INFO, "workhorse.worker.resumed", "Worker resumed locally", Map.of());
+    wakeDispatcher();
+  }
+
+  /** Whether this worker or an operator paused it. */
+  public boolean isPaused() {
+    return locallyPaused.get() || remotelyPaused.get();
+  }
+
+  /** The stop version that {@link #runFrom} compares with. {@link WorkerProcess} reads it. */
+  long stopVersion() {
+    return stopVersion.get();
+  }
+
+  /**
+   * Runs until a {@link #stop} issued after {@code version} was read. The process helper reads the
+   * version before it registers its hook, so a signal that arrives before the loop starts still
+   * stops it.
+   */
+  void runFrom(long version) {
+    runLock.lock();
+    try {
+      runLoop(true, version);
+    } finally {
+      runLock.unlock();
+    }
+  }
+
+  private boolean stopRequested(long version) {
+    return stopVersion.get() != version;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Run loop
+
+  /** The state of one run that handler and claim threads share with the dispatch loop. */
+  private static final class RunState {
+    final long version;
+    final List<Throwable> errors = new CopyOnWriteArrayList<>();
+    final List<RuntimeException> maintenanceErrors = new CopyOnWriteArrayList<>();
+    final ConcurrentLinkedQueue<ClaimResult> results = new ConcurrentLinkedQueue<>();
+
+    /** False once the stop abandons claims in flight. A late claim then releases its permits. */
+    final AtomicBoolean claimsOpen = new AtomicBoolean(true);
+
+    final long generation;
+
+    @Nullable Thread maintenance;
+
+    /**
+     * The end of the shutdown grace, a {@link System#nanoTime} value. The run loop sets it when it
+     * stops claiming, and every later step of the stop waits until it at most.
+     */
+    long deadline;
+
+    RunState(long version, long generation) {
+      this.version = version;
+      this.generation = generation;
+    }
+  }
+
+  /** What one claim returned. */
+  private record ClaimResult(
+      int limit, List<Claimed> claimed, long wakeVersion, @Nullable RuntimeException error) {}
+
+  /** One claimed task with its payload text and the monotonic time its claim left. */
+  private record Claimed(ClaimedTask task, String payload, long startedAt) {}
+
+  /**
+   * An empty-claim wait. A {@code null} version marks a release wait, which a wake does not end.
+   */
+  private record EmptyWait(long deadline, @Nullable Long version) {}
+
+  private boolean runLoop(boolean continuous, long version) {
+    try {
+      return runLoopOnce(continuous, version);
+    } finally {
+      // The deadline belongs to this run's stop. Without the reset, a stop that reaches the next
+      // run before its stop check would keep this run's expired deadline.
+      stopDeadline.set(NEVER);
+    }
+  }
+
+  private boolean runLoopOnce(boolean continuous, long version) {
+    if (!stopRequested(version)) {
+      Runnable hook = beforeDeadlineReset;
+      if (hook != null) {
+        hook.run();
+      }
+      stopDeadline.set(NEVER);
+    }
+    RunState run = new RunState(version, generation.incrementAndGet());
+    // Every step before the claims waits only until the stop deadline, so a stalled statement
+    // cannot keep a stop from its drain.
+    if (!step(queue::assertCompatible, run, "compatibility check")) {
+      return false;
+    }
+    instanceId = UUID.randomUUID();
+    registered.set(false);
+    draining = false;
+    Listener listener = null;
+    boolean claimedAny;
+    int abandoned;
+    try {
+      if (continuous && !pollingOnly) {
+        Consumer<Throwable> errors = onNotificationError;
+        listener =
+            Listener.start(
+                dataSource,
+                queueNames,
+                this::notifyWake,
+                error -> {
+                  if (errors != null) {
+                    errors.accept(error);
+                  }
+                });
+      }
+      step(
+          () -> joinQuietly(registryStep(() -> refreshRegistration(true, run.generation))),
+          run,
+          "registration");
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.worker.started",
+          "Worker started",
+          Map.of(
+              "workhorse.worker.concurrency", concurrency, "workhorse.worker.queues", queueNames));
+      if (continuous && !stopRequested(version)) {
+        // ADR 0078: a long-running worker starts its first claim beside its startup maintenance.
+        startMaintenance(run);
+      }
+      claimedAny = dispatch(continuous, run, listener);
+    } finally {
+      if (run.deadline == 0) {
+        run.deadline = shutdownDeadline(run);
+      }
+      Thread maintenance = run.maintenance;
+      if (maintenance != null) {
+        joinUntil(maintenance, run.deadline, "maintenance");
+      }
+      if (listener != null) {
+        listener.close(run.deadline);
+      }
+      draining = true;
+      joinUntil(
+          registryStep(() -> refreshRegistration(true, run.generation)),
+          run.deadline,
+          "draining registration");
+      abandoned = drain(run.deadline);
+      // The deregistration waits for the draining registration, so a late registration cannot
+      // recreate the row of a stopped worker.
+      joinUntil(
+          registryStep(() -> deregister(run.generation)),
+          System.nanoTime() + DEREGISTER_NANOS,
+          "deregistration");
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.worker.stopped",
+          "Worker stopped",
+          Map.of("workhorse.worker.active_slots", abandoned));
+    }
+    if (abandoned > 0) {
+      throw new ShutdownIncompleteException(abandoned);
+    }
+    if (!run.maintenanceErrors.isEmpty()) {
+      throw run.maintenanceErrors.get(0);
+    }
+    if (!run.errors.isEmpty()) {
+      throw unchecked(run.errors.get(0));
+    }
+    return claimedAny;
+  }
+
+  /**
+   * Keeps the slots full without one serial claim round trip for each task (ADR 0076). A claim
+   * reserves the permits it asks for, so claimed tasks never exceed the concurrency. With no claim
+   * in flight, any free slot starts one. While one is in flight, another starts only once the free
+   * slots reach the refill batch, so a busy worker claims in batches.
+   */
+  private boolean dispatch(boolean continuous, RunState run, @Nullable Listener listener) {
+    int inFlight = 0;
+    int empty = 0;
+    EmptyWait emptyWait = null;
+    boolean passEnded = false;
+    boolean claimedAny = false;
+    RuntimeException claimError = null;
+    try {
+      while (true) {
+        wake.reset();
+        ClaimResult result;
+        while ((result = run.results.poll()) != null) {
+          inFlight--;
+          Progress progress = settleClaim(result, run, empty, emptyWait, listener);
+          empty = progress.empty;
+          emptyWait = progress.emptyWait;
+          passEnded |= progress.passEnded;
+          claimedAny |= progress.claimedAny;
+          if (progress.error != null && claimError == null) {
+            claimError = progress.error;
+          }
+        }
+        refreshRegistrationIfDue(run);
+        if (stopRequested(run.version)
+            || !run.errors.isEmpty()
+            || claimError != null
+            || !run.maintenanceErrors.isEmpty()) {
+          break;
+        }
+        if (!continuous && passEnded) {
+          break;
+        }
+        if (isPaused()) {
+          if (!continuous) {
+            break;
+          }
+          // A pause ends the empty wait, so a resume claims at once.
+          emptyWait = null;
+          wake.await(dispatchWait(empty, listener));
+          continue;
+        }
+        if (emptyWait != null) {
+          long remaining = emptyWait.deadline - System.nanoTime();
+          Long seen = emptyWait.version;
+          if (remaining <= 0 || (seen != null && seen != wake.version())) {
+            emptyWait = null;
+          } else {
+            wake.await(remaining);
+          }
+          continue;
+        }
+        if (claimable(inFlight)) {
+          if (continuous) {
+            startMaintenance(run);
+          } else {
+            if (!step(() -> maintenanceStep(run), run, "maintenance")) {
+              break;
+            }
+          }
+          while (claimable(inFlight)) {
+            int limit = permits.availablePermits();
+            if (!permits.tryAcquire(limit)) {
+              break;
+            }
+            inFlight++;
+            startClaim(limit, wake.version(), empty > 0, run);
+          }
+        }
+        wake.await(dispatchWait(empty, listener));
+      }
+    } finally {
+      run.deadline = shutdownDeadline(run);
+      // Tasks that an in-flight claim returns hold leases, so they run before the drain. The wait
+      // ends at the shutdown deadline, but it lasts one unwind window at least, so a zero grace
+      // still takes a claim that is about to return. A claim that returns later is not run: its
+      // leases expire, and recovery returns its tasks to the queue.
+      long now = System.nanoTime();
+      long claimDeadline = now + Math.max(run.deadline - now, UNWIND_WINDOW_NANOS);
+      while (inFlight > 0) {
+        ClaimResult result = run.results.poll();
+        if (result == null) {
+          long remaining = claimDeadline - System.nanoTime();
+          if (remaining <= 0) {
+            log(
+                System.Logger.Level.WARNING,
+                "workhorse.worker.claims_abandoned",
+                "Claims still in flight at the shutdown deadline were abandoned",
+                Map.of("workhorse.worker.claims", inFlight));
+            run.claimsOpen.set(false);
+            releaseLateClaims(run);
+            break;
+          }
+          wake.reset();
+          if (run.results.isEmpty()) {
+            wake.await(Math.min(remaining, IDLE_CHECK_NANOS));
+          }
+          continue;
+        }
+        inFlight--;
+        Progress progress = settleClaim(result, run, empty, emptyWait, listener);
+        claimedAny |= progress.claimedAny;
+        if (progress.error != null && claimError == null) {
+          claimError = progress.error;
+        }
+      }
+    }
+    if (claimError != null) {
+      throw claimError;
+    }
+    return claimedAny;
+  }
+
+  private boolean claimable(int inFlight) {
+    int free = permits.availablePermits();
+    return free > 0 && (inFlight == 0 || free >= refillBatch);
+  }
+
+  /** The dispatch state that one returned claim changes. */
+  private record Progress(
+      int empty,
+      @Nullable EmptyWait emptyWait,
+      boolean passEnded,
+      boolean claimedAny,
+      @Nullable RuntimeException error) {}
+
+  /** Admits the tasks one claim returned, and records whether it made progress. */
+  private Progress settleClaim(
+      ClaimResult result,
+      RunState run,
+      int empty,
+      @Nullable EmptyWait emptyWait,
+      @Nullable Listener listener) {
+    permits.release(result.limit - result.claimed.size());
+    boolean handled = false;
+    // A claimed task holds a lease, so it runs even when the loop is stopping or failed.
+    for (Claimed claimed : result.claimed) {
+      admit(claimed, run);
+      handled |= handlers.containsKey(claimed.task.type());
+    }
+    RuntimeException error = result.error;
+    if (error instanceof IsolationLevelException isolation) {
+      // The pool runs above read committed. The worker logs it and claims again after the wait.
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.worker.claim_isolation",
+          "Claims need read committed isolation; configure the pool at read committed",
+          Map.of("workhorse.isolation_level", isolation.isolationLevel()));
+      int next = empty + 1;
+      return new Progress(
+          next,
+          new EmptyWait(System.nanoTime() + dispatchWait(next, listener), null),
+          false,
+          false,
+          null);
+    }
+    if (error != null) {
+      return new Progress(empty, emptyWait, false, false, error);
+    }
+    if (handled) {
+      return new Progress(0, null, false, true, null);
+    }
+    // A claim that only handed its tasks back made no progress, so it backs off as an empty claim
+    // does instead of spinning on a task that no handler here runs.
+    int next = empty + 1;
+    long deadline = System.nanoTime() + dispatchWait(next, listener);
+    EmptyWait wait;
+    if (result.claimed.isEmpty()) {
+      wait = emptyWait != null ? emptyWait : new EmptyWait(deadline, result.wakeVersion);
+    } else if (emptyWait == null || emptyWait.version != null) {
+      // A release wait. Each release notifies the queue, so a wake does not end this wait.
+      wait = new EmptyWait(deadline, null);
+    } else {
+      wait = emptyWait;
+    }
+    return new Progress(next, wait, true, false, null);
+  }
+
+  /** Runs one claim on its own virtual thread. The dispatch loop already took its permits. */
+  private void startClaim(int limit, long wakeVersion, boolean backingOff, RunState run) {
+    // The notification delay spreads idle workers that one notification woke together. A worker
+    // whose last claim found work would claim now anyway, so it skips the delay.
+    boolean delayed = notified.getAndSet(false) && backingOff;
+    Thread.ofVirtual()
+        .name("workhorse-claim")
+        .start(
+            () -> {
+              List<Claimed> claimed = new ArrayList<>();
+              RuntimeException error = null;
+              try {
+                if (delayed) {
+                  Thread.sleep(
+                      ThreadLocalRandom.current().nextLong(NOTIFICATION_CLAIM_DELAY_MS + 1));
+                }
+                // A worker paused or stopped during the delay sends no claim.
+                boolean withdrawn = delayed && (stopRequested(run.version) || isPaused());
+                if (!withdrawn) {
+                  claimAcrossQueues(limit, claimed);
+                }
+              } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+              } catch (RuntimeException failure) {
+                error = failure;
+              } finally {
+                run.results.add(new ClaimResult(limit, claimed, wakeVersion, error));
+                wake.signal();
+                if (!run.claimsOpen.get()) {
+                  releaseLateClaims(run);
+                }
+              }
+            });
+  }
+
+  /**
+   * Claims from each queue at most once, starting one queue further on each call. Appends to {@code
+   * claimed} as each queue answers, so a later queue's error keeps the leases already taken.
+   */
+  private void claimAcrossQueues(int limit, List<Claimed> claimed) {
+    int size = queueNames.size();
+    int start = (int) Math.floorMod(nextQueueIndex.getAndIncrement(), (long) size);
+    for (int offset = 0; offset < size && claimed.size() < limit; offset++) {
+      String name = queueNames.get((start + offset) % size);
+      long startedAt = System.nanoTime();
+      List<Row> rows =
+          withConnection(
+              connection ->
+                  Sql.rows(
+                      connection,
+                      SqlCatalogue.CLAIM_MANY_V1,
+                      name,
+                      workerId,
+                      Integer.toString(limit - claimed.size()),
+                      Long.toString(leaseMs)));
+      for (Row row : rows) {
+        ClaimedTask task = claimedTask(row, name);
+        String payload = row.text("payload");
+        claimed.add(new Claimed(task, payload == null ? "null" : payload, startedAt));
+        log(
+            System.Logger.Level.DEBUG,
+            "workhorse.task.claimed",
+            "Task claimed",
+            taskAttributes(task));
+      }
+    }
+  }
+
+  private static ClaimedTask claimedTask(Row row, String queueName) {
+    Long timeout = row.longValue("execution_timeout_ms");
+    return new ClaimedTask(
+        row.requiredUuid("task_id"),
+        queueName,
+        row.requiredText("task_type"),
+        row.requiredInteger("priority"),
+        row.json("payload"),
+        row.text("contract_version"),
+        row.longValue("result_max_bytes"),
+        "t".equals(row.text("redact_error_details")),
+        row.json("trace_context"),
+        row.requiredInteger("attempt"),
+        row.requiredInteger("max_attempts"),
+        row.json("retry_policy"),
+        row.instant("deadline_at"),
+        timeout == null ? null : Duration.ofMillis(timeout),
+        row.instant("attempt_timeout_at"),
+        row.requiredLong("fence_token"),
+        row.instant("lease_expires_at"));
+  }
+
+  private void notifyWake() {
+    notified.set(true);
+    wakeDispatcher();
+  }
+
+  /** Wakes the run loop for a state change, which also ends an empty-claim wait. */
+  private void wakeDispatcher() {
+    wake.bump();
+  }
+
+  /**
+   * The wait before the next claim, in nanoseconds. A listening worker waits for a notification; a
+   * polling worker backs off exponentially while claims come back empty.
+   */
+  private long dispatchWait(int empty, @Nullable Listener listener) {
+    long milliseconds;
+    if (listener != null && listener.isListening()) {
+      milliseconds = notificationPollMs;
+    } else {
+      int doublings = Math.min(Math.max(0, empty - 1), 20);
+      milliseconds = Math.min(MAX_EMPTY_POLL_MS, pollMs << doublings);
+    }
+    milliseconds =
+        Math.max(1, Math.round(milliseconds * ThreadLocalRandom.current().nextDouble(0.9, 1.1)));
+    if (registryMs > 0) {
+      milliseconds = Math.min(milliseconds, registryMs);
+    }
+    return TimeUnit.MILLISECONDS.toNanos(milliseconds);
+  }
+
+  /**
+   * Gives back the permits of claims that returned after the stop abandoned them. Their tasks do
+   * not run: their leases expire, and recovery returns them to the queue. Each result is polled
+   * once, so the claim thread and the dispatch loop never release the same permits twice.
+   */
+  private void releaseLateClaims(RunState run) {
+    ClaimResult late;
+    while ((late = run.results.poll()) != null) {
+      permits.release(late.limit);
+    }
+  }
+
+  /** The end of the shutdown grace: the deadline of the current stop, or one grace from now. */
+  private long shutdownDeadline(RunState run) {
+    long deadline = stopDeadline(run);
+    return deadline != NEVER ? deadline : System.nanoTime() + shutdownGraceNanos;
+  }
+
+  /**
+   * The deadline of a stop that this run sees, or {@link #NEVER} without one. A run that resets the
+   * deadline as it starts can race a stop, so a stop with no deadline gets one here, one grace from
+   * the moment the run sees it.
+   */
+  private long stopDeadline(RunState run) {
+    if (!stopRequested(run.version)) {
+      return NEVER;
+    }
+    stopDeadline.compareAndSet(NEVER, System.nanoTime() + shutdownGraceNanos);
+    return stopDeadline.get();
+  }
+
+  /**
+   * Runs {@code body} on a virtual thread and waits for it. The wait ends early only when a stop
+   * passes its deadline, so a stalled statement cannot keep the stop from the drain. Returns {@code
+   * false} when the step did not finish. An exception of the step is thrown here.
+   */
+  private boolean step(Runnable body, RunState run, String name) {
+    AtomicReference<@Nullable Throwable> failure = new AtomicReference<>();
+    Thread thread =
+        Thread.ofVirtual()
+            .name("workhorse-" + name.replace(' ', '-'))
+            .start(
+                () -> {
+                  try {
+                    body.run();
+                  } catch (Throwable error) {
+                    failure.set(error);
+                  }
+                });
+    boolean interrupted = false;
+    try {
+      while (thread.isAlive()) {
+        long deadline = stopDeadline(run);
+        if (deadline != NEVER && System.nanoTime() - deadline >= 0) {
+          log(
+              System.Logger.Level.WARNING,
+              "workhorse.worker.stop_step_abandoned",
+              "A stop step did not finish before the shutdown deadline",
+              Map.of("workhorse.worker.stop_step", name));
+          return false;
+        }
+        try {
+          thread.join(Duration.ofNanos(IDLE_CHECK_NANOS));
+        } catch (InterruptedException error) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    Throwable error = failure.get();
+    if (error != null) {
+      throw unchecked(error);
+    }
+    return true;
+  }
+
+  /**
+   * Starts a maintenance pass on its own virtual thread when none runs, so a slow pass never holds
+   * up dispatch or a stop.
+   */
+  private void startMaintenance(RunState run) {
+    Thread running = run.maintenance;
+    if (running != null && running.isAlive()) {
+      return;
+    }
+    run.maintenance =
+        Thread.ofVirtual()
+            .name("workhorse-maintenance")
+            .start(
+                () -> {
+                  try {
+                    maintenanceStep(run);
+                  } catch (RuntimeException error) {
+                    run.maintenanceErrors.add(error);
+                  } finally {
+                    wake.signal();
+                  }
+                });
+  }
+
+  private void maintenanceStep(RunState run) {
+    if (generation.get() == run.generation) {
+      runMaintenanceIfDue();
+    }
+  }
+
+  /** Starts a registry refresh when its interval elapsed and no earlier refresh still runs. */
+  private void refreshRegistrationIfDue(RunState run) {
+    if (registryMs == 0) {
+      return;
+    }
+    long last = lastRegistryAt;
+    if (last != NEVER && System.nanoTime() - last < TimeUnit.MILLISECONDS.toNanos(registryMs)) {
+      return;
+    }
+    Thread previous = registryWrite.get();
+    if (previous != null && previous.isAlive()) {
+      return;
+    }
+    registryStep(() -> refreshRegistration(false, run.generation));
+  }
+
+  /**
+   * Starts a registry write on a virtual thread. The write first waits for the write before it, so
+   * the draining registration and the deregistration reach PostgreSQL in that order.
+   */
+  private Thread registryStep(Runnable body) {
+    Thread next;
+    registryLock.lock();
+    try {
+      Thread before = registryWrite.get();
+      next =
+          Thread.ofVirtual()
+              .name("workhorse-registry")
+              .unstarted(
+                  () -> {
+                    if (before != null) {
+                      joinQuietly(before);
+                    }
+                    body.run();
+                  });
+      registryWrite.set(next);
+    } finally {
+      registryLock.unlock();
+    }
+    next.start();
+    return next;
+  }
+
+  /**
+   * Waits until the shutdown deadline, cancels what still runs, interrupts it, and gives it one
+   * unwind window. Returns the number of handlers abandoned after that window.
+   */
+  private int drain(long deadline) {
+    waitUntilIdle(deadline);
+    List<Active> remaining = new ArrayList<>(active);
+    if (!remaining.isEmpty()) {
+      for (Active task : remaining) {
+        task.cancellation.cancel(CancellationReason.SHUTDOWN);
+        task.interrupt();
+      }
+      waitUntilIdle(System.nanoTime() + UNWIND_WINDOW_NANOS);
+    }
+    List<Active> abandoned = new ArrayList<>(active);
+    for (Active task : abandoned) {
+      if (task.abandonUnstarted()) {
+        // The caller's executor never started this task, and now never runs its handler. The
+        // drain frees its slot here, because an executor can discard a queued runnable.
+        active.remove(task);
+        permits.release();
+        continue;
+      }
+      // The flag goes up before the ownership is read. An attempt that publishes its ownership
+      // later reads the flag after that, so one of the two sides always stops the renewal.
+      task.abandoned.set(true);
+      Ownership ownership = task.ownership.get();
+      if (ownership != null) {
+        ownership.abandon();
+      }
+    }
+    return abandoned.size();
+  }
+
+  private void waitUntilIdle(long deadline) {
+    while (!active.isEmpty()) {
+      long remaining = deadline - System.nanoTime();
+      if (remaining <= 0) {
+        return;
+      }
+      wake.reset();
+      if (active.isEmpty()) {
+        return;
+      }
+      wake.await(Math.min(remaining, IDLE_CHECK_NANOS));
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Registration and maintenance
+
+  private void refreshRegistration(boolean force, long run) {
+    if (registryMs == 0 || generation.get() != run) {
+      return;
+    }
+    long now = System.nanoTime();
+    long last = lastRegistryAt;
+    if (!force && last != NEVER && now - last < TimeUnit.MILLISECONDS.toNanos(registryMs)) {
+      return;
+    }
+    lastRegistryAt = now;
+    int slots = active.size();
+    boolean stopping = draining;
+    List<Row> rows;
+    try {
+      rows =
+          withConnection(
+              // A write that waited for its connection checks again that its run is current.
+              connection ->
+                  generation.get() != run
+                      ? null
+                      : Sql.rows(
+                          connection,
+                          SqlCatalogue.REGISTER_WORKER_V1,
+                          workerId,
+                          instanceId.toString(),
+                          hostname,
+                          Long.toString(ProcessHandle.current().pid()),
+                          Sql.textArray(queueNames),
+                          Sql.textArray(scheduleNamespaces),
+                          Integer.toString(concurrency),
+                          Long.toString(leaseMs),
+                          Long.toString(heartbeatMs),
+                          Long.toString(pollMs),
+                          Long.toString(maintenanceMs),
+                          Long.toString(routineMs),
+                          Long.toString(registryMs),
+                          Integer.toString(slots),
+                          Boolean.toString(stopping),
+                          Integer.toString(SqlCatalogue.CLIENT_PROTOCOL_VERSION),
+                          LANGUAGE,
+                          sdkVersion));
+    } catch (RuntimeException error) {
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.worker.registration_failed",
+          "Worker registration failed",
+          Map.of("error.type", error.getClass().getName()));
+      if (onRegistrationError != null) {
+        onRegistrationError.accept(error);
+      }
+      return;
+    }
+    if (rows == null) {
+      return;
+    }
+    boolean paused = !rows.isEmpty() && "t".equals(rows.get(0).text("paused"));
+    boolean changed = remotelyPaused.getAndSet(paused) != paused;
+    registered.set(true);
+    if (changed) {
+      log(
+          System.Logger.Level.INFO,
+          paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
+          paused ? "Worker paused remotely" : "Worker resumed remotely",
+          Map.of());
+      wakeDispatcher();
+    }
+  }
+
+  private void deregister(long run) {
+    if (generation.get() != run || !registered.getAndSet(false)) {
+      return;
+    }
+    try {
+      withConnection(
+          connection ->
+              generation.get() != run
+                  ? null
+                  : Sql.rows(connection, SqlCatalogue.DEREGISTER_WORKER_V1, workerId));
+    } catch (RuntimeException ignored) {
+      // The registry expires a worker that stops reporting.
+    }
+  }
+
+  /**
+   * Runs one maintenance pass when its interval elapsed. The interval restarts only after a pass
+   * succeeds, so a failed pass runs again on the next dispatch.
+   */
+  private void runMaintenanceIfDue() {
+    long now = System.nanoTime();
+    long last = lastMaintenanceAt.get();
+    if (last != NEVER && now - last < TimeUnit.MILLISECONDS.toNanos(maintenanceMs)) {
+      return;
+    }
+    long routine = lastRoutineAt.get();
+    boolean routineDue =
+        routine == NEVER || now - routine >= TimeUnit.MILLISECONDS.toNanos(routineMs);
+    withConnection(
+        connection -> {
+          for (Row row : Sql.rows(connection, SqlCatalogue.TICK_V1, "100", "100")) {
+            recordMaintenance(row);
+          }
+          if (routineDue) {
+            lastRoutineAt.set(now);
+            Sql.rows(connection, SqlCatalogue.RUN_MAINTENANCE_V1, Values.timestamp(Instant.now()));
+          }
+          return null;
+        });
+    lastMaintenanceAt.set(now);
+    if (!scheduleNamespaces.isEmpty()) {
+      fireSchedules();
+    }
+  }
+
+  private void recordMaintenance(Row row) {
+    Long affected = row.longValue("rows_affected");
+    boolean error = row.text("error") != null;
+    if ((affected == null || affected == 0) && !error) {
+      return;
+    }
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put("workhorse.maintenance.operation", "tick");
+    attributes.put("workhorse.maintenance.phase", row.text("phase"));
+    attributes.put("workhorse.maintenance.rows_affected", affected == null ? 0 : affected);
+    attributes.put("workhorse.maintenance.skipped_lock", "t".equals(row.text("skipped_lock")));
+    if (error) {
+      attributes.put("error.type", "PostgreSQLError");
+    }
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.maintenance.completed",
+        "Maintenance phase completed",
+        attributes);
+  }
+
+  private void fireSchedules() {
+    List<Row> rows =
+        withConnection(
+            connection ->
+                Sql.rows(
+                    connection,
+                    SqlCatalogue.FIRE_DUE_SCHEDULES_V2,
+                    Sql.textArray(scheduleNamespaces),
+                    null,
+                    Integer.toString(scheduleCatchupLimit),
+                    Long.toString(maintenanceMs)));
+    for (Row row : rows) {
+      Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+      attributes.put("workhorse.schedule.namespace", row.text("namespace"));
+      attributes.put("workhorse.schedule.name", row.text("schedule_name"));
+      String taskId = row.text("task_id");
+      if (taskId == null) {
+        log(
+            System.Logger.Level.DEBUG,
+            "workhorse.schedule.fire_replayed",
+            "Recurring schedule occurrence replayed",
+            attributes);
+        continue;
+      }
+      attributes.put("workhorse.task.id", taskId);
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.schedule.fired",
+          "Recurring schedule fired",
+          attributes);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Execution
+
+  /** One admitted task: its cancellation token, its lease ownership, and its handler thread. */
+  private static final class Active {
+    final Claimed claimed;
+    final TaskCancellation cancellation = new TaskCancellation();
+    final AtomicReference<@Nullable Ownership> ownership = new AtomicReference<>();
+
+    /** Set by the drain for an attempt that still runs at the end of the unwind window. */
+    final AtomicBoolean abandoned = new AtomicBoolean();
+
+    private final ReentrantLock lock = new ReentrantLock();
+    private final AtomicInteger state = new AtomicInteger(QUEUED);
+    private @Nullable Thread handlerThread;
+
+    private static final int QUEUED = 0;
+    private static final int STARTED = 1;
+    private static final int ABANDONED = 2;
+
+    Active(Claimed claimed) {
+      this.claimed = claimed;
+    }
+
+    /** Starts the attempt, unless the drain abandoned it first. */
+    boolean begin() {
+      return state.compareAndSet(QUEUED, STARTED);
+    }
+
+    /**
+     * Keeps a queued attempt from starting. Returns whether the attempt was still queued; an
+     * attempt that already started is not changed.
+     */
+    boolean abandonUnstarted() {
+      return state.compareAndSet(QUEUED, ABANDONED);
+    }
+
+    /** Marks the handler call. Only a thread inside the handler takes the drain's interrupt. */
+    void enterHandler() {
+      lock.lock();
+      try {
+        handlerThread = Thread.currentThread();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    /**
+     * Ends the handler call, and clears an interrupt the drain sent. The worker's own writes then
+     * run without an interrupt, which would close a virtual thread's socket.
+     */
+    void leaveHandler() {
+      lock.lock();
+      try {
+        handlerThread = null;
+        Thread.interrupted();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    void interrupt() {
+      lock.lock();
+      try {
+        if (handlerThread != null) {
+          handlerThread.interrupt();
+        }
+      } finally {
+        lock.unlock();
+      }
+    }
+  }
+
+  /** A handler and the type its payload decodes as. */
+  private record Registration(Type payloadType, Handler<?> handler) {}
+
+  /** Gives a claimed task a handler thread. Its permit stays taken until the handler returns. */
+  private void admit(Claimed claimed, RunState run) {
+    Active task = new Active(claimed);
+    active.add(task);
+    Runnable body = () -> runClaimedTask(task, run);
+    try {
+      if (executor == null) {
+        Thread.ofVirtual().name("workhorse-handler-" + claimed.task.id()).start(body);
+      } else {
+        executor.execute(body);
+      }
+    } catch (RejectedExecutionException error) {
+      // A task the executor refused never runs, so the drain must not wait for it. Its lease
+      // expires, and recovery returns it to the queue.
+      active.remove(task);
+      permits.release();
+      run.errors.add(error);
+      stopVersion.incrementAndGet();
+    }
+  }
+
+  private void runClaimedTask(Active task, RunState run) {
+    if (!task.begin()) {
+      // The drain abandoned this task before the executor started it, and it already freed the
+      // slot. The lease expires, and recovery returns the task to the queue.
+      return;
+    }
+    try {
+      execute(task);
+    } catch (LeaseLostException ignored) {
+      // Another attempt owns the task, so this attempt has nothing left to write.
+    } catch (Throwable error) {
+      run.errors.add(error);
+      stopVersion.incrementAndGet();
+    } finally {
+      active.remove(task);
+      permits.release();
+      wake.signal();
+    }
+  }
+
+  private void execute(Active task) {
+    ClaimedTask claimed = task.claimed.task;
+    Registration registration = handlers.get(claimed.type());
+    Arbiter arbiter = new Arbiter();
+    Map<String, @Nullable Object> attributes = taskAttributes(claimed);
+    log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
+    try {
+      if (registration == null) {
+        log(
+            System.Logger.Level.WARNING,
+            "workhorse.handler.missing",
+            "No handler registered for the claimed task type",
+            attributes);
+        releaseOwned(claimed, arbiter);
+      } else {
+        runHandler(task, registration, arbiter);
+      }
+    } finally {
+      Outcome outcome = arbiter.outcome();
+      Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
+      finished.put(
+          "workhorse.handler.outcome",
+          outcome == null ? "unknown" : outcome.name().toLowerCase(java.util.Locale.ROOT));
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.task.execution_finished",
+          "Task execution finished",
+          finished);
+    }
+  }
+
+  private void runHandler(Active task, Registration registration, Arbiter arbiter) {
+    ClaimedTask claimed = task.claimed.task;
+    TaskCancellation cancellation = task.cancellation;
+    Ownership ownership =
+        new Ownership(task.claimed.startedAt, TimeUnit.MILLISECONDS.toNanos(leaseMs));
+    own(claimed, ownership, arbiter, cancellation);
+    task.ownership.set(ownership);
+    if (task.abandoned.get()) {
+      // The drain abandoned the attempt before it published its ownership. The handler does not
+      // start, and the lease expires.
+      ownership.abandon();
+      return;
+    }
+    String encoded;
+    try {
+      @SuppressWarnings("unchecked")
+      Handler<@Nullable Object> handler = (Handler<@Nullable Object>) registration.handler;
+      Object result;
+      task.enterHandler();
+      try {
+        Object payload = codec.decode(task.claimed.payload, registration.payloadType);
+        result = handler.handle(new TaskContext(claimed, cancellation), payload);
+      } finally {
+        task.leaveHandler();
+      }
+      encoded = codec.encode(result);
+      Object tree = Json.parse(encoded);
+      checkStorable(claimed, tree);
+      validateResult(claimed, tree);
+      checkResultSize(claimed, encoded);
+    } catch (Exception error) {
+      if (finishOwnership(claimed, ownership, arbiter)) {
+        return;
+      }
+      // A handler that stopped for shutdown returns the task to the queue without an attempt.
+      if (cancellation.reason() == CancellationReason.SHUTDOWN && shutdownCancellation(error)) {
+        releaseOwned(claimed, arbiter);
+        return;
+      }
+      settleFailure(claimed, error, arbiter);
+      return;
+    } finally {
+      ownership.release();
+    }
+    if (finishOwnership(claimed, ownership, arbiter)) {
+      return;
+    }
+    complete(claimed, encoded, arbiter);
+  }
+
+  private void complete(ClaimedTask task, String encoded, Arbiter arbiter) {
+    boolean accepted =
+        "t".equals(fencedRow(SqlCatalogue.COMPLETE_V1, task, encoded).text("accepted"));
+    Map<String, @Nullable Object> attributes = taskAttributes(task);
+    attributes.put("workhorse.complete.accepted", accepted);
+    if (accepted) {
+      log(System.Logger.Level.INFO, "workhorse.task.completed", "Task completed", attributes);
+      arbiter.submit(Outcome.COMPLETED);
+      return;
+    }
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.task.completion_rejected",
+        "Stale task completion rejected",
+        attributes);
+    if (acknowledgeCancel(task)) {
+      arbiter.submit(Outcome.CANCELLED);
+      return;
+    }
+    arbiter.submit(Outcome.LEASE_EXPIRED);
+    throw new LeaseLostException(task.id(), "complete");
+  }
+
+  /** Hands an owned task back to PostgreSQL without charging the attempt. */
+  private void releaseOwned(ClaimedTask task, Arbiter arbiter) {
+    String status = fencedRow(SqlCatalogue.RELEASE_OWNED_V1, task).text("status");
+    Map<String, @Nullable Object> attributes = taskAttributes(task);
+    attributes.put("workhorse.release.status", status);
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.task.release_processed",
+        "Owned task release processed",
+        attributes);
+    if ("released".equals(status)) {
+      arbiter.submit(Outcome.RELEASED);
+    } else {
+      settleStatus(task, status, arbiter, "release", Set.of("not_due"), Outcome.LEASE_EXPIRED);
+    }
+  }
+
+  /** Records a handler failure. PostgreSQL retries or fails the task by its retry policy. */
+  private void settleFailure(ClaimedTask task, Exception error, Arbiter arbiter) {
+    String envelope = Json.write(failureEnvelope(error, task.redactErrorDetails()));
+    Long delay = error instanceof ConflictException ? Long.valueOf(-1) : retryDelayOverride(task);
+    String state =
+        fencedRow(SqlCatalogue.FAIL_V1, task, envelope, delay == null ? null : Long.toString(delay))
+            .text("state");
+    Map<String, @Nullable Object> attributes = taskAttributes(task);
+    attributes.put("workhorse.attempt.outcome", state);
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.task.failure_processed",
+        "Task attempt failure processed",
+        attributes);
+    if ("ready".equals(state) || "scheduled".equals(state)) {
+      arbiter.submit(Outcome.RETRY);
+    } else {
+      settleStatus(task, state, arbiter, "fail", Set.of("failed"), Outcome.FAILED);
+    }
+  }
+
+  private @Nullable Long retryDelayOverride(ClaimedTask task) {
+    if (retryDelay == null) {
+      return null;
+    }
+    Duration delay = retryDelay.delay(task.attempt(), task);
+    return delay == null ? null : Values.milliseconds(delay, "retryDelay", 0, MAX_RETRY_DELAY_MS);
+  }
+
+  /** The failure envelope of {@code protocol/v1/failures.json}. */
+  static Map<String, @Nullable Object> failureEnvelope(Throwable error, boolean redact) {
+    Map<String, @Nullable Object> envelope = new LinkedHashMap<>();
+    if (redact) {
+      envelope.put("name", REDACTED_NAME);
+      envelope.put("message", REDACTED_MESSAGE);
+      return envelope;
+    }
+    StringWriter stack = new StringWriter();
+    error.printStackTrace(new PrintWriter(stack));
+    envelope.put("name", failureName(error));
+    envelope.put("message", storable(error.getMessage() == null ? "" : error.getMessage()));
+    envelope.put("stack", storable(stack.toString()));
+    return envelope;
+  }
+
+  /**
+   * {@code text} with each NUL and each surrogate outside a pair replaced by U+FFFD. PostgreSQL
+   * {@code jsonb} cannot store either, and a refused envelope would end the worker instead of
+   * recording the handler's failure.
+   */
+  static String storable(String text) {
+    StringBuilder out = null;
+    for (int index = 0; index < text.length(); index++) {
+      char character = text.charAt(index);
+      boolean paired =
+          Character.isHighSurrogate(character)
+              && index + 1 < text.length()
+              && Character.isLowSurrogate(text.charAt(index + 1));
+      if (paired) {
+        if (out != null) {
+          out.append(character).append(text.charAt(index + 1));
+        }
+        index++;
+        continue;
+      }
+      boolean refused = character == '\0' || Character.isSurrogate(character);
+      if (refused && out == null) {
+        out = new StringBuilder(text.length()).append(text, 0, index);
+      }
+      if (out != null) {
+        out.append(refused ? '\uFFFD' : character);
+      }
+    }
+    return out == null ? text : out.toString();
+  }
+
+  /**
+   * The simple class name of {@code error}, or the generic name {@code Exception} for an anonymous
+   * or hidden class, whose name is a type-system artifact.
+   */
+  static String failureName(Throwable error) {
+    Class<?> type = error.getClass();
+    String name = type.getSimpleName();
+    if (type.isAnonymousClass() || type.isHidden() || name.isEmpty()) {
+      return GENERIC_NAME;
+    }
+    for (String forbidden : FORBIDDEN_NAME_CHARACTERS) {
+      if (name.contains(forbidden)) {
+        return GENERIC_NAME;
+      }
+    }
+    return name;
+  }
+
+  /**
+   * Whether {@code error}, or an error it wraps, shows that the handler saw the shutdown: a {@link
+   * CancelledException} with {@link CancellationReason#SHUTDOWN}, or the {@link
+   * InterruptedException} of the drain's interrupt. The walk stays bounded against a cyclic chain.
+   */
+  private static boolean shutdownCancellation(Throwable error) {
+    Throwable current = error;
+    for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
+      if (current instanceof CancelledException cancelled
+          && cancelled.reason() == CancellationReason.SHUTDOWN) {
+        return true;
+      }
+      if (current instanceof InterruptedException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Leases
+
+  /** One attempt's hold on its lease: the heartbeat membership and the lease watchdog. */
+  private static final class Ownership {
+    final AtomicLong renewedAt;
+    final long leaseNanos;
+    final CountDownLatch stop = new CountDownLatch(1);
+    final List<Exception> errors = new CopyOnWriteArrayList<>();
+    final ReentrantLock settlement = new ReentrantLock();
+
+    /** True while a heartbeat settlement waits or runs, so repeated statuses coalesce. */
+    final AtomicBoolean settling = new AtomicBoolean();
+
+    private final AtomicBoolean released = new AtomicBoolean();
+    private volatile @Nullable Runnable unregister;
+    private volatile @Nullable Thread watchdog;
+
+    Ownership(long renewedAt, long leaseNanos) {
+      this.renewedAt = new AtomicLong(renewedAt);
+      this.leaseNanos = leaseNanos;
+    }
+
+    void renew(long sentAt) {
+      renewedAt.accumulateAndGet(sentAt, (current, sent) -> sent - current > 0 ? sent : current);
+    }
+
+    long leaseDeadline() {
+      return renewedAt.get() + leaseNanos;
+    }
+
+    void start(Runnable unregister, Thread watchdog) {
+      this.unregister = unregister;
+      this.watchdog = watchdog;
+    }
+
+    /** Stops renewing without waiting for the watchdog. A shutdown abandons with this. */
+    void abandon() {
+      Runnable current = unregister;
+      if (current != null) {
+        current.run();
+      }
+      stop.countDown();
+    }
+
+    /** Stops renewing and waits for the watchdog. Only the first call acts. */
+    void release() {
+      if (!released.compareAndSet(false, true)) {
+        return;
+      }
+      abandon();
+      Thread current = watchdog;
+      if (current != null && !current.equals(Thread.currentThread())) {
+        joinQuietly(current);
+      }
+    }
+  }
+
+  /** Decides one attempt's outcome. The first submission wins. */
+  private static final class Arbiter {
+    private final AtomicReference<@Nullable Outcome> outcome = new AtomicReference<>();
+
+    @Nullable Outcome outcome() {
+      return outcome.get();
+    }
+
+    void submit(Outcome submitted) {
+      outcome.compareAndSet(null, submitted);
+    }
+  }
+
+  /** Registers the attempt with the heartbeat and starts its lease watchdog. */
+  private void own(
+      ClaimedTask task, Ownership ownership, Arbiter arbiter, TaskCancellation cancellation) {
+    Consumer<Exception> failAttempt =
+        error -> {
+          ownership.errors.add(error);
+          cancellation.cancel(CancellationReason.LEASE_LOST);
+        };
+    long intervalNanos = TimeUnit.MILLISECONDS.toNanos(heartbeatMs);
+    Heartbeat.Member member =
+        new Heartbeat.Member() {
+          @Override
+          public String workerId() {
+            return workerId;
+          }
+
+          @Override
+          public UUID taskId() {
+            return task.id();
+          }
+
+          @Override
+          public long fenceToken() {
+            return task.fenceToken();
+          }
+
+          @Override
+          public long leaseMs() {
+            return leaseMs;
+          }
+
+          @Override
+          public long intervalNanos() {
+            return intervalNanos;
+          }
+
+          @Override
+          public void renew(long sentAt) {
+            ownership.renew(sentAt);
+          }
+
+          @Override
+          public void settle(String status) {
+            Map<String, @Nullable Object> attributes = taskAttributes(task);
+            attributes.put("workhorse.heartbeat.status", status);
+            log(
+                System.Logger.Level.INFO,
+                "workhorse.task.heartbeat_rejected",
+                "Task heartbeat rejected",
+                attributes);
+            // The settlement can wait for this attempt's lock and send a statement. The shared
+            // heartbeat thread renews every other lease, so the settlement runs off it. A status
+            // that arrives while one settlement is pending adds nothing, so it is dropped.
+            if (!ownership.settling.compareAndSet(false, true)) {
+              return;
+            }
+            Thread.ofVirtual()
+                .name("workhorse-settlement-" + task.id())
+                .start(
+                    () -> {
+                      ownership.settlement.lock();
+                      try {
+                        if (status.equals("deadline_exceeded")
+                            || status.equals("timeout_exceeded")) {
+                          settleExpiration(task, arbiter, cancellation);
+                        } else {
+                          deliverStatus(status, arbiter, cancellation);
+                        }
+                      } catch (RuntimeException error) {
+                        failAttempt.accept(error);
+                      } finally {
+                        ownership.settlement.unlock();
+                        ownership.settling.set(false);
+                      }
+                    });
+          }
+
+          @Override
+          public void fail(Exception error) {
+            failAttempt.accept(error);
+          }
+        };
+    Runnable unregister = heartbeat.register(member);
+    Thread watchdog =
+        Thread.ofVirtual()
+            .name("workhorse-expiration-" + task.id())
+            .unstarted(() -> watchExpiration(task, ownership, arbiter, cancellation, failAttempt));
+    ownership.start(unregister, watchdog);
+    watchdog.start();
+  }
+
+  /**
+   * Ends an attempt locally when its lease lapses unrenewed, and asks PostgreSQL to settle a
+   * deadline or an attempt timeout when one passes.
+   */
+  private void watchExpiration(
+      ClaimedTask task,
+      Ownership ownership,
+      Arbiter arbiter,
+      TaskCancellation cancellation,
+      Consumer<Exception> failAttempt) {
+    Instant expirationAt = earliest(task.deadlineAt(), task.attemptTimeoutAt());
+    Long retryAt = null;
+    try {
+      while (true) {
+        Long delay;
+        if (retryAt != null) {
+          delay = retryAt - System.nanoTime();
+        } else if (expirationAt != null) {
+          delay = nanosUntil(expirationAt);
+        } else {
+          delay = null;
+        }
+        long leaseDelay = ownership.leaseDeadline() - System.nanoTime();
+        if (delay == null || leaseDelay < delay) {
+          if (leaseDelay > 0) {
+            if (ownership.stop.await(leaseDelay, TimeUnit.NANOSECONDS)) {
+              return;
+            }
+            continue;
+          }
+          arbiter.submit(Outcome.LEASE_EXPIRED);
+          ownership.abandon();
+          cancellation.cancel(CancellationReason.LEASE_LOST);
+          return;
+        }
+        if (ownership.stop.await(Math.max(0, delay), TimeUnit.NANOSECONDS)) {
+          return;
+        }
+        String status;
+        ownership.settlement.lock();
+        try {
+          status = settleExpiration(task, arbiter, cancellation);
+        } finally {
+          ownership.settlement.unlock();
+        }
+        if (!"not_due".equals(status)) {
+          return;
+        }
+        retryAt = System.nanoTime() + EXPIRATION_RETRY_NANOS;
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    } catch (RuntimeException error) {
+      failAttempt.accept(error);
+    }
+  }
+
+  private static @Nullable Instant earliest(@Nullable Instant first, @Nullable Instant second) {
+    if (first == null) {
+      return second;
+    }
+    if (second == null) {
+      return first;
+    }
+    return first.isBefore(second) ? first : second;
+  }
+
+  private static long nanosUntil(Instant time) {
+    try {
+      return Duration.between(Instant.now(), time).toNanos();
+    } catch (ArithmeticException overflow) {
+      return Long.MAX_VALUE;
+    }
+  }
+
+  private @Nullable String settleExpiration(
+      ClaimedTask task, Arbiter arbiter, TaskCancellation cancellation) {
+    String status = fencedRow(SqlCatalogue.EXPIRE_OWNED_TELEMETRY_V1, task).text("status");
+    if ("not_due".equals(status)) {
+      return status;
+    }
+    Map<String, @Nullable Object> attributes = taskAttributes(task);
+    attributes.put("workhorse.expiration.status", status);
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.task.ownership_expired",
+        "Owned task lease expired",
+        attributes);
+    deliverStatus(status, arbiter, cancellation);
+    return status;
+  }
+
+  /** Submits the outcome a heartbeat or expiration status names, and cancels the handler. */
+  private static void deliverStatus(
+      @Nullable String status, Arbiter arbiter, TaskCancellation cancellation) {
+    Outcome outcome = outcomeFor(status, Set.of("accepted"), "heartbeat");
+    if (outcome == null) {
+      return;
+    }
+    arbiter.submit(outcome);
+    cancellation.cancel(
+        switch (outcome) {
+          case CANCELLED -> CancellationReason.REQUESTED;
+          case DEADLINE_EXCEEDED -> CancellationReason.DEADLINE_EXCEEDED;
+          case ATTEMPT_TIMEOUT -> CancellationReason.EXECUTION_TIMEOUT;
+          default -> CancellationReason.LEASE_LOST;
+        });
+  }
+
+  private static @Nullable Outcome outcomeFor(
+      @Nullable String status, Set<String> neutral, String operation) {
+    if (status == null) {
+      throw new UnexpectedStatusException(operation, null);
+    }
+    if (neutral.contains(status)) {
+      return null;
+    }
+    return switch (status) {
+      case "cancel_requested" -> Outcome.CANCELLED;
+      case "deadline_exceeded" -> Outcome.DEADLINE_EXCEEDED;
+      case "timeout_exceeded" -> Outcome.ATTEMPT_TIMEOUT;
+      case "stale" -> Outcome.LEASE_EXPIRED;
+      default -> throw new UnexpectedStatusException(operation, status);
+    };
+  }
+
+  /**
+   * Submits the outcome for a status that the worker's own write returned. A cancel request is
+   * acknowledged; a lost lease throws {@link LeaseLostException}.
+   */
+  private void settleStatus(
+      ClaimedTask task,
+      @Nullable String status,
+      Arbiter arbiter,
+      String operation,
+      Set<String> neutral,
+      Outcome neutralOutcome) {
+    Outcome outcome = outcomeFor(status, neutral, operation);
+    if (outcome == null) {
+      arbiter.submit(neutralOutcome);
+      return;
+    }
+    if (outcome == Outcome.CANCELLED && !acknowledgeCancel(task)) {
+      throw new LeaseLostException(task.id(), operation);
+    }
+    arbiter.submit(outcome);
+    if (outcome == Outcome.LEASE_EXPIRED) {
+      throw new LeaseLostException(task.id(), operation);
+    }
+  }
+
+  /**
+   * Stops renewing and reports whether the heartbeat already decided the attempt. Throws the
+   * heartbeat's error when it failed and nothing decided the attempt.
+   */
+  private boolean finishOwnership(ClaimedTask task, Ownership ownership, Arbiter arbiter) {
+    ownership.release();
+    Outcome outcome = arbiter.outcome();
+    if (outcome != null) {
+      switch (outcome) {
+        case DEADLINE_EXCEEDED, ATTEMPT_TIMEOUT -> {
+          return true;
+        }
+        case CANCELLED -> {
+          if (!acknowledgeCancel(task)) {
+            throw new LeaseLostException(task.id(), "cancel");
+          }
+          return true;
+        }
+        case LEASE_EXPIRED -> throw new LeaseLostException(task.id(), "heartbeat");
+        default -> {}
+      }
+    }
+    if (!ownership.errors.isEmpty()) {
+      throw unchecked(ownership.errors.get(0));
+    }
+    return false;
+  }
+
+  private boolean acknowledgeCancel(ClaimedTask task) {
+    boolean accepted =
+        "t".equals(fencedRow(SqlCatalogue.ACKNOWLEDGE_CANCEL_V1, task).text("accepted"));
+    Map<String, @Nullable Object> attributes = taskAttributes(task);
+    attributes.put("workhorse.cancel.accepted", accepted);
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.task.cancellation_acknowledged",
+        "Task cancellation acknowledged",
+        attributes);
+    return accepted;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Results
+
+  private void validateResult(ClaimedTask task, @Nullable Object result) {
+    String version = task.contractVersion();
+    if (version == null) {
+      return;
+    }
+    List<String> key = List.of(task.type(), version);
+    ContractSchema schema = resultContracts.get(key);
+    if (schema == null) {
+      List<Row> rows =
+          withConnection(
+              connection ->
+                  Sql.rows(
+                      connection, SqlCatalogue.GET_CONTRACT_DEFINITION_V1, task.type(), version));
+      if (rows.size() != 1) {
+        throw new ContractUnavailableException(task.type(), version);
+      }
+      Map<String, @Nullable Object> document = Json.object(rows.get(0).json("schema"));
+      if (document == null || !document.containsKey("result")) {
+        throw new ContractUnavailableException(task.type(), version);
+      }
+      schema = new ContractSchema(document.get("result"));
+      resultContracts.put(key, schema);
+    }
+    if (!schema.valid(result)) {
+      throw new ContractValidationException(task.type(), version, "result");
+    }
+  }
+
+  /**
+   * PostgreSQL refuses a {@code jsonb} string or key that holds NUL, and that refusal would end the
+   * worker rather than the attempt. The core's parser already refused a lone surrogate. The error
+   * carries no part of the result, so the failure envelope that reports it stays storable.
+   */
+  private static void checkStorable(ClaimedTask task, @Nullable Object value) {
+    if (holdsNul(value, 0)) {
+      throw new IllegalArgumentException(
+          task.type() + " result contains a NUL character, which PostgreSQL jsonb cannot store");
+    }
+  }
+
+  private static boolean holdsNul(@Nullable Object value, int depth) {
+    if (value instanceof String text) {
+      return text.indexOf('\0') >= 0;
+    }
+    if (value instanceof List<?> items) {
+      for (Object item : items) {
+        if (holdsNul(item, depth + 1)) {
+          return true;
+        }
+      }
+    }
+    if (value instanceof Map<?, ?> members) {
+      for (Map.Entry<?, ?> member : members.entrySet()) {
+        if (holdsNul(member.getKey(), depth + 1) || holdsNul(member.getValue(), depth + 1)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * PostgreSQL refuses a result whose {@code jsonb} text exceeds the task's limit, and that refusal
+   * would end the worker rather than the attempt, so the worker measures the same text first.
+   * Without exponent notation that text is at most twice as long as the compact JSON, which lets
+   * most results skip the exact measure.
+   */
+  private static void checkResultSize(ClaimedTask task, String encoded) {
+    Long limit = task.resultMaxBytes();
+    if (limit == null) {
+      return;
+    }
+    long compact = encoded.getBytes(StandardCharsets.UTF_8).length;
+    if (compact * 2 <= limit && !EXPONENT_NUMBER.matcher(encoded).find()) {
+      return;
+    }
+    long actual = JsonbSize.of(encoded);
+    if (actual > limit) {
+      throw new ValueSizeLimitException(task.type(), "result", actual, limit);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Statements
+
+  private interface SqlBody<T extends @Nullable Object> {
+    T run(Connection connection);
+  }
+
+  /** Runs {@code body} on a connection from the pool, in autocommit. */
+  private <T extends @Nullable Object> T withConnection(SqlBody<T> body) {
+    Connection connection;
+    try {
+      connection = connections.acquire();
+    } catch (SQLException error) {
+      throw Sql.translate(error);
+    }
+    T result;
+    try {
+      result = body.run(connection);
+    } catch (RuntimeException | Error error) {
+      try {
+        connections.release(connection, false);
+      } catch (SQLException release) {
+        error.addSuppressed(Sql.translate(release));
+      }
+      throw error;
+    }
+    try {
+      connections.release(connection, false);
+    } catch (SQLException error) {
+      throw Sql.translate(error);
+    }
+    return result;
+  }
+
+  /** A lifecycle write returns exactly one row; anything else means the protocol changed. */
+  private Row fencedRow(
+      SqlCatalogue.Statement statement, ClaimedTask task, @Nullable Object... rest) {
+    Object[] parameters = new Object[3 + rest.length];
+    parameters[0] = task.id().toString();
+    parameters[1] = workerId;
+    parameters[2] = Long.toString(task.fenceToken());
+    System.arraycopy(rest, 0, parameters, 3, rest.length);
+    List<Row> rows =
+        withConnection(connection -> Sql.fencedRows(connection, statement, parameters));
+    if (rows.size() != 1) {
+      throw new WorkhorseException(
+          "PostgreSQL lifecycle transition did not return exactly one row");
+    }
+    return rows.get(0);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Support
+
+  private Map<String, @Nullable Object> taskAttributes(ClaimedTask task) {
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put("workhorse.queue.name", task.queue());
+    attributes.put("workhorse.task.id", task.id().toString());
+    attributes.put("workhorse.task.type", task.type());
+    attributes.put("workhorse.task.attempt", task.attempt());
+    return attributes;
+  }
+
+  private void log(
+      System.Logger.Level level, String event, String body, Map<String, ?> attributes) {
+    if (!logger.isLoggable(level)) {
+      return;
+    }
+    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
+    fields.put("event.name", event);
+    fields.put("workhorse.worker.id", workerId);
+    fields.putAll(attributes);
+    logger.log(level, body + " " + fields);
+  }
+
+  private static RuntimeException unchecked(Throwable error) {
+    if (error instanceof RuntimeException runtime) {
+      return runtime;
+    }
+    if (error instanceof Error fatal) {
+      throw fatal;
+    }
+    return new WorkhorseException(error.toString(), error);
+  }
+
+  private void joinUntil(Thread thread, long deadline, String step) {
+    boolean interrupted = false;
+    try {
+      while (thread.isAlive()) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          log(
+              System.Logger.Level.WARNING,
+              "workhorse.worker.stop_step_abandoned",
+              "A stop step did not finish before the shutdown deadline",
+              Map.of("workhorse.worker.stop_step", step));
+          return;
+        }
+        try {
+          thread.join(Duration.ofNanos(remaining));
+        } catch (InterruptedException error) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  private static void joinQuietly(Thread thread) {
+    boolean interrupted = false;
+    while (true) {
+      try {
+        thread.join();
+        break;
+      } catch (InterruptedException error) {
+        interrupted = true;
+      }
+    }
+    if (interrupted) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  private static String localHostname() {
+    try {
+      return InetAddress.getLocalHost().getHostName();
+    } catch (UnknownHostException error) {
+      return "localhost";
+    }
+  }
+
+  private static byte[] randomBytes(int count) {
+    byte[] bytes = new byte[count];
+    ThreadLocalRandom.current().nextBytes(bytes);
+    return bytes;
+  }
+
+  /**
+   * The run loop's wakeup. {@link #signal} wakes a wait; {@link #bump} also counts a state change,
+   * so an empty-claim wait ends when one arrives during its claim.
+   */
+  private static final class Wake {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition condition = lock.newCondition();
+    private final AtomicLong version = new AtomicLong();
+    private boolean signalled;
+
+    void signal() {
+      lock.lock();
+      try {
+        signalled = true;
+        condition.signalAll();
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    void bump() {
+      version.incrementAndGet();
+      signal();
+    }
+
+    long version() {
+      return version.get();
+    }
+
+    void reset() {
+      lock.lock();
+      try {
+        signalled = false;
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    void await(long nanos) {
+      lock.lock();
+      try {
+        long remaining = nanos;
+        while (!signalled && remaining > 0) {
+          remaining = condition.awaitNanos(remaining);
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      } finally {
+        lock.unlock();
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Builder
+
+  /**
+   * Configures a {@link Worker}. Each option has the default of {@code docs/parity.md}, "Worker
+   * runtime defaults". An invalid option throws {@link IllegalArgumentException}.
+   */
+  public static final class Builder {
+    private final DataSource dataSource;
+    private List<String> queues = List.of("default");
+    private @Nullable String workerId;
+    private int concurrency = 1;
+    private @Nullable ExecutorService executor;
+    private long leaseMs = 30_000;
+    private @Nullable Long heartbeatMs;
+    private @Nullable Long pollMs;
+    private boolean pollingOnly;
+    private long maintenanceMs = 1_000;
+    private long routineMs = 60_000;
+    private long registryMs = 5_000;
+    private boolean disableRegistry;
+    private List<String> scheduleNamespaces = List.of();
+    private int scheduleCatchupLimit = 100;
+    private long shutdownGraceMs = 25_000;
+    private boolean sharedHeartbeats;
+    private @Nullable RetryDelay retryDelay;
+    private @Nullable Consumer<Throwable> onRegistrationError;
+    private @Nullable Consumer<Throwable> onNotificationError;
+    private System.Logger logger = System.getLogger(Worker.class.getName());
+    private JsonCodec codec = JsonCodec.standard();
+    private final Map<String, Registration> handlers = new LinkedHashMap<>();
+
+    private Builder(DataSource dataSource) {
+      this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+    }
+
+    /** The queues to claim from. Duplicates are dropped. The default is {@code default}. */
+    public Builder queues(String... queues) {
+      List<String> names = uniqueNames(queues, "queues");
+      if (names.isEmpty()) {
+        throw new IllegalArgumentException("queues must contain at least one non-empty queue name");
+      }
+      this.queues = names;
+      return this;
+    }
+
+    /**
+     * The worker's ID in the fleet registry. The default is the host, the PID, and 8 hex digits.
+     */
+    public Builder workerId(String workerId) {
+      if (workerId.isEmpty()) {
+        throw new IllegalArgumentException("workerId must be a non-empty String");
+      }
+      this.workerId = workerId;
+      return this;
+    }
+
+    /** The most tasks the worker runs at once, from 1 to 100. The default is 1. */
+    public Builder concurrency(int concurrency) {
+      if (concurrency < 1 || concurrency > 100) {
+        throw new IllegalArgumentException("concurrency must be between 1 and 100");
+      }
+      this.concurrency = concurrency;
+      return this;
+    }
+
+    /**
+     * Runs handlers on {@code executor} instead of one virtual thread for each task. The worker
+     * never shuts it down, and the concurrency still bounds the handlers.
+     */
+    public Builder executor(ExecutorService executor) {
+      this.executor = Objects.requireNonNull(executor, "executor");
+      return this;
+    }
+
+    /** The lease each claim and renewal grants, from 100 ms to 1 day. The default is 30 s. */
+    public Builder lease(Duration lease) {
+      this.leaseMs = Values.milliseconds(lease, "lease", 100, 86_400_000);
+      return this;
+    }
+
+    /**
+     * The interval between lease renewals. It must be less than the lease. The default is a third
+     * of it.
+     */
+    public Builder heartbeat(Duration heartbeat) {
+      this.heartbeatMs = Values.milliseconds(heartbeat, "heartbeat", 1, Integer.MAX_VALUE);
+      return this;
+    }
+
+    /**
+     * The claim poll interval. Without it, a listening worker polls every 5 s, and a polling worker
+     * starts at 250 ms and doubles toward 5 s while claims come back empty.
+     */
+    public Builder pollInterval(Duration pollInterval) {
+      this.pollMs = Values.milliseconds(pollInterval, "pollInterval", 1, Integer.MAX_VALUE);
+      return this;
+    }
+
+    /** Polls only, with no {@code LISTEN} connection. The default is {@code false}. */
+    public Builder pollingOnly(boolean pollingOnly) {
+      this.pollingOnly = pollingOnly;
+      return this;
+    }
+
+    /** The maintenance tick interval, at least 100 ms. The default is 1 s. */
+    public Builder maintenanceInterval(Duration interval) {
+      this.maintenanceMs =
+          Values.milliseconds(interval, "maintenanceInterval", 100, Integer.MAX_VALUE);
+      return this;
+    }
+
+    /** The retention routine offer interval, at least 100 ms. The default is 60 s. */
+    public Builder maintenanceRoutineInterval(Duration interval) {
+      this.routineMs =
+          Values.milliseconds(interval, "maintenanceRoutineInterval", 100, Integer.MAX_VALUE);
+      return this;
+    }
+
+    /** The fleet registry interval, at least 100 ms. The default is 5 s. */
+    public Builder registryInterval(Duration interval) {
+      this.registryMs = Values.milliseconds(interval, "registryInterval", 100, Integer.MAX_VALUE);
+      return this;
+    }
+
+    /** Leaves the worker out of the fleet registry, so no operator can pause it remotely. */
+    public Builder disableRegistry(boolean disable) {
+      this.disableRegistry = disable;
+      return this;
+    }
+
+    /** The schedule namespaces this worker fires. The default is none. */
+    public Builder scheduleNamespaces(String... namespaces) {
+      this.scheduleNamespaces = uniqueNames(namespaces, "scheduleNamespaces");
+      return this;
+    }
+
+    /** The most missed occurrences one schedule fires, from 1 to 10,000. The default is 100. */
+    public Builder scheduleCatchupLimit(int limit) {
+      if (limit < 1 || limit > 10_000) {
+        throw new IllegalArgumentException("scheduleCatchupLimit must be between 1 and 10000");
+      }
+      this.scheduleCatchupLimit = limit;
+      return this;
+    }
+
+    /** How long a stopping worker waits for its handlers, up to 1 day. The default is 25 s. */
+    public Builder shutdownGrace(Duration grace) {
+      this.shutdownGraceMs = Values.milliseconds(grace, "shutdownGrace", 0, 86_400_000);
+      return this;
+    }
+
+    /**
+     * Renews leases with a connection borrowed for each round, instead of the dedicated heartbeat
+     * connection that every worker on the {@code DataSource} shares (ADR 0071). The default is
+     * {@code false}.
+     */
+    public Builder sharedHeartbeats(boolean shared) {
+      this.sharedHeartbeats = shared;
+      return this;
+    }
+
+    /** Chooses each retry delay in place of the persisted retry policy. The default is unset. */
+    public Builder retryDelay(RetryDelay retryDelay) {
+      this.retryDelay = Objects.requireNonNull(retryDelay, "retryDelay");
+      return this;
+    }
+
+    /** Receives each fleet registration failure. The worker keeps running. */
+    public Builder onRegistrationError(Consumer<Throwable> listener) {
+      this.onRegistrationError = Objects.requireNonNull(listener, "listener");
+      return this;
+    }
+
+    /** Receives each listener connection failure. The worker keeps polling. */
+    public Builder onNotificationError(Consumer<Throwable> listener) {
+      this.onNotificationError = Objects.requireNonNull(listener, "listener");
+      return this;
+    }
+
+    /** The logger. The default is {@code System.getLogger("dev.stablemates.workhorse.Worker")}. */
+    public Builder logger(System.Logger logger) {
+      this.logger = Objects.requireNonNull(logger, "logger");
+      return this;
+    }
+
+    /** The codec for payloads and results. The default is {@link JsonCodec#standard()}. */
+    public Builder codec(JsonCodec codec) {
+      this.codec = Objects.requireNonNull(codec, "codec");
+      return this;
+    }
+
+    /**
+     * Registers the handler of {@code taskType}. A second registration replaces the first. A
+     * claimed task with no handler goes back to its queue for another worker.
+     */
+    public <P extends @Nullable Object> Builder handle(
+        String taskType, Class<P> payloadType, Handler<P> handler) {
+      if (taskType.isEmpty()) {
+        throw new IllegalArgumentException("taskType must be a non-empty String");
+      }
+      handlers.put(
+          taskType,
+          new Registration(
+              Objects.requireNonNull(payloadType, "payloadType"),
+              Objects.requireNonNull(handler, "handler")));
+      return this;
+    }
+
+    /** Registers a handler under its own task type and payload type. */
+    public <P extends @Nullable Object> Builder handle(TaskHandler<P> handler) {
+      String taskType = handler.taskType();
+      if (taskType.isEmpty()) {
+        throw new IllegalArgumentException("taskType must be a non-empty String");
+      }
+      handlers.put(taskType, new Registration(handler.payloadType(), handler));
+      return this;
+    }
+
+    /**
+     * Builds the worker.
+     *
+     * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.8
+     * @throws IllegalArgumentException if the heartbeat is not less than the lease
+     */
+    public Worker build() {
+      return new Worker(this);
+    }
+
+    private static List<String> uniqueNames(String[] values, String label) {
+      Set<String> names = new LinkedHashSet<>();
+      for (String value : Arrays.asList(values)) {
+        if (value == null || value.isEmpty()) {
+          throw new IllegalArgumentException(label + " must contain only non-empty Strings");
+        }
+        names.add(value);
+      }
+      return List.copyOf(names);
+    }
+  }
+}
