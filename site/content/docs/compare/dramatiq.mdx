@@ -1,0 +1,134 @@
+---
+title: "Workhorse compared with Dramatiq"
+description: "Dramatiq vs Workhorse: a Python task queue on RabbitMQ or Redis, and a PostgreSQL task queue. Compare their features, find when Dramatiq is the better choice, and move an actor to Workhorse."
+---
+
+Dramatiq is a Python task queue. An actor is a Python function that Dramatiq runs from a message.
+Your code sends each message through a broker, RabbitMQ or Redis, to the worker processes.
+Workhorse is a durable task queue that keeps its work in PostgreSQL. Workhorse delivers each task
+at least once. This page compares the two products, row by row, and tells you when Dramatiq is the
+better choice.
+
+## Compare Workhorse and Dramatiq
+
+The two products share many features. These include delays, cron schedules, priorities, retries
+with backoff, recovery from a stopped worker, pipelines and groups, time limits, task results, and
+cancellation.
+They differ in five areas:
+
+- **Enqueue in a transaction.** With Workhorse, a task and your data commit in one PostgreSQL
+  transaction. Dramatiq sends each message to RabbitMQ or Redis, outside your database. Thus, if
+  the process stops between the commit and the send, the data has no message.
+- **Limits across all workers.** Dramatiq has rate limiters that apply to each key across all
+  workers. Your actor code calls each limiter itself, so the message starts first. By default, if the
+  limiter refuses the message, the message retries. Workhorse stores its concurrency and rate limits in the
+  database. Each claim checks the limits, so a task does not start when a limit is full.
+- **Checkpoints inside a task.** A Workhorse handler stores the result of each checkpoint. When
+  the task runs again, the handler skips each checkpoint that completed. It can also wait for a
+  timer or a signal without a worker slot. In Dramatiq, a retry runs the whole actor again.
+- **Operations.** Workhorse has an operator dashboard, a command to run a failed task again, queue
+  pause, and OpenTelemetry. Dramatiq exports Prometheus metrics. Its dead letter queue keeps a
+  failed message for up to 7 days by default. You must enqueue the message again yourself.
+- **Languages.** Dramatiq workers are in Python. Another language can enqueue if it writes the
+  message format to the broker. Workhorse has workers in TypeScript, Python, Go, Rust, and Ruby.
+
+Each cell links its source. A Workhorse cell links the page that explains the feature.
+
+<ComparisonTable product="dramatiq" />
+
+## When Dramatiq is the better choice
+
+Dramatiq is the better choice in these cases:
+
+- You already run RabbitMQ or Redis, and your application has no PostgreSQL database.
+- Your application does not need the message and its data to commit together.
+- Your actors are short and idempotent, and a retry that runs the whole actor again is acceptable.
+- Your code already uses Dramatiq pipelines, groups, and middleware, and a move costs more than it
+  gives.
+
+Workhorse is the better choice in these cases:
+
+- The task must commit with your data.
+- A limit must apply to all workers before a task starts, for example the rate limit of an
+  external API.
+- A task has work that is slow or costly to repeat, or it waits for a timer or a person.
+- Workers in more than one language must use the same queue.
+
+A checkpoint does not make an external effect run one time only. If the worker stops after the
+effect and before the checkpoint commits, the effect runs again. Thus the effect must be
+idempotent.
+
+## Move from Dramatiq
+
+Move one actor at a time. Keep the Dramatiq workers running until their queues are empty. The
+[migration guide](/docs/migrate) gives the full procedure and a table of equivalent parts.
+
+**Example.** An application sends a `welcome-email` message when it creates a user. The actor has
+three attempts with exponential backoff.
+
+1. In Dramatiq, `send()` puts the message on the broker after the transaction commits.
+2. In Workhorse, `Queue(connection).enqueue()` adds the task inside the transaction, so the user
+   and the task commit together.
+3. `max_retries=2` in Dramatiq gives two retries, so three attempts. In Workhorse,
+   `max_attempts=3` gives the same three attempts.
+
+Before the move, with Dramatiq:
+
+```python
+import dramatiq
+from dramatiq.brokers.rabbitmq import RabbitmqBroker
+
+dramatiq.set_broker(RabbitmqBroker())
+
+
+@dramatiq.actor(max_retries=2, min_backoff=5_000, max_backoff=300_000)
+def welcome_email(user_id):
+    send_welcome_email(user_id)
+
+
+with connection.transaction():
+    connection.execute("INSERT INTO app_user (id, email) VALUES (%s, %s)", (user_id, email))
+welcome_email.send(user_id)
+```
+
+After the move, with Workhorse:
+
+```python
+from workhorse import EnqueueOptions, HandlerContext, Json, Queue, Worker
+
+with connection.transaction():
+    connection.execute("INSERT INTO app_user (id, email) VALUES (%s, %s)", (user_id, email))
+    Queue(connection).enqueue(
+        "welcome-email",
+        {"user_id": user_id},
+        EnqueueOptions(
+            max_attempts=3,
+            retry_policy={
+                "type": "exponential",
+                "initialDelayMs": 5_000,
+                "multiplier": 2,
+                "maxDelayMs": 300_000,
+            },
+        ),
+    )
+
+
+def welcome_email(payload: Json, context: HandlerContext) -> Json:
+    send_welcome_email(payload["user_id"])
+    return None
+
+
+worker = Worker(pool).handle("welcome-email", welcome_email)
+worker.run()
+```
+
+`connection` is a Psycopg connection, and `pool` is a Psycopg connection pool for the same
+database. Both products give each delay in milliseconds. Both retry a task after an exception from
+your code, until the task has no attempts left. Dramatiq also adds a random part to each delay, so
+its delays are not the same as the delays of this policy.
+
+## Next
+
+- [Compare task queues](/docs/compare) shows every product in one matrix.
+- [Migrate to Workhorse](/docs/migrate) gives the procedure for each task type.
+- [Enqueue and transactions](/docs/enqueue) commits a business write and its task together.

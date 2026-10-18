@@ -2828,8 +2828,7 @@
       "name": "Dramatiq",
       "aliases": ["dramatiq"],
       "category": "broker-queue",
-      "page": "planned",
-      "issue": "SM-1378",
+      "page": "published",
       "version": "2.2.1",
       "checked": "2026-10-17",
       "repository": "https://github.com/Bogdanp/dramatiq",
@@ -2842,12 +2841,68 @@
           "version": "2.2.1",
           "evidence": "\"Dramatiq abstracts over the notion of a message broker and currently supports both RabbitMQ and Redis out of the box.\" Searched docs/source for 'transaction': no matches."
         },
+        "scheduled-enqueue": {
+          "status": "Supported",
+          "note": "send_with_options takes a delay in milliseconds. The docs advise that delayed messages stay a small part of all messages.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L323-L340",
+          "version": "2.2.1",
+          "evidence": "\"You can schedule messages to run some time in the future by calling |send_with_options| on actors and providing a ``delay`` (in milliseconds)\". \"Keep in mind that *your message broker is not a database*. Scheduled messages should represent a small subset of all your messages.\""
+        },
+        "recurring-schedules": {
+          "status": "Supported",
+          "note": "Dramatiq has no scheduler of its own. The docs recommend APScheduler, a separate library, which calls send on a cron trigger.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/cookbook.rst#L526-L560",
+          "version": "2.2.1",
+          "evidence": "\"APScheduler_ is the recommended scheduler to use with Dramatiq\": scheduler.add_job(print_current_date.send, CronTrigger.from_crontab(\"* * * * *\")). The middleware lists in docs/source/reference.rst#L88-L120 have no scheduler."
+        },
+        "priorities": {
+          "status": "Supported",
+          "note": "With RabbitMQ, broker_priority orders the waiting messages and needs max_priority on the broker. Actor priority orders only the messages that a worker already holds.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/brokers/rabbitmq.py#L60-L78",
+          "version": "2.2.1",
+          "evidence": "\"To support queued message priorities, provide a ``max_priority``... then enqueue messages with the ``broker_priority`` option\". \"RabbitMQ treats higher numbers as higher priorities.\" docs/source/guide.rst#L352-L355: actor priority \"has **no effect on messages while they are waiting in a queue**\"."
+        },
+        "enqueue-deduplication": {
+          "status": "Not supported",
+          "note": "No send option or middleware refuses a duplicate message by key.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/reference.rst#L88-L120",
+          "version": "2.2.1",
+          "evidence": "The default and optional middleware are AgeLimit, Callbacks, Pipelines, Retries, ShutdownNotifications, TimeLimit, AsyncIO, CurrentMessage, GroupCallbacks, Prometheus, and Results. Searched docs/source and dramatiq/ for 'dedup' and 'unique': the only match is \"Generate a globally-unique message id\" in dramatiq/message.py."
+        },
         "debounce-throttle": {
           "status": "Partial",
           "note": "A BucketRateLimiter with a limit of one throttles each key, but the actor code calls it. No option gives debounce.",
           "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/rate_limits/bucket.py#L25-L55",
           "version": "2.2.1",
           "evidence": "Up to 1 operation every minute: >>> BucketRateLimiter(backend, \"some-key\", limit=1, bucket=60_000) ... key(str): The key to rate limit on. The middleware list (docs/source/reference.rst#L90-L119) has no debounce."
+        },
+        "task-dependencies": {
+          "status": "Supported",
+          "note": "A pipeline runs actors in sequence and gives each actor the result of the one before it. A group can start a completion callback.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/cookbook.rst#L50-L145",
+          "version": "2.2.1",
+          "evidence": "\"|Groups| run actors in parallel and let you gather their results or wait for all of them to finish.\" \"Actors can be chained together using the |pipeline| function.\" \"the result of running ``get_uri_contents(uri)`` is passed as the last positional argument to ``count_words``.\" dramatiq/composition.py#L203-L216: add_completion_callback \"Adds a completion callback to run once every job in this group has completed.\""
+        },
+        "retries": {
+          "status": "Supported",
+          "note": "20 retries by default, with exponential backoff from 15 s to 7 days. retry_when and throws select the exceptions.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L214-L250",
+          "version": "2.2.1",
+          "evidence": "\"Dramatiq automatically retries failures with exponential backoff.\" Options: \"``max_retries`` ``20``\", \"``min_backoff`` 15 seconds\", \"``max_backoff`` 7 days\", \"``retry_when``\", \"``throws`` ... An exception or a tuple of exceptions that must not get retried\"."
+        },
+        "crash-recovery": {
+          "status": "Supported",
+          "note": "A worker acknowledges a message after it processes the message. If the worker stops, the broker delivers the message again.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/advanced.rst#L165-L181",
+          "version": "2.2.1",
+          "evidence": "\"Messages are only ever acknowledged to (removed from) the broker after they have been successfully processed.\" \"When a worker goes down while processing messages (eg. due to hardware, power or network failure) then the messages it pulled from the broker will eventually be re-delivered to it (assuming it recovers) or another worker.\""
+        },
+        "cancellation": {
+          "status": "Supported",
+          "note": "The docs point to dramatiq-abort, a separate package outside the Dramatiq repository. Its middleware aborts a running actor by message ID.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/cookbook.rst#L563-L589",
+          "version": "2.2.1",
+          "evidence": "\"The `dramatiq-abort`_ package provides a middleware that can be used to abort running actors by message id.\" abortable = Abortable(backend=dramatiq_abort.backends.RedisBackend()); abort(message.message_id). dramatiq-abort lives at github.com/flared/dramatiq-abort, outside the Dramatiq repository."
         },
         "concurrency-limits": {
           "status": "Partial",
@@ -2870,6 +2925,13 @@
           "version": "2.2.1",
           "evidence": "\"Dramatiq assumes all actors are idempotent so when an exception occurs during message processing, it automatically enqueues a retry for that message with exponential backoff.\""
         },
+        "durable-waits": {
+          "status": "Not supported",
+          "note": "A running actor cannot suspend. Retry with a delay runs the whole actor again later.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/errors.py#L77-L89",
+          "version": "2.2.1",
+          "evidence": "\"Actors may raise this error when they should be retried.\" \"If the ``delay`` argument is provided, then the message will be retried after at least that amount of time (in milliseconds).\" The guide and the cookbook have no API to suspend a running actor or to wait for an external signal."
+        },
         "dashboard": {
           "status": "Not supported",
           "note": "The author's Redis-only dashboard requires Dramatiq below 2.0.",
@@ -2877,11 +2939,39 @@
           "version": "2.2.1",
           "evidence": "dramatiq_dashboard v0.4.0 (2022) requires \"dramatiq[redis]>=1.6,<2.0\". The Dramatiq v2.2.1 docs list only a Grafana metrics dashboard."
         },
+        "dead-letters": {
+          "status": "Partial",
+          "note": "A message moves to a dead letter queue for up to 7 days by default. Dramatiq has no command to enqueue it again.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L264-L271",
+          "version": "2.2.1",
+          "evidence": "\"Once a message has exceeded its retry or age limits, it gets moved to the dead letter queue where it's kept for up to 7 days and then automatically dropped from the message broker. From here, you can manually inspect the message and decide whether or not it should be put back on the queue.\" The TTL is a setting: dramatiq/brokers/redis.py#L82-L83 dead_message_ttl, and dramatiq/brokers/rabbitmq.py#L39 DEAD_MESSAGE_TTL = int(os.getenv(\"dramatiq_dead_message_ttl\", 86400000 * 7))."
+        },
+        "queue-pause": {
+          "status": "Not supported",
+          "note": "No command pauses a queue. The worker signals stop or reload the worker process.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/advanced.rst#L321-L345",
+          "version": "2.2.1",
+          "evidence": "\"The main Dramatiq process responds to several signals\": ``INT`` and ``TERM`` trigger \"graceful shutdown\", and ``HUP`` \"triggers a graceful shutdown followed by a reload of the workers.\" The docs have no command to pause or resume a queue."
+        },
+        "opentelemetry": {
+          "status": "Not supported",
+          "note": "Dramatiq has no OpenTelemetry support. The Prometheus middleware exports metrics.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/advanced.rst#L365-L401",
+          "version": "2.2.1",
+          "evidence": "\"Prometheus metrics are automatically exported by workers ... (assuming you're using the Prometheus middleware).\" Searched docs/source and dramatiq/ for 'opentelemetry' and 'otel': no matches. The instrumentation directory of open-telemetry/opentelemetry-python-contrib at de43f819a4a919213d246a23e62a1b256aeca7b9 has no Dramatiq package."
+        },
         "worker-languages": {
           "value": "Python",
           "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/README.md#L10",
           "version": "2.2.1",
           "evidence": "\"A fast and reliable distributed task processing library for Python 3.\""
+        },
+        "enqueue-languages": {
+          "value": "None",
+          "note": "Another language can enqueue if it pushes the JSON message format to the broker itself.",
+          "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/advanced.rst#L253-L270",
+          "version": "2.2.1",
+          "evidence": "\"You can enqueue Dramatiq messages using any language that has bindings to one of its brokers. All you have to do is push a JSON-encoded dictionary containing the following fields to your queue\"."
         },
         "infrastructure": {
           "value": "RabbitMQ or Redis",
@@ -2896,7 +2986,75 @@
           "version": "2.2.1",
           "evidence": "\"License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)\""
         }
-      }
+      },
+      "rows": [
+        {
+          "id": "task-groups",
+          "group": "producing",
+          "label": "Start a job when a group of tasks finishes",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/parity.md",
+              "row": "Task groups with completion callbacks"
+            },
+            "page": "/docs/task-groups",
+            "note": "onFinish, and onSuccess or onFailure."
+          },
+          "cell": {
+            "status": "Partial",
+            "note": "A completion callback starts when every message of the group succeeds. No callback starts when a message fails. It needs the GroupCallbacks middleware.",
+            "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/dramatiq/middleware/group_callbacks.py#L46-L60",
+            "version": "2.2.1",
+            "evidence": "after_process_message: \"if exception is None:\" ... \"if barrier.wait(block=False): for message in group_completion_callbacks: broker.enqueue(Message(**message))\". dramatiq/composition.py#L203-L211: \"Adds a completion callback to run once every job in this group has completed.\" \"This functionality is dependent upon the optional |GroupCallbacks| middleware.\""
+          }
+        },
+        {
+          "id": "time-limits",
+          "group": "executing",
+          "label": "Time limit for each attempt",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Per-attempt execution timeouts"
+            },
+            "page": "/docs/deadlines",
+            "note": "An absolute deadline for the whole task is also supported."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The default is 10 minutes. The limit raises an exception in the actor thread and cannot stop a system call.",
+            "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/guide.rst#L275-L301",
+            "version": "2.2.1",
+            "evidence": "\"Dramatiq has a default actor time limit of 10 minutes, which means that any actor running for longer than 10 minutes is killed with a |TimeLimitExceeded| error.\" \"Time limits are best-effort. They cannot cancel system calls or any function that doesn't currently hold the GIL under CPython.\""
+          }
+        },
+        {
+          "id": "task-results",
+          "group": "operating",
+          "label": "Store and read the task result",
+          "kind": "status",
+          "workhorse": {
+            "status": "Supported",
+            "feature": {
+              "doc": "docs/features.md",
+              "row": "Terminal result inspection"
+            },
+            "page": "/docs/queries",
+            "note": "The result is in the same PostgreSQL database."
+          },
+          "cell": {
+            "status": "Supported",
+            "note": "The Results middleware stores return values in Redis or Memcached. A result expires after 10 minutes by default.",
+            "source": "https://github.com/Bogdanp/dramatiq/blob/v2.2.1/docs/source/cookbook.rst#L392-L434",
+            "version": "2.2.1",
+            "evidence": "\"You can use Dramatiq's result backends to store and retrieve message return values. To enable result storage, you need to instantiate and add the |Results| middleware to your broker.\" \"results expire after 10 minutes by default\". docs/source/advanced.rst#L187-L188: \"Dramatiq can store actor return values to Memcached and Redis\"."
+          }
+        }
+      ]
     },
     {
       "slug": "asynq",
