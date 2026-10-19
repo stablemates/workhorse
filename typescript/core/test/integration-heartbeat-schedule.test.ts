@@ -82,13 +82,19 @@ async function outcomeState(taskId: string): Promise<string | undefined> {
 }
 
 describe("heartbeat schedule", () => {
-  it("keeps a renewal margin after one timed-out round", async () => {
+  it("keeps a renewal margin after one timed-out round", { timeout: 30_000 }, async () => {
     // The lease is 2.3 heartbeat intervals, shorter than the default of 3. The table lock makes the
     // first round time out on the server at about 1.4 intervals. The fixed schedule sends the next
     // round at 2 intervals, inside the lease. A schedule that waits one interval after the failed
     // round ends sends it at about 2.4 intervals, after the lease.
-    const heartbeatMs = 1_000;
-    const leaseMs = 2_300;
+    //
+    // The lease starts when the claim leaves, so the claim, the start of the handler, and the
+    // second round must end in 0.3 intervals. The delays of a loaded host are absolute, so the
+    // interval is 4 s, which gives them 1.2 s. A trace ran at a 1-minute load of 46 on 32 cores.
+    // The delay from the claim to the handler was up to 654 ms, and the second round took up to
+    // 221 ms (SM-1479).
+    const heartbeatMs = 4_000;
+    const leaseMs = 9_200;
     const id = await queue.enqueue("margin", {}, { queue: "heartbeat-schedule-margin" });
     const reserve = queue[workerHeartbeatReservation].bind(queue);
     let rounds: Round[] = [];
@@ -97,7 +103,10 @@ describe("heartbeat schedule", () => {
       if (channel !== undefined) rounds = recordRounds(channel);
       return channel;
     });
+    let precondition: string | undefined;
     let aborted = false;
+    let handlerStartedAt = 0;
+    let abortedAt: number | undefined;
     const worker = new Worker(queue, {
       workerId: "schedule-margin-worker",
       queue: "heartbeat-schedule-margin",
@@ -106,11 +115,31 @@ describe("heartbeat schedule", () => {
       registryIntervalMs: 0,
     }).handle("margin", async (_payload, context) => {
       const started = performance.now();
+      handlerStartedAt = started;
+      context.signal.addEventListener("abort", () => {
+        abortedAt = performance.now();
+      });
       const commit = await blockHeartbeats();
       try {
-        await sleep(1.6 * heartbeatMs);
+        // The test must hold the lock before the first round starts, and release it when that round
+        // ends, before the second round falls due.
+        if (rounds.length > 0) {
+          precondition = "precondition not met: the first round started before the table lock";
+          return null;
+        }
+        const until = started + 1.9 * heartbeatMs;
+        while (rounds[0]?.endedAt === undefined && performance.now() < until) await sleep(10);
       } finally {
         await commit();
+      }
+      const released = performance.now() - started;
+      if (released > 1.9 * heartbeatMs) {
+        precondition = `precondition not met: the table lock ended ${Math.round(released)} ms after the handler started`;
+        return null;
+      }
+      if (rounds[0]?.failed !== true) {
+        precondition = "precondition not met: the first round did not time out";
+        return null;
       }
       // Run past the end of the lease from the claim, so only a renewal keeps the task.
       await sleep(Math.max(0, started + 2.6 * heartbeatMs - performance.now()));
@@ -122,10 +151,19 @@ describe("heartbeat schedule", () => {
     } finally {
       vi.restoreAllMocks();
     }
-    expect(aborted).toBe(false);
+    expect(precondition).toBeUndefined();
+    // If the lease ends, the message gives the round times from the start of the handler. They show
+    // if the host was slow or if a round was late.
+    const since = (time: number | undefined) =>
+      time === undefined ? "none" : `${Math.round(time - handlerStartedAt)} ms`;
+    expect(
+      aborted,
+      `the lease ended at ${since(abortedAt)}; rounds: ${rounds
+        .map((round) => `${since(round.startedAt)} to ${since(round.endedAt)}`)
+        .join(", ")}`,
+    ).toBe(false);
     expect(await outcomeState(id)).toBe("succeeded");
     expect(rounds.length).toBeGreaterThanOrEqual(2);
-    expect(rounds[0]!.failed).toBe(true);
     expect(rounds[1]!.failed).toBeUndefined();
     // The second round falls due one interval after the first round started.
     expect(rounds[1]!.startedAt - rounds[0]!.startedAt).toBeLessThan(1.25 * heartbeatMs);
@@ -198,10 +236,15 @@ describe("heartbeat schedule", () => {
     // The first task finishes during a slow round, so no lease remains. The second task registers
     // during that round. Its slot is one interval after it registered, which is before the slow
     // round ends, so its round starts when the slow round ends.
+    //
+    // The first task must finish, and the second task must register, by 0.5 intervals before the
+    // slow round ends. The slow round waits 5 intervals, so that window is 900 ms, not 300 ms. At a
+    // 1-minute load of 35 on 32 cores, the second task registered up to 100 ms after the slow round
+    // started (SM-1479).
     const heartbeatMs = 200;
     const rounds = recordRounds(
       queue as unknown as Parameters<typeof recordRounds>[0],
-      2 * heartbeatMs,
+      5 * heartbeatMs,
     );
     let finishFirst!: () => void;
     const firstFinished = new Promise<void>((resolve) => {

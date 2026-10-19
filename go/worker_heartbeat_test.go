@@ -1512,6 +1512,12 @@ func TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline(t *testing.T)
 // of 3. The table lock makes the first round end on the server at about 1.4 intervals. The fixed
 // schedule sends the next round at 2 intervals, inside the lease. A schedule that waits one interval
 // after the failed round ends sends it at about 2.4 intervals, after the lease.
+//
+// The lease starts when the claim leaves, so the claim, the start of the handler, and the second
+// round must end in 0.3 intervals. The delays of a loaded host are absolute, so the interval is
+// 4 s, which gives them 1.2 s. A trace of the TypeScript test ran at a 1-minute load of 46 on 32
+// cores. The delay from the claim to the handler was up to 654 ms, and the second round took up to
+// 221 ms (SM-1479).
 func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-margin")
 	ctx := context.Background()
@@ -1523,7 +1529,7 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 	observer := observeDatabase(t, ctx, databaseURL)
 	blocker := observeDatabase(t, ctx, databaseURL)
 
-	const interval = time.Second
+	const interval = 4 * time.Second
 	const queueName = "go-worker-heartbeat-margin"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	taskID, err := queue.Enqueue(ctx, "heartbeat-margin", nil)
@@ -1533,13 +1539,39 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "heartbeat-margin-worker",
-		LeaseDuration:       2300 * time.Millisecond,
+		LeaseDuration:       9200 * time.Millisecond,
 		HeartbeatInterval:   interval,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var blockerPID int32
+	if err := blocker.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+	// reached reports whether a heartbeat statement waits on the lock of blocker (waits true) or no
+	// statement waits on it (waits false). An answer that arrives after deadline does not count.
+	reached := func(waits bool, deadline time.Time) (bool, error) {
+		for {
+			var count int
+			if err := observer.QueryRow(
+				ctx,
+				"SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) "+
+					"AND query LIKE '%heartbeat_many%'",
+				blockerPID,
+			).Scan(&count); err != nil {
+				return false, err
+			}
+			if time.Now().After(deadline) {
+				return false, nil
+			}
+			if (count > 0) == waits {
+				return true, nil
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	handlerErr := make(chan error, 1)
 	worker.Handle("heartbeat-margin", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
@@ -1551,9 +1583,36 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 			if _, err := blocker.Exec(ctx, lockFastRuntimeTableStatement); err != nil {
 				return err
 			}
-			time.Sleep(interval * 16 / 10)
+			// The first round falls due one interval after the lease registered, just before the
+			// handler started. A lock that comes later than half an interval can miss that round.
+			if held := time.Since(started); held > interval/2 {
+				_, _ = blocker.Exec(ctx, "ROLLBACK")
+				return errors.New("precondition not met: the table lock came " + held.String() + " after the handler started")
+			}
+			// Hold the lock until the first round waits on it and then stops. While the lock is held,
+			// the statement stops only when its round times out. Then release the lock before the
+			// second round.
+			waited, err := reached(true, started.Add(interval*3/2))
+			if err != nil {
+				return err
+			}
+			if !waited {
+				_, _ = blocker.Exec(ctx, "ROLLBACK")
+				return errors.New("precondition not met: the first round did not wait on the table lock")
+			}
+			timedOut, err := reached(false, started.Add(interval*19/10))
+			if err != nil {
+				return err
+			}
+			if !timedOut {
+				_, _ = blocker.Exec(ctx, "ROLLBACK")
+				return errors.New("precondition not met: the first round did not time out")
+			}
 			if _, err := blocker.Exec(ctx, "COMMIT"); err != nil {
 				return err
+			}
+			if released := time.Since(started); released > interval*19/10 {
+				return errors.New("precondition not met: the table lock ended " + released.String() + " after the handler started")
 			}
 			// Run past the end of the lease from the claim, so only a renewal keeps the task.
 			time.Sleep(time.Until(started.Add(interval * 26 / 10)))
@@ -1569,6 +1628,9 @@ func TestWorkerKeepsARenewalMarginAfterOneTimedOutHeartbeatRound(t *testing.T) {
 		t.Fatal("worker did not process the heartbeat-margin task")
 	}
 	if err := <-handlerErr; err != nil {
+		if strings.HasPrefix(err.Error(), "precondition not met") {
+			t.Fatal(err)
+		}
 		t.Fatalf("the handler lost its lease: %v", err)
 	}
 	var state string

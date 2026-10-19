@@ -111,6 +111,21 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     end
   end
 
+  # Whether a heartbeat statement waits on the lock of the backend blocker_pid (waits true), or no
+  # statement waits on it (waits false). An answer after the monotonic time deadline does not count.
+  def heartbeats_reach(observer, blocker_pid, waits, deadline)
+    loop do
+      waiting = observer.exec_params(
+        "SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) " \
+        "AND query LIKE '%heartbeat_many%'", [blocker_pid]
+      ).getvalue(0, 0).to_i
+      return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      return true if waiting.positive? == waits
+
+      sleep 0.01
+    end
+  end
+
   # Runs +subject+ on a thread, yields, and then stops it and waits for the run to return.
   def running(subject)
     thread = Thread.new { subject.run }
@@ -271,27 +286,47 @@ RSpec.describe "Worker runtime against PostgreSQL" do
   # fast tier makes the first round wait, and the server ends it at about 1.4 intervals. The fixed
   # schedule sends the next round at 2 intervals, inside the lease. A schedule that starts again
   # after the failed round sends it at about 2.4 intervals, after the lease.
+  #
+  # The lease starts when the claim leaves, so the claim, the start of the handler, and the second
+  # round must end in 0.3 intervals. The delays of a loaded host are absolute, so the interval is
+  # 4 s, which gives them 1.2 s. A trace of the TypeScript test ran at a 1-minute load of 46 on 32
+  # cores. The delay from the claim to the handler was up to 654 ms, and the second round took up to
+  # 221 ms (SM-1479).
   it "keeps a renewal margin after one timed-out heartbeat round" do
-    interval = 1.0
+    interval = 4.0
     task_id = queue.enqueue("margin", {}).task_id
     release = Concurrent::Event.new
     started = Concurrent::Event.new
     cancelled = nil
     lapsed = []
-    subject = worker(lease: 2.3, heartbeat: interval).handle("margin") do |_payload, context|
+    subject = worker(lease: 9.2, heartbeat: interval).handle("margin") do |_payload, context|
       started.set
       release.wait(30)
       cancelled = context.cancellation.cancelled?
       {}
     end
     blocker = ScratchDatabase.connect
+    observer = ScratchDatabase.connect
     running(subject) do
       expect(started.wait(10)).to be(true)
       handler_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       blocker.exec("BEGIN")
       blocker.exec("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")
-      sleep [0, handler_started + 1.6 * interval - Process.clock_gettime(Process::CLOCK_MONOTONIC)].max
+      # The first round falls due one interval after the lease registered, just before the handler
+      # started. A lock that comes later than half an interval can miss that round.
+      held = Process.clock_gettime(Process::CLOCK_MONOTONIC) - handler_started
+      expect(held).to(be <= interval / 2, "precondition not met: the table lock came #{held} s after the handler started")
+      # Hold the lock until the first round waits on it and then stops. While the lock is held, the
+      # statement stops only when its round times out. Then release the lock before the second round.
+      expect(heartbeats_reach(observer, blocker.backend_pid, true, handler_started + 1.5 * interval)).to(
+        be(true), "precondition not met: the first round did not wait on the table lock"
+      )
+      expect(heartbeats_reach(observer, blocker.backend_pid, false, handler_started + 1.9 * interval)).to(
+        be(true), "precondition not met: the first round did not time out"
+      )
       blocker.exec("COMMIT")
+      released = Process.clock_gettime(Process::CLOCK_MONOTONIC) - handler_started
+      expect(released).to(be <= 1.9 * interval, "precondition not met: the table lock ended #{released} s after the handler started")
       # Run past the end of the lease from the claim, so only a renewal keeps the task. The stored
       # lease must not lapse before that renewal.
       until Process.clock_gettime(Process::CLOCK_MONOTONIC) >= handler_started + 2.6 * interval
@@ -311,6 +346,7 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(state(task_id)).to eq("succeeded")
   ensure
     blocker&.close
+    observer&.close
   end
 
   # SM-1443: a heartbeat that meets a row lock that another transaction holds does not wait for it.

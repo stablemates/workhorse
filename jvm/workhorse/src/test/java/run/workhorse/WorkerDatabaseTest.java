@@ -640,17 +640,23 @@ class WorkerDatabaseTest {
    * makes the first round end on the server at about 1.4 intervals. The fixed schedule sends the
    * next round at 2 intervals, inside the lease. A schedule that starts again after the failed
    * round sends it at about 2.5 intervals, after the lease.
+   *
+   * <p>The lease starts when the claim leaves, so the claim, the start of the handler, and the
+   * second round must end in 0.3 intervals. The delays of a loaded host are absolute, so the
+   * interval is 4 s, which gives them 1.2 s. A trace of the TypeScript test ran at a 1-minute load
+   * of 46 on 32 cores. The delay from the claim to the handler was up to 654 ms, and the second
+   * round took up to 221 ms (SM-1479).
    */
   @Test
   void keepsARenewalMarginAfterOneTimedOutHeartbeatRound() throws Exception {
-    long intervalMs = 1_000;
+    long intervalMs = 4_000;
     UUID taskId = enqueue("margin", Map.of());
     CountDownLatch started = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
     AtomicReference<Boolean> cancelled = new AtomicReference<>();
     Worker worker =
         worker()
-            .lease(Duration.ofMillis(2_300))
+            .lease(Duration.ofMillis(9_200))
             .heartbeat(Duration.ofMillis(intervalMs))
             .handle(
                 "margin",
@@ -664,13 +670,43 @@ class WorkerDatabaseTest {
             .build();
     ExecutorService runner = Executors.newSingleThreadExecutor();
     List<Boolean> lapsed = new ArrayList<>();
-    try (Connection blocker = ScratchDatabase.connect()) {
+    try (Connection blocker = ScratchDatabase.connect();
+        Connection observer = ScratchDatabase.connect()) {
+      int blockerPid = backendPid(blocker);
       var run = runner.submit(worker::runOnce);
       assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
       long handlerStarted = System.nanoTime();
       blockHeartbeats(blocker);
-      sleepUntil(handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 16 / 10));
+      // The first round falls due one interval after the lease registered, just before the handler
+      // started. A lock that comes later than half an interval can miss that round.
+      long heldMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - handlerStarted);
+      assertTrue(
+          heldMs <= intervalMs / 2,
+          "precondition not met: the table lock came " + heldMs + " ms after the handler started");
+      // Hold the lock until the first round waits on it and then stops. While the lock is held,
+      // the statement stops only when its round times out. Then release the lock before the second
+      // round.
+      assertTrue(
+          heartbeatsReach(
+              observer,
+              blockerPid,
+              true,
+              handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 3 / 2)),
+          "precondition not met: the first round did not wait on the table lock");
+      assertTrue(
+          heartbeatsReach(
+              observer,
+              blockerPid,
+              false,
+              handlerStarted + TimeUnit.MILLISECONDS.toNanos(intervalMs * 19 / 10)),
+          "precondition not met: the first round did not time out");
       blocker.commit();
+      long releasedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - handlerStarted);
+      assertTrue(
+          releasedMs <= intervalMs * 19 / 10,
+          "precondition not met: the table lock ended "
+              + releasedMs
+              + " ms after the handler started");
       blocker.setAutoCommit(true);
       // Run past the end of the lease from the claim, so only a renewal keeps the task. The stored
       // lease must not lapse before that renewal.
@@ -704,39 +740,52 @@ class WorkerDatabaseTest {
    * SM-1444: a round that ends after its next slot starts one overdue round at once, also when it
    * replaces its connection. The interval is 40 ms, so the round bound equals the interval. The
    * first heartbeat round commits only after its deadline, so it fails after its next slot. The
-   * overdue round then renews the lease at about 100 ms after the lease registered. A wait of 100
-   * ms before the new connection moves it to about 200 ms, after the lease of 180 ms. A lease of
-   * 120 ms has no margin by the rule (2 × 40 + 40 = 120), so the test cannot use it.
+   * worker then checks out a new connection at once, and starts the overdue round on it at once.
+   *
+   * <p>The test measures that gap without the time of the connect. The old loop waited 100 ms
+   * before the new connection, so its gap is at least 100 ms. The limit is 90 ms. The lease is 30
+   * s, so the delay from the claim to the handler on a loaded host does not change the result. An
+   * earlier version checked a lease of 180 ms instead, which left about 80 ms for that delay
+   * (SM-1479).
    */
   @Test
   void startsAnOverdueRoundAtOnceAfterAFailedRoundReplacesItsConnection() throws Exception {
     long intervalMs = 40;
     UUID taskId = enqueue("overdue", Map.of());
     CountDownLatch started = new CountDownLatch(1);
-    AtomicReference<Boolean> cancelled = new AtomicReference<>();
+    AtomicLong failedAt = new AtomicLong();
+    List<HeartbeatSend> sends = new CopyOnWriteArrayList<>();
     Worker worker =
-        Worker.builder(delayingFirstHeartbeatCommit(dataSource, intervalMs))
+        Worker.builder(delayingFirstHeartbeatCommit(dataSource, intervalMs, failedAt, sends))
             .queues(queueName)
             .pollingOnly(true)
             .pollInterval(Duration.ofMillis(10))
             .disableRegistry(true)
-            .lease(Duration.ofMillis(180))
+            .lease(Duration.ofSeconds(30))
             .heartbeat(Duration.ofMillis(intervalMs))
             .handle(
                 "overdue",
                 Object.class,
                 (ctx, payload) -> {
                   started.countDown();
-                  // Run past the end of the lease from the claim, so only a renewal keeps the task.
                   Thread.sleep(400);
-                  cancelled.set(ctx.isCancelled());
                   return Map.of();
                 })
             .build();
     assertTrue(worker.runOnce(), "the worker ran the task");
     assertTrue(started.await(1, TimeUnit.SECONDS), "the handler started");
-    assertEquals(false, cancelled.get(), "the handler lost its lease");
     assertEquals("succeeded", status(taskId).state());
+    long failed = failedAt.get();
+    assertTrue(failed != 0, "precondition not met: no heartbeat round failed");
+    HeartbeatSend overdue =
+        sends.stream()
+            .filter(send -> send.connectStartedAt() - failed >= 0)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no round started after the failed round"));
+    long gapMs =
+        TimeUnit.NANOSECONDS.toMillis(
+            (overdue.connectStartedAt() - failed) + (overdue.sentAt() - overdue.connectedAt()));
+    assertTrue(gapMs < 90, "the overdue round started " + gapMs + " ms after the failed round");
   }
 
   /**
@@ -817,17 +866,23 @@ class WorkerDatabaseTest {
     }
   }
 
+  /** One heartbeat statement: when its connection was requested and given, and when it was sent. */
+  private record HeartbeatSend(long connectStartedAt, long connectedAt, long sentAt) {}
+
   /**
    * A source over {@code source} whose first {@code COMMIT} after a heartbeat statement returns
-   * {@code delayMs} late, so that heartbeat round ends after its deadline.
+   * {@code delayMs} late, so that heartbeat round ends after its deadline. It sets {@code failedAt}
+   * when that commit returns, and adds each heartbeat statement to {@code sends}.
    */
-  private static DataSource delayingFirstHeartbeatCommit(DataSource source, long delayMs) {
+  private static DataSource delayingFirstHeartbeatCommit(
+      DataSource source, long delayMs, AtomicLong failedAt, List<HeartbeatSend> sends) {
     AtomicBoolean delayed = new AtomicBoolean();
     return (DataSource)
         Proxy.newProxyInstance(
             DataSource.class.getClassLoader(),
             new Class<?>[] {DataSource.class},
             (proxy, method, arguments) -> {
+              long connectStartedAt = System.nanoTime();
               Object result;
               try {
                 result = method.invoke(source, arguments);
@@ -837,6 +892,7 @@ class WorkerDatabaseTest {
               if (!method.getName().equals("getConnection")) {
                 return result;
               }
+              long connectedAt = System.nanoTime();
               Connection connection = (Connection) result;
               AtomicBoolean heartbeat = new AtomicBoolean();
               return Proxy.newProxyInstance(
@@ -846,6 +902,8 @@ class WorkerDatabaseTest {
                     if (call.getName().equals("prepareStatement")
                         && String.valueOf(values[0]).contains("heartbeat_many_v2")) {
                       heartbeat.set(true);
+                      sends.add(
+                          new HeartbeatSend(connectStartedAt, connectedAt, System.nanoTime()));
                     }
                     boolean delay =
                         call.getName().equals("commit")
@@ -860,6 +918,7 @@ class WorkerDatabaseTest {
                     if (delay) {
                       // After the commit, so no idle gap ends the session first.
                       Thread.sleep(delayMs);
+                      failedAt.set(System.nanoTime());
                     }
                     return answer;
                   });
@@ -880,10 +939,39 @@ class WorkerDatabaseTest {
     }
   }
 
-  private static void sleepUntil(long nanoTime) throws InterruptedException {
-    long remaining = nanoTime - System.nanoTime();
-    if (remaining > 0) {
-      TimeUnit.NANOSECONDS.sleep(remaining);
+  private static int backendPid(Connection connection) throws SQLException {
+    try (PreparedStatement query = connection.prepareStatement("SELECT pg_backend_pid()");
+        ResultSet result = query.executeQuery()) {
+      assertTrue(result.next(), "the backend has a process id");
+      return result.getInt(1);
+    }
+  }
+
+  /**
+   * Whether a heartbeat statement waits on the lock of the backend {@code blockerPid} ({@code
+   * waits} true), or no statement waits on it ({@code waits} false). An answer after {@code
+   * deadline}, a {@link System#nanoTime()} value, does not count.
+   */
+  private static boolean heartbeatsReach(
+      Connection observer, int blockerPid, boolean waits, long deadline)
+      throws SQLException, InterruptedException {
+    try (PreparedStatement query =
+        observer.prepareStatement(
+            "SELECT count(*) FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))"
+                + " AND query LIKE '%heartbeat_many%'")) {
+      query.setInt(1, blockerPid);
+      while (true) {
+        try (ResultSet result = query.executeQuery()) {
+          assertTrue(result.next(), "the count has a row");
+          if (System.nanoTime() - deadline > 0) {
+            return false;
+          }
+          if ((result.getLong(1) > 0) == waits) {
+            return true;
+          }
+        }
+        Thread.sleep(10);
+      }
     }
   }
 
