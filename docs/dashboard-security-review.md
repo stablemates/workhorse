@@ -110,9 +110,17 @@ Confirm an error body reveals nothing about container paths or package internals
 - Confirm the schema-compatibility `503` body carries only version information in all six hosts.
   A compatibility verdict answers with its message. Any other failure answers with the fixed
   "Unable to verify Workhorse schema compatibility because the database query failed." and is
-  logged on the server, never returned. Each host other than the JVM has a test that drives a
-  driver error that names a database address. The test asserts that the address stays out of the
-  body. The JVM host has the behavior, but no test drives it yet (SM-1473).
+  logged on the server, never returned. Each host has a test that drives a driver error that
+  names a database address. The test asserts that the address stays out of the body:
+
+  | Host       | Test                                                                                                                                                 |
+  | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | TypeScript | `typescript/dashboard-server/test/rpc-logging.test.ts`, `logs a failed compatibility query and answers without its detail`                           |
+  | Python     | `python/tests/test_dashboard_host.py`, `test_dashboard_host_hides_an_unexpected_compatibility_failure`                                               |
+  | Go         | `go/dashboard/host_test.go`, `TestHandlerHidesAnUnexpectedCompatibilityFailure`                                                                      |
+  | Rust       | `rust/src/dashboard/mod.rs`, `reports_only_a_compatibility_verdict`                                                                                  |
+  | Ruby       | `ruby/spec/unit/dashboard_spec.rb`, `answers 503 with a generic message and logs an unexpected compatibility failure`                                |
+  | JVM        | `jvm/workhorse/src/test/java/run/workhorse/dashboard/DashboardServletTest.java`, `answers503WithAGenericBodyAndLogsAnUnexpectedCompatibilityFailure` |
 
 **Re-walk when** a read starts projecting a persisted error, when `redactErrorStacks` changes
 shape, when a host's compatibility check changes what it returns, or when the oRPC major version
