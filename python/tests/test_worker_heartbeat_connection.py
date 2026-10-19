@@ -832,19 +832,68 @@ async def test_an_async_heartbeat_round_that_waits_on_a_lock_ends_on_the_server_
 # about 1.4 intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A
 # schedule that waits one interval after the failed round ends sends it at about 2.4 intervals,
 # after the lease.
-MARGIN_HEARTBEAT_MS = 1_000
-MARGIN_LEASE_MS = 2_300
+#
+# The lease starts when the claim leaves, so the claim, the start of the handler, and the second
+# round must end in 0.3 intervals. The delays of a loaded host are absolute, so the interval is 4 s,
+# which gives them 1.2 s. A trace of the TypeScript test ran at a 1-minute load of 46 on 32 cores.
+# The delay from the claim to the handler was up to 654 ms, and the second round took up to 221 ms
+# (SM-1479).
+MARGIN_HEARTBEAT_MS = 4_000
+MARGIN_LEASE_MS = 9_200
+
+
+def heartbeats_reach(
+    observer: psycopg.Connection[Any], blocker_pid: int, waits: bool, deadline: float
+) -> bool:
+    """Return whether a heartbeat statement waits on the lock of `blocker_pid` (`waits` true), or
+    no statement waits on it (`waits` false). An answer after the monotonic time `deadline` does
+    not count."""
+    while True:
+        row = observer.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid)) "
+            "AND query LIKE '%%heartbeat_many%%'",
+            (blocker_pid,),
+        ).fetchone()
+        assert row is not None
+        if monotonic() > deadline:
+            return False
+        if (row[0] > 0) == waits:
+            return True
+        sleep(0.01)
 
 
 def time_out_one_round(database_url: str, task: BlockingTask) -> None:
-    """Hold the table lock through the first round, then release the handler after the lease."""
+    """Hold the table lock until the first round times out, then release the handler after the
+    lease."""
     assert task.started.wait(30)
     started = monotonic()
     interval = MARGIN_HEARTBEAT_MS / 1000
-    with psycopg.connect(database_url) as blocker:
+    with (
+        psycopg.connect(database_url, autocommit=True) as observer,
+        psycopg.connect(database_url) as blocker,
+    ):
         lock_the_fast_tier_table(blocker)
-        sleep(max(0.0, started + 1.6 * interval - monotonic()))
+        # The first round falls due one interval after the lease registered, just before the
+        # handler started. A lock that comes later than half an interval can miss that round.
+        held = monotonic() - started
+        assert held <= interval / 2, (
+            f"precondition not met: the table lock came {held:.3f} s after the handler started"
+        )
+        # Hold the lock until the first round waits on it and then stops. While the lock is held,
+        # the statement stops only when its round times out. Then release the lock before the
+        # second round.
+        pid = blocker.info.backend_pid
+        assert heartbeats_reach(observer, pid, True, started + 1.5 * interval), (
+            "precondition not met: the first round did not wait on the table lock"
+        )
+        assert heartbeats_reach(observer, pid, False, started + 1.9 * interval), (
+            "precondition not met: the first round did not time out"
+        )
         blocker.commit()
+        released = monotonic() - started
+        assert released <= 1.9 * interval, (
+            f"precondition not met: the table lock ended {released:.3f} s after the handler started"
+        )
     # Run past the end of the lease from the claim, so only a renewal keeps the task.
     sleep(max(0.0, started + 2.6 * interval - monotonic()))
     task.release.set()

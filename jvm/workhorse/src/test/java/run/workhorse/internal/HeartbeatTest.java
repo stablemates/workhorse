@@ -117,14 +117,23 @@ class HeartbeatTest {
     return members;
   }
 
-  /** A round whose first batch always passes the deadline. It records the payload of each send. */
+  /**
+   * The deadline of a round in the batch tests. A pause of a loaded host before the first send
+   * stays below it (SM-1479).
+   */
+  private static final long ROUND_DEADLINE_MS = 200;
+
+  /**
+   * A round whose slow batch always passes the deadline of {@link #ROUND_DEADLINE_MS}. It records
+   * the payload of each send.
+   */
   private static Heartbeat.Round slowFirstBatch(String slowTask, List<String> sent) {
     return (timeoutNanos, statement, parameters) -> {
       String payload = (String) parameters[1];
       sent.add(payload);
       if (payload.contains(slowTask)) {
         try {
-          TimeUnit.MILLISECONDS.sleep(30);
+          TimeUnit.MILLISECONDS.sleep(ROUND_DEADLINE_MS + 50);
         } catch (InterruptedException interrupted) {
           Thread.currentThread().interrupt();
         }
@@ -142,7 +151,7 @@ class HeartbeatTest {
     Heartbeat shared = new Heartbeat(null, false);
     for (int round = 0; round < 3; round++) {
       List<String> sent = new ArrayList<>();
-      long deadline = System.nanoTime() + millis(10);
+      long deadline = System.nanoTime() + millis(ROUND_DEADLINE_MS);
       shared.sendBatches(
           batches,
           shared.nextFirstBatch(batches.size()),
@@ -163,7 +172,7 @@ class HeartbeatTest {
     int renewedLast = 0;
     for (int round = 0; round < 4; round++) {
       List<String> sent = new ArrayList<>();
-      long deadline = System.nanoTime() + millis(10);
+      long deadline = System.nanoTime() + millis(ROUND_DEADLINE_MS);
       dedicated.sendBatches(
           batches,
           dedicated.nextFirstBatch(batches.size()),

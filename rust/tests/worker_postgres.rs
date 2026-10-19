@@ -1046,13 +1046,19 @@ async fn a_heartbeat_statement_that_waits_on_a_lock_ends_on_the_server_by_its_de
 // intervals. The fixed schedule sends the next round at 2 intervals, inside the lease. A schedule
 // that waits one interval after the failed round ends sends it at about 2.4 intervals, after the
 // lease.
+//
+// The lease starts when the claim leaves, so the claim, the start of the handler, and the second
+// round must end in 0.3 intervals. The delays of a loaded host are absolute, so the interval is
+// 4 s, which gives them 1.2 s. A trace of the TypeScript test ran at a 1-minute load of 46 on 32
+// cores. The delay from the claim to the handler was up to 654 ms, and the second round took up to
+// 221 ms (SM-1479).
 #[tokio::test]
 async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     let Some(harness) = harness("worker_heartbeat_margin").await else { return };
     let task = harness.enqueue("rust.margin", json!({}), EnqueueOptions::default()).await;
-    let interval = Duration::from_secs(1);
+    let interval = Duration::from_secs(4);
     let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_millis(2300),
+        lease_duration: Duration::from_millis(9200),
         heartbeat_interval: Some(interval),
         ..options()
     });
@@ -1073,11 +1079,34 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     running_handlers.recv().await.unwrap();
     let handler_started = tokio::time::Instant::now();
 
+    let observer = harness.database.connect().await;
     let mut locker = harness.database.connect().await;
+    let blocker: i32 = locker.query_one("SELECT pg_backend_pid()", &[]).await.unwrap().get(0);
     let lock = locker.transaction().await.unwrap();
     lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
-    tokio::time::sleep_until(handler_started + interval * 16 / 10).await;
+    // The first round falls due one interval after the lease registered, just before the handler
+    // started. A lock that comes later than half an interval can miss that round.
+    let held = handler_started.elapsed();
+    assert!(
+        held <= interval / 2,
+        "precondition not met: the table lock came {held:?} after the handler started"
+    );
+    // Hold the lock until the first round waits on it and then stops. While the lock is held, the
+    // statement stops only when its round times out. Then release the lock before the second round.
+    assert!(
+        heartbeats_reach(&observer, blocker, true, handler_started + interval * 3 / 2).await,
+        "precondition not met: the first round did not wait on the table lock"
+    );
+    assert!(
+        heartbeats_reach(&observer, blocker, false, handler_started + interval * 19 / 10).await,
+        "precondition not met: the first round did not time out"
+    );
     lock.commit().await.unwrap();
+    let released = handler_started.elapsed();
+    assert!(
+        released <= interval * 19 / 10,
+        "precondition not met: the table lock ended {released:?} after the handler started"
+    );
     // Run past the end of the lease from the claim, so only a renewal keeps the task.
     tokio::time::sleep_until(handler_started + interval * 26 / 10).await;
     release.notify_one();
@@ -1085,6 +1114,34 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     harness.wait_for(task, TaskState::Succeeded).await;
     stop.send(()).unwrap();
     running.await.unwrap().unwrap();
+}
+
+/// Whether a heartbeat statement waits on the lock of the backend `blocker` (`waits` true), or no
+/// statement waits on it (`waits` false). An answer after `deadline` does not count.
+async fn heartbeats_reach(
+    observer: &Client,
+    blocker: i32,
+    waits: bool,
+    deadline: tokio::time::Instant,
+) -> bool {
+    loop {
+        let waiting: i64 = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) \
+                 AND query LIKE '%heartbeat_many%'",
+                &[&blocker],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if tokio::time::Instant::now() > deadline {
+            return false;
+        }
+        if (waiting > 0) == waits {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// One heartbeat round for `task` under `worker_id`, as the worker sends it, and its status.
