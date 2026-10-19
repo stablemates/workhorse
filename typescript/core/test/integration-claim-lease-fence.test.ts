@@ -2339,6 +2339,29 @@ describe("claim lease fence", () => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // The index choice follows the statistics of task_runtime. TRUNCATE keeps pg_statistic, and
+      // earlier tests and auto-analyze write it at times that load changes. Thus the test seeds 40
+      // queues with 25 ready and 25 active rows each and analyzes them in this transaction. ANALYZE
+      // prevents auto-analyze until ROLLBACK. ROLLBACK restores the earlier pg_statistic rows.
+      const planQueues = Array.from({ length: 40 }, (_, index) => `concurrency-plan-${index}`);
+      const seeding = new Queue(client);
+      for (const half of [planQueues.slice(0, 20), planQueues.slice(20)]) {
+        await seeding.enqueueMany(
+          half.flatMap((queueName) =>
+            Array.from({ length: 50 }, () => ({
+              type: "concurrency-plan",
+              payload: null,
+              options: { queue: queueName },
+            })),
+          ),
+        );
+      }
+      for (const queueName of planQueues) {
+        await expect(
+          seeding.claimMany("concurrency-plan-worker", 25, { queue: queueName }),
+        ).resolves.toHaveLength(25);
+      }
+      await client.query("ANALYZE workhorse.task_runtime");
       await client.query("SET LOCAL enable_seqscan = off");
 
       const activePlan = (
@@ -2346,7 +2369,7 @@ describe("claim lease fence", () => {
           SELECT count(*)
             FROM workhorse.task_runtime active
            WHERE active.state = 'active'
-             AND active.queue_name = 'concurrency-plan'
+             AND active.queue_name = 'concurrency-plan-0'
              AND active.expires_at > clock_timestamp()`)
       ).rows
         .map((row) => row["QUERY PLAN"])
@@ -2359,7 +2382,7 @@ describe("claim lease fence", () => {
             FROM workhorse.task_runtime runtime
             JOIN workhorse.task task ON task.id = runtime.task_id
            WHERE runtime.state = 'ready'
-             AND runtime.queue_name = 'concurrency-plan'
+             AND runtime.queue_name = 'concurrency-plan-0'
              AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
              AND (task.execution_timeout_ms IS NULL
                OR runtime.execution_used_ms < task.execution_timeout_ms)
