@@ -10,9 +10,15 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.postgresql.util.PSQLException;
+import org.postgresql.util.PSQLState;
 import run.workhorse.ConnectionSource;
 import run.workhorse.internal.Json;
 import run.workhorse.testing.ScratchDataSource;
@@ -171,6 +177,70 @@ class DashboardServletTest {
       assertTrue(response.header("Content-Type").startsWith("text/plain"));
       assertEquals("forbidden", response.text());
     }
+  }
+
+  // SM-1473: as in the other hosts, a driver error stays in the log and out of the 503 body.
+  @Test
+  void answers503WithAGenericBodyAndLogsAnUnexpectedCompatibilityFailure() throws Exception {
+    ConnectionSource unreachable =
+        new ConnectionSource() {
+          @Override
+          public Connection acquire() throws SQLException {
+            throw new PSQLException(
+                "Connection to db.example.invalid:5432 refused.",
+                PSQLState.CONNECTION_UNABLE_TO_CONNECT);
+          }
+
+          @Override
+          public void release(Connection connection, boolean transactional) {}
+        };
+    List<LogRecord> records = new CopyOnWriteArrayList<>();
+    Handler capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord logRecord) {
+            records.add(logRecord);
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    Logger logger = Logger.getLogger(Dashboard.class.getName());
+    boolean parentHandlers = logger.getUseParentHandlers();
+    logger.setUseParentHandlers(false);
+    logger.addHandler(capture);
+    try (TestServer server =
+        new TestServer(
+            "",
+            Dashboard.builder(unreachable, request -> DashboardAuthorization.principal("operator"))
+                .build())) {
+      for (String path : List.of("/workhorse/tasks", "/workhorse/rpc/dashboard/meta")) {
+        TestServer.Response response =
+            path.contains("/rpc/") ? server.post(path, "{\"json\":null}") : server.get(path);
+        assertEquals(503, response.status(), path);
+        assertEquals(
+            "{\"error\":\"Unable to verify Workhorse schema compatibility because the database"
+                + " query failed.\"}",
+            response.text(),
+            path);
+        assertFalse(response.text().contains("db.example.invalid"), path);
+        assertFalse(response.text().contains("5432"), path);
+      }
+    } finally {
+      logger.removeHandler(capture);
+      logger.setUseParentHandlers(parentHandlers);
+    }
+    assertTrue(
+        records.stream()
+            .anyMatch(
+                logged ->
+                    logged.getThrown() != null
+                        && String.valueOf(logged.getThrown().getMessage())
+                            .contains("db.example.invalid:5432")),
+        "the driver error reaches the log");
   }
 
   @Test
