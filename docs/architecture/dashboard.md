@@ -145,9 +145,11 @@ The host handles a request in this order:
 6. It overwrites `audit.actor`.
 7. It calls the private `workhorse.dashboard._backend.DashboardBackend`.
 
-The backend's `procedures()` implements every database-owned contract procedure through versioned
-dashboard views and lifecycle functions. The host supplies `enqueueTest` and `setSchedulePaused`.
-The behavior of these two procedures belongs to the embedding runtime.
+The backend's `procedures()` implements the database-owned contract procedures through versioned
+dashboard views and lifecycle functions. The exception is `previewRetentionPolicy`, which reads
+`get_retention_policy_v1()` and then counts the eligible rows directly in the tables, as every host
+does. SM-1478 owns the decision about this exception. The host supplies `enqueueTest` and
+`setSchedulePaused`. The behavior of these two procedures belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six scenarios and all 81 exchanges
 against both writable and read-only hosts.
 
@@ -879,6 +881,9 @@ document for three seconds:
 | TypeScript | `createDashboardQueueHealthReader` |
 | Go         | `backend.queueHealth`              |
 | Python     | `DashboardBackend._queue_health`   |
+| Rust       | `Backend::queue_health`            |
+| Ruby       | `Backend#queue_health`             |
+| JVM        | `Backend.queueHealth`              |
 
 `dashboard_task_detail_v1` takes the same input from the same cache.
 

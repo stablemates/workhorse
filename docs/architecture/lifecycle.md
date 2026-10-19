@@ -330,9 +330,9 @@ decrease the maintenance interval of the registered workers.
 
 Concurrent callers return immediately with `skipped_lock = true` and do not change the state.
 
-A skipped tick still uses the interval of the caller. The TypeScript and Python workers record
-their last tick time, also if a phase skipped. The Go and Rust maintenance loops wait for their next
-ticker fire.
+A skipped tick still uses the interval of the caller. The TypeScript, Python, Ruby, and JVM workers
+record their last tick time, also if a phase skipped. The Go and Rust maintenance loops wait for
+their next ticker fire.
 
 This behavior is intentional. At that moment, the lock holder does promotion and recovery. Thus a
 skip gives the work to the lock holder and does not drop it. A retry can become due after the
