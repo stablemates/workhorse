@@ -15,8 +15,10 @@ const AGENTIC_FLOW_SCENARIO = "agentic-flow";
 const coveragePath = path.join(repositoryRoot, "docs/examples-coverage.json");
 
 type FileMapping = { file: string };
+// A scenario whose JVM program has a Java and a Kotlin form maps both files.
+type FilesMapping = { files: string[] };
 type ExclusionMapping = { exclusion: { reason: string; capability?: string } };
-type Mapping = FileMapping | ExclusionMapping;
+type Mapping = FileMapping | FilesMapping | ExclusionMapping;
 
 type Coverage = {
   languages: string[];
@@ -27,6 +29,14 @@ type ParityStatus = "Supported" | "Planned" | "Absent";
 
 function isFileMapping(mapping: Mapping): mapping is FileMapping {
   return "file" in mapping && typeof mapping.file === "string";
+}
+
+function isFilesMapping(mapping: Mapping): mapping is FilesMapping {
+  return (
+    "files" in mapping &&
+    Array.isArray(mapping.files) &&
+    mapping.files.every((file) => typeof file === "string")
+  );
 }
 
 function cellStatus(cell: ParityCell): ParityStatus {
@@ -62,9 +72,18 @@ function isExampleFile(language: string, relativePath: string): boolean {
       !["docs.rb", "landing.rb", "agent_playbook.rb", "active_job.rb"].includes(name)
     );
   }
-  // Every file in jvm/examples holds the regions that the documentation embeds, as docs.rs and
-  // docs.rb do. None is a scenario the other languages mirror.
-  if (language === "jvm") return false;
+  // The scenario programs are the Java and Kotlin sources of the jvm/examples/programs project,
+  // apart from its package-info.java and the Programs.java helper that every program shares. The
+  // other files in jvm/examples hold the regions that the documentation embeds, as docs.rs and
+  // docs.rb do, or the tests that run them. None of those is a scenario the other languages mirror.
+  if (language === "jvm") {
+    return (
+      relativePath.startsWith("jvm/examples/programs/src/main/") &&
+      (name.endsWith(".java") || name.endsWith(".kt")) &&
+      name !== "package-info.java" &&
+      name !== "Programs.java"
+    );
+  }
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&
@@ -142,15 +161,19 @@ function coverageErrors(input: {
     for (const language of languages) {
       const mapping = columns[language];
       if (mapping === undefined) continue;
-      if (isFileMapping(mapping)) {
-        if (mapping.file.trim() === "") {
-          errors.push(`${scenario}.${language} file is empty`);
-          continue;
+      if (isFileMapping(mapping) || isFilesMapping(mapping)) {
+        const files = isFileMapping(mapping) ? [mapping.file] : mapping.files;
+        if (files.length === 0) errors.push(`${scenario}.${language} files is empty`);
+        for (const file of files) {
+          if (file.trim() === "") {
+            errors.push(`${scenario}.${language} file is empty`);
+            continue;
+          }
+          if (!existing.has(file)) {
+            errors.push(`${scenario}.${language} maps missing file ${file}`);
+          }
+          mappedByLanguage.get(language)?.push(file);
         }
-        if (!existing.has(mapping.file)) {
-          errors.push(`${scenario}.${language} maps missing file ${mapping.file}`);
-        }
-        mappedByLanguage.get(language)?.push(mapping.file);
         continue;
       }
       if ("exclusion" in mapping) {
@@ -334,6 +357,87 @@ describe("example scenario coverage", () => {
         "scenario transaction columns [go, python, typescript] must match languages [go, python, rust, typescript]",
       ]),
     );
+  });
+
+  it("accepts a cell that maps several files, and holds each file to the same checks", () => {
+    const orchestration = {
+      ...fixtureCoverage.scenarios.orchestration,
+      go: { files: ["go/examples/orchestration/main.go", "go/examples/orchestration/extra.go"] },
+    };
+    const input = {
+      ...fixtureInput,
+      coverage: {
+        ...fixtureCoverage,
+        scenarios: { ...fixtureCoverage.scenarios, orchestration },
+      },
+    };
+    const extraFiles = {
+      ...fixtureFiles,
+      go: [...fixtureFiles.go, "go/examples/orchestration/extra.go"],
+    };
+    expect(
+      coverageErrors({
+        ...input,
+        exampleFiles: extraFiles,
+        existingFiles: Object.values(extraFiles).flat(),
+      }),
+    ).toEqual([]);
+    expect(coverageErrors(input)).toEqual(
+      expect.arrayContaining([
+        "orchestration.go maps missing file go/examples/orchestration/extra.go",
+        "go maps go/examples/orchestration/extra.go, which is not an example file",
+      ]),
+    );
+    expect(
+      coverageErrors({
+        ...fixtureInput,
+        coverage: {
+          ...fixtureCoverage,
+          scenarios: {
+            ...fixtureCoverage.scenarios,
+            orchestration: { ...fixtureCoverage.scenarios.orchestration, go: { files: [] } },
+          },
+        },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "orchestration.go files is empty",
+        "orphan example go/examples/orchestration/main.go",
+      ]),
+    );
+    expect(
+      coverageErrors({
+        ...fixtureInput,
+        coverage: {
+          ...fixtureCoverage,
+          scenarios: {
+            ...fixtureCoverage.scenarios,
+            orchestration: {
+              ...fixtureCoverage.scenarios.orchestration,
+              go: {
+                files: ["go/examples/orchestration/main.go", "go/examples/orchestration/main.go"],
+              },
+            },
+          },
+        },
+      }),
+    ).toContain("go maps the same example file more than once");
+  });
+
+  it("counts the JVM scenario programs as examples, and not the documentation regions", () => {
+    const programs = "jvm/examples/programs/src/main";
+    expect(
+      [
+        `${programs}/java/run/workhorse/examples/programs/QuickstartProgram.java`,
+        `${programs}/kotlin/run/workhorse/examples/programs/OrchestrationProgram.kt`,
+        `${programs}/java/run/workhorse/examples/programs/package-info.java`,
+        `${programs}/java/run/workhorse/examples/programs/Programs.java`,
+        "jvm/examples/programs/src/test/java/run/workhorse/examples/programs/ScenarioProgramsTest.java",
+        "jvm/examples/programs/build.gradle.kts",
+        "jvm/examples/src/main/java/run/workhorse/examples/QuickstartExamples.java",
+        "jvm/examples/src/main/kotlin/run/workhorse/examples/QuickstartExamples.kt",
+      ].map((file) => isExampleFile("jvm", file)),
+    ).toEqual([true, true, false, false, false, false, false, false]);
   });
 
   it("rejects an exclusion that cites a Supported parity cell", () => {
