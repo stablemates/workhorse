@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,7 +108,8 @@ func holdLendableConnections(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	}
 	t.Cleanup(release)
 	for pool.Stat().AcquiredConns() < pool.Config().MaxConns {
-		acquireContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+		// The wait only bounds a hang. A stalled host can take many seconds to dial a connection.
+		acquireContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 		connection, err := pool.Acquire(acquireContext)
 		cancel()
 		if err != nil {
@@ -226,6 +228,13 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 // completion that waits longer than a whole lease for a pooled connection still settles the task
 // under the fence it was claimed with. A cancellation that arrives during that wait still ends the
 // attempt with one terminal transition, written by recovery once the refused renewal lets the lease lapse.
+//
+// The starvation holds only while every heartbeat round renews in time. On a loaded host that
+// precondition can break in two ways. A round can overrun its bound and discard the reserved
+// connection, and the waiting completion then takes the freed slot. Or the worker can send a round
+// that does not renew within a whole lease, and the lease watchdog then ends the renewal. That
+// attempt cannot test the starved finalization, so the test makes a new attempt. A watchdog with no
+// round sent during the lease is the defect this test catches, so it fails at once.
 func TestWorkerKeepsTheLeaseUntilTheCompletionIsWritten(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -236,19 +245,125 @@ func TestWorkerKeepsTheLeaseUntilTheCompletionIsWritten(t *testing.T) {
 		{name: "settles a cancellation requested during finalization", cancel: true, wantState: "canceled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			assertDelayedFinalization(t, test.cancel, test.wantState)
+			held, breaks := repeatStarvedFinalization(
+				delayedFinalizationAttempts, delayedFinalizationSpacing, t.Logf, time.Sleep,
+				func(attempt int) (string, bool) {
+					return assertDelayedFinalization(t, attempt, test.cancel, test.wantState)
+				},
+			)
+			if held == 0 {
+				t.Fatalf(
+					"the starvation precondition broke in each of %d attempts, so no attempt tested the starved finalization: %s",
+					delayedFinalizationAttempts, strings.Join(breaks, "; "),
+				)
+			}
+			t.Logf("the starved finalization held in attempt %d of %d", held, delayedFinalizationAttempts)
 		})
 	}
 }
 
-func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
-	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-finalization-lease")
+// delayedFinalizationAttempts is the most attempts assertDelayedFinalization gets to keep the
+// starvation precondition intact.
+const delayedFinalizationAttempts = 5
+
+// delayedFinalizationSpacing is the wait before attempt 2. The wait doubles before each later
+// attempt: 5 s, 10 s, 20 s, then 40 s.
+const delayedFinalizationSpacing = 5 * time.Second
+
+// The names of the two ways the starvation precondition breaks.
+const (
+	heartbeatRoundFailedBreak = "a heartbeat round failed"
+	leaseWatchdogBreak        = "the lease watchdog fired after a round"
+)
+
+// repeatStarvedFinalization runs attempt until one attempt holds or limit attempts broke. It returns
+// the attempt that held, or 0, and the break of each broken attempt. Before attempt 2 it waits
+// spacing. A stall can last longer than one attempt, so the wait doubles before each later attempt.
+func repeatStarvedFinalization(
+	limit int,
+	spacing time.Duration,
+	logf func(string, ...any),
+	sleep func(time.Duration),
+	attempt func(int) (broke string, held bool),
+) (int, []string) {
+	var breaks []string
+	for number := 1; number <= limit; number++ {
+		broke, held := attempt(number)
+		if held {
+			return number, breaks
+		}
+		breaks = append(breaks, "attempt "+strconv.Itoa(number)+": "+broke)
+		if number == limit {
+			break
+		}
+		wait := spacing << (number - 1)
+		logf("attempt %d: %s, so the test makes a new attempt in %s", number, broke, wait)
+		sleep(wait)
+	}
+	return 0, breaks
+}
+
+// starvationCheck is what one attempt observed when its starvation check failed.
+type starvationCheck struct {
+	cancel bool
+	// leased is true if the task_runtime row still exists.
+	leased      bool
+	roundFailed bool
+	// watchdogAt is the time of the lease watchdog record. It is zero if the worker logged none.
+	watchdogAt time.Time
+	// renewedAt is the database time of the last accepted renewal. PostgreSQL samples it inside the
+	// heartbeat statement, so the accepted round started before it and every later round after it.
+	renewedAt   time.Time
+	roundStarts []time.Time
+}
+
+type starvationVerdict int
+
+const (
+	starvationBroke starvationVerdict = iota
+	watchdogWithoutRound
+	completionWhileStarved
+	renewalStopped
+)
+
+// classifyStarvation decides what a failed starvation check means. A failed round breaks the
+// precondition. Without a cancellation, a watchdog also breaks it if a round started after the last
+// accepted renewal and by the watchdog record. A cancellation refuses renewal, so its watchdog is
+// expected and breaks nothing. Every other result is a failure of the test.
+func classifyStarvation(check starvationCheck) (starvationVerdict, string) {
+	switch {
+	case check.roundFailed:
+		return starvationBroke, heartbeatRoundFailedBreak
+	case check.cancel || !check.leased:
+		return completionWhileStarved, ""
+	case check.watchdogAt.IsZero():
+		return renewalStopped, ""
+	}
+	for _, start := range check.roundStarts {
+		if start.After(check.renewedAt) && !start.After(check.watchdogAt) {
+			return starvationBroke, leaseWatchdogBreak
+		}
+	}
+	return watchdogWithoutRound, ""
+}
+
+// assertDelayedFinalization runs one attempt of the starved finalization. If the starvation check
+// failed after the precondition broke, it returns held false and the name of the break. The
+// precondition breaks when a heartbeat round fails, or, without a cancellation, when the lease
+// watchdog fires after the worker sent a round during that lease. Any other failed check fails the
+// test.
+func assertDelayedFinalization(t *testing.T, attempt int, cancel bool, wantState string) (broke string, held bool) {
+	databaseURL := createConformanceDatabase(
+		t, testDatabaseURL(t), "worker-finalization-lease-"+strconv.Itoa(attempt),
+	)
 	ctx := context.Background()
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.MaxConns = 3
+	rounds := &heartbeatRoundRecorder{}
+	config.ConnConfig.Tracer = rounds
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -269,14 +384,17 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 	}
 	// A heartbeat round is bounded by the interval, and a round that overruns discards the reserved
 	// connection. The completion is already waiting on the pool and would take that freed slot. So
-	// the interval must leave a loaded runner room to finish a round.
+	// the interval must leave a loaded runner room to finish a round, and the log tells the test when
+	// a round did not finish.
 	const lease = time.Second
+	logs := newWorkerLogRecorder()
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:             queueName,
 		WorkerID:          "finalization-lease-worker",
 		LeaseDuration:     lease,
 		HeartbeatInterval: 200 * time.Millisecond,
 		PollInterval:      5 * time.Millisecond,
+		Logger:            slog.New(logs),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -296,10 +414,11 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 		}
 		workerResult <- err
 	}()
+	// The liveness waits only bound a hang. A stalled host can take many seconds to claim or settle.
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not start the handler")
+	case <-time.After(30 * time.Second):
+		t.Fatalf("attempt %d of %d: worker did not start the handler", attempt, delayedFinalizationAttempts)
 	}
 	var claimedFence int64
 	if err := observer.QueryRow(
@@ -322,23 +441,63 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 	time.Sleep(3 * lease)
 	renewed, leased := starvedLeaseExpiry(t, ctx, observer, taskID)
 	releaseHeld()
-	if !leased {
-		t.Fatalf("the completion was written while the pool was starved: task %s has no task_runtime row", taskID)
-	}
 	if cancelError != nil {
 		t.Fatal(cancelError)
 	}
-	if !cancel && !renewed.After(expiresAt.Add(lease)) {
-		t.Fatalf("lease stopped renewing during finalization: claimed until %s, now until %s", expiresAt, renewed)
+	starved := leased && (cancel || renewed.After(expiresAt.Add(lease)))
+	// The worker logs a failed round just after it discards the connection. So the log can come after
+	// the completion that took the freed slot.
+	if !starved {
+		check := starvationCheck{
+			cancel:      cancel,
+			leased:      leased,
+			roundFailed: logs.waitFor(heartbeatRoundFailedMessage, time.Second),
+			roundStarts: rounds.snapshot(),
+		}
+		if leased {
+			check.renewedAt = renewed.Add(-lease)
+		}
+		if watchdogAt, fired := logs.eventTime(leaseWatchdogEvent); fired {
+			check.watchdogAt = watchdogAt
+		}
+		verdict, name := classifyStarvation(check)
+		switch verdict {
+		case starvationBroke:
+			broke = name
+		case watchdogWithoutRound:
+			t.Fatalf(
+				"attempt %d of %d: the lease watchdog fired at %s, but the worker sent no heartbeat round after the renewal at %s\nworker log:\n%s",
+				attempt, delayedFinalizationAttempts, check.watchdogAt, check.renewedAt, logs.text(),
+			)
+		case completionWhileStarved:
+			t.Fatalf(
+				"attempt %d of %d: the completion was written while the pool was starved: task %s has no task_runtime row\nworker log:\n%s",
+				attempt, delayedFinalizationAttempts, taskID, logs.text(),
+			)
+		default:
+			t.Fatalf(
+				"attempt %d of %d: lease stopped renewing during finalization: claimed until %s, now until %s\nworker log:\n%s",
+				attempt, delayedFinalizationAttempts, expiresAt, renewed, logs.text(),
+			)
+		}
 	}
 
 	select {
 	case err := <-workerResult:
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("attempt %d of %d: %v", attempt, delayedFinalizationAttempts, err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not settle the delayed completion")
+	case <-time.After(30 * time.Second):
+		t.Fatalf("attempt %d of %d: worker did not settle the delayed completion", attempt, delayedFinalizationAttempts)
+	}
+	if !starved {
+		// PostgreSQL writes a completion only under the live lease and the claimed fence. A
+		// cancellation can end either way, because the completion can take the freed slot before the
+		// refused renewal lets the lease lapse.
+		if !leased && !cancel {
+			assertFinalizationOutcome(t, ctx, observer, taskID, attempt, "succeeded", claimedFence)
+		}
+		return broke, false
 	}
 	if cancel {
 		// Cancellation refuses renewal, so the starved acknowledgement finds the lease gone. Lease
@@ -347,6 +506,22 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 			t.Fatal(err)
 		}
 	}
+	assertFinalizationOutcome(t, ctx, observer, taskID, attempt, wantState, claimedFence)
+	return "", true
+}
+
+// assertFinalizationOutcome checks that the first attempt of the task ended in wantState under the
+// claimed fence. testAttempt is the attempt of the test, not of the task.
+func assertFinalizationOutcome(
+	t *testing.T,
+	ctx context.Context,
+	observer *pgx.Conn,
+	taskID string,
+	testAttempt int,
+	wantState string,
+	claimedFence int64,
+) {
+	t.Helper()
 	var state string
 	var fence int64
 	var attempt int
@@ -355,13 +530,241 @@ func assertDelayedFinalization(t *testing.T, cancel bool, wantState string) {
 		"SELECT state, fence_token, current_attempt FROM workhorse.task_outcome WHERE task_id = $1::uuid",
 		taskID,
 	).Scan(&state, &fence, &attempt); err != nil {
-		t.Fatal(err)
+		t.Fatalf("test attempt %d of %d: %v", testAttempt, delayedFinalizationAttempts, err)
 	}
 	if state != wantState || fence != claimedFence || attempt != 1 {
 		t.Fatalf(
-			"expected the delayed finalization to end %s under fence %d on attempt 1, received %s under fence %d on attempt %d",
-			wantState, claimedFence, state, fence, attempt,
+			"test attempt %d of %d: expected the delayed finalization to end %s under fence %d on attempt 1, received %s under fence %d on attempt %d",
+			testAttempt, delayedFinalizationAttempts, wantState, claimedFence, state, fence, attempt,
 		)
+	}
+}
+
+// heartbeatRoundFailedMessage is the exact message of the record a worker logs for a failed
+// heartbeat round.
+const heartbeatRoundFailedMessage = "heartbeat round failed; retrying"
+
+// workerLogRecorder is a slog.Handler that counts the records of each exact message. It also keeps
+// the text of every record, so a test can print the whole log on a failure.
+type workerLogRecorder struct {
+	state   *workerLogState
+	handler slog.Handler
+}
+
+type workerLogState struct {
+	mu       sync.Mutex
+	messages map[string]int
+	// events keeps the time of the first record of each event.name value.
+	events map[string]time.Time
+	buffer lockedBuffer
+}
+
+func newWorkerLogRecorder() *workerLogRecorder {
+	state := &workerLogState{messages: make(map[string]int), events: make(map[string]time.Time)}
+	return &workerLogRecorder{state: state, handler: slog.NewTextHandler(&state.buffer, nil)}
+}
+
+func (recorder *workerLogRecorder) Enabled(ctx context.Context, level slog.Level) bool {
+	return recorder.handler.Enabled(ctx, level)
+}
+
+func (recorder *workerLogRecorder) Handle(ctx context.Context, record slog.Record) error {
+	recorder.state.mu.Lock()
+	recorder.state.messages[record.Message]++
+	record.Attrs(func(attribute slog.Attr) bool {
+		if attribute.Key != "event.name" {
+			return true
+		}
+		if _, seen := recorder.state.events[attribute.Value.String()]; !seen {
+			recorder.state.events[attribute.Value.String()] = record.Time
+		}
+		return false
+	})
+	recorder.state.mu.Unlock()
+	return recorder.handler.Handle(ctx, record)
+}
+
+func (recorder *workerLogRecorder) WithAttrs(attributes []slog.Attr) slog.Handler {
+	return &workerLogRecorder{state: recorder.state, handler: recorder.handler.WithAttrs(attributes)}
+}
+
+func (recorder *workerLogRecorder) WithGroup(name string) slog.Handler {
+	return &workerLogRecorder{state: recorder.state, handler: recorder.handler.WithGroup(name)}
+}
+
+// waitFor reports whether the worker logs a record with exactly message within the given time.
+func (recorder *workerLogRecorder) waitFor(message string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		recorder.state.mu.Lock()
+		count := recorder.state.messages[message]
+		recorder.state.mu.Unlock()
+		if count > 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// eventTime returns the time of the first record whose event.name is exactly event.
+func (recorder *workerLogRecorder) eventTime(event string) (time.Time, bool) {
+	recorder.state.mu.Lock()
+	defer recorder.state.mu.Unlock()
+	at, ok := recorder.state.events[event]
+	return at, ok
+}
+
+func (recorder *workerLogRecorder) text() string {
+	return recorder.state.buffer.String()
+}
+
+// leaseWatchdogEvent is the event.name of the record a worker logs when no heartbeat was accepted
+// within the task lease.
+const leaseWatchdogEvent = "workhorse.task.lease_expired"
+
+// heartbeatRoundRecorder is a pgx tracer that keeps the start time of each heartbeat statement. A
+// test uses it to find whether the worker tried to renew after a renewal.
+type heartbeatRoundRecorder struct {
+	mu     sync.Mutex
+	starts []time.Time
+}
+
+func (recorder *heartbeatRoundRecorder) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if strings.Contains(data.SQL, "heartbeat_many_v2") {
+		recorder.mu.Lock()
+		recorder.starts = append(recorder.starts, time.Now())
+		recorder.mu.Unlock()
+	}
+	return ctx
+}
+
+func (*heartbeatRoundRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// snapshot returns the start time of each heartbeat statement so far.
+func (recorder *heartbeatRoundRecorder) snapshot() []time.Time {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]time.Time(nil), recorder.starts...)
+}
+
+// TestClassifyStarvation pins which failed starvation checks give the test a new attempt.
+func TestClassifyStarvation(t *testing.T) {
+	renewedAt := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	watchdogAt := renewedAt.Add(time.Second)
+	// The accepted round starts before PostgreSQL samples the renewal time.
+	acceptedRound := renewedAt.Add(-20 * time.Millisecond)
+	laterRound := renewedAt.Add(200 * time.Millisecond)
+	for _, test := range []struct {
+		name        string
+		check       starvationCheck
+		wantVerdict starvationVerdict
+		wantBreak   string
+	}{
+		{
+			name:        "a failed round breaks the precondition",
+			check:       starvationCheck{leased: true, roundFailed: true},
+			wantVerdict: starvationBroke,
+			wantBreak:   heartbeatRoundFailedBreak,
+		},
+		{
+			name:        "a failed round breaks it during a cancellation",
+			check:       starvationCheck{cancel: true, roundFailed: true},
+			wantVerdict: starvationBroke,
+			wantBreak:   heartbeatRoundFailedBreak,
+		},
+		{
+			name: "a watchdog after a later round breaks the precondition",
+			check: starvationCheck{
+				leased: true, watchdogAt: watchdogAt, renewedAt: renewedAt,
+				roundStarts: []time.Time{acceptedRound, laterRound},
+			},
+			wantVerdict: starvationBroke,
+			wantBreak:   leaseWatchdogBreak,
+		},
+		{
+			name: "the accepted round alone does not excuse a watchdog",
+			check: starvationCheck{
+				leased: true, watchdogAt: watchdogAt, renewedAt: renewedAt,
+				roundStarts: []time.Time{acceptedRound},
+			},
+			wantVerdict: watchdogWithoutRound,
+		},
+		{
+			name: "a round after the watchdog does not excuse it",
+			check: starvationCheck{
+				leased: true, watchdogAt: watchdogAt, renewedAt: renewedAt,
+				roundStarts: []time.Time{acceptedRound, watchdogAt.Add(time.Millisecond)},
+			},
+			wantVerdict: watchdogWithoutRound,
+		},
+		{
+			name: "a watchdog does not excuse an early completion",
+			check: starvationCheck{
+				watchdogAt: watchdogAt, roundStarts: []time.Time{laterRound},
+			},
+			wantVerdict: completionWhileStarved,
+		},
+		{
+			name: "a cancellation watchdog does not excuse an early completion",
+			check: starvationCheck{
+				cancel: true, watchdogAt: watchdogAt, roundStarts: []time.Time{laterRound},
+			},
+			wantVerdict: completionWhileStarved,
+		},
+		{
+			name:        "a lease that stopped renewing with no record fails",
+			check:       starvationCheck{leased: true, renewedAt: renewedAt, roundStarts: []time.Time{laterRound}},
+			wantVerdict: renewalStopped,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			verdict, broke := classifyStarvation(test.check)
+			if verdict != test.wantVerdict || broke != test.wantBreak {
+				t.Fatalf("received verdict %d and break %q, want verdict %d and break %q",
+					verdict, broke, test.wantVerdict, test.wantBreak)
+			}
+		})
+	}
+}
+
+// TestRepeatStarvedFinalizationStopsAtTheLimit pins the attempt limit, the doubled waits, and the
+// break of each attempt.
+func TestRepeatStarvedFinalizationStopsAtTheLimit(t *testing.T) {
+	var waits []time.Duration
+	held, breaks := repeatStarvedFinalization(
+		5, 5*time.Second, t.Logf, func(wait time.Duration) { waits = append(waits, wait) },
+		func(int) (string, bool) { return heartbeatRoundFailedBreak, false },
+	)
+	if held != 0 || len(breaks) != 5 {
+		t.Fatalf("expected no attempt to hold and 5 breaks, received %d and %q", held, breaks)
+	}
+	if breaks[4] != "attempt 5: "+heartbeatRoundFailedBreak {
+		t.Fatalf("unexpected last break %q", breaks[4])
+	}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second}
+	if len(waits) != len(want) {
+		t.Fatalf("expected waits %v, received %v", want, waits)
+	}
+	for index := range want {
+		if waits[index] != want[index] {
+			t.Fatalf("expected waits %v, received %v", want, waits)
+		}
+	}
+
+	waits = nil
+	held, breaks = repeatStarvedFinalization(
+		5, 5*time.Second, t.Logf, func(wait time.Duration) { waits = append(waits, wait) },
+		func(attempt int) (string, bool) { return leaseWatchdogBreak, attempt == 3 },
+	)
+	if held != 3 || len(breaks) != 2 || len(waits) != 2 {
+		t.Fatalf("expected attempt 3 to hold after 2 breaks and 2 waits, received %d, %q, and %v", held, breaks, waits)
 	}
 }
 
