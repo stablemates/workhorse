@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # The Ruby worker runs on the runtime stage's Alpine Ruby, so its gems install on that same base. The
 # lockfile pins every gem and its checksum. pg's prebuilt musl gem carries libpq, so nothing compiles.
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ruby-build
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS ruby-build
 
 RUN apk add --no-cache ruby ruby-bundler
 WORKDIR /opt/workhorse-ruby
@@ -68,7 +68,7 @@ RUN uv export \
       --requirement /tmp/requirements.txt
 COPY python/src/workhorse/ /opt/workhorse-python/workhorse/
 
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS build
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -117,7 +117,7 @@ RUN pnpm build:runtime && pnpm --filter @stablemates/workhorse-demo build
 RUN cd typescript/demo && npm pkg delete devDependencies
 RUN pnpm --filter @stablemates/workhorse-demo deploy --prod --legacy /opt/workhorse-demo
 
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS runtime
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3000
