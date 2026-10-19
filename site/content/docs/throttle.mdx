@@ -30,7 +30,7 @@ the task that opened the window.
 
 To use throttle, give a `throttle` key and a window when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult("email.digest", { accountId }, {
@@ -79,6 +79,27 @@ To use throttle, give a `throttle` key and a window when you enqueue the task.
     ```ruby
     result = queue.enqueue("email.digest", {"accountId" => account_id},
       throttle: Stablemates::Workhorse::Throttle.new(key: account_id, window: digest_window, scope: "digest"))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    EnqueueResult result =
+        queue.enqueue(
+            "email.digest",
+            Map.of("accountId", accountId),
+            EnqueueOptions.builder()
+                .throttle(new Throttle(accountId, digestWindow, "digest"))
+                .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val result =
+      queue.enqueueSuspend(
+        "email.digest",
+        mapOf("accountId" to accountId),
+        EnqueueOptions.builder().throttle(Throttle(accountId, digestWindow, "digest")).build(),
+      )
     ```
   </Tab>
 </Tabs>

@@ -27,7 +27,7 @@ wrapper of each `Admin` method. An operator can also redrive from the dashboard.
 The set of failed tasks is the dead-letter list. Other queue products call it a dead letter queue.
 Use `Admin.listDeadLetters` to filter the list and to read it one page at a time.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const page = await admin.listDeadLetters({
@@ -76,6 +76,29 @@ Use `Admin.listDeadLetters` to filter the list and to read it one page at a time
     ```ruby
     page = admin.list_dead_letters(queue: "payments", error_name: "ProviderTimeout",
       finished_after: Time.utc(2026, 3, 14, 9, 0, 0))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    DeadLetterPage page =
+        admin.listDeadLetters(
+            DeadLetterQuery.builder()
+                .queue("payments")
+                .errorName("ProviderTimeout")
+                .finishedAfter(Instant.parse("2026-03-14T09:00:00Z"))
+                .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val page =
+      admin.listDeadLettersSuspend(
+        DeadLetterQuery.builder()
+          .queue("payments")
+          .errorName("ProviderTimeout")
+          .finishedAfter(Instant.parse("2026-03-14T09:00:00Z"))
+          .build(),
+      )
     ```
   </Tab>
 </Tabs>
@@ -136,7 +159,7 @@ More detail: [Data model: Dead-letter index](https://github.com/stablemates/work
   alt="Redrive copies the work into a new task and keeps the failed task as evidence"
 />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await admin.redrive(sourceTaskId, {
@@ -174,6 +197,22 @@ More detail: [Data model: Dead-letter index](https://github.com/stablemates/work
     audit = Stablemates::Workhorse::AdminAudit.new(actor: "ops@example.com", reason: "Provider outage ended",
       request_id: "r-77")
     result = admin.redrive(source_task_id, audit: audit)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    RedriveResult result =
+        admin.redrive(
+            sourceTaskId, new AdminAudit("ops@example.com", "Provider outage ended", "r-77"));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val result =
+      admin.redriveSuspend(
+        sourceTaskId,
+        AdminAudit("ops@example.com", "Provider outage ended", "r-77"),
+      )
     ```
   </Tab>
 </Tabs>
@@ -333,7 +372,7 @@ run shows the tasks of a page and changes nothing.
    the 100 oldest failures and returns a cursor.
 4. You send the request with the cursor two more times. Workhorse redrives the remaining 200 tasks.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "payments", errorName: "ProviderTimeout" };
@@ -419,6 +458,30 @@ run shows the tasks of a page and changes nothing.
     preview = admin.redrive_many(audit: audit, dry_run: true, limit: 100, **filter)
     page = admin.redrive_many(audit: audit, limit: 100, **filter)
     page = admin.redrive_many(audit: audit, limit: 100, cursor: page.next_cursor, **filter) while page.next_cursor
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    RedriveFilter filter =
+        RedriveFilter.builder().queue("payments").errorName("ProviderTimeout").limit(100).build();
+    AdminAudit audit = new AdminAudit("ops@example.com", "Provider outage ended", "outage-0314");
+    BulkRedrivePage preview = admin.redriveMany(filter.toBuilder().dryRun(true).build(), audit);
+    BulkRedrivePage page = admin.redriveMany(filter, audit);
+    while (page.nextCursor() != null) {
+      page = admin.redriveMany(filter.toBuilder().cursor(page.nextCursor()).build(), audit);
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val filter =
+      RedriveFilter.builder().queue("payments").errorName("ProviderTimeout").limit(100).build()
+    val audit = AdminAudit("ops@example.com", "Provider outage ended", "outage-0314")
+    val preview = admin.redriveManySuspend(filter.toBuilder().dryRun(true).build(), audit)
+    var page = admin.redriveManySuspend(filter, audit)
+    while (page.nextCursor() != null) {
+      page = admin.redriveManySuspend(filter.toBuilder().cursor(page.nextCursor()).build(), audit)
+    }
     ```
   </Tab>
 </Tabs>

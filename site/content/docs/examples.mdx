@@ -20,7 +20,7 @@ the order commit together, or they roll back together.
 - In Java, give the JDBC `Connection` that holds the transaction as the first argument to
   `enqueue`. In Kotlin, give it as the `connection` argument of `enqueueSuspend`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue } from "@stablemates/workhorse";
@@ -146,6 +146,63 @@ the order commit together, or they roll back together.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    void createOrder(String orderId, List<String> items) throws SQLException {
+      try (Connection connection = dataSource.getConnection()) {
+        connection.setAutoCommit(false);
+        try {
+          try (PreparedStatement insert =
+              connection.prepareStatement("INSERT INTO orders (id, items) VALUES (?, ?)")) {
+            insert.setString(1, orderId);
+            insert.setArray(2, connection.createArrayOf("text", items.toArray()));
+            insert.executeUpdate();
+          }
+          queue.enqueue(
+              connection,
+              "order.fulfill",
+              Map.of("orderId", orderId),
+              EnqueueOptions.builder().queue("orders").build());
+          connection.commit();
+        } catch (SQLException | RuntimeException error) {
+          connection.rollback();
+          throw error;
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    suspend fun createOrder(
+      dataSource: DataSource,
+      queue: Queue,
+      orderId: String,
+      items: List<String>,
+    ) {
+      dataSource.connection.use { connection ->
+        connection.autoCommit = false
+        try {
+          connection.prepareStatement("INSERT INTO orders (id, items) VALUES (?, ?)").use { insert ->
+            insert.setString(1, orderId)
+            insert.setArray(2, connection.createArrayOf("text", items.toTypedArray()))
+            insert.executeUpdate()
+          }
+          queue.enqueueSuspend(
+            "order.fulfill",
+            mapOf("orderId" to orderId),
+            EnqueueOptions.builder().queue("orders").build(),
+            connection = connection,
+          )
+          connection.commit()
+        } catch (error: Throwable) {
+          connection.rollback()
+          throw error
+        }
+      }
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If the insert fails, no task exists. If the enqueue fails, no order exists. At no time can a reader
@@ -163,7 +220,7 @@ so a later run of the handler does not run the code again.
 - Give the mail provider an idempotency key that you make from the task ID. A checkpoint alone
   cannot stop a repeated send.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
@@ -355,6 +412,62 @@ so a later run of the handler does not run the code again.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    static Map<String, Object> sendWelcome(String to, String idempotencyKey) {
+      return Map.of("deliveredTo", to, "kind", "welcome", "idempotencyKey", idempotencyKey);
+    }
+
+    static Map<String, Object> sendFollowUp(String to, String idempotencyKey) {
+      return Map.of("deliveredTo", to, "kind", "follow-up", "idempotencyKey", idempotencyKey);
+    }
+
+    static Worker.Builder registerTrialHandler(Worker.Builder worker) {
+      return worker.handle(
+          "trial.lifecycle",
+          Map.class,
+          (context, trial) -> {
+            if (!(trial.get("to") instanceof String to)
+                || !(trial.get("followUpAt") instanceof String followUpAt)) {
+              throw new IllegalArgumentException("trial payload needs string to and followUpAt");
+            }
+            context.checkpoint(
+                "welcome", Map.class, () -> sendWelcome(to, "welcome:" + context.task().id()));
+            context.sleepUntil("follow-up-window", Instant.parse(followUpAt));
+            context.checkpoint(
+                "follow-up", Map.class, () -> sendFollowUp(to, "follow-up:" + context.task().id()));
+            return Map.of("deliveredTo", to);
+          });
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    fun sendWelcome(to: String, idempotencyKey: String): Map<String, Any?> =
+      mapOf("deliveredTo" to to, "kind" to "welcome", "idempotencyKey" to idempotencyKey)
+
+    fun sendFollowUp(to: String, idempotencyKey: String): Map<String, Any?> =
+      mapOf("deliveredTo" to to, "kind" to "follow-up", "idempotencyKey" to idempotencyKey)
+
+    fun registerTrialHandler(worker: WorkerScope) {
+      worker.handle<Map<String, Any?>>("trial.lifecycle") { context, trial ->
+        val to = trial["to"] as String
+        context.checkpoint<Map<String, Any?>>("welcome") {
+          sendWelcome(to, "welcome:${context.task.id()}")
+        }
+        context.sleepUntil("follow-up-window", Instant.parse(trial["followUpAt"] as String))
+        context.checkpoint<Map<String, Any?>>("follow-up") {
+          sendFollowUp(to, "follow-up:${context.task.id()}")
+        }
+        mapOf("deliveredTo" to to)
+      }
+    }
+    ```
+  </Tab>
 </Tabs>
 
 The sleep stores a named timer, and the worker releases the task. The task waits in the state
@@ -382,7 +495,7 @@ An invoice run must occur each night at 03:00. You do not want a separate schedu
 the schedule in your code, and sync it during the deployment. Each worker that watches the
 namespace of the schedule can start the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     // Deployment step: reconcile the namespace to exactly this set.
@@ -557,6 +670,55 @@ namespace of the schedule can start the task.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    void runBillingWorker() {
+      // Deployment step: reconcile the namespace to exactly this set.
+      ScheduledTask task =
+          new ScheduledTask(
+              "invoice.generate", Map.of("scope", "due"), "billing", 0, null, null, null);
+      queue.syncSchedules(
+          "billing-production",
+          List.of(new ScheduleDefinition("nightly-invoice-run", "0 3 * * *", task)));
+
+      // Worker process: evaluate and fire schedules for that namespace.
+      Worker worker =
+          Worker.builder(dataSource)
+              .queues("billing")
+              .scheduleNamespaces("billing-production")
+              .handle(
+                  "invoice.generate",
+                  Map.class,
+                  (context, payload) -> Map.of("generated", true, "payload", payload))
+              .build();
+      WorkerProcess.runWorkerProcess(worker);
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    suspend fun runBillingWorker(dataSource: DataSource, queue: Queue) {
+      // Deployment step: reconcile the namespace to exactly this set.
+      val task =
+        ScheduledTask("invoice.generate", mapOf("scope" to "due"), "billing", 0, null, null, null)
+      queue.syncSchedulesSuspend(
+        "billing-production",
+        listOf(ScheduleDefinition("nightly-invoice-run", "0 3 * * *", task)),
+      )
+
+      // Worker process: evaluate and fire schedules for that namespace.
+      val worker =
+        workhorseWorker(dataSource) {
+          queues = listOf("billing")
+          scheduleNamespaces = listOf("billing-production")
+          handle<Map<String, Any?>>("invoice.generate") { _, payload ->
+            mapOf("generated" to true, "payload" to payload)
+          }
+        }
+      WorkerProcess.runWorkerProcess(worker)
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Two workers cannot start the same occurrence two times. Each occurrence has a durable key: the
@@ -570,7 +732,7 @@ A payment provider can send the same webhook event more than one time. Each even
 one task. Make the idempotency key from the event ID of the provider. A repeated delivery then
 returns the first task and does not make a new task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
@@ -703,6 +865,42 @@ returns the first task and does not make a new task.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    record StripeEvent(String id, String type, @Nullable Object data) {}
+
+    Map<String, UUID> handleStripeWebhook(StripeEvent event) {
+      EnqueueResult result =
+          queue.enqueue(
+              "stripe.event",
+              Map.of("eventId", event.id(), "eventType", event.type()),
+              EnqueueOptions.builder()
+                  .queue("webhooks")
+                  .idempotency(
+                      new Idempotency("stripe:" + event.id(), "stripe-webhooks", Duration.ofDays(1)))
+                  .build());
+      return Map.of("accepted", result.taskId());
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    data class StripeEvent(val id: String, val type: String, val data: Any?)
+
+    suspend fun handleStripeWebhook(queue: Queue, event: StripeEvent): Map<String, UUID> {
+      val result =
+        queue.enqueueSuspend(
+          "stripe.event",
+          mapOf("eventId" to event.id, "eventType" to event.type),
+          EnqueueOptions.builder()
+            .queue("webhooks")
+            .idempotency(Idempotency("stripe:${event.id}", "stripe-webhooks", Duration.ofDays(1)))
+            .build(),
+        )
+      return mapOf("accepted" to result.taskId())
+    }
+    ```
+  </Tab>
 </Tabs>
 
 An equal repeated request returns the same task ID. It makes no new task, event, or notification.
@@ -728,7 +926,7 @@ A redrive makes a new task from a failed task. Like each task, the new task runs
 2. Use one request ID for the incident on all pages. Then, if the script crashes, you can run it
    again without duplicate work.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
@@ -920,6 +1118,51 @@ A redrive makes a new task from a failed task. Like each task, the new task runs
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    void redriveIncident() {
+      RedriveFilter filter =
+          RedriveFilter.builder().queue("billing").errorName("ProviderTimeout").limit(100).build();
+      AdminAudit audit =
+          new AdminAudit("reviewer@example.com", "provider incident INC-2041 resolved", "INC-2041");
+
+      BulkRedrivePage preview = admin.redriveMany(filter.toBuilder().dryRun(true).build(), audit);
+      System.out.println(preview.results().size() + " tasks eligible");
+
+      DeadLetterCursor cursor = null;
+      do {
+        BulkRedrivePage page = admin.redriveMany(filter.toBuilder().cursor(cursor).build(), audit);
+        for (RedriveResult result : page.results()) {
+          System.out.println(
+              result.status() + " " + result.sourceTaskId() + " -> " + result.targetTaskId());
+        }
+        cursor = page.nextCursor();
+      } while (cursor != null);
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    suspend fun redriveIncident(admin: Admin) {
+      val filter =
+        RedriveFilter.builder().queue("billing").errorName("ProviderTimeout").limit(100).build()
+      val audit =
+        AdminAudit("reviewer@example.com", "provider incident INC-2041 resolved", "INC-2041")
+
+      val preview = admin.redriveManySuspend(filter.toBuilder().dryRun(true).build(), audit)
+      println("${preview.results().size} tasks eligible")
+
+      var cursor: DeadLetterCursor? = null
+      do {
+        val page = admin.redriveManySuspend(filter.toBuilder().cursor(cursor).build(), audit)
+        for (result in page.results()) {
+          println("${result.status()} ${result.sourceTaskId()} -> ${result.targetTaskId()}")
+        }
+        cursor = page.nextCursor()
+      } while (cursor != null)
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Each redrive creates a new task. The new task copies the queue, the type, the payload, and the
@@ -933,7 +1176,7 @@ A customer cancels an order while its export task runs. A worker cannot safely s
 arbitrary point. Thus, a cancellation is a durable request. Each SDK gives the request to the
 handler. The handler must check for the request and stop.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     // Operator side: record who asked and why.
@@ -1102,6 +1345,54 @@ handler. The handler must check for the request and stop.
     end
     ```
   </Tab>
+  <Tab value="Java">
+    ```java
+    static void uploadPart(String part) {
+      System.out.println("uploading " + part);
+    }
+
+    Worker.Builder configureExport(Worker.Builder worker, UUID taskId) {
+      queue.cancel(taskId, "support@example.com", "customer withdrew the order");
+
+      return worker.handle(
+          "export.build",
+          Map.class,
+          (context, export) -> {
+            if (!(export.get("parts") instanceof List<?> parts)) {
+              throw new IllegalArgumentException("export payload needs an array parts field");
+            }
+            for (Object part : parts) {
+              context.cancellation().throwIfCancelled();
+              uploadPart(String.valueOf(part));
+            }
+            return Map.of("exported", true);
+          });
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    fun uploadPart(part: String) = println("uploading $part")
+
+    suspend fun configureExport(dataSource: DataSource, queue: Queue, taskId: UUID): Worker {
+      queue.cancelSuspend(
+        taskId,
+        requestedBy = "support@example.com",
+        reason = "customer withdrew the order",
+      )
+
+      return workhorseWorker(dataSource) {
+        handle<Map<String, Any?>>("export.build") { context, export ->
+          for (part in export["parts"] as List<*>) {
+            context.cancellation.throwIfCancelled()
+            uploadPart(part.toString())
+          }
+          mapOf("exported" to true)
+        }
+      }
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If no worker runs the task, Workhorse cancels it immediately. For example, the task waits in the
@@ -1129,7 +1420,7 @@ must continue after a deployment.
 3. Wait on a durable timer.
 4. Wait for an approval signal, which the application sends with an idempotency key.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
@@ -1397,6 +1688,92 @@ must continue after a deployment.
         {"plan" => plan, "tools" => tools, "approved" => approval["approved"] == true}
       end
     end
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    interface Model {
+      Map<String, Object> plan(String prompt, String idempotencyKey);
+    }
+
+    static Worker.Builder registerAgent(Worker.Builder worker, Model model, Duration cooldown) {
+      return worker.handle(
+          "agent.run",
+          Map.class,
+          (context, run) -> {
+            if (!(run.get("prompt") instanceof String prompt)
+                || !(run.get("conversationId") instanceof String conversationId)) {
+              throw new IllegalArgumentException("agent payload needs prompt and conversationId");
+            }
+            Map<?, ?> plan =
+                context.checkpoint(
+                    "plan", Map.class, () -> model.plan(prompt, "plan:" + context.task().id()));
+            if (!(plan.get("tools") instanceof List<?> planTools)) {
+              throw new IllegalArgumentException("model plan needs an array tools field");
+            }
+
+            List<ChildRequest> children = new ArrayList<>();
+            for (Object value : planTools) {
+              if (!(value instanceof Map<?, ?> tool) || !(tool.get("id") instanceof String id)) {
+                throw new IllegalArgumentException("tool needs a string id field");
+              }
+              children.add(
+                  ChildRequest.of(
+                      id,
+                      "agent.tool",
+                      tool,
+                      EnqueueOptions.builder()
+                          .queue("tools")
+                          .concurrencyKey(conversationId)
+                          .build()));
+            }
+
+            var tools = context.runChildrenAll(children);
+            context.sleep("model-cooldown", cooldown);
+            Map<?, ?> approval = context.waitForSignal("approval", Map.class, null);
+            return Map.of(
+                "plan",
+                plan,
+                "tools",
+                tools,
+                "approved",
+                Boolean.TRUE.equals(approval.get("approved")));
+          });
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    interface Model {
+      suspend fun plan(prompt: String, idempotencyKey: String): Map<String, Any?>
+    }
+
+    fun registerAgent(worker: WorkerScope, model: Model, cooldown: Duration) {
+      worker.handle<Map<String, Any?>>("agent.run") { context, run ->
+        val prompt = run["prompt"] as String
+        val conversationId = run["conversationId"] as String
+        val plan =
+          context.checkpoint<Map<String, Any?>>("plan") {
+            model.plan(prompt, "plan:${context.task.id()}")
+          }
+
+        val children =
+          (plan["tools"] as List<*>).map { value ->
+            val tool = value as Map<*, *>
+            ChildRequest.of(
+              tool["id"] as String,
+              "agent.tool",
+              tool,
+              EnqueueOptions.builder().queue("tools").concurrencyKey(conversationId).build(),
+            )
+          }
+
+        val tools = context.runChildrenAll(children)
+        context.sleep("model-cooldown", cooldown)
+        val approval = context.waitForSignal<Map<String, Any?>>("approval")
+        mapOf("plan" to plan, "tools" to tools, "approved" to (approval["approved"] == true))
+      }
+    }
     ```
   </Tab>
 </Tabs>

@@ -25,7 +25,7 @@ default priority. All worker slots run earlier reminders.
 
 To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", priority: 10 });
@@ -59,6 +59,23 @@ To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
   <Tab value="Ruby">
     ```ruby
     queue.enqueue("invoice.remind", {"invoiceId" => invoice_id}, queue: "billing", priority: 10)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "invoice.remind",
+        Map.of("invoiceId", invoiceId),
+        EnqueueOptions.builder().queue("billing").priority(10).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "invoice.remind",
+      mapOf("invoiceId" to invoiceId),
+      EnqueueOptions.builder().queue("billing").priority(10).build(),
+    )
     ```
   </Tab>
 </Tabs>

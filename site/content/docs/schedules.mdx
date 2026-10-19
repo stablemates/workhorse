@@ -33,7 +33,7 @@ increases with each change.
 To declare your schedules, call `queue.syncSchedules` with all the definitions of one namespace.
 Make this call each time that you deploy.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncSchedules("billing-production", [{
@@ -85,6 +85,37 @@ Make this call each time that you deploy.
     schedule = Stablemates::Workhorse::ScheduleDefinition.new(name: "invoice-run", schedule: nightly_cron,
       task: task, timezone: "America/New_York")
     queue.sync_schedules("billing-production", [schedule], prune: true)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    ScheduledTask task =
+        new ScheduledTask(
+            "invoice.generate", Map.of("scope", "due"), "billing", 0, null, null, null);
+    queue.syncSchedules(
+        "billing-production",
+        List.of(
+            new ScheduleDefinition(
+                "invoice-run", nightlyCron, task, "America/New_York", CatchupPolicy.SKIP, true)));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val task =
+      ScheduledTask("invoice.generate", mapOf("scope" to "due"), "billing", 0, null, null, null)
+    queue.syncSchedulesSuspend(
+      "billing-production",
+      listOf(
+        ScheduleDefinition(
+          "invoice-run",
+          nightlyCron,
+          task,
+          "America/New_York",
+          CatchupPolicy.SKIP,
+          true,
+        ),
+      ),
+    )
     ```
   </Tab>
 </Tabs>
@@ -158,7 +189,7 @@ Workhorse has no scheduler process. A worker evaluates the namespaces that you l
 maintenance. To make a TypeScript worker offer a namespace, set `scheduleNamespaces`. Python, Rust,
 and Ruby workers use `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, { scheduleNamespaces: ["billing-production"] });
@@ -190,6 +221,16 @@ and Ruby workers use `schedule_namespaces`, and Go workers use `WorkerOptions.Sc
   <Tab value="Ruby">
     ```ruby
     worker = Stablemates::Workhorse::Worker.new(pool, schedule_namespaces: ["billing-production"])
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker = Worker.builder(dataSource).scheduleNamespaces("billing-production").build();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing-production") }
     ```
   </Tab>
 </Tabs>

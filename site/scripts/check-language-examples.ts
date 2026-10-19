@@ -299,6 +299,8 @@ function assertVerifiedLanguageSnippets(
     go?: LandingSnippetId;
     rust?: LandingSnippetId;
     ruby?: LandingSnippetId;
+    java?: LandingSnippetId;
+    kotlin?: LandingSnippetId;
   },
 ) {
   if (
@@ -306,10 +308,14 @@ function assertVerifiedLanguageSnippets(
     snippets.go === undefined ||
     snippets.rust === undefined ||
     snippets.ruby === undefined ||
+    snippets.java === undefined ||
+    snippets.kotlin === undefined ||
     landingSnippetLanguages[snippets.python] !== "python" ||
     landingSnippetLanguages[snippets.go] !== "go" ||
     landingSnippetLanguages[snippets.rust] !== "rust" ||
-    landingSnippetLanguages[snippets.ruby] !== "ruby"
+    landingSnippetLanguages[snippets.ruby] !== "ruby" ||
+    landingSnippetLanguages[snippets.java] !== "java" ||
+    landingSnippetLanguages[snippets.kotlin] !== "kotlin"
   ) {
     throw new Error(`landing example ${name} has unverified language snippets`);
   }
@@ -516,40 +522,8 @@ const rustPendingPages: Record<string, string> = {};
 const rustPendingExamples: Record<string, string> = {};
 const rubyPendingPages: Record<string, string> = {};
 const rubyPendingExamples: Record<string, string> = {};
-// SM-1464 adds the Java and Kotlin tabs of these pages and of the examples page.
-const jvmPendingPages: Record<string, string> = Object.fromEntries(
-  [
-    "agentic-flow.mdx",
-    "batch-handlers.mdx",
-    "cancellation.mdx",
-    "child-tasks.mdx",
-    "concurrency-policies.mdx",
-    "contracts.mdx",
-    "dead-letters.mdx",
-    "deadlines.mdx",
-    "debounce.mdx",
-    "durable-execution.mdx",
-    "for-ai-agents.mdx",
-    "human-waits.mdx",
-    "idempotency.mdx",
-    "multi-tenancy.mdx",
-    "operations.mdx",
-    "priority.mdx",
-    "progress.mdx",
-    "queue-health.mdx",
-    "quickstart.mdx",
-    "rate-limits.mdx",
-    "retries.mdx",
-    "schedules.mdx",
-    "signals.mdx",
-    "task-dependencies.mdx",
-    "task-groups.mdx",
-    "throttle.mdx",
-  ].map((page) => [page, "SM-1464"]),
-);
-const jvmPendingExamples: Record<string, string> = Object.fromEntries(
-  examplePatterns.map((section) => [section.match(/^## (.+)$/m)![1]!, "SM-1464"]),
-);
+const jvmPendingPages: Record<string, string> = {};
+const jvmPendingExamples: Record<string, string> = {};
 for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
   entry.endsWith(".mdx"),
 )) {

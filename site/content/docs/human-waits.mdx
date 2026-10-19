@@ -23,7 +23,7 @@ gives the decision the name `account-review`. It stores the context that an oper
 
 <Diagram name="human-decisions-wait" alt="A human wait frees the worker until a person decides" />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const review = await ctx.waitForHuman<
@@ -81,6 +81,33 @@ gives the decision the name `account-review`. It stores the context that an oper
       {"accountId" => account_id, "prompt" => "Approve this account?"})
     activate_account(account_id) if review["approved"] == true
     ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<?, ?> review =
+        context.waitForHuman(
+            "account-review",
+            Map.of("accountId", accountId, "prompt", "Approve this account?"),
+            Map.class,
+            null);
+
+    if (Boolean.TRUE.equals(review.get("approved"))) {
+      activateAccount(accountId);
+    }
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val review =
+      ctx.waitForHuman<Map<String, Any?>>(
+        "account-review",
+        mapOf("accountId" to accountId, "prompt" to "Approve this account?"),
+      )
+
+    if (review["approved"] == true) activateAccount(accountId)
+    ```
+
   </Tab>
 </Tabs>
 

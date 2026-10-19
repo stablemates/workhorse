@@ -34,7 +34,7 @@ The waits become longer because each failure shows that the provider needs more 
 
 To set the budget, give `maxAttempts` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
@@ -70,6 +70,23 @@ To set the budget, give `maxAttempts` when you enqueue the task.
   <Tab value="Ruby">
     ```ruby
     queue.enqueue("provider.sync", {"accountId" => account_id}, max_attempts: 5)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    queue.enqueue(
+        "provider.sync",
+        Map.of("accountId", accountId),
+        EnqueueOptions.builder().maxAttempts(5).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    queue.enqueueSuspend(
+      "provider.sync",
+      mapOf("accountId" to accountId),
+      EnqueueOptions.builder().maxAttempts(5).build(),
+    )
     ```
   </Tab>
 </Tabs>
@@ -122,7 +139,7 @@ Workhorse stores the policy with the task. A policy has one of three types:
 - **Decorrelated jitter.** The delay is random in a range. The range becomes larger after each
   failure, to a maximum.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
@@ -167,6 +184,27 @@ Workhorse stores the policy with the task. A policy has one of three types:
     ```ruby
     jitter = {"type" => "decorrelated-jitter", "baseDelayMs" => 1_000, "maxDelayMs" => 60_000}
     queue.enqueue("provider.sync", {"accountId" => account_id}, retry_policy: jitter, max_attempts: 5)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<String, Object> jitter =
+        Map.of("type", "decorrelated-jitter", "baseDelayMs", 1_000, "maxDelayMs", 60_000);
+    queue.enqueue(
+        "provider.sync",
+        Map.of("accountId", accountId),
+        EnqueueOptions.builder().retryPolicy(jitter).maxAttempts(5).build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val jitter =
+      mapOf("type" to "decorrelated-jitter", "baseDelayMs" to 1_000, "maxDelayMs" to 60_000)
+    queue.enqueueSuspend(
+      "provider.sync",
+      mapOf("accountId" to accountId),
+      EnqueueOptions.builder().retryPolicy(jitter).maxAttempts(5).build(),
+    )
     ```
   </Tab>
 </Tabs>

@@ -26,7 +26,7 @@ charge runs as its own task on the `payments` queue, so a payments worker can do
 
 <Diagram name="child-tasks-join" alt="A parent gives up its worker until its child succeeds" />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const charge = await context.runChild<{ orderId: string }, { receiptId: string }>(
@@ -72,6 +72,28 @@ charge runs as its own task on the `payments` queue, so a payments worker can do
   <Tab value="Ruby">
     ```ruby
     charge = context.run_child("charge", "payments.charge", {"orderId" => order.fetch("id")}, queue: "payments")
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<?, ?> charge =
+        context.runChild(
+            "charge",
+            "payments.charge",
+            Map.of("orderId", order.id()),
+            EnqueueOptions.builder().queue("payments").build(),
+            Map.class);
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val charge =
+      context.runChild<Map<String, Any?>>(
+        "charge",
+        "payments.charge",
+        mapOf("orderId" to order.id),
+        EnqueueOptions.builder().queue("payments").build(),
+      )
     ```
   </Tab>
 </Tabs>
@@ -144,7 +166,7 @@ two checks do not depend on each other, so they can run at the same time.
 4. A worker runs the handler again from the start. `runChildren` returns one outcome for each name.
 5. The outcome of `fraud` has the status `failed`, so the handler rejects the order.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const results = await context.runChildren<{
@@ -217,6 +239,38 @@ two checks do not depend on each other, so they can run at the same time.
     else
       {"accepted" => true}
     end
+    ```
+
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Map<String, ChildOutcome> results =
+        context.runChildren(
+            List.of(
+                ChildRequest.of("fraud", "orders.check-fraud", Map.of("orderId", orderId)),
+                ChildRequest.of("inventory", "orders.reserve", Map.of("orderId", orderId))));
+
+    ChildOutcome fraud = Objects.requireNonNull(results.get("fraud"));
+    if (fraud.status() == ChildStatus.FAILED) {
+      return Map.of("accepted", false, "reason", fraud.error());
+    }
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val results =
+      context.runChildren(
+        listOf(
+          ChildRequest.of("fraud", "orders.check-fraud", mapOf("orderId" to orderId)),
+          ChildRequest.of("inventory", "orders.reserve", mapOf("orderId" to orderId)),
+        ),
+      )
+
+    val fraud = results.getValue("fraud")
+    if (fraud.status == ChildStatus.FAILED) {
+      return mapOf("accepted" to false, "reason" to fraud.error)
+    }
     ```
 
   </Tab>

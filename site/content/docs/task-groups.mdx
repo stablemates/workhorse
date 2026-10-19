@@ -32,7 +32,7 @@ the queue `imports`. After the last row, the app must send one report.
   alt="The last finished member task finishes the group and enqueues its callback"
 />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const rows = file.rows.map((row) => ({
@@ -148,6 +148,50 @@ the queue `imports`. After the last row, the app must send one report.
     group = queue.task_group(on_finish: report) do |builder|
       rows.each_slice(1_000) { |slice| builder.add(slice) }
     end.group
+    ```
+
+  </Tab>
+  <Tab value="Java">
+    ```java
+    EnqueueOptions imports = EnqueueOptions.builder().queue("imports").build();
+    List<EnqueueRequest> rows =
+        file.rows().stream()
+            .map(
+                row ->
+                    EnqueueRequest.of(
+                        "imports.row", Map.of("importId", "imp-7", "row", row), imports))
+            .toList();
+    EnqueueRequest report =
+        EnqueueRequest.of("imports.report", Map.of("importId", "imp-7"), imports);
+
+    TaskGroup group =
+        queue
+            .taskGroup(
+                new TaskGroupCallbacks(report, null, null),
+                builder -> {
+                  for (int start = 0; start < rows.size(); start += 1_000) {
+                    builder.add(rows.subList(start, Math.min(start + 1_000, rows.size())));
+                  }
+                })
+            .group();
+    ```
+
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val imports = EnqueueOptions.builder().queue("imports").build()
+    val rows =
+      file.rows.map { row ->
+        EnqueueRequest.of("imports.row", mapOf("importId" to "imp-7", "row" to row), imports)
+      }
+    val report = EnqueueRequest.of("imports.report", mapOf("importId" to "imp-7"), imports)
+
+    val group =
+      queue
+        .taskGroupSuspend(TaskGroupCallbacks(report, null, null)) {
+          rows.chunked(1_000).forEach { slice -> add(slice) }
+        }
+        .group
     ```
 
   </Tab>
@@ -271,7 +315,7 @@ More detail: [Task groups: Lifecycle](https://github.com/stablemates/workhorse/b
 A handler reads its own group through its handler context. A callback uses this read to find the
 counts of the group that enqueued it.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle<{ importId: string }>("imports.report", async (report, ctx) => {
@@ -336,6 +380,35 @@ counts of the group that enqueued it.
       send_report(report.fetch("importId"), counts.succeeded, counts.failed)
       {"sent" => true}
     end
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    Worker worker =
+        Worker.builder(dataSource)
+            .queues("imports")
+            .handle(
+                "imports.report",
+                Map.class,
+                (context, report) -> {
+                  TaskGroupCounts counts = context.taskGroup().get().orElseThrow().group().counts();
+                  reporter.send(report.get("importId"), counts.succeeded(), counts.failed());
+                  return Map.of("sent", true);
+                })
+            .build();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val worker =
+      workhorseWorker(dataSource) {
+        queues = listOf("imports")
+        handle<Map<String, Any?>>("imports.report") { context, report ->
+          val counts = checkNotNull(context.taskGroup.get()) { "no task group" }.group.counts
+          reporter.send(report["importId"], counts.succeeded, counts.failed)
+          mapOf("sent" to true)
+        }
+      }
     ```
   </Tab>
 </Tabs>

@@ -32,7 +32,7 @@ Worker A can stop after step 2. The loop keeps the plan and the tool results.
 
 Write the steps of the loop in ordinary handler code:
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const plan = await context.checkpoint("plan", () => callModel(prompt));
@@ -76,6 +76,24 @@ Write the steps of the loop in ordinary handler code:
     tools = context.run_children_all(tool_requests)
     context.sleep("model-cooldown", cooldown)
     approval = context.wait_for_signal("approval")
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    String plan = context.checkpoint("plan", String.class, () -> callModel(prompt));
+    context.setProgress(Map.of("stage", "planned"));
+    Map<String, @Nullable Object> tools = context.runChildrenAll(toolRequests);
+    context.sleep("model-cooldown", cooldown);
+    Map<?, ?> approval = context.waitForSignal("approval", Map.class, null);
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val plan = context.checkpoint<String>("plan") { callModel(prompt) }
+    context.setProgress(mapOf("stage" to "planned"))
+    val tools = context.runChildrenAll(toolRequests)
+    context.sleep("model-cooldown", cooldown)
+    val approval = context.waitForSignal<Map<String, Any?>>("approval")
     ```
   </Tab>
 </Tabs>

@@ -19,7 +19,7 @@ to run in 10 min. At 2 min, the customer withdraws the order.
 
 Thus, if no worker holds a task, cancellation ends the task in one step.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.cancel(taskId, {
@@ -56,6 +56,17 @@ Thus, if no worker holds a task, cancellation ends the task in one step.
   <Tab value="Ruby">
     ```ruby
     result = queue.cancel(task_id, requested_by: actor.email, reason: "customer withdrew the order")
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    CancelResult result = queue.cancel(taskId, actor.email(), "customer withdrew the order");
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val result =
+      queue.cancelSuspend(taskId, requestedBy = actor.email, reason = "customer withdrew the order")
     ```
   </Tab>
 </Tabs>
@@ -176,7 +187,7 @@ Pass `ctx.signal` to each API that accepts an `AbortSignal`. Check the signal be
 work. If the signal is aborted, start no new work and throw `ctx.signal.reason`. Do not start an API
 call that you then cannot use.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     for (const part of payload.parts) {
@@ -220,6 +231,23 @@ call that you then cannot use.
       context.cancellation.check!
       upload_part(part)
     end
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    List<?> parts = (List<?>) Objects.requireNonNull(payload.get("parts"));
+    for (Object part : parts) {
+      context.cancellation().throwIfCancelled();
+      uploadPart(part, context.cancellation());
+    }
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    for (part in payload.getValue("parts") as List<*>) {
+      ctx.cancellation.throwIfCancelled()
+      uploadPart(part, ctx.cancellation)
+    }
     ```
   </Tab>
 </Tabs>

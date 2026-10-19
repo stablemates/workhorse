@@ -21,7 +21,7 @@ endpoint runs two times.
 
 To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const taskId = await queue.enqueue("invoice.capture", { invoiceId }, {
@@ -74,6 +74,37 @@ To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
     result = queue.enqueue("invoice.capture", {"invoiceId" => invoice_id},
       queue: "billing",
       idempotency: Stablemates::Workhorse::Idempotency.new(key: "capture:#{invoice_id}", scope: "invoice-capture"))
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    UUID taskId =
+        queue
+            .enqueue(
+                "invoice.capture",
+                Map.of("invoiceId", invoiceId),
+                EnqueueOptions.builder()
+                    .queue("billing")
+                    .idempotency(
+                        new Idempotency(
+                            "capture:" + invoiceId, "invoice-capture", Duration.ofDays(1)))
+                    .build())
+            .taskId();
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val taskId =
+      queue
+        .enqueueSuspend(
+          "invoice.capture",
+          mapOf("invoiceId" to invoiceId),
+          EnqueueOptions.builder()
+            .queue("billing")
+            .idempotency(Idempotency("capture:$invoiceId", "invoice-capture", Duration.ofDays(1)))
+            .build(),
+        )
+        .taskId()
     ```
   </Tab>
 </Tabs>
@@ -137,7 +168,7 @@ More detail: [Data model: Key and limits](https://github.com/stablemates/workhor
 `Queue.enqueueWithResult`. Its `outcome` is `accepted` for a new task and `replayed` for a duplicate
 request. The other outcomes are for [debounce](/docs/debounce) and [throttle](/docs/throttle).
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult(
@@ -186,6 +217,29 @@ request. The other outcomes are for [debounce](/docs/debounce) and [throttle](/d
     result = queue.enqueue("invoice.capture", {"invoiceId" => invoice_id},
       idempotency: Stablemates::Workhorse::Idempotency.new(key: key, scope: "invoice-capture"))
     puts "#{result.outcome} #{result.task_id}"
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    EnqueueResult result =
+        queue.enqueue(
+            "invoice.capture",
+            Map.of("invoiceId", invoiceId),
+            EnqueueOptions.builder()
+                .idempotency(new Idempotency(key, "invoice-capture", Duration.ofDays(1)))
+                .build());
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val result =
+      queue.enqueueSuspend(
+        "invoice.capture",
+        mapOf("invoiceId" to invoiceId),
+        EnqueueOptions.builder()
+          .idempotency(Idempotency(key, "invoice-capture", Duration.ofDays(1)))
+          .build(),
+      )
     ```
   </Tab>
 </Tabs>

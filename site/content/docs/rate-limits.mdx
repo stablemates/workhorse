@@ -41,7 +41,7 @@ token.
 
 To set a rate limit, synchronize a rate-limit policy for the queue.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncRateLimitPolicies("workers", [{
@@ -93,6 +93,33 @@ To set a rate limit, synchronize a rate-limit policy for the queue.
         per_key: Stablemates::Workhorse::RateLimit.new(limit: 5, interval: 60, burst: 2)
       )
     ], prune: false)
+    ```
+  </Tab>
+  <Tab value="Java">
+    ```java
+    List<RateLimitPolicy> policies =
+        queue.syncRateLimitPolicies(
+            "workers",
+            List.of(
+                new RateLimitPolicyDefinition(
+                    "provider-api",
+                    new RateLimit(60, Duration.ofMinutes(1), 10),
+                    new RateLimit(5, Duration.ofMinutes(1), 2))));
+    ```
+  </Tab>
+  <Tab value="Kotlin">
+    ```kotlin
+    val policies =
+      queue.syncRateLimitPoliciesSuspend(
+        "workers",
+        listOf(
+          RateLimitPolicyDefinition(
+            "provider-api",
+            RateLimit(60, Duration.ofMinutes(1), 10),
+            RateLimit(5, Duration.ofMinutes(1), 2),
+          ),
+        ),
+      )
     ```
   </Tab>
 </Tabs>
