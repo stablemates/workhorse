@@ -347,7 +347,9 @@ maintenance pass. These entry points start that pass at the same time as dispatc
 - the TypeScript `Worker.run()`;
 - the Python `Worker.run()` and `AsyncWorker.run()`;
 - the Go `Worker.Run`;
-- the Rust `Worker::run`.
+- the Rust `Worker::run`;
+- the Ruby `Worker#run`;
+- the JVM `Worker.run()` and `Worker.start()`.
 
 Thus the first claim of a new worker skips one `tick_v1`, schedule evaluation, and
 `run_maintenance_v1` round. [ADR 0078
@@ -355,7 +357,8 @@ Thus the first claim of a new worker skips one `tick_v1`, schedule evaluation, a
 records this order.
 
 A single pass (TypeScript `runOnce()`, Go `RunOnce`, Rust `run_once`) runs maintenance before it
-claims. The Python `run_once()` does this each time its maintenance interval has elapsed.
+claims. The Python `run_once()`, the Ruby `run_once`, and the JVM `runOnce()` do this each time their
+maintenance interval has elapsed.
 
 The Python worker runs the first pass and every later pass on a dedicated maintenance thread:
 

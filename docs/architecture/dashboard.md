@@ -904,7 +904,7 @@ The concurrency utilization of a live task comes from the supplied `health` docu
 caller supplied none, it comes from `queue_health_v1()`.
 
 TypeScript replaces the returned `durability: null` with `DashboardDurabilityProjector`. Python,
-Go, and Rust leave it null.
+Go, Rust, Ruby, and the JVM leave it null.
 
 #### Current state and result
 
