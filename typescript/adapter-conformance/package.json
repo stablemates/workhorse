@@ -19,7 +19,7 @@
     "knex": "3.3.0",
     "kysely": "0.29.6",
     "magicast": "0.5.5",
-    "objection": "3.1.5",
+    "objection": "3.9.1",
     "pg": "8.23.1",
     "typeorm": "1.1.2",
     "typescript": "^5.8.3",
