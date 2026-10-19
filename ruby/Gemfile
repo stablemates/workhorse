@@ -22,5 +22,5 @@ group :development do
   gem "rubocop", "~> 1.91", require: false
   gem "standard", "~> 1.56", require: false
   # Sitrox's unrelated gem, which defines a top-level Workhorse beside this SDK.
-  gem "workhorse", "~> 1.5", require: false
+  gem "workhorse", "~> 2.0", require: false
 end
