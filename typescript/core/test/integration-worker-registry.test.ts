@@ -39,6 +39,20 @@ const heartbeatBackends = async (): Promise<number[]> => {
   return backends.rows.map((row) => row.pid);
 };
 
+// A heartbeat round on the reserved connection must end within heartbeatRoundBoundMs. Below 50 ms,
+// that bound is the interval itself. On a loaded host, the four round trips of a round need more
+// than 10 or 20 ms. Then no heartbeat gets to PostgreSQL, and the lease expires. Workhorse then
+// rejects the completion as stale (SM-1436). A 100 ms interval gives a 75 ms round. The lease
+// leaves time for many failed rounds.
+const loadSafeHeartbeat = { heartbeatMs: 100, leaseMs: 5_000 };
+
+// A host stall can delay a condition by seconds, so each wait gets 10 s, well inside the 20 s test.
+const stallWait = { timeout: 10_000 };
+
+// An idle worker polls again after 4.5 s at the earliest. A notification test must see its wake
+// well before that, or a poll could pass the check.
+const notificationWait = { timeout: 1_000 };
+
 describe("worker registry", () => {
   it("claims configured queues through one worker identity and shared slot budget", async () => {
     const firstQueue = `multi-queue-first-${randomUUID()}`;
@@ -190,7 +204,7 @@ describe("worker registry", () => {
 
     try {
       const running = worker.run();
-      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2), stallWait);
       expect(subscribe.mock.calls.map(([queueName]) => queueName)).toEqual(["mail", "billing"]);
       worker.stop();
       await running;
@@ -222,7 +236,7 @@ describe("worker registry", () => {
         hostname: expect.any(String),
         pid: process.pid,
       });
-    });
+    }, stallWait);
 
     worker.stop();
     await running;
@@ -244,8 +258,11 @@ describe("worker registry", () => {
 
     try {
       const running = worker.run();
-      await vi.waitFor(async () => expect(await closeFailureRegistration()).toBeDefined());
-      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+      await vi.waitFor(
+        async () => expect(await closeFailureRegistration()).toBeDefined(),
+        stallWait,
+      );
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce(), stallWait);
 
       worker.stop();
       await expect(running).rejects.toBe(closeFailure);
@@ -293,8 +310,8 @@ describe("worker registry", () => {
       (await admin.listWorkers()).find((entry) => entry.workerId === workerId);
 
     const running = worker.run();
-    await vi.waitFor(async () => expect(await registration()).toBeDefined());
-    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+    await vi.waitFor(async () => expect(await registration()).toBeDefined(), stallWait);
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce(), stallWait);
     failRegistration = true;
     worker.stop();
 
@@ -323,7 +340,7 @@ describe("worker registry", () => {
         expect((await admin.listWorkers()).map((entry) => entry.workerId)).toContain(
           "registry-remote-pause",
         );
-      });
+      }, stallWait);
 
       await expect(
         admin.setWorkerPaused("registry-remote-pause", true, {
@@ -331,7 +348,7 @@ describe("worker registry", () => {
           actor: "operator",
         }),
       ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
-      await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
+      await vi.waitFor(() => expect(worker.isPaused()).toBe(true), stallWait);
       expect(worker.runtimeState()).toMatchObject({
         paused: true,
         remotelyPaused: true,
@@ -349,7 +366,7 @@ describe("worker registry", () => {
       expect(worker.isPaused()).toBe(true);
 
       await admin.setWorkerPaused("registry-remote-pause", false, adminAudit("resume worker"));
-      await vi.waitFor(() => expect(handled).toEqual([1]));
+      await vi.waitFor(() => expect(handled).toEqual([1]), stallWait);
       expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
     } finally {
       worker.stop();
@@ -461,7 +478,7 @@ describe("worker registry", () => {
 
     try {
       const run = worker.runOnce();
-      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2), stallWait);
 
       expect(claim).toHaveBeenCalledTimes(1);
       expect(worker.runtimeState()).toEqual({
@@ -510,7 +527,7 @@ describe("worker registry", () => {
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(started).toEqual([1, 2]));
+      await vi.waitFor(() => expect(started).toEqual([1, 2]), stallWait);
       firstRelease.resolve();
       await thirdStarted.promise;
 
@@ -542,13 +559,13 @@ describe("worker registry", () => {
 
     const first = worker.runOnce();
     const second = worker.runOnce();
-    await vi.waitFor(() => expect(started).toEqual([1]));
+    await vi.waitFor(() => expect(started).toEqual([1]), stallWait);
     expect(worker.concurrency).toBe(1);
     expect(worker.runtimeState().activeSlots).toBe(1);
 
     firstRelease.resolve();
     await expect(first).resolves.toBe(true);
-    await vi.waitFor(() => expect(started).toEqual([1, 2]));
+    await vi.waitFor(() => expect(started).toEqual([1, 2]), stallWait);
     secondRelease.resolve();
     await expect(second).resolves.toBe(true);
     expect(worker.runtimeState().activeSlots).toBe(0);
@@ -564,8 +581,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
-      heartbeatMs: 20,
-      leaseMs: 500,
+      ...loadSafeHeartbeat,
       pollMs: 0,
     }).handle("paused-concurrency", async () => {
       await release.promise;
@@ -574,7 +590,7 @@ describe("worker registry", () => {
 
     try {
       const run = worker.runOnce();
-      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2), stallWait);
       worker.pause();
       await vi.waitFor(() => {
         const heartbeatingIds = new Set(
@@ -582,7 +598,7 @@ describe("worker registry", () => {
         );
         expect(heartbeatingIds.size).toBe(2);
         expect([...heartbeatingIds].every((id) => ids.includes(id))).toBe(true);
-      });
+      }, stallWait);
 
       expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, paused: true });
       release.resolve();
@@ -634,14 +650,14 @@ describe("worker registry", () => {
 
     try {
       const run = worker.runOnce();
-      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
-      await vi.waitFor(() => expect(heartbeatGates).toHaveLength(1));
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2), stallWait);
+      await vi.waitFor(() => expect(heartbeatGates).toHaveLength(1), stallWait);
       expect(latestIds).toHaveLength(2);
 
       await sleep(40);
       expect(heartbeatCalls).toBe(1);
       heartbeatGates[0]!.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
-      await vi.waitFor(() => expect(heartbeatCalls).toBe(2));
+      await vi.waitFor(() => expect(heartbeatCalls).toBe(2), stallWait);
       expect(maxInFlight).toBe(1);
 
       releaseHandlers.resolve();
@@ -674,7 +690,7 @@ describe("worker registry", () => {
     });
 
     const running = worker.run();
-    await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+    await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2), stallWait);
     const blockedRunOnce = worker.runOnce();
     let runOnceResolved = false;
     void blockedRunOnce.then(() => {
@@ -723,8 +739,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,
-      heartbeatMs: 10,
-      leaseMs: 500,
+      ...loadSafeHeartbeat,
       pollMs: 0,
     }).handle<{ sequence: number }>("signal-abort-drain", async ({ sequence }, context) => {
       startedIds.push(context.task.id);
@@ -748,7 +763,7 @@ describe("worker registry", () => {
         for (const id of ids.slice(0, 2)) {
           expect(heartbeatCount(id)).toBeGreaterThan(countsAtAbort.get(id)!);
         }
-      });
+      }, stallWait);
       expect(claim).toHaveBeenCalledTimes(1);
       await expect(admin.getTask(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
@@ -757,13 +772,17 @@ describe("worker registry", () => {
         runSettled = true;
       });
       releases[0]!.resolve();
-      await vi.waitFor(async () => expect((await admin.getTask(ids[0]!))?.state).toBe("succeeded"));
+      await vi.waitFor(
+        async () => expect((await admin.getTask(ids[0]!))?.state).toBe("succeeded"),
+        stallWait,
+      );
       expect(runSettled).toBe(false);
       expect(worker.runtimeState().activeSlots).toBe(1);
 
       const secondCountAfterFirstRelease = heartbeatCount(ids[1]!);
-      await vi.waitFor(() =>
-        expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
+      await vi.waitFor(
+        () => expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
+        stallWait,
       );
       expect(claim).toHaveBeenCalledTimes(1);
       await expect(admin.getTask(ids[2]!)).resolves.toMatchObject({ state: "ready" });
@@ -986,8 +1005,10 @@ describe("worker registry", () => {
       heartbeatMs: 50,
       leaseMs: 500,
       maintenanceIntervalMs: 100,
-      maintenanceRoutinePollMs: 1_000,
-      pollMs: 1_000,
+      // The other intervals are much longer than stallWait. Thus a second tick inside that wait
+      // comes only from the 100 ms maintenance cadence.
+      maintenanceRoutinePollMs: 60_000,
+      pollMs: 60_000,
     }).handle("maintenance-during-handler", async () => {
       await release.promise;
       return null;
@@ -995,13 +1016,15 @@ describe("worker registry", () => {
 
     try {
       const running = worker.run();
-      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(1));
-      await vi.waitFor(() => expect(tick).toHaveBeenCalledTimes(2), { timeout: 500 });
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(1), stallWait);
+      await vi.waitFor(() => expect(tick).toHaveBeenCalledTimes(2), stallWait);
 
       worker.stop();
       release.resolve();
       await expect(running).resolves.toBeUndefined();
     } finally {
+      // If a wait fails, the handler must still end, or the worker cannot stop after the test.
+      release.resolve();
       tick.mockRestore();
     }
   });
@@ -1039,7 +1062,7 @@ describe("worker registry", () => {
     const running = worker.run();
     let notificationLoad: NodeJS.Timeout | undefined;
     try {
-      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce(), stallWait);
       expect(runMaintenance).toHaveBeenCalledOnce();
       expect(notify).toBeDefined();
       notificationLoad = setInterval(() => notify?.(), 10);
@@ -1074,10 +1097,12 @@ describe("worker registry", () => {
     await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalTime: "00:00" });
 
     const telemetry: ReturnType<Worker["maintenanceTelemetry"]> = [];
+    // The routine poll is due again when maintenanceRoutinePollMs has passed since the start of the
+    // first pass. On a loaded host, that pass and the checks after it can take more than 1 s.
     const worker = new Worker(queue, {
       workerId: "worker-maintenance",
       maintenanceIntervalMs: 100,
-      maintenanceRoutinePollMs: 1_000,
+      maintenanceRoutinePollMs: 60_000,
       onMaintenance: (event) => telemetry.push(event),
     }).handle("scheduled-worker", () => ({ ok: true }));
     expect(await worker.runOnce()).toBe(true);
@@ -1241,10 +1266,10 @@ describe("worker registry", () => {
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled(), stallWait);
       await queue.enqueue("notification-dispatch", { message: "prompt" });
 
-      await vi.waitFor(() => expect(handled).toEqual(["prompt"]), { timeout: 1_000 });
+      await vi.waitFor(() => expect(handled).toEqual(["prompt"]), notificationWait);
     } finally {
       worker.stop();
       await running;
@@ -1276,7 +1301,7 @@ describe("worker registry", () => {
       await sleep(100);
       expect(handled).toEqual([]);
       await expect(policyQueue.complete(held!, "capacity-holder", null)).resolves.toBe(true);
-      await vi.waitFor(() => expect(handled).toEqual([secondId]), { timeout: 1_000 });
+      await vi.waitFor(() => expect(handled).toEqual([secondId]), notificationWait);
     } finally {
       worker.stop();
       await running;
@@ -1313,11 +1338,11 @@ describe("worker registry", () => {
               AND query = 'LISTEN workhorse_tasks'`,
         );
         expect(listeners.rows[0]?.count).toBeGreaterThan(0);
-      });
+      }, stallWait);
       await queue.enqueue("notification-during-claim", { message: "latched" });
       releaseEmptyClaim.resolve();
 
-      await vi.waitFor(() => expect(handled).toEqual(["latched"]), { timeout: 1_000 });
+      await vi.waitFor(() => expect(handled).toEqual(["latched"]), notificationWait);
     } finally {
       worker.stop();
       releaseEmptyClaim.resolve();
@@ -1354,7 +1379,7 @@ describe("worker registry", () => {
         );
         expect(listeners.rows[0]?.pid).toBeDefined();
         return listeners.rows[0]!.pid;
-      });
+      }, stallWait);
       await pool.query("SELECT pg_terminate_backend($1)", [listenerPid]);
       await new Promise((resolve) => {
         setTimeout(resolve, 100);
@@ -1362,7 +1387,7 @@ describe("worker registry", () => {
 
       await queue.enqueue("notification-reconnect", { message: "after reconnect" });
 
-      await vi.waitFor(() => expect(handled).toEqual(["after reconnect"]), { timeout: 1_000 });
+      await vi.waitFor(() => expect(handled).toEqual(["after reconnect"]), notificationWait);
       expect(notificationErrors).toHaveLength(1);
       expect(notificationErrors[0]).toBeInstanceOf(Error);
     } finally {
@@ -1391,16 +1416,13 @@ describe("worker registry", () => {
     try {
       releases.set("before", deferred());
       await queue.enqueue(kind, { step: "before" });
-      const [terminatedPid] = await vi.waitFor(
-        async () => {
-          const pids = await heartbeatBackends();
-          expect(pids).toHaveLength(1);
-          return pids;
-        },
-        { timeout: 2_000 },
-      );
+      const [terminatedPid] = await vi.waitFor(async () => {
+        const pids = await heartbeatBackends();
+        expect(pids).toHaveLength(1);
+        return pids;
+      }, stallWait);
       releases.get("before")!.resolve();
-      await vi.waitFor(() => expect(finished).toEqual(["before"]), { timeout: 2_000 });
+      await vi.waitFor(() => expect(finished).toEqual(["before"]), stallWait);
 
       // The worker is idle and still holds the connection, so the error arrives outside a round.
       await pool.query("SELECT pg_terminate_backend($1)", [terminatedPid]);
@@ -1408,16 +1430,13 @@ describe("worker registry", () => {
 
       releases.set("after", deferred());
       await queue.enqueue(kind, { step: "after" });
-      await vi.waitFor(
-        async () => {
-          const pids = await heartbeatBackends();
-          expect(pids).toHaveLength(1);
-          expect(pids[0]).not.toBe(terminatedPid);
-        },
-        { timeout: 2_000 },
-      );
+      await vi.waitFor(async () => {
+        const pids = await heartbeatBackends();
+        expect(pids).toHaveLength(1);
+        expect(pids[0]).not.toBe(terminatedPid);
+      }, stallWait);
       releases.get("after")!.resolve();
-      await vi.waitFor(() => expect(finished).toEqual(["before", "after"]), { timeout: 2_000 });
+      await vi.waitFor(() => expect(finished).toEqual(["before", "after"]), stallWait);
     } finally {
       for (const release of releases.values()) release.resolve();
       worker.stop();
@@ -1441,10 +1460,10 @@ describe("worker registry", () => {
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled(), stallWait);
       await queue.enqueue("notification-fallback", { message: "polled" });
 
-      await vi.waitFor(() => expect(handled).toEqual(["polled"]), { timeout: 1_000 });
+      await vi.waitFor(() => expect(handled).toEqual(["polled"]), stallWait);
     } finally {
       worker.stop();
       await running;
@@ -1477,7 +1496,7 @@ describe("worker registry", () => {
 
     const running = worker.run();
     try {
-      await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(3), { timeout: 1_000 });
+      await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(3), stallWait);
       const firstWait = claimTimes[1]! - claimTimes[0]!;
       const secondWait = claimTimes[2]! - claimTimes[1]!;
       expect(secondWait).toBeGreaterThan(firstWait * 1.5);
@@ -1515,7 +1534,7 @@ describe("worker registry", () => {
     });
 
     const running = worker.run();
-    await vi.waitFor(() => expect(claim).toHaveBeenCalled(), { timeout: 1_000 });
+    await vi.waitFor(() => expect(claim).toHaveBeenCalled(), stallWait);
     worker.stop();
     await expect(running).resolves.toBeUndefined();
     expect(listener.release).toHaveBeenCalledWith(expect.any(Error));
@@ -1630,7 +1649,7 @@ describe("worker registry", () => {
       await vi.waitFor(() => {
         expect(firstClaim).toHaveBeenCalled();
         expect(secondClaim).toHaveBeenCalled();
-      });
+      }, stallWait);
       const listeners = await pool.query<{ count: number }>(
         `SELECT count(*)::integer AS count
            FROM pg_stat_activity
