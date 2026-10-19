@@ -1,4 +1,5 @@
-import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { cp, mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
@@ -14,6 +15,13 @@ const demoDatabaseUrl =
   process.env.DATABASE_URL_PRIMARY ??
   "postgresql://workhorse:workhorse@localhost:5432/workhorse_dev_primary";
 const reuseBuild = process.argv.includes("--reuse-build");
+// The demo supervisor starts each worker in its own process group, so a signal to the demo's group
+// does not reach them. Every process the demo starts inherits this token, which lets the teardown
+// find them all and wait for them before it removes the checkout.
+const demoProcessToken = randomUUID();
+// The supervisor force-kills its workers after 5 s and waits 1 s more for their process groups.
+const demoStopTimeoutMs = 10_000;
+const demoKillTimeoutMs = 5_000;
 
 interface CommandResult {
   code: number;
@@ -50,6 +58,108 @@ function run(
 let demo: ReturnType<typeof spawn> | undefined;
 let demoOutput = "";
 let installed = false;
+let passed = false;
+
+/**
+ * The live processes that carry this run's exact token.
+ *
+ * Other checkouts on the same host run processes with the same names, so the token is the only
+ * selector. Only Linux exposes process environments in `/proc`. On other platforms this list is
+ * empty, and the teardown waits only for the demo's own process group.
+ */
+async function demoProcesses(): Promise<number[]> {
+  if (process.platform !== "linux") return [];
+  const marker = `WORKHORSE_DEMO_SMOKE_TOKEN=${demoProcessToken}`;
+  const pids: number[] = [];
+  for (const entry of await readdir("/proc")) {
+    const pid = Number(entry);
+    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    const environment = await readFile(`/proc/${pid}/environ`, "utf8").catch(() => "");
+    if (environment.split("\0").includes(marker)) pids.push(pid);
+  }
+  return pids;
+}
+
+async function describeProcess(pid: number): Promise<string> {
+  const commandLine = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
+  // The process group is the fifth field of `stat`, after the command name in parentheses.
+  const status = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+  const group = status.slice(status.lastIndexOf(")") + 2).split(" ")[2] ?? "?";
+  const command = commandLine.split("\0").join(" ").trim() || "(exited)";
+  return `pid=${pid} pgid=${group} command=${command}`;
+}
+
+function demoGroupExists(pid: number): boolean {
+  if (process.platform === "win32") return demo!.exitCode === null && demo!.signalCode === null;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function signalDemo(pid: number, signal: NodeJS.Signals, others: number[]): void {
+  for (const target of process.platform === "win32" ? [] : [-pid, ...others]) {
+    try {
+      process.kill(target, signal);
+    } catch {
+      // The process exited after the last check.
+    }
+  }
+  if (process.platform === "win32") demo!.kill(signal);
+}
+
+/** Wait until the demo's process group and every process with this run's token have exited. */
+async function waitForDemoExit(pid: number, timeoutMs: number): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const running = await demoProcesses();
+    if (!demoGroupExists(pid) && running.length === 0) return [];
+    if (Date.now() >= deadline) return running;
+    await sleep(100);
+  }
+}
+
+/**
+ * Stop the demo and every process it started.
+ *
+ * The outer `pnpm` process exits as soon as it gets SIGTERM, but the supervisor and its workers
+ * stop later. A worker that still runs can write into the checkout while the teardown removes it,
+ * and a Rust worker that still compiles writes to `target/debug/deps`. Only the demo's group gets
+ * SIGTERM, so the supervisor stops its workers in its usual sequence. A process that remains after
+ * the timeout, for example a worker that the supervisor does not signal, gets SIGKILL.
+ */
+async function stopDemo(pid: number): Promise<void> {
+  signalDemo(pid, "SIGTERM", []);
+  let running = await waitForDemoExit(pid, demoStopTimeoutMs);
+  if (running.length === 0 && !demoGroupExists(pid)) return;
+  // A process can start a child after a scan, so each pass scans again and kills new processes.
+  const killed = new Set<number>();
+  const deadline = Date.now() + demoKillTimeoutMs;
+  for (;;) {
+    const found = running.filter((target) => !killed.has(target));
+    const descriptions = (await Promise.all(found.map(describeProcess))).join("\n");
+    if (killed.size === 0) {
+      console.error(
+        `Demo processes still ran ${demoStopTimeoutMs} ms after SIGTERM; sending SIGKILL to group ${pid} and:\n${descriptions}`,
+      );
+    } else if (found.length > 0) {
+      console.error(`Demo processes started during SIGKILL; sending SIGKILL:\n${descriptions}`);
+    }
+    for (const target of [pid, ...found]) killed.add(target);
+    signalDemo(pid, "SIGKILL", running);
+    await sleep(100);
+    running = await demoProcesses();
+    if (running.length === 0 && !demoGroupExists(pid)) return;
+    if (Date.now() >= deadline) {
+      const survivors = await Promise.all(running.map(describeProcess));
+      console.error(`Demo processes survived SIGKILL:\n${survivors.join("\n")}`);
+      return;
+    }
+  }
+}
+
 try {
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({ message: "Exporting tracked clean checkout" })}`,
@@ -128,6 +238,7 @@ try {
       DATABASE_URL_SECONDARY: "",
       WORKHORSE_DISABLE_PORTLESS: "1",
       WORKHORSE_WORKER_POLL_MS: "15",
+      WORKHORSE_DEMO_SMOKE_TOKEN: demoProcessToken,
     },
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
@@ -261,6 +372,7 @@ try {
     throw new Error(`Out-of-process demo workers never registered: ${workersText}`);
   }
 
+  passed = true;
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({
       message: "Clean-checkout demo passed",
@@ -273,26 +385,29 @@ try {
     })}`,
   );
 } finally {
-  if (demo?.pid && demo.exitCode === null) {
-    const exited = new Promise<void>((resolveExit) => {
-      if (demo!.exitCode !== null) resolveExit();
-      else demo!.once("exit", () => resolveExit());
+  // The teardown reports its own errors, so they cannot replace the result of the checks.
+  if (demo?.pid) {
+    await stopDemo(demo.pid).catch((error: unknown) => {
+      console.error(`The teardown could not stop the demo: ${String(error)}`);
     });
-    if (process.platform === "win32") demo.kill("SIGTERM");
-    else process.kill(-demo.pid, "SIGTERM");
-
-    await Promise.race([
-      exited,
-      sleep(2_000).then(() => {
-        if (demo?.pid && demo.exitCode === null) {
-          if (process.platform === "win32") demo.kill("SIGKILL");
-          else process.kill(-demo.pid, "SIGKILL");
-        }
-      }),
-    ]);
   }
   if (installed) {
     await run("pnpm", ["db:reset:dev-primary"], { cwd: checkout }).catch(() => undefined);
   }
-  await rm(checkout, { recursive: true, force: true });
+  // Node retries ENOTEMPTY and EBUSY with a linear backoff, for about 5 s in total.
+  const removal = await rm(checkout, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  // A failed removal is a warning. If a check failed, its error still ends the run.
+  if (removal !== undefined) {
+    const result = passed ? "The demo smoke checks passed" : "The demo smoke checks failed";
+    const message = `${result}, but the teardown could not remove the scratch checkout ${checkout}: ${String(removal)}`;
+    console.error(process.env.GITHUB_ACTIONS === "true" ? `::warning::${message}` : message);
+  }
 }
