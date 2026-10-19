@@ -35,6 +35,11 @@ struct Harness {
 }
 
 async fn harness(name: &str) -> Option<Harness> {
+    harness_with(name, WorkerOptions::default()).await
+}
+
+/// A harness whose worker takes the fields this file does not set from `defaults`.
+async fn harness_with(name: &str, defaults: WorkerOptions) -> Option<Harness> {
     let database = scratch_database(name).await?;
     let queue = Queue::connect(database.url(), QUEUE).await.unwrap();
     let admin = Admin::connect(database.url()).await.unwrap();
@@ -48,7 +53,7 @@ async fn harness(name: &str) -> Option<Harness> {
         poll_interval: Some(Duration::from_millis(20)),
         concurrency: 4,
         heartbeat_interval: Some(Duration::from_millis(100)),
-        ..WorkerOptions::default()
+        ..defaults
     };
     let worker = Worker::new(pool.clone(), options).unwrap();
     Some(Harness { database, queue, admin, worker, pool })
@@ -613,7 +618,13 @@ async fn a_replayed_parent_keeps_a_child_its_new_contract_would_reject() {
 
 #[tokio::test]
 async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
-    let Some(harness) = harness("durable_child_contract_advance").await else { return };
+    // A reserved heartbeat connection stays out of the pool while its rounds succeed. The count
+    // below cannot tell it from a connection that the second call keeps. Shared rounds borrow a
+    // connection only for their statement, as the poll does.
+    let shared = WorkerOptions { shared_heartbeats: true, ..WorkerOptions::default() };
+    let Some(harness) = harness_with("durable_child_contract_advance", shared).await else {
+        return;
+    };
     sync_contract(&harness, "counted", "v1", vec![("v1", counted_contract(4096))]).await;
     let parent = harness.enqueue("advanced-parent", Value::Null).await;
     let (events, mut replay) = mpsc::unbounded_channel::<&'static str>();
@@ -649,7 +660,8 @@ async fn identical_replayed_calls_share_one_call_across_a_contract_change() {
             tokio::pin!(second);
             // The second call holds a pooled connection from its first poll until its lookup
             // returns, and it joins the first call without yielding in between. Only the first
-            // call's blocked statement then holds one, and other pool users can only add to that.
+            // call's blocked statement then holds one. Every other pool user, the heartbeat rounds
+            // included, borrows one only for a statement, so the count drops to 1 between them.
             let in_use = || {
                 let status = pool.status();
                 status.size - status.available + status.waiting
