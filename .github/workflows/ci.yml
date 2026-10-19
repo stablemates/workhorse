@@ -96,12 +96,12 @@ jobs:
           components: rustfmt
           cache: false
           rustflags: ""
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
       # `ruby:vuln` runs bundler-audit from its bundle.
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
@@ -550,7 +550,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: ruby
@@ -746,7 +746,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -790,7 +790,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -839,7 +839,7 @@ jobs:
       # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
       # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
       # path, so the smoke step names the installed bundle itself.
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
