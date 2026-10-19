@@ -106,6 +106,12 @@ Spring Boot starter.
 transaction, a Spring `@Transactional` service, the dashboard filter, and a worker process. Its
 tests run every snippet against PostgreSQL. It is not an artifact and is never published.
 
+`jvm/examples/programs/` holds the scenario programs that the other SDKs also have: the quickstart,
+a transactional enqueue, a dedicated worker, an orchestration, a demo worker, and an agentic flow.
+Each program has a `main` method and reads a JDBC URL from `WORKHORSE_DATABASE_URL`. The demo
+worker reads `DATABASE_URL_PRIMARY`. Its tests start each program in a child JVM against
+PostgreSQL. It is not an artifact and is never published.
+
 ## Package boundary
 
 The core is the named Java module `run.workhorse`. Every package is `@NullMarked`, so

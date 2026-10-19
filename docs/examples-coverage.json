@@ -110,9 +110,7 @@
       "rust": { "file": "rust/examples/quickstart.rs" },
       "ruby": { "file": "ruby/examples/quickstart.rb" },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no quickstart scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/QuickstartProgram.java"
       }
     },
     "transaction": {
@@ -122,9 +120,7 @@
       "rust": { "file": "rust/examples/transaction.rs" },
       "ruby": { "file": "ruby/examples/transaction.rb" },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no transaction scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/TransactionProgram.java"
       }
     },
     "sqlx-transaction": {
@@ -218,9 +214,7 @@
       "rust": { "file": "rust/examples/dedicated_worker.rs" },
       "ruby": { "file": "ruby/examples/dedicated_worker.rb" },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no dedicated-worker scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DedicatedWorkerProgram.java"
       }
     },
     "orchestration": {
@@ -230,9 +224,10 @@
       "rust": { "file": "rust/examples/orchestration.rs" },
       "ruby": { "file": "ruby/examples/orchestration.rb" },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no orchestration scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "files": [
+          "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/OrchestrationProgram.java",
+          "jvm/examples/programs/src/main/kotlin/run/workhorse/examples/programs/OrchestrationProgram.kt"
+        ]
       }
     },
     "demo-worker": {
@@ -246,9 +241,7 @@
       },
       "ruby": { "file": "ruby/examples/demo_worker.rb" },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no demo-worker scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DemoWorkerProgram.java"
       }
     },
     "agentic-flow": {
@@ -274,9 +267,10 @@
         }
       },
       "jvm": {
-        "exclusion": {
-          "reason": "The JVM has no agentic-flow scenario program yet; SM-1469 adds it. jvm/examples holds only documentation snippets."
-        }
+        "files": [
+          "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/AgenticFlowProgram.java",
+          "jvm/examples/programs/src/main/kotlin/run/workhorse/examples/programs/AgenticFlowProgram.kt"
+        ]
       }
     },
     "slack-approvals": {
@@ -501,7 +495,7 @@
       },
       "jvm": {
         "exclusion": {
-          "reason": "The JVM Worker runs each handler on its own virtual thread, and Kotlin suspend handlers run on the same Worker, so there is no separate async-worker example."
+          "reason": "By default the JVM Worker runs each handler on its own virtual thread. Kotlin suspend handlers run on the same Worker, so there is no separate async-worker example."
         }
       }
     },

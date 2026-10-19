@@ -36,3 +36,6 @@ include("api-snapshot")
 
 // The Java and Kotlin snippets of the documentation, compiled and run. It is never published.
 include("examples")
+
+// The cross-SDK scenario programs (SM-1469), one `main` for each scenario. It is never published.
+include("examples:programs")
