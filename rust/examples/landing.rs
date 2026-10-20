@@ -3,6 +3,7 @@
 //! Each `docs:start landing-<name>` region is one snippet, wrapped in a module so that it carries
 //! its own `use` lines. `site/scripts/check-language-examples.ts` requires every Rust string in
 //! `site/lib/landing-snippets.ts` to equal a dedented region, and every region to appear there.
+//! `tests/landing_postgres.rs` includes this file and runs the regions it names against PostgreSQL.
 //!
 //! Landing page: https://workhorse.run
 #![allow(dead_code, unused_variables)]
@@ -117,7 +118,7 @@ mod landing_sleep {
     // docs:end
 }
 
-mod landing_retries {
+pub(crate) mod landing_retries {
     // docs:start landing-retries
     use chrono::{DateTime, Utc};
     use serde_json::json;
@@ -136,7 +137,7 @@ mod landing_retries {
             execution_timeout_ms: Some(30_000),
             max_attempts: 5,
             retry_policy: json!({
-                "kind": "exponential",
+                "type": "exponential",
                 "initialDelayMs": 1_000,
                 "multiplier": 2,
                 "maxDelayMs": 60_000,

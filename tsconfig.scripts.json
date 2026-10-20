@@ -9,6 +9,8 @@
   },
   "include": [
     "scripts/**/*.ts",
+    "site/lib/landing-snippets.ts",
+    "typescript/core/test/support/db.ts",
     "typescript/core/test/support/parity-capabilities.ts",
     "typescript/core/test/support/schema-template.ts",
     "vitest*.config.ts"
