@@ -355,7 +355,7 @@ for (const pattern of examplePatterns) {
 
 // Rust, Ruby, Java, and Kotlin examples live as `docs:start <name>` regions in `rust/examples/`,
 // `ruby/examples/`, and `jvm/examples/src/main/`. `cargo clippy --all-targets` compiles the Rust
-// regions in CI, `rust/tests/landing_postgres.rs` runs the Rust `landing-retries` region, and a
+// regions in CI, `rust/tests/landing_postgres.rs` runs each Rust `landing-*` region, and a
 // documentation spec runs the Ruby regions against PostgreSQL. `pnpm jvm:build`
 // compiles the Java and Kotlin regions, and `pnpm jvm:test` runs them against PostgreSQL. Every
 // fence in one of these languages and every landing snippet in Rust or Ruby must equal one region
@@ -477,6 +477,40 @@ assertDocumentationRegions("rust", "Rust", "rust/examples", ".rs", "//", goFence
 assertDocumentationRegions("ruby", "Ruby", "ruby/examples", ".rb", "#", goFencePaths);
 assertDocumentationRegions("java", "Java", "jvm/examples/src/main", ".java", "//", jvmFencePaths);
 assertDocumentationRegions("kotlin", "Kotlin", "jvm/examples/src/main", ".kt", "//", jvmFencePaths);
+
+// Each Python and Go landing snippet is a whole module, so it is a file of its own in
+// `python/tests/landing_snippets/` or `go/internal/landing/`, named after its snippet. These are
+// test fixtures, not examples: an example opens with a header comment, and a snippet must not. The
+// tests of each language run those files against PostgreSQL. A file must equal its snippet, and
+// every file other than a test must be a snippet, so the page cannot carry code that no test ran.
+for (const [language, directory, extension, suffix] of [
+  ["python", "python/tests/landing_snippets", ".py", "Python"],
+  ["go", "go/internal/landing", ".go", "Go"],
+] as const) {
+  const expected = new Map<string, string>();
+  for (const [snippet, snippetLanguage] of Object.entries(landingSnippetLanguages)) {
+    if (snippetLanguage !== language) continue;
+    if (!snippet.endsWith(suffix))
+      throw new Error(`landing snippet ${snippet} is not named *${suffix}`);
+    const file = snippet
+      .slice(0, -suffix.length)
+      .replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+    expected.set(`${file}${extension}`, `${landingSnippets[snippet as LandingSnippetId]}\n`);
+  }
+  const files = readdirSync(resolve(repositoryRoot, directory)).filter(
+    (file) =>
+      file.endsWith(extension) && !file.endsWith(`_test${extension}`) && !file.startsWith("test_"),
+  );
+  for (const file of files) {
+    if (!expected.has(file)) throw new Error(`${directory}/${file} is no landing snippet`);
+  }
+  for (const [file, source] of expected) {
+    const path = resolve(repositoryRoot, directory, file);
+    if (!existsSync(path) || readFileSync(path, "utf8") !== source) {
+      throw new Error(`${directory}/${file} does not equal its landing snippet`);
+    }
+  }
+}
 
 // Go fences stay gofmt-checked fragments, so a Go fence need not match a region. A Go example whose
 // error handling is the point lives instead as a `docs:start <name>` region in a tested example
