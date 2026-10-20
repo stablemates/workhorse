@@ -16,7 +16,7 @@ module Stablemates
         "workhorse.tasks.claimed" => [:counter, "Tasks claimed for handler execution", "{task}"],
         "workhorse.tasks.completed" => [:counter, "Tasks completed under a valid lease", "{task}"],
         "workhorse.tasks.failed" => [:counter, "Handler failures submitted to PostgreSQL", "{task}"],
-        "workhorse.tasks.retried" => [:counter, "Failed tasks returned to live work", "{task}"],
+        "workhorse.tasks.retried" => [:counter, "Failed or expired tasks returned to live work", "{task}"],
         "workhorse.leases.expired" => [:counter, "Expired leases recovered by maintenance", "{lease}"],
         "workhorse.handler.runtime" => [:counter, "Cumulative handler execution time", "ms"],
         "workhorse.handler.executions" => [:counter, "Worker handler activations by outcome", "{execution}"],

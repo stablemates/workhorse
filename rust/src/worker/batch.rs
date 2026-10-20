@@ -249,7 +249,7 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             workhorse.task.type = %self.task_type,
             workhorse.worker.id = %worker.worker_id,
             workhorse.handler.batch.size = batch.len(),
-            workhorse.handler.batch.linger = linger_ms,
+            workhorse.handler.batch.linger_ms = linger_ms,
             workhorse.handler.batch.full = full,
             "Batch dispatched"
         );

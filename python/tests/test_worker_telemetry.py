@@ -86,6 +86,14 @@ def _typescript_worker_metric_catalog() -> dict[str, dict[str, object]]:
     return json.loads(result.stdout)
 
 
+def _contract_instruments() -> dict[str, tuple[str, str]]:
+    """The unit and description of each instrument in api/telemetry.txt."""
+    contract = (Path(__file__).parents[2] / "api" / "telemetry.txt").read_text(encoding="utf-8")
+    instruments = contract.split("## Instruments", 1)[1].split("## Spans", 1)[0]
+    rows = (line.split(maxsplit=3) for line in instruments.splitlines())
+    return {row[0]: (row[2], row[3]) for row in rows if len(row) == 4 and row[0] != "#"}
+
+
 def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> None:
     SPAN_EXPORTER.clear()
     LOG_EXPORTER.clear()
@@ -159,6 +167,9 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
         for name, metric in exported_metrics.items()
     }
     assert observed_catalog == expected_metrics
+    contract = _contract_instruments()
+    for metric in _metrics():
+        assert (metric.unit, metric.description) == contract[metric.name], metric.name
     assert len(exported_metrics) == len(expected_metrics)
     expected_task_attributes = {
         "workhorse.queue.name": "mail",

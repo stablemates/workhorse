@@ -34,6 +34,12 @@ The Go worker records the metrics of the worker through the OpenTelemetry Go API
 settlements, handler outcomes and durations, batch delivery, rejected heartbeats, and lease
 recovery use the same instrument names, units, and attributes as the JavaScript worker.
 
+The Rust worker records the metrics of the worker when its `opentelemetry` feature is on. It records
+the same worker metrics as the Go worker. It does not record schedule firing or routines.
+
+The Ruby and JVM workers record the same metrics as the Python worker. The JVM worker is the Java
+worker, which the Kotlin module and the Spring Boot starter also run.
+
 Execution metrics use the queue, the task type, and the outcome as attributes. They never use a
 task ID, a payload, a worker ID, or an error message. These values have no stable bound. As metric
 attributes, they make the backend create more and more time series. For the evidence of one task,
@@ -42,18 +48,18 @@ use traces.
 <details>
 <summary>Reference: runtime instruments by runtime</summary>
 
-| Instrument                                                     | TypeScript | Python | Go  |
-| -------------------------------------------------------------- | ---------- | ------ | --- |
-| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  |
-| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes |
-| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  |
-| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes |
-| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes |
-| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes |
-| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes |
-| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  |
-| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  |
-| `workhorse.maintenance.drift`                                  | Yes        | No     | No  |
+| Instrument                                                     | TypeScript | Python | Go  | Rust | Ruby | JVM |
+| -------------------------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- |
+| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  |
+| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
+| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  | No   | No   | No  |
+| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
+| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
+| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
+| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
+| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes |
+| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes |
+| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  |
 
 The five handler instruments are `workhorse.handler.executions`, `workhorse.handler.duration`,
 `workhorse.handler.runtime`, `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`.
@@ -66,7 +72,12 @@ Stable metrics include `workhorse.tasks.enqueued`, `workhorse.tasks.claimed`,
 Go recovery cannot see the queue and type of a recovered task. Its retry count uses `unknown` for
 both, as the TypeScript fallback does.
 
-More detail: [Telemetry: Synchronous instruments](../architecture/telemetry.md#synchronous-instruments).
+Rust recovery counts one retry for each queue and type that its result lists. It does not count a
+retry that the result does not list.
+
+The JVM column covers Java, Kotlin, and the Spring Boot starter.
+
+More detail: [Telemetry: Synchronous instruments](../architecture/telemetry.md#synchronous-instruments), [Telemetry: Go worker metrics](../architecture/telemetry.md#go-worker-metrics), [Telemetry: Rust worker metrics](../architecture/telemetry.md#rust-worker-metrics), [Telemetry: Ruby worker metrics](../architecture/telemetry.md#ruby-worker-metrics), [Telemetry: JVM worker metrics](../architecture/telemetry.md#jvm-worker-metrics), and [Telemetry: Python worker metrics](../architecture/telemetry.md#python-worker-metrics).
 
 </details>
 
