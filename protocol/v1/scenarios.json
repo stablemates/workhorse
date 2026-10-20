@@ -182,6 +182,39 @@
         }
       },
       {
+        "id": "heartbeat-one-lease-without-a-row-lock-wait",
+        "sql": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        "parameters": [
+          {
+            "$ref": "successfulTask"
+          },
+          "protocol-success",
+          {
+            "$ref": "successfulFence"
+          },
+          30000
+        ],
+        "expect": {
+          "rows": [
+            {
+              "status": "accepted"
+            }
+          ]
+        }
+      },
+      {
+        "id": "heartbeat-one-lease-reports-an-unknown-lease-stale",
+        "sql": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        "parameters": ["00000000-0000-4000-8000-000000000000", "protocol-success", 1, 30000],
+        "expect": {
+          "rows": [
+            {
+              "status": "stale"
+            }
+          ]
+        }
+      },
+      {
         "id": "heartbeat-many",
         "sql": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
         "parameters": [
@@ -2294,7 +2327,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 72,
+                "schemaVersion": 73,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

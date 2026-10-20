@@ -410,6 +410,7 @@ describe("schema installation", () => {
       { name: "create_single_child_v2" },
       { name: "fire_due_schedules_v2" },
       { name: "heartbeat_many_v2" },
+      { name: "heartbeat_v2" },
       { name: "save_checkpoint_v2" },
       { name: "sync_queue_health_policy_v2" },
       { name: "sync_schedule_definitions_v2" },
@@ -602,6 +603,10 @@ describe("schema installation", () => {
       {
         version: 72,
         description: "skip a locked row in a heartbeat",
+      },
+      {
+        version: 73,
+        description: "skip a locked row in a one-lease heartbeat",
       },
     ]);
 

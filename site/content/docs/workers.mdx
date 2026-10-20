@@ -271,6 +271,10 @@ of your own code, can still cost the lease.
 
 `heartbeat_many_v1` has the same input. It waits for a locked row and never returns `busy`.
 
+**`heartbeat_v2(p_task_id, p_worker_id, p_fence_token, p_lease_ms)`** renews one lease. It returns
+the status that `heartbeat_many_v2` gives that lease, and `stale` for a null task ID or fence token.
+`heartbeat_v1` takes the same input. It waits for a locked row and never returns `busy`.
+
 **Busy retry.** A busy retry sends only the busy leases after `base × (1 + random)`, with
 `base = min(100 ms, interval / 8)`. It ends by the earliest of the round deadline, the next regular
 slot, and the watchdog end. A bounded retry with less than 20 ms left sends nothing, and the next
@@ -278,7 +282,8 @@ regular round renews the lease. It does not move the regular rounds. With the de
 10,000 ms interval), the regular rounds at 10 s and 20 s can both be busy before the watchdog ends
 at 30 s. `SKIP LOCKED` does not stop every wait: an update-chain wait can still occur, and the round
 deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartbeatMany` still wait
-for a row lock and never report `busy`.
+for a row lock and never report `busy`. TypeScript `Queue.tryHeartbeat()` calls `heartbeat_v2`,
+which renews one lease by the rule of `heartbeat_many_v2`, but it has no busy retry.
 
 **Round deadline.** A round on the reserved connection sends `heartbeat_many_v2` in its own
 transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
@@ -292,16 +297,16 @@ round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its b
 change. On a loaded host, each round can then miss its deadline, and the worker can renew no
 lease.
 
-**Statuses** (`heartbeat_v1` and `heartbeat_many_v2`)
+**Statuses** (`heartbeat_v1`, `heartbeat_v2`, and `heartbeat_many_v2`)
 
-| Status              | Effect                                                      |
-| ------------------- | ----------------------------------------------------------- |
-| `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`. |
-| `busy`              | No change. Only `heartbeat_many_v2` returns it.             |
-| `cancel_requested`  | No change.                                                  |
-| `deadline_exceeded` | No change.                                                  |
-| `timeout_exceeded`  | No change.                                                  |
-| `stale`             | No change. The worker no longer owns this fence.            |
+| Status              | Effect                                                            |
+| ------------------- | ----------------------------------------------------------------- |
+| `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`.       |
+| `busy`              | No change. Only `heartbeat_v2` and `heartbeat_many_v2` return it. |
+| `cancel_requested`  | No change.                                                        |
+| `deadline_exceeded` | No change.                                                        |
+| `timeout_exceeded`  | No change.                                                        |
+| `stale`             | No change. The worker no longer owns this fence.                  |
 
 **Lease watchdog.** Each attempt also keeps a local countdown. It starts when the claim request
 leaves. Every `accepted` heartbeat restarts it from the moment that the request of that round left. A
@@ -366,13 +371,14 @@ Two results follow:
 These functions lock the exact active `task_id`, `worker_id`, and `fence_token` row before they
 write:
 
-- `heartbeat_v1`, `heartbeat_many_v1`, and `heartbeat_many_v2`;
+- `heartbeat_v1`, `heartbeat_v2`, `heartbeat_many_v1`, and `heartbeat_many_v2`;
 - `complete_v1` and `fail_v1`;
 - `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`;
 - `update_progress_v1` and `save_checkpoint_v1`.
 
-A mismatch writes nothing. A heartbeat reports it as `stale`. `heartbeat_many_v2` does not wait for
-a row that another transaction locks. It reports that lease as `busy` and writes nothing.
+A mismatch writes nothing. A heartbeat reports it as `stale`. `heartbeat_v2` and `heartbeat_many_v2`
+do not wait for a row that another transaction locks. They report that lease as `busy` and write
+nothing.
 
 More detail: [Task lifecycle: Terminal transitions](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#terminal-transitions).
 

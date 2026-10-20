@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 72;
-export const MINIMUM_SCHEMA_VERSION = 72;
-export const MAXIMUM_SCHEMA_VERSION = 72;
+export const WORKHORSE_SCHEMA_VERSION = 73;
+export const MINIMUM_SCHEMA_VERSION = 73;
+export const MAXIMUM_SCHEMA_VERSION = 73;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -57,6 +57,8 @@ export const SQL_STATEMENTS = {
     "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
   heartbeat_v1:
     "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+  heartbeat_v2:
+    "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
   list_checkpoint:
     "SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text",
   list_checkpoints:

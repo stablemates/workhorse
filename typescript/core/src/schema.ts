@@ -517,6 +517,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "skip a locked row in a heartbeat",
     kind: "additive",
   },
+  {
+    fromVersion: 72,
+    toVersion: 73,
+    file: "0074-skip-a-locked-row-in-a-one-lease-heartbeat.sql",
+    description: "skip a locked row in a one-lease heartbeat",
+    kind: "additive",
+  },
 ];
 
 /**

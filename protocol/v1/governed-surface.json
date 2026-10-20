@@ -398,6 +398,10 @@
       "arguments": ["uuid", "text", "bigint", "integer?"],
       "returns": "text"
     },
+    "heartbeat_v2": {
+      "arguments": ["uuid", "text", "bigint", "integer?"],
+      "returns": "text"
+    },
     "list_dead_letters_v1": {
       "arguments": ["jsonb?", "integer?", "timestamptz?", "uuid?"],
       "returns": "table",

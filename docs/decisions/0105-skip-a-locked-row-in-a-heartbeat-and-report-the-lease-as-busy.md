@@ -194,3 +194,27 @@ wait for the connection, and `BEGIN`. If less time remains, the retry sends noth
 other retry. The regular round then sends every registered lease, the busy ones too. A retry
 without a client deadline does not skip. Under shared heartbeats, only Go bounds its rounds, so only
 a Go retry under shared heartbeats can skip. All six SDKs use the same rule and the same values.
+
+## Amendment: a one-lease successor, heartbeat_v2 (2026-10-20)
+
+"Paths outside this decision" names `heartbeat_v1` as a path that still waits for a row lock, and
+it gives the successor to SM-1461. This amendment records that successor. The rule text above does
+not change.
+
+1. Migration 0074 moves the schema from 72 to 73. It adds
+   `heartbeat_v2(p_task_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000) RETURNS text`.
+   The input, the checks, and the errors are the same as in `heartbeat_v1`.
+2. A null task ID or fence token gives `stale`, as in `heartbeat_v1`. Every other call returns the
+   status that `heartbeat_many_v2` gives the one lease. Thus the function rules 2 through 5 above
+   apply to it, `busy` too.
+3. `heartbeat_v1` does not change, under ADR 0057. `Queue.heartbeat()` and `Queue.heartbeatStatus()`
+   still call it and still wait.
+4. TypeScript adds `Queue.tryHeartbeat(task, workerId, leaseMs?)`, which calls `heartbeat_v2` and
+   returns `HeartbeatBatchStatus`. The change is additive. It has no busy retry: on `busy`, the
+   caller decides when to call again. The scalar `HeartbeatStatus` does not change.
+5. A TypeScript `Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` still renews
+   through `heartbeatStatus`. It can wait and never reports `busy`. `WorkerQueueApi` gets no new
+   method. A custom API must implement `heartbeatMany` to get the busy rule and the busy retry.
+
+Every SDK statement catalogue names `heartbeat_v2`, so the SDK schema floor rises from 72 to 73. No
+release published schema 72. The next minor release must freeze `sql/releases/0073.sql`.

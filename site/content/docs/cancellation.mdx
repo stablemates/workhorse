@@ -160,8 +160,8 @@ cancellation. Your handler code decides how quickly the cancellation occurs.
 1. **Request.** The first `cancel_v1` on an `active` runtime stores `cancel_requested_at`,
    `cancel_requested_by`, and `cancel_reason`. It appends one `cancel_requested` event. A repeat
    keeps the first metadata and appends nothing.
-2. **Delivery.** `heartbeat_v1` and `heartbeat_many_v2` return `cancel_requested` and leave
-   `expires_at` unchanged. The worker aborts the handler signal with `CancellationRequestedError`.
+2. **Delivery.** `heartbeat_v1`, `heartbeat_v2`, and `heartbeat_many_v2` return `cancel_requested`
+   and leave `expires_at` unchanged. The worker aborts the handler signal with `CancellationRequestedError`.
 3. **Acknowledgement.** `acknowledge_cancel_v1(task_id, worker_id, fence_token)` accepts only the
    exact unexpired worker and fence. It writes one `canceled` outcome, one attempt-history row, and
    one `canceled` event with `source = acknowledged`.

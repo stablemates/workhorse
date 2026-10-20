@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 72
-	maximumSchemaVersion   = 72
+	minimumSchemaVersion   = 73
+	maximumSchemaVersion   = 73
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -726,6 +726,7 @@ var protocolStatementRegistry = map[string]string{
 	"get_contract_definition_v1":   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
 	"heartbeat_many_v2":            `SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal`,
 	"heartbeat_v1":                 `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	"heartbeat_v2":                 `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	"queue_health_v1":              `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
 	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"record_batch_failure_v1":      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,

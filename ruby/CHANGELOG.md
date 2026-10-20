@@ -7,15 +7,16 @@ other SDKs carry, because every tag names one release of all of them.
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
 
-Requires **schema v72**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+Requires **schema v73**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migration 0073 moves the schema to version **72**.
-The SDK compatibility floor rises from 69 to **72**, because every SDK statement catalogue now names
-`heartbeat_many_v2`. An updated process refuses a schema below version 72 at startup. A 0.8 process
-keeps working on version 72, because a migration inside a major line only adds.
+process of this release starts, producers too. Migrations 0073 and 0074 move the schema to version
+**73**. The SDK compatibility floor rises from 69 to **73**, because every SDK statement catalogue
+now names `heartbeat_many_v2` and `heartbeat_v2`. An updated process refuses a schema below version
+73 at startup. A 0.8 process keeps working on version 73, because a migration inside a major line
+only adds.
 
 ### Heartbeats do not wait for a locked task row
 
@@ -27,6 +28,10 @@ ownership verdict. The worker keeps a busy lease, retries only the busy leases a
 with jitter, and does not move the regular heartbeat schedule. A busy answer never extends the local
 lease watchdog, so a lease that stays busy until the watchdog ends is lost, as before. Old and new
 workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
+
+**One-lease heartbeat without a row lock wait.** Migration 0074 adds `heartbeat_v2` (SM-1461). It
+renews one lease by the rule of `heartbeat_many_v2`, so it reports a locked row as `busy`. This SDK
+names it in its statement catalogue but does not call it. `heartbeat_v1` does not change.
 
 ### Heartbeat rounds keep a renewal margin and end on the server
 

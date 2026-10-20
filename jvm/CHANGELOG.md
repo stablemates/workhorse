@@ -14,10 +14,10 @@ adds.
 This is the first release of the JVM SDK. The npm packages, Python distribution, Go module, Rust
 crate, Ruby gem, and JVM artifacts release from one source commit.
 
-Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
+Requires **schema v73**, Java **21** or newer, and PostgreSQL **15** or newer.
 
-- The JVM SDK needs schema version 72 or later. The SDK compatibility floor is schema version
-  **72**. Install or migrate the schema with the `workhorse` CLI as a deployment step, before the
+- The JVM SDK needs schema version 73 or later. The SDK compatibility floor is schema version
+  **73**. Install or migrate the schema with the `workhorse` CLI as a deployment step, before the
   application starts. The application never installs or migrates the schema.
 - The SDK has three artifacts. All three use the group `run.workhorse` and one version ([ADR
   0103](../docs/decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)):
@@ -45,6 +45,9 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   smallest supported value. The [heartbeat round
   deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
   schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
+- Migration 0074 adds `heartbeat_v2`, which renews one lease by the rule of `heartbeat_many_v2`
+  and reports a locked row as `busy` (SM-1461). The JVM SDK names it in its statement catalogue but
+  does not call it. `heartbeat_v1` does not change.
 - The Java API is ready for the Gate 2 freeze of [ADR
   0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md). A public record can get a new
   component only at the end, and it keeps each earlier canonical constructor; a record pattern that

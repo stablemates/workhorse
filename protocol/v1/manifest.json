@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 72,
-    "minimumVersion": 72,
-    "maximumVersion": 72,
+    "installedVersion": 73,
+    "minimumVersion": 73,
+    "maximumVersion": 73,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -151,6 +151,11 @@
       "name": "heartbeat_many_v2",
       "arity": 2,
       "contract": "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal"
+    },
+    {
+      "name": "heartbeat_v2",
+      "arity": 4,
+      "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
     },
     {
       "name": "expire_owned_telemetry_v1",
@@ -419,6 +424,12 @@
       "name": "heartbeat_v1",
       "arity": 4,
       "contract": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+      "catalogues": ["protocol"]
+    },
+    {
+      "name": "heartbeat_v2",
+      "arity": 4,
+      "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
       "catalogues": ["protocol"]
     },
     {
