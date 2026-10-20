@@ -1037,12 +1037,19 @@ class WorkerDatabaseTest {
    * version measured from the time after the lock, and allowed two intervals for the last accepted
    * round. Under load, the heartbeat thread sent that round late, or the test recorded the lock
    * late, and the attempt seemed to end early (SM-1543).
+   *
+   * <p>The task has one attempt. Before it claims again, {@code runOnce} runs a maintenance pass.
+   * If the test commits its lock before that pass, the pass recovers the expired lease. With more
+   * attempts, the task then went back to the queue, {@code runOnce} claimed it again, and the new
+   * handler waited 20 s for a cancellation. On a loaded host, {@code runOnce} thus did not return
+   * in 20 s (SM-1562). With one attempt, the recovery ends the task, and the next claim finds no
+   * task.
    */
   @Test
   void endsAnAttemptWhoseLeaseStaysBusyAtTheEndOfItsLeaseWindow() throws Exception {
     long leaseMs = 800;
     long intervalMs = 100;
-    UUID taskId = enqueue("held", Map.of());
+    UUID taskId = enqueue("held", Map.of(), EnqueueOptions.builder().maxAttempts(1));
     CountDownLatch started = new CountDownLatch(1);
     AtomicLong cancelledAt = new AtomicLong();
     AtomicLong renewedAt = new AtomicLong();
@@ -1090,6 +1097,7 @@ class WorkerDatabaseTest {
       blocker.commit();
       assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
       assertEquals(locked, busy, "a busy round renewed the stored lease");
+      assertEquals(1, status(taskId).attempt(), "one attempt ran");
     } finally {
       runner.shutdownNow();
     }
