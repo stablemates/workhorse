@@ -13,7 +13,7 @@ This is an application recipe, not a Workhorse checkpointer or an SDK adapter.
 
 [`python/examples/langgraph_approval.py`](langgraph_approval.py) uses these released development dependencies:
 
-- `langgraph==1.2.15`, upstream tag `1.2.15` at `08a345637fb2bd499f69c90056a22c478a468817`.
+- `langgraph==1.2.16`, upstream tag `1.2.16` at `41c9c22fdc83d68a2859d0c9a2b627c8615a792f`.
 - `langgraph-checkpoint-postgres==3.2.0`, tag `checkpointpostgres==3.2.0` at
   `d4149cc1f5384364d1a21092b4c2f582a6e7af8f`.
 - `langgraph-checkpoint==4.3.0`, resolved in `python/uv.lock`.
