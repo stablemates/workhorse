@@ -625,6 +625,7 @@ jobs:
       # jvm/gradle/verification-metadata.xml, so every JVM step fails on an artifact with no entry,
       # for example after a Dependabot update. This step writes the file again from nothing and
       # fails if it differs from the committed file, so an entry that nothing resolves also fails.
+      # It also checks the file of each release consumer that jvm:package-check runs.
       - if: matrix.java == fromJSON(needs.plan.outputs.jvm).include[0].java
         run: pnpm jvm:verification-metadata:check
       - run: pnpm jvm:build
