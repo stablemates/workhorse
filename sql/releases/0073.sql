@@ -11533,6 +11533,28 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.heartbeat_v2(
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_lease_ms IS NULL OR p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  IF p_task_id IS NULL OR p_fence_token IS NULL THEN RETURN 'stale'; END IF;
+  RETURN (
+    SELECT beat.status FROM workhorse.heartbeat_many_v2(
+      p_worker_id,
+      jsonb_build_array(jsonb_build_object(
+        'taskId', p_task_id, 'fenceToken', p_fence_token, 'leaseMs', p_lease_ms
+      ))
+    ) beat
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
   p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS boolean
@@ -22096,10 +22118,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (69, 'fence a task group member add and index the group list'),
   (70, 'lock purged runtime rows in identity order'),
   (71, 'purge a queue that holds a prerequisite of a live dependent'),
-  (72, 'skip a locked row in a heartbeat')
+  (72, 'skip a locked row in a heartbeat'),
+  (73, 'skip a locked row in a one-lease heartbeat')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (72) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (73) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
