@@ -68,6 +68,14 @@ describe("lefthook pre-commit scope", () => {
     expect(preCommitRuns).not.toContain("mise exec -- pnpm rust:integration");
   });
 
+  it("runs no PostgreSQL schema suite after a SQL change", async () => {
+    const limits = "typescript/core/test/schema-limits.test.ts";
+    expect(preCommitRuns).not.toContain("mise exec -- pnpm test:schema");
+    expect(preCommitRuns).toContain(`mise exec -- pnpm test:changed ${limits}`);
+    // `test:changed` passes when it selects no test, so a moved file would pass unseen.
+    await expect(readFile(path.resolve(import.meta.dirname, "..", limits))).resolves.toBeDefined();
+  });
+
   it("checks the parity tables once", () => {
     // `pnpm rust:conformance:check` also runs `pnpm parity:check`.
     expect(preCommitRuns).not.toContain("mise exec -- pnpm rust:conformance:check");

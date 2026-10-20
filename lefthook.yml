@@ -1,8 +1,6 @@
 pre-commit:
   # The hook runs the unit scope of each language only. A unit scope needs no database. CI runs the
   # database suites, and the full suite of each language, on every pull request and `main` push.
-  # One exception remains: a change under `sql/` runs the schema suites (`pnpm test:schema`), which
-  # use PostgreSQL. SM-1549 moves them to CI.
   # The build runs alone, before the checks, so that no check reads a `dist` directory while
   # TypeScript rewrites it. Piped jobs stop at the first failure, so a failed build skips the checks.
   piped: true
@@ -129,14 +127,13 @@ pre-commit:
             run: mise exec -- pnpm docs:typecheck
           - name: test changed scope
             run: mise exec -- pnpm test:changed {staged_files}
-          # `vitest related` cannot select tests from a .sql path, so SQL changes name the schema
-          # suites directly. The changed-file database scope once ran beside this job, but a commit
-          # touching widely imported sources selects nearly the whole suite — past the pre-commit
-          # time budget no matter how the group is scheduled — so that scope now runs in CI's
-          # `typescript` lane (`pnpm test:database:typescript`, every pull request and main push).
-          - name: test database scope after SQL changes
+          # `vitest related` cannot select tests from a .sql path, so a SQL change names the one
+          # schema suite that needs no database. CI's `npm-release-scope` job also runs it, with
+          # `pnpm npm:test:unit`. The schema installation and migration suites use PostgreSQL, so
+          # CI's `typescript` job runs them with `pnpm test:database:typescript`.
+          - name: test schema limits after SQL changes
             glob: "sql/**"
-            run: mise exec -- pnpm test:schema
+            run: mise exec -- pnpm test:changed typescript/core/test/schema-limits.test.ts
 
 pre-push:
   jobs:
