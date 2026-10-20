@@ -29,4 +29,45 @@ RSpec.describe W::Values do
       expect(described_class.jsonb_text_bytes(text)).to eq(bytes)
     end
   end
+
+  describe ".milliseconds" do
+    it "names the lower limit of an endless range" do
+      [0, -1, Float::NAN, "1", nil].each do |value|
+        expect { described_class.milliseconds(value, "heartbeat", 1..) }
+          .to raise_error(ArgumentError, "heartbeat must be a finite Numeric count of seconds of at least 0.001")
+      end
+      expect(described_class.milliseconds(0.001, "heartbeat", 1..)).to eq(1)
+    end
+
+    it "names both limits of a bounded range" do
+      expect { described_class.milliseconds(0, "lease", 100..86_400_000) }
+        .to raise_error(ArgumentError, "lease must be a finite Numeric count of seconds between 0.1 and 86400")
+    end
+  end
+
+  # Five worker options have no upper limit. A bad value raises ArgumentError before the worker
+  # touches PostgreSQL.
+  describe "an interval option of a worker" do
+    pool_class = Class.new(FakeExecutor) do
+      def size = 3
+
+      def with = raise("unit specs never check out a connection")
+    end
+
+    {
+      heartbeat: [0, "0.001"],
+      poll_interval: [0, "0.001"],
+      maintenance_interval: [0.05, "0.1"],
+      maintenance_routine_interval: [0.05, "0.1"],
+      registry_interval: [0.05, "0.1"]
+    }.each do |option, (value, limit)|
+      it "raises ArgumentError for #{option}: #{value}" do
+        pool = pool_class.new
+        options = {queues: ["default"], polling_only: true}.merge(option => value)
+        expect { W::Worker.new(pool, **options) }
+          .to raise_error(ArgumentError, "#{option} must be a finite Numeric count of seconds of at least #{limit}")
+        expect(pool.statements).to be_empty
+      end
+    end
+  end
 end

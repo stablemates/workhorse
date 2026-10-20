@@ -216,13 +216,15 @@ module Stablemates
       end
 
       # Whole milliseconds from a finite Numeric count of seconds, within +range+ milliseconds.
-      # An ActiveSupport::Duration is Numeric and converts the same way.
+      # An ActiveSupport::Duration is Numeric and converts the same way. An endless +range+ has
+      # only a lower limit.
       def milliseconds(value, label, range)
         milliseconds = whole_milliseconds(value)
         return milliseconds if milliseconds && range.cover?(milliseconds)
 
-        raise ArgumentError, "#{label} must be a finite Numeric count of seconds between " \
-          "#{seconds(range.begin)} and #{seconds(range.end)}"
+        limits = range.end.nil? ? "of at least #{seconds(range.begin)}" :
+          "between #{seconds(range.begin)} and #{seconds(range.end)}"
+        raise ArgumentError, "#{label} must be a finite Numeric count of seconds #{limits}"
       end
 
       def whole_milliseconds(value)

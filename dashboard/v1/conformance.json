@@ -5734,6 +5734,38 @@
           }
         },
         {
+          "id": "preview-retention-policy-null",
+          "procedure": "previewRetentionPolicy",
+          "request": {
+            "json": {
+              "definition": {
+                "terminalOutcomeRetentionDays": null
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "eligible": {
+                  "terminalTasks": 0,
+                  "taskEvents": 0,
+                  "attemptHistory": 0,
+                  "scheduleOccurrences": 0,
+                  "statistics": 0
+                },
+                "capped": {
+                  "terminalTasks": false,
+                  "taskEvents": false,
+                  "attemptHistory": false,
+                  "scheduleOccurrences": false,
+                  "statistics": false
+                }
+              }
+            }
+          }
+        },
+        {
           "id": "task-detail",
           "procedure": "taskDetail",
           "request": {
