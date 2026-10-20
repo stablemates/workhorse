@@ -8,6 +8,10 @@
 //! Without `DATABASE_URL_TEST` a local run skips with a visible reason. CI, or
 //! `WORKHORSE_REQUIRE_DATABASE=1`, turns that skip into a failure, and a database that is set but
 //! unreachable always fails.
+//!
+//! `WORKHORSE_NO_DATABASE=1` skips every database test, even when `DATABASE_URL_TEST` is set.
+//! `pnpm rust:test:unit` sets it, so the unit scope that the pre-commit hook runs never uses
+//! PostgreSQL. Library tests in `src/worker/heartbeat.rs` use this module too.
 
 #![allow(dead_code)]
 
@@ -87,6 +91,10 @@ impl Drop for ScratchDatabase {
 
 /// Create a scratch database for `test`, or return `None` when a local run has no database.
 pub async fn scratch_database(test: &str) -> Option<ScratchDatabase> {
+    if set("WORKHORSE_NO_DATABASE") {
+        report(&format!("SKIPPED {test}: WORKHORSE_NO_DATABASE is set"));
+        return None;
+    }
     let Some(source) = env::var("DATABASE_URL_TEST").ok().filter(|value| !value.is_empty()) else {
         if database_required() {
             panic!(
@@ -163,9 +171,12 @@ async fn drop_database(client: &Client, name: &str) -> Result<(), tokio_postgres
 }
 
 fn database_required() -> bool {
-    let set =
-        |key: &str| env::var(key).is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false"));
     set("CI") || set("WORKHORSE_REQUIRE_DATABASE")
+}
+
+/// Whether the environment variable `key` is set to a value other than empty, `0`, or `false`.
+fn set(key: &str) -> bool {
+    env::var(key).is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false"))
 }
 
 async fn connect(config: &Config) -> Client {

@@ -177,6 +177,7 @@
     "rust:conformance:check": "tsx scripts/generate-rust-conformance.ts --check && pnpm parity:check",
     "rust:format:check": "tsx scripts/with-env.ts cargo fmt --all -- --check && tsx scripts/with-env.ts rustfmt --check --edition 2021 rust/release-consumer/main.rs",
     "rust:test": "tsx scripts/with-env.ts cargo test --workspace --all-features",
+    "rust:test:unit": "WORKHORSE_NO_DATABASE=1 tsx scripts/with-env.ts cargo test --workspace --all-features --lib --bins",
     "rust:test:sqlx": "WORKHORSE_REQUIRE_DATABASE=1 tsx scripts/with-env.ts cargo test --package workhorse --features sqlx --test sqlx_postgres",
     "rust:example:sqlx": "tsx scripts/with-env.ts cargo run --package workhorse --features sqlx --example sqlx_transaction",
     "rust:test:no-features": "tsx scripts/with-env.ts cargo test --workspace",

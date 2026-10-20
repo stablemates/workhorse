@@ -31,7 +31,7 @@ describe("lefthook Rust and generated-artifact routing", () => {
     );
     expect(config).toContain("run: mise exec -- pnpm rust:format:check");
     expect(config).toContain('glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"');
-    expect(config).toContain("run: mise exec -- pnpm rust:test");
+    expect(config).toContain("run: mise exec -- pnpm rust:test:unit\n");
     expect(config).toContain('glob: "**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}"');
   });
 
@@ -43,7 +43,35 @@ describe("lefthook Rust and generated-artifact routing", () => {
       'glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"',
     );
     expect(config).toContain("run: mise exec -- pnpm parity:check");
-    expect(config).toContain("run: mise exec -- pnpm rust:conformance:check");
+    expect(config).toContain(
+      "run: mise exec -- pnpm exec tsx scripts/generate-rust-conformance.ts --check",
+    );
+  });
+});
+
+// Every command a list of jobs runs, including the jobs of nested groups.
+function runs(jobs: readonly Job[]): string[] {
+  return jobs.flatMap((job) => [...(job.run ? [job.run] : []), ...runs(job.group?.jobs ?? [])]);
+}
+
+describe("lefthook pre-commit scope", () => {
+  const preCommitRuns = runs(hooks["pre-commit"]!.jobs);
+
+  it("runs the Rust unit scope, not the database suite that CI runs", async () => {
+    const { scripts } = JSON.parse(
+      await readFile(path.resolve(import.meta.dirname, "../package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    // Library tests in `rust/src/worker/heartbeat.rs` use a scratch database unless this is set.
+    expect(scripts["rust:test:unit"]).toMatch(/^WORKHORSE_NO_DATABASE=1 .* --lib --bins$/);
+    expect(preCommitRuns).toContain("mise exec -- pnpm rust:test:unit");
+    expect(preCommitRuns).not.toContain("mise exec -- pnpm rust:test");
+    expect(preCommitRuns).not.toContain("mise exec -- pnpm rust:integration");
+  });
+
+  it("checks the parity tables once", () => {
+    // `pnpm rust:conformance:check` also runs `pnpm parity:check`.
+    expect(preCommitRuns).not.toContain("mise exec -- pnpm rust:conformance:check");
+    expect(preCommitRuns.filter((run) => run.includes("parity:check"))).toHaveLength(1);
   });
 
   it("routes staged Ruby files to RuboCop and the generated catalogue to its check", () => {
