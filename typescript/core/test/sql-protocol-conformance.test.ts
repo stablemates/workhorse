@@ -216,7 +216,9 @@ async function executeBatchRuntimeFixture(
     retryDelayMs: 0,
   }).handleBatch<{ key: string; outcome: string }, { attempt: number }>(
     fixture.taskType,
-    { maxSize: fixture.batchMaxSize, lingerMs: 100 },
+    // SM-1538: a full batch dispatches at once. A short linger can split the batch when one member
+    // starts late under host load, which changes the handler order.
+    { maxSize: fixture.batchMaxSize, lingerMs: 1_000 },
     (items) => {
       seen.push(...items.map((item) => item.payload.key));
       return items.map(({ payload, context }) =>

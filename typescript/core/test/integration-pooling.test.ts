@@ -296,30 +296,52 @@ for (const lane of lanes) {
       it("exercises the session advisory lock boundary for the lane", async () => {
         const key = `${lockScope}:${lane.name}`;
         const holder = await lanePool.connect();
-        const contender = await lanePool.connect();
+        const contenders: Client[] = [];
         try {
-          await holder.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key]);
+          const held = await holder.query<{ pid: number }>(
+            "SELECT pg_advisory_lock(hashtextextended($1, 0)), pg_backend_pid() AS pid",
+            [key],
+          );
+          const holderPid = held.rows[0]!.pid;
 
-          // Each try may reach a different server session in transaction mode; one success
-          // anywhere proves the lock no longer excludes a second client.
-          const attempts: boolean[] = [];
-          for (let attempt = 0; attempt < 6; attempt += 1) {
-            const result = await contender.query<{ got: boolean }>(
-              "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS got",
+          // A session lock belongs to the server session that took it, and that session can take
+          // it again. Thus a try from another client succeeds only on the holder's server session.
+          // Each contender keeps its transaction open, which pins its server session under
+          // transaction pooling. The next contender then reaches a server session that no earlier
+          // contender holds, so one contender reaches the holder's session within the pool size.
+          // The result does not depend on which session the pooler gives first. Under session
+          // pooling and direct connections, the holder keeps its session, and no contender reaches it.
+          const tries: Array<{ got: boolean; pid: number }> = [];
+          while (
+            tries.length < 50 &&
+            (lane.sessionLocksExclude
+              ? tries.length < 3
+              : !tries.some((attempt) => attempt.pid === holderPid))
+          ) {
+            const contender = new Client({ connectionString: url! });
+            contenders.push(contender);
+            await contender.connect();
+            await contender.query("BEGIN");
+            const result = await contender.query<{ got: boolean; pid: number }>(
+              "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS got, pg_backend_pid() AS pid",
               [key],
             );
-            attempts.push(result.rows[0]!.got);
+            tries.push(result.rows[0]!);
           }
 
-          expect(attempts.some((got) => got)).toBe(!lane.sessionLocksExclude);
+          for (const attempt of tries) expect(attempt.got).toBe(attempt.pid === holderPid);
+          expect(tries.some((attempt) => attempt.got)).toBe(!lane.sessionLocksExclude);
         } finally {
-          // Session grants persist on whichever server session took them, so cleanup is best
-          // effort: each unlocked session clears only its own grants, and any the contender
-          // reached stay pinned to those pooled backends until they close.
+          // Each contender unlocks in its own pinned server session before it commits. Under
+          // transaction pooling, the contender on the holder's session thus also clears the
+          // holder's lock, so no grant stays on a pooled server session.
+          for (const contender of contenders) {
+            await contender.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
+            await contender.query("COMMIT").catch(() => undefined);
+            await contender.end().catch(() => undefined);
+          }
           await holder.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
-          await contender.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
           holder.release();
-          contender.release();
         }
       });
     },

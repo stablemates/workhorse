@@ -387,9 +387,12 @@ describe("signed Slack approval recipe with a real isolated database", () => {
       const { reference } = await prompt();
       const http = await receiver();
       let body = formBody(payload(reference));
+      // The receiver reads its clock after this request is built, and the header drops the
+      // fraction of a second. Thus a fault one second outside the 300 s window can arrive inside
+      // it. The faults stay a minute outside; the verifier test checks the exact bound.
       const timestamp =
         Math.floor(Date.now() / 1_000) +
-        (fault === "old timestamp" ? -301 : fault === "future timestamp" ? 301 : 0);
+        (fault === "old timestamp" ? -360 : fault === "future timestamp" ? 360 : 0);
       const headers = signedHeaders(body, timestamp.toString());
       if (fault === "signature") headers["X-Slack-Signature"] = `v0=${"0".repeat(64)}`;
       if (fault === "tampered raw body") body += "&extra=changed";
@@ -430,6 +433,23 @@ describe("signed Slack approval recipe with a real isolated database", () => {
     expect(
       verifySlackSignature(Buffer.from(body), "1712345678", headers["X-Slack-Signature"], "", now),
     ).toBe(false);
+    for (const [offset, accepted] of [
+      [-300, true],
+      [300, true],
+      [-301, false],
+      [301, false],
+    ] as const) {
+      const timestamp = (1_712_345_678 + offset).toString();
+      expect(
+        verifySlackSignature(
+          Buffer.from(body),
+          timestamp,
+          signedHeaders(body, timestamp)["X-Slack-Signature"],
+          signingSecret,
+          now,
+        ),
+      ).toBe(accepted);
+    }
   });
 
   it("rejects malformed, oversized and unsupported requests without storing response URLs", async () => {

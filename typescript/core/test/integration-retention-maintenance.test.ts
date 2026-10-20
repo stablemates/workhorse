@@ -666,7 +666,19 @@ describe("retention maintenance", () => {
   });
 
   it("folds statistics beyond the group limit into an overflow type instead of growing unbounded", async () => {
-    for (let index = 0; index < 5; index += 1) await queue.enqueue(`stat-type-${index}`, {});
+    const taskIds: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      taskIds.push(await queue.enqueue(`stat-type-${index}`, {}));
+    }
+    // The group limit applies to each bucket. If the enqueues cross a minute boundary, each bucket
+    // stays under the limit and nothing folds. One event time keeps all five in one bucket.
+    await pool.query(
+      `UPDATE workhorse.task_event
+          SET occurred_at = (SELECT min(occurred_at) FROM workhorse.task_event
+                              WHERE task_id = ANY($1::uuid[]))
+        WHERE task_id = ANY($1::uuid[])`,
+      [taskIds],
+    );
     await queue.overrideMaintenancePolicy({ statisticsGroupLimit: 2 });
     await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
     const rows = await pool.query<{ task_type: string; enqueued: number }>(
