@@ -75,15 +75,29 @@ runner is the code that has the most effect on safety, so it exists only one tim
 This limit stays at 1.0.0. In the stable line, schema installation, migration, the `workhorse` CLI,
 and the TUI stay in the TypeScript package only. The 1.0.0 release makes two promises:
 
-- Each language gets the same operator capability through its own `Admin` client.
+- The dashboard and the CLI give the same operator capability against each database, whatever
+  language enqueued the work.
 - Each language refuses to start with a schema that it cannot use.
 
-The 1.0.0 release does not promise a second migration runner in each language.
+[ADR 0059](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0059-assemble-the-1-0-0-specification.md)
+records the first promise as the 1.0.0 parity bar. The 1.0.0 release does not promise a second
+migration runner in each language.
 
 Workaround: run the CLI as a deployment step. Pin it to the SDK version of your application. Before
 the first new process starts, check the schema with `workhorse schema status --json`.
 [Installation](/docs/installation) gives the two forms of the command. For a development database
 without Node.js, each release attaches `schema.sql`, which you can apply with `psql -f`.
+
+## Use the TypeScript SDK for some operator methods
+
+Each language has an `Admin` client with the shared operator reads and controls. Examples are task
+listing, dead-letter redrive, and queue pause. Some operator methods are only in the TypeScript
+SDK. Examples are `runTaskNow`, the lineage reads, and the retention policy methods. The
+[language parity list](https://github.com/stablemates/workhorse/blob/main/docs/parity.md#public-sdk-operator-surface)
+names each of them.
+
+Workaround: use the dashboard for run now, the lineage reads, and the retention and maintenance
+policy controls. For the other methods, run a TypeScript script against the same database.
 
 ## Enqueue from your own API routes
 

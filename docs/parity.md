@@ -315,6 +315,34 @@ clients. Python provides synchronous `Admin` over Psycopg and `AsyncAdmin` over 
 Their embedded dashboards call the same clients for shared operator reads and controls. Cancellation
 remains application-shaped, so every queue client exposes it with audit attribution.
 
+The table above lists the operator operations that every SDK exposes. It is not the full TypeScript
+operator surface. Only the TypeScript SDK has public methods for these operator operations:
+
+- `Admin.runTaskNow`, which releases a future-scheduled task now.
+- The lineage reads `Admin.getRedriveLineage`, `Admin.getDependencyLineage`, and
+  `Admin.getChildLineage`.
+- The dependency drift list and repair, `Admin.listDependencyDrift` and
+  `Admin.repairDependencyDrift`.
+- The metric snapshots `queueMetricSnapshot` and `budgetMetricSnapshot`, on `Admin` and `Queue`.
+- The schedule reads and controls `schedules`, on `Admin` and `Queue`, and `Queue.fireSchedule`.
+- The status reads `Queue.rateLimitStatuses` and `Queue.budgetStatuses`.
+- The retention policy methods `Queue.syncRetentionPolicy`, `overrideRetentionPolicy`,
+  `revertRetentionPolicy`, `previewRetentionPolicy`, and `getRetentionPolicy`.
+- The maintenance policy methods `Queue.syncMaintenancePolicy`, `overrideMaintenancePolicy`,
+  `revertMaintenancePolicy`, and `getMaintenancePolicy`.
+- The cold export methods `Queue.setColdExportPolicy` and `Queue.getColdExportStatus`.
+
+`Admin` also has `getRetentionPolicy`, `previewRetentionPolicy`, and `getMaintenancePolicy` in
+TypeScript only. The statement catalogue of each SDK holds the SQL of many of these operations,
+for example `run_task_now_v1` and `get_retention_policy_v1`. No public method in Python, Go, Rust,
+Ruby, or the JVM uses those statements. In those languages, the embedded dashboard gives some of
+these operations: run now, the lineage reads, and the retention and maintenance policy controls.
+For the other operations, an operator must run TypeScript code.
+
+`setQueueTier` and `setQueueHistory` are in the TypeScript, Python, Go, and Rust `Admin` clients.
+Ruby and the JVM do not have them. [SM-1417](https://linear.app/stablemates/issue/SM-1417) records
+that decision.
+
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when
 that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
@@ -346,9 +374,12 @@ compatibility check" row above is Supported everywhere, and it is what turns a m
 into a refused start rather than a corrupted write.
 
 This boundary holds at 1.0.0, and the CLI and TUI hold it with the schema tooling
-(WH-581). What 1.0.0 promises is that every
-language reaches the same operator capability through its own `Admin` client and refuses to start
-against a schema it cannot speak, not that every language grows a second migration runner.
+([ADR 0059](decisions/0059-assemble-the-1-0-0-specification.md)). The 1.0.0 parity bar is the
+product table: the dashboard and the CLI give each operator capability against any database,
+whatever language enqueued the work. 1.0.0 also promises that each language refuses to start
+against a schema it cannot speak. Each SDK `Admin` client covers the rows of the public SDK
+operator table. 1.0.0 does not promise the TypeScript-only operator methods in other languages, and
+it does not promise a second migration runner in each language.
 
 ## Keeping this document honest
 
