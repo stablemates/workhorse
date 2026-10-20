@@ -1,17 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   bundleFiles,
   group,
+  importPublicKey,
+  javadocProblems,
+  keyPackets,
   jvmTrainVersion,
   manifestAttributes,
   manifestProblems,
   moduleProblems,
   pomProblems,
+  publicKeyPackets,
   publishedArtifacts,
+  releaseKeyFingerprint,
   scratchDatabaseName,
   stagedFileProblems,
+  stopAgent,
   tagVersion,
+  throwawayKey,
   withoutPublicationSecrets,
 } from "./check-jvm-release.js";
 import { jdbcUrl } from "./verify-release.js";
@@ -402,6 +413,118 @@ describe("the jar manifests", () => {
     );
     expect(attributes.get("Implementation-Title")).toBe("workhorse-spring-boot-starter");
     expect(attributes.has("Implementation-Version")).toBe(false);
+  });
+});
+
+describe("the javadoc jars", () => {
+  it("accepts a javadoc jar with an index page", () => {
+    expect(
+      javadocProblems("workhorse-kotlin-0.8.0-javadoc.jar", [
+        "META-INF/",
+        "META-INF/MANIFEST.MF",
+        "index.html",
+        "workhorse-kotlin/run.workhorse.kotlin/index.html",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("refuses a javadoc jar that holds only its manifest", () => {
+    expect(
+      javadocProblems("workhorse-kotlin-0.8.0-javadoc.jar", ["META-INF/", "META-INF/MANIFEST.MF"]),
+    ).toEqual([
+      "workhorse-kotlin-0.8.0-javadoc.jar has no index.html, so it holds no documentation",
+    ]);
+  });
+});
+
+/** The command line of each process that runs a gpg-agent for `home`. */
+function agentsFor(home: string): string[] {
+  return execFileSync("ps", ["-eo", "args="], { encoding: "utf8" })
+    .split("\n")
+    .filter((line) => line.includes("gpg-agent") && line.includes(home));
+}
+
+/** Every file below `directory`, relative to it. */
+async function filesBelow(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name)));
+}
+
+describe("the signing key", () => {
+  let directory: string;
+  let throwawayHome: string;
+  let key: string;
+
+  // GnuPG takes some seconds to generate a key, so the tests share one throwaway key.
+  beforeAll(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "workhorse-jvm-key-"));
+    throwawayHome = path.join(directory, "throwaway");
+    ({ key } = await throwawayKey(throwawayHome));
+  }, 60_000);
+
+  afterAll(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  /** A new, empty GnuPG home. */
+  async function verifyingHome(): Promise<string> {
+    const home = await mkdtemp(path.join(directory, "verify-"));
+    await chmod(home, 0o700);
+    return home;
+  }
+
+  it("pins the fingerprint of the release key that SM-1384 records", () => {
+    expect(releaseKeyFingerprint).toBe("B933E2F16C3FA58E5414849A024210DB67A17773");
+  });
+
+  it("signs the dry run with an ed25519 primary key and no subkey, like the release key", () => {
+    const keys = keyPackets(key).filter((packet) => packet.tag === 5 || packet.tag === 7);
+    expect(keys.map((packet) => packet.tag)).toEqual([5]);
+    // A version 4 key packet names its algorithm in its sixth byte. 22 is EdDSA (ed25519).
+    expect(keys[0]!.body[0]).toBe(4);
+    expect(keys[0]!.body[5]).toBe(22);
+  });
+
+  it("stops the gpg-agent of the throwaway key", () => {
+    expect(agentsFor(throwawayHome)).toEqual([]);
+  });
+
+  it("takes only the public packets from an armored secret key", () => {
+    const tags = keyPackets(publicKeyPackets(key)).map((packet) => packet.tag);
+    expect(tags).toContain(6);
+    expect(tags).not.toContain(5);
+    expect(tags).not.toContain(7);
+  });
+
+  it("imports no secret key material into the GnuPG home that verifies", async () => {
+    const home = await verifyingHome();
+    try {
+      const fingerprint = await importPublicKey(home, key);
+      expect(fingerprint).toMatch(/^[0-9A-F]{40}$/);
+      expect(
+        (await filesBelow(home)).filter((file) => file.startsWith("private-keys-v1.d")),
+      ).toEqual([]);
+    } finally {
+      await stopAgent(home);
+    }
+    expect(agentsFor(home)).toEqual([]);
+  });
+
+  it("refuses a signing key whose fingerprint is not the pinned release key", async () => {
+    const home = await verifyingHome();
+    try {
+      await expect(importPublicKey(home, key, releaseKeyFingerprint)).rejects.toThrow(
+        `not the release key ${releaseKeyFingerprint}`,
+      );
+    } finally {
+      await stopAgent(home);
+    }
+  });
+
+  it("refuses text that is not an armored key", () => {
+    expect(() => publicKeyPackets("not a key")).toThrow("not an ASCII-armored OpenPGP key");
   });
 });
 

@@ -44,13 +44,12 @@ lease watchdog, so a lease that stays busy until the watchdog ends is lost, as b
 workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
 
 **Breaking (TypeScript types).** A new type, `HeartbeatBatchStatus`, is `HeartbeatStatus | "busy"`.
-`WorkerQueueApi.heartbeatMany`, `WorkerHeartbeatChannel.heartbeatMany`, and `Queue.heartbeatMany`
-return it. This is a breaking return change in a 0.x minor. Code that implements
-`WorkerQueueApi.heartbeatMany` compiles unchanged. Code that reads its result and checks every
-status must handle `busy` as "not renewed, no verdict". The scalar `HeartbeatStatus`,
-`Queue.heartbeat()`, and `Queue.heartbeatStatus()` do not change, and they still wait for a row lock.
-A `Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` renews through
-`heartbeatStatus`, so it never sees `busy`.
+`WorkerQueueApi.heartbeatMany` and `WorkerHeartbeatChannel.heartbeatMany` return it. This is a
+breaking return change in a 0.x minor. Code that implements `WorkerQueueApi.heartbeatMany` compiles
+unchanged. Code that reads its result and checks every status must handle `busy` as "not renewed,
+no verdict". The scalar `HeartbeatStatus`, `Queue.heartbeat()`, and `Queue.heartbeatStatus()` do
+not change, and they still wait for a row lock. A `Worker` with a custom `WorkerQueueApi` that has
+no `heartbeatMany` renews through `heartbeatStatus`, so it never sees `busy`.
 
 ### Heartbeat rounds keep a renewal margin and end on the server
 

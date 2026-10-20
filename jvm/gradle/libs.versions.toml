@@ -37,6 +37,9 @@ spring-boot-snapshot = "4.2.0-SNAPSHOT"
 # release that requires kotlin-stdlib 2.1.0, so a Kotlin 2.2 caller resolves no newer standard
 # library through it. 1.11.0 requires kotlin-stdlib 2.2.20.
 kotlinx-coroutines = "1.10.2"
+# The documentation engine for the KDoc of `workhorse-kotlin`. Its HTML goes into the module's
+# `-javadoc.jar`, because the module has no Java sources for the javadoc tool (SM-1507).
+dokka = "2.2.0"
 
 [libraries]
 pgjdbc = { module = "org.postgresql:postgresql", version.ref = "pgjdbc" }
@@ -70,3 +73,4 @@ kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-em
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 errorprone = { id = "net.ltgt.errorprone", version.ref = "errorprone-plugin" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }

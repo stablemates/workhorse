@@ -86,6 +86,51 @@ describe("the Central Portal upload", () => {
     await expect(failure).rejects.not.toThrow("token-password");
   });
 
+  it("retries a status request that fails for a transient reason", async () => {
+    const answers: (() => Response)[] = [
+      () => new Response("bad gateway", { status: 502 }),
+      () => {
+        throw new TypeError("fetch failed");
+      },
+      () => new Response("slow down", { status: 429 }),
+      () => Response.json({ deploymentState: "VALIDATED" }),
+    ];
+    const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+      String(url).includes("/upload?") ? new Response("deployment-3") : answers.shift()!(),
+    );
+
+    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).resolves.toBe(
+      "deployment-3",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("fails after five status requests in a row fail, and names the deployment", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+      String(url).includes("/upload?")
+        ? new Response("deployment-4")
+        : new Response("unavailable", { status: 503 }),
+    );
+
+    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
+      "The Portal status request for deployment deployment-4 failed 5 times in a row: HTTP 503",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not retry a status request that the Portal refuses", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+      String(url).includes("/upload?")
+        ? new Response("deployment-5")
+        : new Response("unauthorized", { status: 401 }),
+    );
+
+    await expect(uploadToCentral(bundle, "name", fetchImpl, async () => {})).rejects.toThrow(
+      "The Portal refused the status request for deployment deployment-5: HTTP 401",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses to upload without the user token", async () => {
     vi.stubEnv("MAVEN_CENTRAL_PASSWORD", "");
     await expect(uploadToCentral(bundle, "name", vi.fn<typeof fetch>())).rejects.toThrow(

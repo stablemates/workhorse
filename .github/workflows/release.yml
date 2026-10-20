@@ -284,14 +284,34 @@ jobs:
   #
   # The upload uses `publishingType=USER_MANAGED`. The Portal validates the deployment and holds it,
   # and the maintainer publishes it in the Portal. Central never deletes a published version.
+  #
+  # The job uploads the bytes that its own consumers ran (SM-1506). One step signs the artifacts and
+  # writes the bundle. The next step, without a secret, runs the release consumers from the same
+  # staging directory. Then the upload step sends that bundle.
   maven-central:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
     needs: publish
     runs-on: depot-ubuntu-24.04
-    timeout-minutes: 30
+    # The consumers and the Portal validation, which can take 15 minutes.
+    timeout-minutes: 45
     environment: maven-central
     permissions:
       contents: read
+    # Each consumer runs one task in a scratch database. Under CI the check refuses to skip them.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test_packed
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -344,15 +364,28 @@ jobs:
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
       - if: steps.version.outputs.publish == 'true'
         run: pnpm install --frozen-lockfile
-      # The check stages the three artifacts, signs them with the release key, verifies every
-      # signature and checksum, and refuses a version that differs from the tag. The build job ran
-      # the consumers on the same commit.
+      # The check refuses a signing key whose fingerprint is not the release key. It stages the
+      # three artifacts, signs them, verifies every signature and checksum, and refuses a version
+      # that differs from the tag. It verifies the signatures with only the public key.
       - name: Stage and sign the JVM artifacts
         if: steps.version.outputs.publish == 'true'
         env:
           MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
           MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
         run: pnpm jvm:package-check --tag "$GITHUB_REF_NAME" --signing-key environment --no-consumers --bundle "$RUNNER_TEMP/workhorse-jvm.zip"
+      # The consumers take the artifacts from the staging directory that the bundle holds, so the
+      # job uploads the jars that they ran. This step gets no secret. The consumer builds are not
+      # in jvm/gradle/verification-metadata.xml, so they run only after the step that signs ends.
+      - name: Run the release consumers on the signed artifacts
+        if: steps.version.outputs.publish == 'true'
+        env:
+          DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
+        run: pnpm jvm:package-check --tag "$GITHUB_REF_NAME" --consumers-only
+      # A consumer build starts Gradle daemons, which would otherwise run on beside the step that
+      # receives the Portal token.
+      - name: Stop the Gradle daemons of the consumers
+        if: always() && steps.version.outputs.publish == 'true'
+        run: gradle --stop
       - name: Upload the bundle to the Central Portal
         if: steps.version.outputs.publish == 'true'
         env:
