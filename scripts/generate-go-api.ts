@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { writeOrCheck } from "./api-snapshot.js";
+import { retryStep, runCommand as run } from "./command-retry.js";
 import { repositoryRoot } from "./packages.js";
 
 /**
@@ -53,22 +53,6 @@ interface Baseline {
   readonly tag: string;
 }
 
-async function run(command: string, args: readonly string[], cwd: string): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, [...args], { cwd, stdio: ["ignore", "pipe", "inherit"] });
-    let output = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      output += chunk;
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(`${command} ${args.join(" ")} exited with ${signal ?? String(code)}`));
-    });
-  });
-}
-
 /** The pinned baseline, read from the committed list. */
 async function pinnedBaseline(): Promise<Baseline> {
   const current = await readFile(path.join(repositoryRoot, snapshotPath), "utf8").catch(() => "");
@@ -114,26 +98,28 @@ async function incompatibleChanges(baseline: Baseline): Promise<string[]> {
   const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-go-api-"));
   try {
     await writeFile(path.join(scratch, "go.mod"), "module workhorse-go-api-baseline\n\ngo 1.25\n");
-    await run("go", ["mod", "download", `${goModule}@${baseline.version}`], scratch);
+    // The download and both `go run` steps reach the module proxy or the checksum database, which
+    // can reset a stream for a short time. Each one runs again if it fails (SM-1557).
+    await retryStep(
+      () => run("go", ["mod", "download", `${goModule}@${baseline.version}`], scratch),
+      { label: "go mod download" },
+    );
     const cache = (await run("go", ["env", "GOMODCACHE"], scratch)).trim();
     const published = path.join(cache, ...`${goModule}@${baseline.version}`.split("/"));
     const exportData = path.join(scratch, "baseline.api");
-    await run(
-      "go",
-      ["run", `golang.org/x/exp/cmd/apidiff@${apidiffVersion}`, "-m", "-w", exportData, goModule],
-      published,
+    const apidiff = `golang.org/x/exp/cmd/apidiff@${apidiffVersion}`;
+    await retryStep(
+      () => run("go", ["run", apidiff, "-m", "-w", exportData, goModule], published),
+      { label: "go run apidiff -w" },
     );
-    const changes = await run(
-      "go",
-      [
-        "run",
-        `golang.org/x/exp/cmd/apidiff@${apidiffVersion}`,
-        "-m",
-        "-incompatible",
-        exportData,
-        goModule,
-      ],
-      path.join(repositoryRoot, "go"),
+    const changes = await retryStep(
+      () =>
+        run(
+          "go",
+          ["run", apidiff, "-m", "-incompatible", exportData, goModule],
+          path.join(repositoryRoot, "go"),
+        ),
+      { label: "go run apidiff -incompatible" },
     );
     // apidiff walks the module's packages in map order, so the same tree can report the same
     // changes in a different sequence. Sorting makes the committed list canonical.
