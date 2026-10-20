@@ -16,10 +16,20 @@ import org.jspecify.annotations.Nullable;
  * List<@Nullable Object>}, a {@code Long} or a {@code BigInteger} for an integer, a {@code Double}
  * for a number with a fraction or an exponent, a {@code String}, a {@code Boolean}, or {@code
  * null}. The parser is strict: it refuses a token that is not JSON, a lone surrogate, and trailing
- * text. A duplicate object key keeps the last value, as PostgreSQL's {@code jsonb} does.
+ * text. A duplicate object key keeps the last value, as PostgreSQL's {@code jsonb} does. It also
+ * refuses a number token that is longer than a limit, because {@code new BigInteger(String)} takes
+ * time that grows with the square of the number of digits.
  */
 public final class Json {
   private static final int MAX_DEPTH = 1000;
+
+  /**
+   * The most characters, after an optional minus sign, that {@link #parse(String)} accepts in a
+   * number token. PostgreSQL's {@code jsonb} stores at most 131,072 digits before the decimal
+   * point, so this limit refuses no integer that a stored value can hold.
+   */
+  public static final int MAX_NUMBER_LENGTH = 131_072;
+
   private static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE);
   private static final BigInteger LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
 
@@ -31,7 +41,21 @@ public final class Json {
    * @throws IllegalArgumentException if the text is not one strict JSON value
    */
   public static @Nullable Object parse(String text) {
-    Parser parser = new Parser(text);
+    return parse(text, MAX_NUMBER_LENGTH);
+  }
+
+  /**
+   * Parses {@code text} into a tree, and refuses a number token that has more than {@code
+   * maxNumberLength} characters after an optional minus sign.
+   *
+   * @throws IllegalArgumentException if the text is not one strict JSON value, or if it holds a
+   *     number token that is too long
+   */
+  public static @Nullable Object parse(String text, int maxNumberLength) {
+    if (maxNumberLength < 1) {
+      throw new IllegalArgumentException("maxNumberLength must be at least 1");
+    }
+    Parser parser = new Parser(text, maxNumberLength);
     parser.skipSpace();
     Object value = parser.value(0);
     parser.skipSpace();
@@ -154,10 +178,12 @@ public final class Json {
 
   private static final class Parser {
     private final String text;
+    private final int maxNumberLength;
     private int position;
 
-    Parser(String text) {
+    Parser(String text, int maxNumberLength) {
       this.text = text;
+      this.maxNumberLength = maxNumberLength;
     }
 
     @Nullable Object value(int depth) {
@@ -310,6 +336,7 @@ public final class Json {
       if (peek() == '-') {
         position++;
       }
+      int unsigned = position;
       if (peek() == '0') {
         position++;
       } else if (isDigit(peek())) {
@@ -336,6 +363,9 @@ public final class Json {
           throw error("a bad exponent");
         }
         digits();
+      }
+      if (position - unsigned > maxNumberLength) {
+        throw error("a number longer than " + maxNumberLength + " characters");
       }
       String token = text.substring(start, position);
       if (integer) {

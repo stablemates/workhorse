@@ -84,6 +84,14 @@ public final class Dashboard implements Filter {
   /** The largest RPC request body the dashboard reads, the same bound the other hosts apply. */
   private static final int MAX_REQUEST_BYTES = 2 << 20;
 
+  /**
+   * The most characters, after an optional minus sign, in a number token of a request body. The
+   * browser app reads a number as a double, so it never sends a longer number. The limit keeps the
+   * parse time of a request body small. It also applies to {@code signalTask.payload} and {@code
+   * completeHumanWait.result}. The Go, Ruby, and Python hosts accept a longer number there.
+   */
+  private static final int MAX_REQUEST_NUMBER_LENGTH = 1000;
+
   private static final String UNVERIFIED_COMPATIBILITY =
       "Unable to verify Workhorse schema compatibility because the database query failed.";
   private static final Map<String, String> DEFAULT_PORTS = Map.of("http", ":80", "https", ":443");
@@ -294,7 +302,8 @@ public final class Dashboard implements Filter {
     boolean extended = builtIn == null;
     try {
       String text = body.length == 0 ? "{}" : utf8(body);
-      Map<String, @Nullable Object> envelope = Json.object(Json.parse(text));
+      Map<String, @Nullable Object> envelope =
+          Json.object(Json.parse(text, MAX_REQUEST_NUMBER_LENGTH));
       if (envelope == null) {
         throw new Validator.InputValidationException("request envelope must be an object");
       }

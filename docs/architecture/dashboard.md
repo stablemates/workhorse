@@ -247,6 +247,9 @@ The filter handles a request that it owns in this order:
 4. The filter rejects a mutation that is not same-origin with 403, before it decodes the input. It
    then rejects a mutation on a read-only host with 403.
 5. It reads at most 2 MiB of request body, and answers 413 for a larger body.
+   It answers 400 for a body that is not JSON, or for a number token with more than 1,000
+   characters after an optional minus sign. The limit also applies to `signalTask.payload` and
+   `completeHumanWait.result`. The Go, Ruby, and Python hosts accept a longer number there.
 6. It validates the input against the generated `dashboard/v1` schemas. A mutation `audit.requestId`
    of more than 512 UTF-8 bytes answers 400.
 7. It overwrites `audit.actor`, and calls the procedure.

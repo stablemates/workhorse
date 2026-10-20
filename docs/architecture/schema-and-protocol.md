@@ -2348,6 +2348,12 @@ Workhorse exception extends the unchecked `WorkhorseException`, a `RuntimeExcept
 argument throws the standard `IllegalArgumentException` instead. The `Queue`, `Admin`, and
 `Worker` constructors throw `IllegalStateException` when PgJDBC is older than 42.7.12.
 
+The core parses JSON text with its own strict parser, `run.workhorse.internal.Json`. The parser
+refuses a number token with more than 131,072 characters after an optional minus sign, with
+`IllegalArgumentException`. PostgreSQL `jsonb` stores at most 131,072 digits before the decimal
+point, so this limit refuses no integer that a stored value can hold. The limit exists because the
+time to read an integer grows with the square of its number of digits.
+
 ### JVM connection sources
 
 `Queue` and `Admin` take a `ConnectionSource`. It has two methods, `acquire()` and
