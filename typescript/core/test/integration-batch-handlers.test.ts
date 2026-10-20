@@ -537,11 +537,10 @@ describe("batch handlers", () => {
     }).handleBatch<{ deadline: boolean }, null>(
       "batch-deadline",
       // A full batch dispatches at once. A short linger can split the batch when one member starts
-      // late under host load (SM-1312). A split does not explain the CI failure in which the claim
-      // did not take the deadline task. SM-1552 owns that cause.
+      // late under host load.
       { maxSize: 2, lingerMs: 1_000 },
       async (items) => {
-        batches.push(items.map(({ payload }) => payload.deadline));
+        batches.push(items.map(({ payload }) => payload.deadline).toSorted());
         const expiring = items.find(({ payload }) => payload.deadline)!;
         const peer = items.find(({ payload }) => !payload.deadline)!;
         await expect(
@@ -557,8 +556,9 @@ describe("batch handlers", () => {
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    // If this fails, the batch contents show whether the claim missed a member or the batch split.
-    expect(batches).toEqual([[true, false]]);
+    // One batch holds both members. Their order depends on the claim sequence, so the test sorts
+    // them. If this fails, the batch contents show whether the claim missed a member.
+    expect(batches).toEqual([[false, true]]);
     await expect(admin.getTask(deadlineId)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
