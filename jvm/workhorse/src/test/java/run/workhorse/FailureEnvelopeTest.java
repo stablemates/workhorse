@@ -125,4 +125,30 @@ class FailureEnvelopeTest {
       assertTrue(actual.get("stack") instanceof String, id + " records a stack");
     }
   }
+
+  // SM-1512: a wrapped durable replay conflict keeps its class name, as in Go and Rust.
+  @Test
+  void namesAWrappedReplayConflictByItsClass() {
+    ConflictException conflict = new ConflictException("checkpoint", "charge");
+    RuntimeException wrapped =
+        new java.util.concurrent.CompletionException(new RuntimeException("inner", conflict));
+    Map<String, @Nullable Object> envelope = Worker.failureEnvelope(wrapped, false);
+    assertEquals("ConflictException", envelope.get("name"));
+    assertEquals(wrapped.getMessage(), envelope.get("message"));
+    assertEquals(conflict, Worker.replayConflict(wrapped));
+    assertEquals(null, Worker.replayConflict(new RuntimeException("plain")));
+  }
+
+  @Test
+  void stopsTheConflictWalkAtTheDepthLimit() {
+    Throwable error = new ConflictException("checkpoint", "charge");
+    for (int depth = 0; depth < 16; depth++) {
+      error = new RuntimeException("wrapper " + depth, error);
+    }
+    assertEquals(null, Worker.replayConflict(error), "a conflict below 16 wrappers is not seen");
+    RuntimeException cyclic = new RuntimeException("cyclic");
+    RuntimeException other = new RuntimeException("other", cyclic);
+    cyclic.initCause(other);
+    assertEquals(null, Worker.replayConflict(cyclic));
+  }
 }

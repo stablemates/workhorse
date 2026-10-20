@@ -55,6 +55,8 @@ import run.workhorse.internal.telemetry.TelemetrySpan;
  * runs.
  */
 public final class Queue {
+  private static final System.Logger LOGGER = System.getLogger(Queue.class.getName());
+
   private static final long DEFAULT_IDEMPOTENCY_TTL_MS = 86_400_000L;
   private static final int DEFAULT_MAX_ATTEMPTS = 25;
   private static final int MAX_TASK_DEPENDENCIES = 100;
@@ -596,10 +598,13 @@ public final class Queue {
       contract = contracts.get(key);
     } else if (stored != null) {
       String version = stored.version();
-      contract = version == null ? null : Contracts.load(connection, taskType, version);
+      contract =
+          version == null
+              ? null
+              : Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, version));
       contracts.put(key, contract);
     } else {
-      contract = Contracts.load(connection, taskType, null);
+      contract = Worker.withDeferredInterrupt(() -> Contracts.load(connection, taskType, null));
       contracts.put(key, contract);
       lock.lock();
       try {
@@ -1694,11 +1699,7 @@ public final class Queue {
     EnqueueOutcome parsed = Rows.constant(EnqueueOutcome.class, "enqueue", outcome);
     EnqueueNonReplaceableReason because = null;
     if (parsed == EnqueueOutcome.NON_REPLACEABLE) {
-      because =
-          reason == null ? null : Rows.optionalConstant(EnqueueNonReplaceableReason.class, reason);
-      if (because == null) {
-        throw invalidResult();
-      }
+      because = Rows.constant(EnqueueNonReplaceableReason.class, "enqueue", reason);
     } else if (reason != null) {
       throw invalidResult();
     }
@@ -1847,10 +1848,16 @@ public final class Queue {
       releaseAfter(connection, transactional, error);
       throw error;
     }
+    // The call succeeded: it committed in autocommit, or the source owns its transaction. A throw
+    // here would make a caller retry a write that PostgreSQL already has (SM-1525).
     try {
       connections.release(connection, transactional);
-    } catch (SQLException error) {
-      throw Sql.translate(error);
+    } catch (SQLException | RuntimeException error) {
+      LOGGER.log(
+          System.Logger.Level.WARNING,
+          "Connection release failed after a successful call {event.name="
+              + "workhorse.connection.release_failed}",
+          error);
     }
     return result;
   }
@@ -1861,6 +1868,8 @@ public final class Queue {
       connections.release(connection, transactional);
     } catch (SQLException error) {
       failure.addSuppressed(Sql.translate(error));
+    } catch (RuntimeException error) {
+      failure.addSuppressed(error);
     }
   }
 }

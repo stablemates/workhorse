@@ -38,6 +38,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
@@ -174,6 +175,13 @@ public final class Worker implements AutoCloseable {
   private final AtomicBoolean notified = new AtomicBoolean();
   private final AtomicBoolean registered = new AtomicBoolean();
   private final AtomicLong nextQueueIndex = new AtomicLong();
+
+  /** The claims started and not yet answered. Tests read it through {@link #claimsInFlight}. */
+  private final AtomicInteger claimsInFlight = new AtomicInteger();
+
+  /** The dispatch passes that saw a pause. Tests read it through {@link #pauseObservations}. */
+  private final AtomicLong pauseObservations = new AtomicLong();
+
   private final AtomicLong lastMaintenanceAt = new AtomicLong(NEVER);
   private final AtomicLong lastRoutineAt = new AtomicLong(NEVER);
   // Each attempt is its own element: a retry of the same task can run beside an attempt that
@@ -843,6 +851,7 @@ public final class Worker implements AutoCloseable {
           break;
         }
         if (isPaused()) {
+          pauseObservations.incrementAndGet();
           if (!continuous) {
             break;
           }
@@ -1076,11 +1085,30 @@ public final class Worker implements AutoCloseable {
     }
   }
 
+  /**
+   * The claims that the dispatch loop started and that have not answered. A claim that started
+   * before a pause still sends its statement, and the tasks that it returns run, as in the
+   * reference SDK. A test reads this count to know that no such claim remains (SM-1547).
+   */
+  int claimsInFlight() {
+    return claimsInFlight.get();
+  }
+
+  /**
+   * The dispatch passes that saw a pause. After one such pass, the loop starts no claim until the
+   * pause ends. So a test that waits for one more pass and then for {@link #claimsInFlight} to
+   * reach zero knows that no claim can take a task that it enqueues next (SM-1547).
+   */
+  long pauseObservations() {
+    return pauseObservations.get();
+  }
+
   /** Runs one claim on its own virtual thread. The dispatch loop already reserved its slots. */
   private void startClaim(ClaimPlan plan, long wakeVersion, boolean backingOff, RunState run) {
     // The notification delay spreads idle workers that one notification woke together. A worker
     // whose last claim found work would claim now anyway, so it skips the delay.
     boolean delayed = notified.getAndSet(false) && backingOff;
+    claimsInFlight.incrementAndGet();
     Thread.ofVirtual()
         .name("workhorse-claim")
         .start(
@@ -1103,6 +1131,7 @@ public final class Worker implements AutoCloseable {
               } catch (RuntimeException failure) {
                 error = failure;
               } finally {
+                claimsInFlight.decrementAndGet();
                 run.results.add(new ClaimResult(plan, claimed, wakeVersion, error));
                 wake.signal();
                 if (!run.claimsOpen.get()) {
@@ -1482,15 +1511,21 @@ public final class Worker implements AutoCloseable {
       }
       waitUntilIdle(System.nanoTime() + UNWIND_WINDOW_NANOS);
     }
-    List<Active> abandoned = new ArrayList<>(active);
-    for (Active task : abandoned) {
+    int abandoned = 0;
+    for (Active task : new ArrayList<>(active)) {
       if (task.abandonUnstarted()) {
         // The caller's executor never started this task, and now never runs its handler. The
-        // drain frees its slot here, because an executor can discard a queued runnable.
-        active.remove(task);
-        releaseSlot(task);
+        // drain frees its slot here, because an executor can discard a queued runnable. No handler
+        // ran, so the task goes back to its queue without an attempt (SM-1525).
+        try {
+          releaseUnstarted(task);
+        } finally {
+          active.remove(task);
+          releaseSlot(task);
+        }
         continue;
       }
+      abandoned++;
       // The flag goes up before the ownership is read. An attempt that publishes its ownership
       // later reads the flag after that, so one of the two sides always stops the renewal.
       task.abandoned.set(true);
@@ -1499,7 +1534,25 @@ public final class Worker implements AutoCloseable {
         ownership.abandon();
       }
     }
-    return abandoned.size();
+    return abandoned;
+  }
+
+  /**
+   * Hands the lease of a task that no handler started back to PostgreSQL. If the release fails, the
+   * lease expires, and recovery returns the task to the queue.
+   */
+  private void releaseUnstarted(Active task) {
+    try {
+      releaseOwned(task.claimed.task, new Arbiter());
+    } catch (RuntimeException error) {
+      Map<String, @Nullable Object> attributes = taskAttributes(task.claimed.task);
+      attributes.put("error.type", error.getClass().getName());
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.task.release_failed",
+          "Unstarted task release failed",
+          attributes);
+    }
   }
 
   private void waitUntilIdle(long deadline) {
@@ -1861,13 +1914,22 @@ public final class Worker implements AutoCloseable {
    * not call caller code, such as the codec, because that code would not see the drain.
    */
   private <T extends @Nullable Object> T withoutInterrupt(SqlBody<T> body) {
+    return withDeferredInterrupt(() -> withConnection(body));
+  }
+
+  /**
+   * Runs {@code body}, one of the SDK's own reads or writes on a connection that the caller already
+   * holds, as {@link #withoutInterrupt} runs a statement. A child request reads its payload
+   * contract this way, so the drain's interrupt cannot close the socket of that read (SM-1525).
+   */
+  static <T extends @Nullable Object> T withDeferredInterrupt(Supplier<T> body) {
     Active task = HANDLER_TASK.get();
     if (task == null) {
-      return withConnection(body);
+      return body.get();
     }
     task.deferInterrupt();
     try {
-      return withConnection(body);
+      return body.get();
     } finally {
       task.resumeInterrupt();
     }
@@ -2110,7 +2172,7 @@ public final class Worker implements AutoCloseable {
   /** Records a handler failure. PostgreSQL retries or fails the task by its retry policy. */
   private void settleFailure(ClaimedTask task, Exception error, Arbiter arbiter) {
     String envelope = Json.write(failureEnvelope(error, task.redactErrorDetails()));
-    Long delay = error instanceof ConflictException ? Long.valueOf(-1) : retryDelayOverride(task);
+    Long delay = replayConflict(error) != null ? Long.valueOf(-1) : retryDelayOverride(task);
     String state =
         telemetry.fail(
             task,
@@ -2154,7 +2216,9 @@ public final class Worker implements AutoCloseable {
     }
     StringWriter stack = new StringWriter();
     error.printStackTrace(new PrintWriter(stack));
-    envelope.put("name", failureName(error));
+    // A durable replay conflict keeps its class name through a wrapper, as in Go and Rust.
+    ConflictException conflict = replayConflict(error);
+    envelope.put("name", failureName(conflict == null ? error : conflict));
     envelope.put("message", storable(error.getMessage() == null ? "" : error.getMessage()));
     envelope.put("stack", storable(stack.toString()));
     return envelope;
@@ -2207,6 +2271,22 @@ public final class Worker implements AutoCloseable {
       }
     }
     return name;
+  }
+
+  /**
+   * The durable replay conflict of ADR 0098 that {@code error} is or wraps, or {@code null}. A
+   * conflict is terminal also inside a wrapper, such as the {@code CompletionException} of a {@code
+   * join()}, as in Go and Rust (SM-1512). The walk stays bounded against a cyclic chain.
+   */
+  static @Nullable ConflictException replayConflict(Throwable error) {
+    Throwable current = error;
+    for (int depth = 0; depth < CAUSE_DEPTH && current != null; depth++) {
+      if (current instanceof ConflictException conflict) {
+        return conflict;
+      }
+      current = current.getCause();
+    }
+    return null;
   }
 
   /**
@@ -3261,6 +3341,50 @@ public final class Worker implements AutoCloseable {
     } catch (SQLException error) {
       throw Sql.translate(error);
     }
+    return result;
+  }
+
+  /**
+   * Runs {@code body} on a connection from the pool, in autocommit. {@code body} can call caller
+   * code, such as the codec, so the drain's interrupt can reach it. The acquire and the release are
+   * the worker's own statements, so in a handler region the interrupt waits for each of them, as
+   * {@link #withoutInterrupt} describes. A read inside {@code body} defers the interrupt with
+   * {@link #withDeferredInterrupt}.
+   */
+  <T extends @Nullable Object> T withCallerConnection(SqlBody<T> body) {
+    Connection connection =
+        withDeferredInterrupt(
+            () -> {
+              try {
+                return connections.acquire();
+              } catch (SQLException error) {
+                throw Sql.translate(error);
+              }
+            });
+    T result;
+    try {
+      result = body.run(connection);
+    } catch (RuntimeException | Error error) {
+      withDeferredInterrupt(
+          () -> {
+            try {
+              connections.release(connection, false);
+            } catch (SQLException release) {
+              error.addSuppressed(Sql.translate(release));
+            }
+            return null;
+          });
+      throw error;
+    }
+    withDeferredInterrupt(
+        () -> {
+          try {
+            connections.release(connection, false);
+          } catch (SQLException error) {
+            throw Sql.translate(error);
+          }
+          return null;
+        });
     return result;
   }
 

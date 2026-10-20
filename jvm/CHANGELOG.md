@@ -87,3 +87,18 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
 - The release key signs every file of the three artifacts. It is an ed25519 key with the
   fingerprint `B933E2F16C3FA58E5414849A024210DB67A17773`. Use it to check a `.asc` file from Maven
   Central. [Publication credentials](../docs/compatibility.md#publication-credentials) states it.
+- A `Float` value reaches PostgreSQL with its shortest `float` digits, so `0.1f` is `0.1`, also in a
+  checkpoint input fingerprint (SM-1528). A result, a checkpoint value, progress, and a payload
+  refuse a number with more fraction digits than `numeric` stores before any statement, also when
+  the value equals a `double` (SM-1540).
+- A durable replay conflict inside a wrapper, such as the `CompletionException` of a `join()`, fails
+  the task at once and records the conflict class name, as in Go and Rust (SM-1512).
+- A child request reads its payload contract through the drain's interrupt, so a drain gives the
+  parent back to its queue instead of failing it. At the drain deadline, a task that the caller's
+  `executor` never started goes back to its queue, and `ShutdownIncompleteException` does not
+  count it. If telemetry or the logger throws before a batch handler runs, each task of the batch
+  fails, and no task waits forever (SM-1525).
+- `Queue` and `Admin` return the result of a successful call when the connection release fails, and
+  log the release error, so a caller does not retry a committed write. `EnqueueOptions` and
+  `ScheduledTask` copy the retry policy. An unknown non-replaceable reason throws
+  `UnexpectedStatusException` (SM-1525).

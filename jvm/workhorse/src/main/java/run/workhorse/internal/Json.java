@@ -61,8 +61,9 @@ public final class Json {
    * double equal the token in value. Otherwise it is the {@code BigDecimal} of the token, and
    * {@link #write(Object)} writes its digits unchanged. So a value that a double cannot hold, such
    * as {@code 12345678901234567.89} or {@code 1E+400}, reaches PostgreSQL exactly. The parse
-   * refuses a {@code BigDecimal} that PostgreSQL's {@code numeric} type cannot store. It also
-   * refuses a {@code BigDecimal} with fraction digits outside the double range, because {@link
+   * refuses a number token that PostgreSQL's {@code numeric} type cannot store, also when the token
+   * equals a double in value, as {@code 0.5} with 16,384 fraction digits does. It also refuses a
+   * {@code BigDecimal} with fraction digits outside the double range, because {@link
    * #parse(String)} cannot read the stored value back.
    *
    * @throws IllegalArgumentException if the text is not one strict JSON value, or if it holds a
@@ -123,7 +124,7 @@ public final class Json {
       case Byte number -> out.append(number);
       case BigInteger number -> out.append(number);
       case Double number -> out.append(finite(number));
-      case Float number -> out.append(finite(number.doubleValue()));
+      case Float number -> out.append(finite(shortest(number)));
       case BigDecimal number -> out.append(number.toString());
       case Map<?, ?> map -> {
         out.append('{');
@@ -156,6 +157,14 @@ public final class Json {
           throw new IllegalArgumentException(
               value.getClass().getName() + " is not a JSON value the core can write");
     }
+  }
+
+  /**
+   * The double with the shortest digits of {@code number} as a float, so {@code 0.1f} is {@code
+   * 0.1}. A widening conversion would give {@code 0.10000000149011612} (SM-1528).
+   */
+  public static double shortest(Float number) {
+    return Double.parseDouble(Float.toString(number));
   }
 
   private static String finite(double number) {
@@ -428,13 +437,15 @@ public final class Json {
       } catch (NumberFormatException failure) {
         throw error("a number outside the numeric range");
       }
-      if (Double.isFinite(value)
-          && new BigDecimal(Double.toString(value)).compareTo(decimal) == 0) {
-        return value;
-      }
+      // PostgreSQL refuses the token itself, so a token that equals a double in value but has more
+      // fraction digits than numeric stores is refused too (SM-1540).
       long integerDigits = (long) decimal.precision() - decimal.scale();
       if (integerDigits > MAX_INTEGER_DIGITS || decimal.scale() > MAX_FRACTION_DIGITS) {
         throw error("a number outside the numeric range");
+      }
+      if (Double.isFinite(value)
+          && new BigDecimal(Double.toString(value)).compareTo(decimal) == 0) {
+        return value;
       }
       // PostgreSQL writes such a value back with its fraction digits, and parse() refuses that text
       // (SM-1537). A decimal without a fraction reads back as an integer.

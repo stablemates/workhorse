@@ -181,4 +181,24 @@ class JsonTest {
     assertEquals(1.2345678901234568E16, Json.parse("12345678901234567.89"));
     assertThrows(IllegalArgumentException.class, () -> Json.parse("1E+400"));
   }
+
+  // SM-1528: a widening conversion writes 0.1f as 0.10000000149011612.
+  @Test
+  void writesAFloatWithItsShortestFloatDigits() {
+    assertEquals("[0.1,1.0,-3.4028235E38]", Json.write(List.of(0.1f, 1.0f, -Float.MAX_VALUE)));
+    assertThrows(IllegalArgumentException.class, () -> Json.write(Float.NaN));
+    assertThrows(IllegalArgumentException.class, () -> Json.write(Float.POSITIVE_INFINITY));
+  }
+
+  // SM-1540: PostgreSQL refuses the token, also when it equals a double in value.
+  @Test
+  void anExactParseRefusesTooManyFractionDigitsAlsoWhenTheValueIsADouble() {
+    for (String text :
+        List.of("0.5" + "0".repeat(16_383), "0e-16384", "-1." + "0".repeat(16_384))) {
+      IllegalArgumentException error =
+          assertThrows(IllegalArgumentException.class, () -> Json.parseExact(text), text);
+      assertTrue(error.getMessage().endsWith("a number outside the numeric range"), text);
+    }
+    assertEquals(0.5, Json.parseExact("0.5" + "0".repeat(16_382)));
+  }
 }

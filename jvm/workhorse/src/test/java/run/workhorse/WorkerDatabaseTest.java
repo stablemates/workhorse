@@ -1586,6 +1586,12 @@ class WorkerDatabaseTest {
 
       assertTrue(admin.setWorkerPaused(worker.workerId(), true, audit).isPresent());
       waitUntil("the worker sees the pause", worker::isPaused);
+      // A claim that started before the pause still sends its statement, and its tasks run
+      // (SM-1547). After the loop sees the pause once, it starts no claim, so the test waits for
+      // that pass and then for each earlier claim to answer.
+      long observed = worker.pauseObservations();
+      waitUntil("the dispatch loop sees the pause", () -> worker.pauseObservations() > observed);
+      waitUntil("no claim is in flight", () -> worker.claimsInFlight() == 0);
       UUID taskId = enqueue("echo", "held");
       // A negative check: the window cannot hide a claim, because a claim would change the state.
       Thread.sleep(300);
@@ -1822,5 +1828,264 @@ class WorkerDatabaseTest {
     assertEquals(7, worker.concurrency());
     assertEquals("named", worker.workerId());
     assertFalse(worker.isPaused());
+  }
+
+  // SM-1540: the result path checks the numeric scale before the value becomes a double.
+  @Test
+  void refusesAResultWithMoreFractionDigitsThanPostgreSqlStores() throws SQLException {
+    UUID taskId = enqueue("scale", Map.of(), EnqueueOptions.builder().maxAttempts(1));
+    BigDecimal half = new BigDecimal("0.5" + "0".repeat(16_383));
+
+    assertTrue(
+        worker().handle("scale", Object.class, (ctx, p) -> Map.of("rate", half)).build().runOnce());
+
+    Status failed = status(taskId);
+    assertEquals("failed", failed.state(), "the attempt fails before PostgreSQL sees the value");
+    Map<String, @Nullable Object> error = Json.object(json(failed.error()));
+    assertNotNull(error);
+    assertEquals("IllegalArgumentException", error.get("name"));
+    assertTrue(
+        String.valueOf(error.get("message")).endsWith("a number outside the numeric range"),
+        String.valueOf(error.get("message")));
+  }
+
+  // SM-1512: a durable replay conflict inside a wrapper is terminal, as in Go and Rust.
+  @Test
+  void failsAWrappedReplayConflictAtOnce() throws SQLException {
+    UUID taskId = enqueue("wrapped", Map.of(), EnqueueOptions.builder().maxAttempts(5));
+    AtomicInteger delays = new AtomicInteger();
+
+    assertTrue(
+        worker()
+            .retryDelay(
+                (attempt, task) -> {
+                  delays.incrementAndGet();
+                  return Duration.ofSeconds(60);
+                })
+            .handle(
+                "wrapped",
+                Object.class,
+                (ctx, p) -> {
+                  throw new java.util.concurrent.CompletionException(
+                      new ConflictException("checkpoint", "charge"));
+                })
+            .build()
+            .runOnce());
+
+    Status failed = status(taskId);
+    assertEquals("failed", failed.state());
+    assertEquals(1, failed.attempt());
+    assertEquals(0, delays.get(), "a terminal conflict asks for no retry delay");
+    assertEquals("ConflictException", Json.object(json(failed.error())).get("name"));
+  }
+
+  // SM-1525 (m3): a logger that throws before the batch handler fails each member, and no member
+  // on another thread waits forever.
+  @Test
+  void failsEveryBatchMemberWhenTheDispatchThrowsBeforeTheHandler() throws Exception {
+    List<UUID> taskIds =
+        List.of(
+            enqueue("batched", Map.of(), EnqueueOptions.builder().maxAttempts(1)),
+            enqueue("batched", Map.of(), EnqueueOptions.builder().maxAttempts(1)));
+    AtomicInteger handled = new AtomicInteger();
+    System.Logger throwing =
+        new System.Logger() {
+          @Override
+          public String getName() {
+            return "throwing";
+          }
+
+          @Override
+          public boolean isLoggable(Level level) {
+            return true;
+          }
+
+          @Override
+          public void log(
+              Level level,
+              java.util.@Nullable ResourceBundle bundle,
+              @Nullable String message,
+              @Nullable Throwable thrown) {
+            if (message != null && message.startsWith("Task batch dispatched")) {
+              throw new IllegalStateException("the logger failed");
+            }
+          }
+
+          @Override
+          public void log(
+              Level level,
+              java.util.@Nullable ResourceBundle bundle,
+              @Nullable String format,
+              @Nullable Object... parameters) {
+            log(level, bundle, format, (Throwable) null);
+          }
+        };
+    Worker worker =
+        worker()
+            .concurrency(2)
+            .logger(throwing)
+            .handleBatch(
+                "batched",
+                Object.class,
+                new BatchOptions(2, Duration.ofSeconds(5)),
+                items -> {
+                  handled.incrementAndGet();
+                  return items.stream()
+                      .<BatchHandlerOutcome>map(item -> new BatchSucceeded("done"))
+                      .toList();
+                })
+            .build();
+    worker.start();
+    try {
+      for (UUID taskId : taskIds) {
+        waitUntil("each member fails", () -> "failed".equals(statusUnchecked(taskId).state()));
+      }
+    } finally {
+      worker.close();
+    }
+    assertEquals(0, handled.get(), "the handler did not run");
+    for (UUID taskId : taskIds) {
+      assertEquals("IllegalStateException", Json.object(json(status(taskId).error())).get("name"));
+    }
+  }
+
+  private static Status statusUnchecked(UUID taskId) {
+    try {
+      return status(taskId);
+    } catch (SQLException error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  // SM-1525 (m16): a task that the caller's executor never started goes back to its queue at the
+  // drain deadline, and the drain does not count it as an abandoned handler.
+  @Test
+  void releasesATaskThatTheCallerExecutorNeverStarted() throws Exception {
+    UUID taskId = enqueue("unstarted", Map.of());
+    List<Runnable> held = new CopyOnWriteArrayList<>();
+    ExecutorService holding =
+        new java.util.concurrent.AbstractExecutorService() {
+          @Override
+          public void execute(Runnable command) {
+            held.add(command);
+          }
+
+          @Override
+          public void shutdown() {}
+
+          @Override
+          public List<Runnable> shutdownNow() {
+            return List.of();
+          }
+
+          @Override
+          public boolean isShutdown() {
+            return false;
+          }
+
+          @Override
+          public boolean isTerminated() {
+            return false;
+          }
+
+          @Override
+          public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return false;
+          }
+        };
+    AtomicInteger handled = new AtomicInteger();
+    Worker worker =
+        worker()
+            .executor(holding)
+            .shutdownGrace(Duration.ZERO)
+            .handle(
+                "unstarted",
+                Object.class,
+                (ctx, p) -> {
+                  handled.incrementAndGet();
+                  return null;
+                })
+            .build();
+    worker.start();
+    waitUntil("the executor holds the task", () -> !held.isEmpty());
+    worker.close();
+
+    Status released = status(taskId);
+    assertEquals("ready", released.state(), "the task is back in its queue");
+    assertNull(released.workerId(), "no worker holds the lease");
+    assertEquals(
+        1,
+        count(
+            "SELECT count(*) FROM workhorse.task_event WHERE event_type = 'released'"
+                + " AND task_id = ?::uuid",
+            taskId.toString()),
+        "the worker released the lease");
+    held.forEach(Runnable::run);
+    assertEquals(0, handled.get(), "a late runnable does not start the handler");
+  }
+
+  // SM-1547: a claim that started before a pause sends its statement after the pause, and the task
+  // that it claims runs, as in the TypeScript reference and docs/architecture/lifecycle.md.
+  @Test
+  void runsATaskThatAClaimFromBeforeThePauseTakes() throws Exception {
+    CountDownLatch holding = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicBoolean armed = new AtomicBoolean(true);
+    DataSource held =
+        (DataSource)
+            Proxy.newProxyInstance(
+                DataSource.class.getClassLoader(),
+                new Class<?>[] {DataSource.class},
+                (proxy, method, arguments) -> {
+                  Object result;
+                  try {
+                    result = method.invoke(dataSource, arguments);
+                  } catch (InvocationTargetException error) {
+                    throw error.getCause();
+                  }
+                  if (!method.getName().equals("getConnection")) {
+                    return result;
+                  }
+                  Connection connection = (Connection) result;
+                  return Proxy.newProxyInstance(
+                      Connection.class.getClassLoader(),
+                      new Class<?>[] {Connection.class},
+                      (inner, call, values) -> {
+                        if (call.getName().equals("prepareStatement")
+                            && String.valueOf(values[0]).contains("claim_many_v1")
+                            && armed.compareAndSet(true, false)) {
+                          holding.countDown();
+                          assertTrue(release.await(WAIT.toSeconds(), TimeUnit.SECONDS));
+                        }
+                        try {
+                          return call.invoke(connection, values);
+                        } catch (InvocationTargetException error) {
+                          throw error.getCause();
+                        }
+                      });
+                });
+    Worker worker =
+        Worker.builder(held)
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .handle("echo", Object.class, (ctx, payload) -> payload)
+            .build();
+    worker.start();
+    try {
+      await(holding, "the claim holds before its statement");
+      worker.pause();
+      assertTrue(worker.isPaused());
+      UUID taskId = enqueue("echo", "late");
+      release.countDown();
+
+      waitForState(taskId, "succeeded");
+      assertTrue(worker.isPaused(), "the worker is still paused");
+      waitUntil("the claim answered", () -> worker.claimsInFlight() == 0);
+    } finally {
+      release.countDown();
+      worker.close();
+    }
   }
 }

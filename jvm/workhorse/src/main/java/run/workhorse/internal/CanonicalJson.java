@@ -110,7 +110,7 @@ public final class CanonicalJson {
         out.append(number);
       }
       case Double number -> out.append(fraction(number));
-      case Float number -> out.append(fraction(number.doubleValue()));
+      case Float number -> out.append(fraction(Json.shortest(number)));
       case List<?> items -> {
         out.append('[');
         for (int index = 0; index < items.size(); index++) {

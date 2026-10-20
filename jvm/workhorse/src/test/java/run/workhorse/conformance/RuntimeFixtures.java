@@ -1036,6 +1036,10 @@ final class RuntimeFixtures {
                     (ctx, payload) -> {
                       throw switch (kind) {
                         case "checkpoint" -> new ConflictException("checkpoint", "saved");
+                        // A conflict inside a plain wrapper is still terminal (SM-1512).
+                        case "wrapped-checkpoint" ->
+                            new RuntimeException(
+                                "wrapped", new ConflictException("checkpoint", "saved"));
                         case "wait" -> new ConflictException("sleep", "saved");
                         case "child", "redacted-child" ->
                             new ConflictException("runChild", "saved");
