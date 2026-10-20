@@ -274,22 +274,63 @@ describe("terminal cleanup pace", () => {
     expect(await terminalStorageDue()).toBe(false);
   });
 
-  it("keeps pace with a sustained completion rate of 15 tasks per second", async () => {
-    // One worker offers the routine every 60 seconds. Each simulated minute completes 900 tasks,
-    // split between the tiers. A pass at the old pace removed 1,000 tasks every five minutes, so
-    // this backlog would grow by about 3,500 tasks every five minutes.
+  it("keeps pace when each minute completes nine tenths of a batch", async () => {
+    // Each simulated minute completes nine tenths of a batch. The test checks the cadence of the
+    // passes and that each pass removes at least one batch. It does not measure throughput. A pass
+    // always runs one batch before it checks its one-second budget, so a slow runner cannot reduce
+    // a pass below one batch, and the batch size does not change what the test proves. A small
+    // batch keeps the database work small. A pass at the old pace removed one batch every five
+    // minutes, so this backlog would grow without limit.
+    const limit = defaultRetentionPolicy.terminalTaskPruneLimit! / 50;
+    const perTier = (limit * 9) / 20;
+    await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, terminalTaskPruneLimit: limit });
     const start = Date.now();
-    let maximumBacklog = 0;
+    const minutes: Array<{
+      ran: boolean;
+      backlog: boolean;
+      waiting: number;
+      removed: number;
+      reported: number | undefined;
+      left: number;
+    }> = [];
     for (let minute = 0; minute < 15; minute += 1) {
+      // One worker offers the routine every 60 seconds and each minute completes new tasks.
       const now = new Date(start + minute * 60_000);
-      await seed("full", 450, new Date(now.getTime() - 40 * 86_400_000));
-      await seed("fast", 450, new Date(now.getTime() - 40 * 86_400_000));
-      await queue.pruneTerminalStorage({ now });
-      const { full, fast } = await remaining();
-      maximumBacklog = Math.max(maximumBacklog, full + fast);
+      await seed("full", perTier, new Date(now.getTime() - 40 * 86_400_000));
+      await seed("fast", perTier, new Date(now.getTime() - 40 * 86_400_000));
+      const before = await remaining();
+      const phases = await queue.pruneTerminalStorage({ now });
+      const after = await remaining();
+      const waiting = before.full + before.fast;
+      const left = after.full + after.fast;
+      minutes.push({
+        ran: phases.length > 0,
+        backlog: (await backlogSince()) !== null,
+        waiting,
+        removed: waiting - left,
+        reported: terminalTasksPruned(phases),
+        left,
+      });
     }
-    // Every pass that leaves rows behind removes at least one full batch a minute later, so the
-    // backlog never exceeds what five minutes of completions add before the first follow-up.
-    expect(maximumBacklog).toBeLessThanOrEqual(4_500);
+    const passes = minutes.filter(({ ran }) => ran);
+    // The pass at minute 0 drains, so the next pass waits the five-minute interval until minute 5.
+    expect(minutes.map(({ ran }) => ran).slice(0, 6)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    // A pass that records a backlog makes the next offer, one minute later, run a pass.
+    expect(minutes.slice(1).filter(({ ran }, index) => minutes[index]!.backlog && !ran)).toEqual(
+      [],
+    );
+    expect(passes.map(({ reported }) => reported)).toEqual(passes.map(({ removed }) => removed));
+    // A pass removes at least one full batch, or every row it can, however slow the runner is.
+    expect(passes.filter(({ removed, waiting }) => removed < Math.min(limit, waiting))).toEqual([]);
+    // From minute 5 on, each pass removes more than a minute of completions, so the backlog never
+    // exceeds what five minutes of completions add.
+    expect(Math.max(...minutes.map(({ left }) => left))).toBeLessThanOrEqual(5 * 2 * perTier);
   });
 });
