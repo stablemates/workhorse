@@ -1,0 +1,7 @@
+# These modules are the Python snippets of the landing page. The page shows them in a narrow
+# column, so they keep ruff's default line length.
+extend = "../../pyproject.toml"
+line-length = 88
+
+[lint.isort]
+known-first-party = ["workhorse"]

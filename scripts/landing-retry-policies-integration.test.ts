@@ -3,10 +3,11 @@ import { landingSnippetLanguages, landingSnippets } from "../site/lib/landing-sn
 import type { LandingSnippetId } from "../site/lib/landing-snippets.js";
 import { createDatabaseTestHarness } from "../typescript/core/test/support/db.js";
 
-// The TypeScript, Python, Go, and Rust landing snippets are only compiled or type-checked, so a
-// retry policy with a wrong key passes those checks and PostgreSQL refuses it at enqueue. This
-// test reads the policy literal of every landing snippet and gives it to
-// `workhorse.normalize_retry_policy_v1`, the function that the enqueue path calls.
+// A retry policy with a wrong key compiles and type-checks, and PostgreSQL refuses it at enqueue.
+// This test reads the policy literal of every landing snippet and gives it to
+// `workhorse.normalize_retry_policy_v1`, the function that the enqueue path calls. The tests that
+// run each snippet against PostgreSQL also catch it; this test names the key in all seven
+// languages at once.
 
 const languages = ["ts", "python", "go", "rust", "ruby", "java", "kotlin"] as const;
 

@@ -8,7 +8,7 @@
 //! Landing page: https://workhorse.run
 #![allow(dead_code, unused_variables)]
 
-mod landing_hero {
+pub(crate) mod landing_hero {
     // docs:start landing-hero
     use serde_json::{json, Value};
     use workhorse::deadpool_postgres::Pool;
@@ -30,7 +30,7 @@ mod landing_hero {
     // docs:end
 }
 
-mod landing_enqueue {
+pub(crate) mod landing_enqueue {
     // docs:start landing-enqueue
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
@@ -58,7 +58,7 @@ mod landing_enqueue {
     // docs:end
 }
 
-mod landing_checkpoints {
+pub(crate) mod landing_checkpoints {
     // docs:start landing-checkpoints
     use serde::Deserialize;
     use serde_json::{json, Value};
@@ -94,7 +94,7 @@ mod landing_checkpoints {
     // docs:end
 }
 
-mod landing_sleep {
+pub(crate) mod landing_sleep {
     // docs:start landing-sleep
     use std::time::Duration;
 
@@ -151,7 +151,7 @@ pub(crate) mod landing_retries {
     // docs:end
 }
 
-mod landing_idempotency {
+pub(crate) mod landing_idempotency {
     // docs:start landing-idempotency
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
@@ -173,7 +173,7 @@ mod landing_idempotency {
     // docs:end
 }
 
-mod landing_schedules {
+pub(crate) mod landing_schedules {
     // docs:start landing-schedules
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
@@ -197,7 +197,7 @@ mod landing_schedules {
     // docs:end
 }
 
-mod landing_flow_control {
+pub(crate) mod landing_flow_control {
     // docs:start landing-flow-control
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
@@ -235,7 +235,7 @@ mod landing_flow_control {
     // docs:end
 }
 
-mod landing_dependencies {
+pub(crate) mod landing_dependencies {
     // docs:start landing-dependencies
     use serde_json::{json, Value};
     use workhorse::deadpool_postgres::Pool;
@@ -269,7 +269,7 @@ mod landing_dependencies {
     // docs:end
 }
 
-mod landing_coalescing {
+pub(crate) mod landing_coalescing {
     // docs:start landing-coalescing
     use serde_json::json;
     use workhorse::deadpool_postgres::Pool;
@@ -297,7 +297,7 @@ mod landing_coalescing {
     // docs:end
 }
 
-mod landing_external_waits {
+pub(crate) mod landing_external_waits {
     // docs:start landing-external-waits
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -332,7 +332,7 @@ mod landing_external_waits {
     // docs:end
 }
 
-mod landing_batch_handlers {
+pub(crate) mod landing_batch_handlers {
     // docs:start landing-batch-handlers
     use std::time::Duration;
 
@@ -351,7 +351,7 @@ mod landing_batch_handlers {
     // docs:end
 }
 
-mod landing_cancellation {
+pub(crate) mod landing_cancellation {
     // docs:start landing-cancellation
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -380,7 +380,7 @@ mod landing_cancellation {
     // docs:end
 }
 
-mod landing_dead_letters {
+pub(crate) mod landing_dead_letters {
     // docs:start landing-dead-letters
     use workhorse::deadpool_postgres::Pool;
     use workhorse::{Admin, AdminAudit, DeadLetterFilter, DeadLetterQuery, Error};
@@ -408,7 +408,7 @@ mod landing_dead_letters {
 }
 
 #[cfg(feature = "dashboard")]
-mod landing_operate_dashboard {
+pub(crate) mod landing_operate_dashboard {
     // docs:start landing-operate-dashboard
     use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
     use workhorse::deadpool_postgres::Pool;
@@ -435,7 +435,7 @@ mod landing_operate_dashboard {
     // docs:end
 }
 
-mod landing_operate_health {
+pub(crate) mod landing_operate_health {
     // docs:start landing-operate-health
     use workhorse::deadpool_postgres::Pool;
     use workhorse::{Admin, Error, Queue, TaskListQuery, TaskState};
@@ -460,7 +460,7 @@ mod landing_operate_health {
     // docs:end
 }
 
-mod landing_operate_fleet {
+pub(crate) mod landing_operate_fleet {
     // docs:start landing-operate-fleet
     use workhorse::deadpool_postgres::Pool;
     use workhorse::{Admin, AdminAudit, Error};
@@ -483,7 +483,7 @@ mod landing_operate_fleet {
     // docs:end
 }
 
-mod landing_deploy {
+pub(crate) mod landing_deploy {
     // docs:start landing-deploy
     use std::time::Duration;
 

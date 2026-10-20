@@ -11,10 +11,16 @@
  * typescript/core/src/types.ts. Change the source, change the snippet. Never
  * the other way around.
  *
+ * scripts/landing-typescript-snippets-integration.test.ts runs every
+ * TypeScript snippet against PostgreSQL, except the ORM snippets, for which it
+ * records the reason.
+ * Every Python and Go snippet is a copy of one file in
+ * python/tests/landing_snippets or go/internal/landing.
+ * python/tests/test_landing_snippets.py and go/internal/landing/landing_test.go
+ * run each file against PostgreSQL.
  * Every Rust snippet is a copy of one `landing-*` region in
  * rust/examples/landing.rs, which `pnpm rust:clippy` compiles.
- * rust/tests/landing_postgres.rs runs the `landing-retries` region against
- * PostgreSQL.
+ * rust/tests/landing_postgres.rs runs each region against PostgreSQL.
  * Every Ruby snippet is a copy of one `landing-*` region in
  * ruby/examples/landing.rb, which a documentation spec runs against PostgreSQL.
  * Every Java snippet is a copy of one `landing-*-java` region in
@@ -893,7 +899,7 @@ def run_billing(database_url: str) -> None:
             ),
         )
 
-    def generate(payload: object, _context: HandlerContext) -> dict[str, Json]:
+    def generate(_payload: object, _context: HandlerContext) -> dict[str, Json]:
         return {"generated": True}
 
     with ConnectionPool(
@@ -2044,6 +2050,7 @@ export async function GET(request: Request) {
   operateDashboardPython: `import os
 
 import psycopg
+
 from workhorse.dashboard import DashboardHost, DashboardPrincipal
 
 connection = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
@@ -2181,7 +2188,7 @@ const live = await admin.listTasks({
 
   operateHealthPython: `import psycopg
 
-from workhorse import Admin, TaskListQuery, Queue
+from workhorse import Admin, Queue, TaskListQuery
 
 
 def inspect(database_url: str) -> None:
@@ -2485,7 +2492,6 @@ export default defineWorkerProcess({
   deployPython: `import os
 from typing import TypedDict
 
-import psycopg
 from psycopg_pool import ConnectionPool
 
 from workhorse import HandlerContext, Json, Worker, run_worker_process
