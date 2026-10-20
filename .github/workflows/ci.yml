@@ -76,6 +76,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Set up Gradle before the other tools. If the runner image already has this Gradle version in
+      # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
+      # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
+      # (SM-1484).
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -96,12 +103,12 @@ jobs:
           components: rustfmt
           cache: false
           rustflags: ""
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
       # `ruby:vuln` runs bundler-audit from its bundle.
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
@@ -113,9 +120,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
       # `pnpm npm:release-check` runs knip before it builds, so run knip here with no `dist/` too. A
       # knip config that loads a build output passes after the build and fails the release (SM-1292).
@@ -550,7 +554,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: ruby
@@ -598,6 +602,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Set up Gradle before the other tools. If the runner image already has this Gradle version in
+      # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
+      # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
+      # (SM-1484).
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -609,9 +620,6 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm jvm:build
       # Each database test makes its own scratch database from DATABASE_URL_TEST.
@@ -652,6 +660,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Set up Gradle before the other tools. If the runner image already has this Gradle version in
+      # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
+      # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
+      # (SM-1484).
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -661,9 +676,6 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }}
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-kotlin:test :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=4.1
 
@@ -697,6 +709,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Set up Gradle before the other tools. If the runner image already has this Gradle version in
+      # /usr/bin, the action puts /usr/bin first on the PATH, where /usr/bin/go is an older Go. Each
+      # later setup step puts its own directory ahead of /usr/bin, so the pinned tools stay first
+      # (SM-1484).
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -706,9 +725,6 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }}
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-        with:
-          gradle-version: 9.8.1 # Pinned to the gradle version in mise.toml.
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/with-env.ts gradle -p jvm :workhorse-kotlin:test :workhorse-spring-boot-starter:test -Pworkhorse.springBoot=snapshot
 
@@ -746,7 +762,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -790,7 +806,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -839,7 +855,7 @@ jobs:
       # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
       # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
       # path, so the smoke step names the installed bundle itself.
-      - uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
