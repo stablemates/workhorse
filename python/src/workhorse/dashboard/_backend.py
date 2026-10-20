@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -9,7 +10,7 @@ from decimal import Decimal
 from typing import cast
 
 from .._drivers import SyncExecutor
-from .._statements import DriverStatement
+from .._statements import SQL_STATEMENTS, DriverStatement
 from ..admin import (
     Admin,
     AdminAudit,
@@ -24,6 +25,13 @@ from ._errors import DashboardRPCError
 # How long one health document serves nearby reads, in seconds. It matches the TypeScript host's
 # createDashboardQueueHealthReader, so the three backends agree on staleness.
 QUEUE_HEALTH_TTL = 3.0
+
+# The shared retention preview statement. Psycopg binds one value to each placeholder, so a
+# parameter that the statement uses more than once is sent once for each use.
+_RETENTION_POLICY_PREVIEW = DriverStatement(*SQL_STATEMENTS["retention_policy_preview"])
+_RETENTION_POLICY_PREVIEW_ORDER = tuple(
+    int(number) - 1 for number in re.findall(r"\$(\d+)", _RETENTION_POLICY_PREVIEW.asyncpg)
+)
 
 
 def _statement(sql: str) -> DriverStatement:
@@ -303,57 +311,9 @@ class DashboardBackend:
             definition.get(name, current[column])
             for name, column in zip(names, columns, strict=True)
         ]
-        row = self._rows(
-            """
-            SELECT
-              (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.task task
-                JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
-                WHERE %s::integer IS NOT NULL AND %s::integer IS NOT NULL
-                  AND task.created_at < clock_timestamp() - make_interval(days => %s)
-                  AND outcome.finished_at < clock_timestamp() - make_interval(days => %s)
-                LIMIT 10001
-              ) rows) AS terminal_tasks,
-              (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.task_event WHERE %s::integer IS NOT NULL
-                  AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
-              ) rows) AS task_events,
-              (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.attempt_history WHERE %s::integer IS NOT NULL
-                  AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
-              ) rows) AS attempt_history,
-              (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.schedule_occurrence WHERE %s::integer IS NOT NULL
-                  AND occurrence_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
-              ) rows) AS schedule_occurrences,
-              (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.task_stat_bucket WHERE %s::integer IS NOT NULL
-                  AND bucket_start < clock_timestamp() - make_interval(days => %s)
-                UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_hour
-                  WHERE %s::integer IS NOT NULL
-                  AND bucket_start < clock_timestamp() - make_interval(days => %s)
-                UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_day WHERE %s::integer IS NOT NULL
-                  AND bucket_start < clock_timestamp() - make_interval(days => %s) LIMIT 10001
-              ) rows) AS statistics
-            """,
-            (
-                values[0],
-                values[1],
-                values[0],
-                values[1],
-                values[2],
-                values[2],
-                values[3],
-                values[3],
-                values[4],
-                values[4],
-                values[5],
-                values[5],
-                values[5],
-                values[5],
-                values[5],
-                values[5],
-            ),
+        row = self._executor.rows(
+            _RETENTION_POLICY_PREVIEW,
+            [values[index] for index in _RETENTION_POLICY_PREVIEW_ORDER],
         )[0]
         sampled = {
             "terminalTasks": int(cast(int, row["terminal_tasks"])),

@@ -34,6 +34,14 @@ workers can run together: an old worker keeps calling `heartbeat_many_v1`, which
 The `heartbeat_many` statement binding now names `heartbeat_many_v2`, and its rows can carry the
 status `busy`. The synchronous psycopg, asynchronous psycopg, and asyncpg workers handle it.
 
+### The retention preview counts finished fast-tier tasks
+
+Before this release, the Python dashboard did not count a finished fast-tier task in the
+`terminalTasks` count of the retention preview. Its SQL read only `workhorse.task_outcome`, and
+Workhorse keeps the outcome of a fast-tier task in `workhorse.fast_task_outcome`. The dashboard now
+sends the shared `retention_policy_preview` statement, which reads both tables, as the TypeScript,
+Rust, Ruby, and JVM dashboards do (SM-1477).
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

@@ -24,7 +24,9 @@ import { createDashboardConformanceTransport } from "./conformance-harness.js";
  * stable on one machine but are environment- or time-dependent. `reads/cron` coerces the
  * `history_retention` routine's `due` flag because `dashboard_cron_v1` derives it from the wall
  * clock against `historyRetentionLocalTime`, so two idle runs agree while runs before 03:00 UTC
- * disagree with runs after it. Review the diff like any contract change:
+ * disagree with runs after it. `reads/system` coerces `maxLagCategory`. The aged fast-tier task
+ * makes the task identity lag and the terminal outcome lag equal except for the time between two
+ * clock reads, so either category can be the larger one. Review the diff like any contract change:
  * `pnpm dashboard-conformance:generate`.
  */
 

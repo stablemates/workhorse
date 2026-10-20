@@ -1120,6 +1120,118 @@
               }
             ]
           }
+        },
+        {
+          "id": "set-fast-tier",
+          "sql": "SELECT workhorse.set_queue_tier_v1($1::text, $2::text, $3::text, $4::text) AS tier",
+          "parameters": [
+            "conformance-fast",
+            "fast",
+            "conformance",
+            "seed a fast-tier queue"
+          ],
+          "expect": {
+            "rows": [
+              {
+                "tier": "fast"
+              }
+            ]
+          }
+        },
+        {
+          "id": "enqueue-fast",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-fast",
+                "type": "conformance.fast",
+                "payload": {}
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "fastTask": "0.value.taskId"
+          }
+        },
+        {
+          "id": "claim-fast",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.fast_claim_v1($1::text, $2::text, $3::integer, $4::integer, $5::boolean)",
+          "parameters": [
+            "conformance-fast",
+            "conformance-worker",
+            1,
+            30000,
+            false
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "taskId": {
+                    "$ref": "fastTask"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "fastFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "complete-fast",
+          "sql": "SELECT workhorse.fast_complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+          "parameters": [
+            {
+              "$ref": "fastTask"
+            },
+            "conformance-worker",
+            {
+              "$ref": "fastFence"
+            },
+            {
+              "ok": true
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "accepted": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "age-fast-outcome",
+          "sql": "WITH aged AS (UPDATE workhorse.task SET created_at = created_at - interval '30 days' WHERE id = $1::uuid RETURNING id) UPDATE workhorse.fast_task_outcome outcome SET enqueued_at = outcome.enqueued_at - interval '30 days', claimed_at = outcome.claimed_at - interval '30 days', finished_at = outcome.finished_at - interval '30 days' FROM aged WHERE outcome.task_id = aged.id RETURNING true AS aged",
+          "parameters": [
+            {
+              "$ref": "fastTask"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "aged": true
+              }
+            ]
+          }
         }
       ]
     },
@@ -1147,14 +1259,14 @@
             "status": 200,
             "body": {
               "json": {
-                "all": 15,
+                "all": 16,
                 "queued": 6,
                 "blocked": 0,
                 "retried": 0,
                 "running": 0,
                 "waiting": 2,
                 "canceled": 0,
-                "completed": 3,
+                "completed": 4,
                 "discarded": 3,
                 "scheduled": 3
               }
@@ -1762,9 +1874,48 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "fastTask"
+                    },
+                    "tags": [],
+                    "type": "conformance.fast",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-fast",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 15,
+                "total": 16,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -1833,6 +1984,7 @@
                 ],
                 "queues": [
                   "conformance",
+                  "conformance-fast",
                   "conformance-groups",
                   "conformance-preserved",
                   "conformance-purge",
@@ -1844,6 +1996,7 @@
                 "taskTypes": [
                   "conformance.cancel-target",
                   "conformance.fail",
+                  "conformance.fast",
                   "conformance.group-member",
                   "conformance.human",
                   "conformance.preserve",
@@ -3123,6 +3276,22 @@
                     "terminalCountsApproximate": false
                   },
                   {
+                    "tier": "fast",
+                    "queue": "conformance-fast",
+                    "ready": 0,
+                    "active": 0,
+                    "failed": 0,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 1,
+                    "recordClaims": false,
+                    "recordAttempts": false,
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "terminalCountsApproximate": false
+                  },
+                  {
                     "tier": "full",
                     "queue": "conformance-groups",
                     "ready": 3,
@@ -3339,6 +3508,20 @@
                     "completedPerMinute": 0.03333333333333333
                   },
                   {
+                    "queue": "conformance-fast",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0,
+                    "completedPerMinute": 0
+                  },
+                  {
                     "queue": "conformance-groups",
                     "ready": 3,
                     "active": 0,
@@ -3421,6 +3604,24 @@
                     {
                       "code": "rollup-stalled",
                       "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
                       "observed": {
                         "$type": "number"
                       },
@@ -5034,10 +5235,14 @@
                     }
                   },
                   "retention": {
-                    "maxLagMs": null,
+                    "maxLagMs": {
+                      "$type": "number"
+                    },
                     "categories": [
                       {
-                        "lagMs": null,
+                        "lagMs": {
+                          "$type": "number"
+                        },
                         "category": "taskIdentity",
                         "retentionDays": 14,
                         "oldestRetainedAt": {
@@ -5046,7 +5251,9 @@
                         "prunedByPartition": false
                       },
                       {
-                        "lagMs": null,
+                        "lagMs": {
+                          "$type": "number"
+                        },
                         "category": "terminalOutcome",
                         "retentionDays": 14,
                         "oldestRetainedAt": {
@@ -5087,7 +5294,9 @@
                         "prunedByPartition": false
                       }
                     ],
-                    "maxLagCategory": null,
+                    "maxLagCategory": {
+                      "$type": "string"
+                    },
                     "policyUpdatedAt": {
                       "$type": "timestamp"
                     },
@@ -5244,7 +5453,8 @@
             "body.json.integrity.storage.relations.*.indexBytes": "integer",
             "body.json.integrity.storage.relations.*.rows": "integer",
             "body.json.integrity.storage.relations.*.deadRows": "integer",
-            "body.json.integrity.storage.totalBytes": "integer"
+            "body.json.integrity.storage.totalBytes": "integer",
+            "body.json.integrity.retention.maxLagCategory": "string"
           }
         },
         {
@@ -5442,6 +5652,24 @@
                         "$type": "number"
                       },
                       "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
                     }
                   ],
                   "statistics": {
@@ -5488,7 +5716,7 @@
             "body": {
               "json": {
                 "eligible": {
-                  "terminalTasks": 0,
+                  "terminalTasks": 1,
                   "taskEvents": 0,
                   "attemptHistory": 0,
                   "scheduleOccurrences": 0,
@@ -6424,6 +6652,45 @@
                     "wait": null,
                     "keyed": false,
                     "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "fastTask"
+                    },
+                    "tags": [],
+                    "type": "conformance.fast",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-fast",
                     "runAt": {
                       "$type": "timestamp"
                     },
@@ -9966,9 +10233,48 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "fastTask"
+                    },
+                    "tags": [],
+                    "type": "conformance.fast",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-fast",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "total": 15,
+                "total": 16,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -10177,6 +10483,24 @@
                     {
                       "code": "rollup-stalled",
                       "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "taskIdentity",
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    },
+                    {
+                      "code": "retention-lag",
+                      "budget": 21600000,
+                      "category": "terminalOutcome",
                       "observed": {
                         "$type": "number"
                       },
@@ -10906,6 +11230,45 @@
                     "wait": null,
                     "keyed": false,
                     "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "enqueueMode": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "prerequisiteTaskIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "fastTask"
+                    },
+                    "tags": [],
+                    "type": "conformance.fast",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-fast",
                     "runAt": {
                       "$type": "timestamp"
                     },

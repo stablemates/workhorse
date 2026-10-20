@@ -104,13 +104,18 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 	}
 	names := []string{"taskIdentityRetentionDays", "terminalOutcomeRetentionDays", "taskEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays"}
 	values := make([]any, len(names))
+	// An absent setting keeps its current value. An explicit null disables the category, so the
+	// statement counts no rows for it.
 	for index, name := range names {
-		values[index] = definition[name]
-		if values[index] == nil {
-			values[index] = rows[0][snake(name)]
+		value, present := definition[name]
+		if !present {
+			value = rows[0][snake(name)]
 		}
+		values[index] = value
 	}
-	return service.jsonQuery(ctx, `SELECT jsonb_build_object('eligible',jsonb_build_object('terminalTasks',LEAST(terminal_tasks,10000),'taskEvents',LEAST(task_events,10000),'attemptHistory',LEAST(attempt_history,10000),'scheduleOccurrences',LEAST(schedule_occurrences,10000),'statistics',LEAST(statistics,10000)),'capped',jsonb_build_object('terminalTasks',terminal_tasks>10000,'taskEvents',task_events>10000,'attemptHistory',attempt_history>10000,'scheduleOccurrences',schedule_occurrences>10000,'statistics',statistics>10000)) result FROM(SELECT (SELECT count(*) FROM(SELECT 1 FROM workhorse.task j JOIN workhorse.task_outcome o ON o.task_id=j.id WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL AND j.created_at<clock_timestamp()-make_interval(days=>$1) AND o.finished_at<clock_timestamp()-make_interval(days=>$2) LIMIT 10001)x)terminal_tasks,(SELECT count(*) FROM(SELECT 1 FROM workhorse.task_event WHERE $3::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$3) LIMIT 10001)x)task_events,(SELECT count(*) FROM(SELECT 1 FROM workhorse.attempt_history WHERE $4::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$4) LIMIT 10001)x)attempt_history,(SELECT count(*) FROM(SELECT 1 FROM workhorse.schedule_occurrence WHERE $5::integer IS NOT NULL AND occurrence_at<clock_timestamp()-make_interval(days=>$5) LIMIT 10001)x)schedule_occurrences,(SELECT count(*) FROM(SELECT 1 FROM workhorse.task_stat_bucket WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_hour WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_day WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) LIMIT 10001)x)statistics)s`, values...)
+	// The shared statement counts each kind of row up to one past the cap. The wrapper caps each
+	// count and reports which ones it capped.
+	return service.jsonQuery(ctx, `SELECT jsonb_build_object('eligible',jsonb_build_object('terminalTasks',LEAST(terminal_tasks,10000),'taskEvents',LEAST(task_events,10000),'attemptHistory',LEAST(attempt_history,10000),'scheduleOccurrences',LEAST(schedule_occurrences,10000),'statistics',LEAST(statistics,10000)),'capped',jsonb_build_object('terminalTasks',terminal_tasks>10000,'taskEvents',task_events>10000,'attemptHistory',attempt_history>10000,'scheduleOccurrences',schedule_occurrences>10000,'statistics',statistics>10000)) result FROM (`+retentionPolicyPreviewStatement+`) counts`, values...)
 }
 
 func (service *backend) taskDetail(ctx context.Context, input any, _ string) (any, error) {
