@@ -3,6 +3,7 @@ package run.workhorse.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -58,6 +59,36 @@ class JsonTest {
             "1e999")) {
       assertThrows(IllegalArgumentException.class, () -> Json.parse(text), text);
     }
+  }
+
+  @Test
+  void readsANumberAsLongAsTheLongestJsonbInteger() {
+    String digits = "9".repeat(Json.MAX_NUMBER_LENGTH);
+    assertEquals(new BigInteger(digits), Json.parse(digits));
+    assertEquals(List.of(new BigInteger("-" + digits)), Json.parse("[-" + digits + "]"));
+    for (String text :
+        List.of(
+            digits + "9",
+            "-" + digits + "9",
+            "{\"a\":" + digits + "9}",
+            "1." + digits,
+            "1e" + digits)) {
+      IllegalArgumentException error =
+          assertThrows(IllegalArgumentException.class, () -> Json.parse(text));
+      assertTrue(error.getMessage().contains("a number longer than 131072 characters"));
+    }
+  }
+
+  @Test
+  void refusesANumberLongerThanTheLimitOfTheCaller() {
+    String digits = "1".repeat(1000);
+    assertEquals(new BigInteger(digits), Json.parse(digits, 1000));
+    assertEquals(new BigInteger("-" + digits), Json.parse("-" + digits, 1000));
+    assertEquals(1.5, Json.parse("1.5", 3));
+    for (String text : List.of(digits + "1", "-" + digits + "1", "0." + digits)) {
+      assertThrows(IllegalArgumentException.class, () -> Json.parse(text, 1000), text);
+    }
+    assertThrows(IllegalArgumentException.class, () -> Json.parse("1", 0));
   }
 
   @Test

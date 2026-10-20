@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -363,6 +364,31 @@ class DashboardServletTest {
       assertEquals(
           "PAYLOAD_TOO_LARGE",
           Json.object(Json.object(Json.parse(large.text())).get("json")).get("code"));
+    }
+  }
+
+  @Test
+  void refusesALongNumberInTheRequestBodyQuickly() throws Exception {
+    try (TestServer server = new TestServer("", builder().build())) {
+      String tasks = "/workhorse/rpc/dashboard/tasks";
+      String limit = "1".repeat(1000);
+      TestServer.Response accepted = server.post(tasks, "{\"json\":{\"page\":" + limit + "}}");
+      assertFalse(accepted.text().contains("a number longer than"), accepted.text());
+
+      TestServer.Response refused = server.post(tasks, "{\"json\":{\"page\":" + limit + "1}}");
+      assertEquals(400, refused.status());
+      assertTrue(refused.text().contains("a number longer than 1000 characters"), refused.text());
+
+      // A body of about 2 MB with one integer. Without the limit, its parse takes many seconds.
+      String body = "{\"json\":{\"page\":" + "9".repeat(2_000_000) + "}}";
+      long started = System.nanoTime();
+      TestServer.Response large = server.post(tasks, body);
+      long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
+      assertEquals(400, large.status());
+      assertEquals(
+          "BAD_REQUEST",
+          Json.object(Json.object(Json.parse(large.text())).get("json")).get("code"));
+      assertTrue(elapsed < 2000, "the dashboard answered after " + elapsed + " ms");
     }
   }
 
