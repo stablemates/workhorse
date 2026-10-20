@@ -21,16 +21,18 @@ type fakeHeartbeatRound struct {
 	tasks []string
 }
 
-// fakeHeartbeat records every round and answers each one with answer.
+// fakeHeartbeat records every round and answers each one with answer, by task ID. If
+// answerMembers is set, it answers each member instead, in the order of members.
 type fakeHeartbeat struct {
-	mu        sync.Mutex
-	rounds    []fakeHeartbeatRound
-	active    atomic.Int32
-	maxActive atomic.Int32
-	answer    func(call int, tasks []string) (map[string]ownershipStatus, error)
+	mu            sync.Mutex
+	rounds        []fakeHeartbeatRound
+	active        atomic.Int32
+	maxActive     atomic.Int32
+	answer        func(call int, tasks []string) (map[string]ownershipStatus, error)
+	answerMembers func(members []*heartbeatMember) []ownershipStatus
 }
 
-func (fake *fakeHeartbeat) round(members []*heartbeatMember, _ time.Time) (map[string]ownershipStatus, error) {
+func (fake *fakeHeartbeat) round(members []*heartbeatMember, _ time.Time) ([]ownershipStatus, error) {
 	active := fake.active.Add(1)
 	defer fake.active.Add(-1)
 	for {
@@ -48,7 +50,21 @@ func (fake *fakeHeartbeat) round(members []*heartbeatMember, _ time.Time) (map[s
 	call := len(fake.rounds)
 	fake.rounds = append(fake.rounds, fakeHeartbeatRound{at: time.Now(), tasks: tasks})
 	fake.mu.Unlock()
-	return fake.answer(call, tasks)
+	if fake.answerMembers != nil {
+		return fake.answerMembers(members), nil
+	}
+	answer, err := fake.answer(call, tasks)
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]ownershipStatus, len(members))
+	for index, member := range members {
+		statuses[index] = answer[member.task.ID]
+		if statuses[index] == emptyString {
+			statuses[index] = workerOwnershipStale
+		}
+	}
+	return statuses, nil
 }
 
 func (fake *fakeHeartbeat) snapshot() []fakeHeartbeatRound {
@@ -326,6 +342,62 @@ func TestAnAcceptedResultForAReplacedLeaseDoesNotMoveTheNewWatchdog(t *testing.T
 	time.Sleep(50 * time.Millisecond)
 	if member := second.member(); member == nil || !member.leaseEnd.Load().Equal(endBefore) {
 		t.Fatal("an accepted result for the replaced attempt moved the new attempt's watchdog")
+	}
+}
+
+func TestEachResultOfARoundGoesToTheMemberThatItBelongsTo(t *testing.T) {
+	const interval = 100 * time.Millisecond
+	answered := make(chan struct{})
+	var once sync.Once
+	fake := &fakeHeartbeat{answerMembers: func(members []*heartbeatMember) []ownershipStatus {
+		// PostgreSQL renews only the current fence, so the old attempt's lease is stale.
+		statuses := make([]ownershipStatus, len(members))
+		for index, member := range members {
+			statuses[index] = workerOwnershipStale
+			if member.task.FenceToken == 2 {
+				statuses[index] = workerOwnershipAccepted
+			}
+		}
+		if len(members) == 2 {
+			once.Do(func() { close(answered) })
+		}
+		return statuses
+	}}
+	worker := newBusyHeartbeatWorker(t, 4*time.Second, interval, fake)
+	// The old attempt has not unregistered yet when the new attempt of the same task registers.
+	old := superviseAttempt(t, worker, "task", 1)
+	current := superviseAttempt(t, worker, "task", 2)
+	endBefore := *current.member().leaseEnd.Load()
+	select {
+	case <-answered:
+	case <-time.After(5 * interval):
+		t.Fatal("the scheduler sent no round with both members")
+	}
+	select {
+	case <-old.aborted:
+	case <-time.After(5 * interval):
+		t.Fatal("a stale result did not end the old attempt")
+	}
+	var lost *LeaseLostError
+	if !errors.As(old.cause(), &lost) {
+		t.Fatalf("the old attempt ended with %v; want a lost lease", old.cause())
+	}
+	// The round applies each status in the order of its members, so the renewal can come after
+	// the old attempt ends.
+	deadline := time.Now().Add(5 * interval)
+	for {
+		if member := current.member(); member != nil && member.leaseEnd.Load().After(endBefore) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the accepted result did not move the current attempt's watchdog")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-current.aborted:
+		t.Fatalf("the current attempt ended with %v; its lease was renewed", current.cause())
+	default:
 	}
 }
 

@@ -43,8 +43,10 @@ module Stablemates
         # The wait after a shared round raised an unexpected error, in seconds, so that an error that
         # repeats cannot keep the thread busy.
         FAILED_ROUND_DELAY = 0.1
+        # heartbeat_many_v2 raises an error for more leases than this in one statement.
+        STATEMENT_LEASE_LIMIT = 100
         private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :BUSY_RETRY_BASE, :BUSY_RETRY_MARGIN,
-          :BUSY_RETRY_MINIMUM, :FAILED_ROUND_DELAY
+          :BUSY_RETRY_MINIMUM, :FAILED_ROUND_DELAY, :STATEMENT_LEASE_LIMIT
 
         # The deadline of one round, in seconds, for an +interval+ in seconds. It is three quarters
         # of the interval, so that one timed-out round leaves a renewal margin when 2 × interval +
@@ -204,7 +206,8 @@ module Stablemates
           end
         end
 
-        # Sends one round for +members+. A round sends one statement for each worker. On the
+        # Sends one round for +members+. A round sends one statement for each worker, and more for a
+        # worker with more than +STATEMENT_LEASE_LIMIT+ members (+statements+). On the
         # dedicated connection, all of them share one +deadline+. A statement that would start after
         # it waits for the next round, so a slow statement of one worker cannot delay the renewal of
         # another past it. Each regular round starts with the next worker (+ordered_groups+), so a
@@ -221,7 +224,7 @@ module Stablemates
           @busy = nil
           busy = []
           expired = false
-          ordered_groups(members, rotate:).each do |worker_id, group|
+          statements(members, rotate:).each do |worker_id, group|
             sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             leases = group.map do |member|
               {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
@@ -277,7 +280,17 @@ module Stablemates
           [started + round_bound(interval), regular_at, *ends].min
         end
 
-        # The statements of one round, one for each worker, as [worker_id, members] pairs. On the
+        # The statements of one round, as [worker_id, members] pairs: the +ordered_groups+, each
+        # split into slices of at most +STATEMENT_LEASE_LIMIT+ members. A fused completion claim
+        # registers its tasks before the completing attempts unregister, so a worker can hold more
+        # members than its concurrency.
+        def statements(members, rotate:)
+          ordered_groups(members, rotate:).flat_map do |worker_id, group|
+            group.each_slice(STATEMENT_LEASE_LIMIT).map { |slice| [worker_id, slice] }
+          end
+        end
+
+        # The members of one round, one group for each worker, as [worker_id, members] pairs. On the
         # dedicated connection, each regular round starts one worker later than the round before
         # it. A busy retry (+rotate+ false) keeps the order and does not move the rotation.
         def ordered_groups(members, rotate: true)

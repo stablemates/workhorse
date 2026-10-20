@@ -134,8 +134,8 @@ pub struct WorkerOptions {
     pub cohorts: Option<usize>,
     /// Whole milliseconds between 100ms and 24h.
     pub lease_duration: Duration,
-    /// Defaults to a third of the lease. The smallest supported value is 100ms. The worker accepts
-    /// a shorter value, but on a loaded host it can renew no lease.
+    /// Defaults to the larger of 100ms and a third of the lease. The smallest supported value is
+    /// 100ms. The worker accepts a shorter value, but on a loaded host it can renew no lease.
     pub heartbeat_interval: Option<Duration>,
     /// Defaults to 5s while a notification listener is expected and 250ms when polling only.
     pub poll_interval: Option<Duration>,
@@ -267,7 +267,8 @@ fn validate(
     }
     let heartbeat = options
         .heartbeat_interval
-        .unwrap_or_else(|| Duration::from_millis((lease.as_millis() / 3) as u64));
+        // The default never goes below the smallest supported interval, as in every SDK.
+        .unwrap_or_else(|| Duration::from_millis((lease.as_millis() / 3).max(100) as u64));
     if !whole_millis(heartbeat) || heartbeat.is_zero() || heartbeat >= lease {
         return invalid("worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration");
     }
@@ -1378,6 +1379,24 @@ mod tests {
         assert_eq!(worker.0.heartbeat_interval, Duration::from_secs(10));
         assert_eq!(worker.0.poll_interval, POLLING_POLL);
         assert!(worker.worker_id().contains(&format!("-{}-", std::process::id())));
+    }
+
+    #[tokio::test]
+    async fn the_default_heartbeat_is_at_least_the_smallest_supported_interval() {
+        // A third of a 150 ms lease is 50 ms, below the 100 ms that every SDK supports.
+        let lease = |millis| WorkerOptions {
+            lease_duration: Duration::from_millis(millis),
+            ..Default::default()
+        };
+        let worker = Worker::new(pool(4), lease(150)).unwrap();
+        assert_eq!(worker.0.heartbeat_interval, Duration::from_millis(100));
+        let worker = Worker::new(pool(4), lease(900)).unwrap();
+        assert_eq!(worker.0.heartbeat_interval, Duration::from_millis(300));
+        // The floor is not less than the smallest lease, so the default must still be shorter.
+        rejects(
+            lease(100),
+            "worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration",
+        );
     }
 
     #[tokio::test]

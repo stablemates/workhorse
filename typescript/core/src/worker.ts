@@ -9,14 +9,8 @@ import {
   WorkhorseError,
 } from "./errors.js";
 import { Queue } from "./queue.js";
-import {
-  CheckpointConflictError,
-  CheckpointInputConflictError,
-  WaitConflictError,
-} from "./queue/checkpoints-progress-waits.js";
-import { ChildConflictError } from "./queue/child-tasks.js";
-import { HumanWaitConflictError } from "./queue/human-waits.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
+import { durableReplayConflict } from "./queue/replay-conflicts.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
 import { heartbeatRoundBoundMs } from "./heartbeat-round.js";
@@ -457,7 +451,10 @@ export interface WorkerOptions {
    * per cohort after the listener and the heartbeat connection. An explicit value is not capped.
    */
   cohorts?: number;
-  /** Ownership duration granted by claim and every accepted heartbeat. */
+  /**
+   * Ownership duration granted by claim and every accepted heartbeat. It must be from 100 through
+   * 86,400,000 ms.
+   */
   leaseMs?: number;
   /**
    * Local heartbeat interval. It must remain shorter than leaseMs. The smallest supported value
@@ -934,7 +931,10 @@ export class Worker {
       throw new Error("cohorts must be a safe integer between 1 and concurrency");
     // A comparison with NaN is always false, so each option must first be a safe integer. A bad
     // value would otherwise surface later in a timer, a statement timeout, or a SQL parameter.
-    requireSafeInteger("leaseMs", this.leaseMs, 1);
+    // The lease range is the range that the SQL protocol accepts, as in every SDK.
+    requireSafeInteger("leaseMs", this.leaseMs, 100, "between 100 and 86400000");
+    if (this.leaseMs > 86_400_000)
+      throw new Error("leaseMs must be a safe integer between 100 and 86400000");
     requireTimerInterval("heartbeatMs", this.heartbeatMs, 1);
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
     requireTimerInterval("pollMs", this.pollMs, 0);
@@ -1676,12 +1676,8 @@ export class Worker {
     }
     span.recordException(errorForTelemetry(error, task.redactErrorDetails));
     span.setStatus("error");
-    const terminalConflict =
-      error instanceof CheckpointConflictError ||
-      error instanceof CheckpointInputConflictError ||
-      error instanceof WaitConflictError ||
-      error instanceof ChildConflictError ||
-      error instanceof HumanWaitConflictError;
+    // A conflict that the handler wrapped in its own error is terminal too.
+    const terminalConflict = durableReplayConflict(error) !== undefined;
     const delay = terminalConflict
       ? -1
       : typeof this.options.retryDelayMs === "function"

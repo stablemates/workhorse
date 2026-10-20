@@ -120,6 +120,24 @@ The Python worker now describes `workhorse.tasks.retried` as "Failed or expired 
 live work", as the contract does (SM-1514). The counter already counted expired tasks. Only the
 description changes.
 
+### A wrapped durable replay conflict is terminal
+
+Before this release, the Python worker checked only the outermost error for a durable replay
+conflict (ADR 0098). If a handler wrapped a conflict in its own error, the worker recorded a
+retryable failure, and the conflict repeated until `max_attempts` (SM-1512). The worker now follows
+the cause chain of the error, as the Go and Rust workers do. It reads at most 16 errors, so a cyclic
+chain cannot stop it. It reads `__cause__`, or else `__context__` if `__suppress_context__` is not
+set, so an exception raised in an `except` block also counts. A wrapped conflict fails the task at
+once. The failure envelope records the name of the conflict. Its fields `message` and `stack` stay
+those of the outer error.
+
+### A heartbeat round sends at most 100 leases in each statement
+
+`heartbeat_many_v2` accepts at most 100 leases. A fused completion claim registers its tasks before
+the completing attempts unregister, so a round can hold more leases than the concurrency limit. That
+round raised an error, and no lease in it renewed (SM-1495). The worker now splits a round into
+statements of at most 100 leases. If one statement fails, the round fails, as before.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

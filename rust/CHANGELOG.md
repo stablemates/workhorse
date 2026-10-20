@@ -113,6 +113,13 @@ The `workhorse.handler.batch_dispatched` log record now names its linger
 instrument name `workhorse.handler.batch.linger`. Each Rust instrument now also has the description
 from `api/telemetry.txt`.
 
+### The default heartbeat interval is at least 100 ms
+
+Before this release, the Rust worker set the default heartbeat interval to lease / 3. For a lease
+below 300 ms, that is below the 100 ms that every SDK supports. The default is now `max(100 ms,
+lease / 3)`, as in TypeScript, Python, Ruby, and the JVM (SM-1510). A lease of 100 ms thus needs an
+explicit, shorter heartbeat interval.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

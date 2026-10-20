@@ -145,6 +145,8 @@ _HeartbeatExecutorFactory = Callable[[], tuple[_SyncRowExecutor, Callable[[], No
 # A round with less time than this left fails before it sends its heartbeat. At this size every
 # budget of _round_timeouts is at least 1 ms, and the budgets still fit in the time left.
 _MINIMUM_ROUND_REMAINING_SECONDS = _MINIMUM_ROUND_REMAINING_MS / 1000
+# heartbeat_many_v2 raises an error for more leases than this in one statement.
+_HEARTBEAT_STATEMENT_LEASE_LIMIT = 100
 
 
 def _round_timeouts(remaining_ms: float) -> tuple[str, str]:
@@ -1635,9 +1637,24 @@ class Worker:
             else:
                 next_at = sent_at + self.heartbeat_ms / 1000
             try:
-                rows = self._heartbeat_rows(
-                    (self.worker_id, json.dumps(leases, separators=(",", ":"))), deadline
-                )
+                # One statement accepts at most _HEARTBEAT_STATEMENT_LEASE_LIMIT leases. A fused
+                # completion claim registers its tasks before the completing attempts unregister,
+                # so a round can hold more leases than the concurrency limit. If a later statement
+                # fails, the round fails, and the earlier statements renew nothing locally.
+                rows = [
+                    row
+                    for start in range(0, len(leases), _HEARTBEAT_STATEMENT_LEASE_LIMIT)
+                    for row in self._heartbeat_rows(
+                        (
+                            self.worker_id,
+                            json.dumps(
+                                leases[start : start + _HEARTBEAT_STATEMENT_LEASE_LIMIT],
+                                separators=(",", ":"),
+                            ),
+                        ),
+                        deadline,
+                    )
+                ]
             except Exception:
                 # A failed round proves nothing about ownership, so every task keeps running and
                 # the next regular round retries. Each attempt's lease watchdog ends it once its
@@ -3630,15 +3647,7 @@ class Worker:
                         json.dumps(envelope),
                         (
                             -1
-                            if isinstance(
-                                error,
-                                (
-                                    CheckpointConflictError,
-                                    WaitConflictError,
-                                    ChildConflictError,
-                                    HumanWaitConflictError,
-                                ),
-                            )
+                            if _durable_replay_conflict(error) is not None
                             else self._retry_delay_override(task)
                         ),
                     ),
@@ -3957,11 +3966,49 @@ def _has_unstorable_escape(encoded: str) -> bool:
     return low_expected_at >= 0
 
 
+# The most exceptions of a cause chain that the conflict check reads. A chain can be a cycle.
+_MAX_CAUSE_DEPTH = 16
+
+
+def _durable_replay_conflict(error: BaseException) -> BaseException | None:
+    """The durable replay conflict (ADR 0098) in the cause chain of `error`, or None.
+
+    A handler can wrap a conflict in its own exception, explicitly with `raise ... from` or
+    implicitly inside an `except` block. The conflict is terminal also then, as in Go and Rust, and
+    the failure envelope records the name of the conflict. The chain follows the cause that a
+    traceback shows.
+    """
+    current: BaseException | None = error
+    for _ in range(_MAX_CAUSE_DEPTH):
+        if current is None:
+            return None
+        if isinstance(
+            current,
+            (
+                CheckpointConflictError,
+                WaitConflictError,
+                ChildConflictError,
+                HumanWaitConflictError,
+            ),
+        ):
+            return current
+        current = (
+            current.__cause__
+            if current.__cause__ is not None
+            else None
+            if current.__suppress_context__
+            else current.__context__
+        )
+    return None
+
+
 def _error_envelope(error: Exception, redact_details: bool) -> Json:
     if redact_details:
         return {"name": _REDACTED_ERROR_NAME, "message": _REDACTED_ERROR_MESSAGE}
+    # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
+    conflict = _durable_replay_conflict(error)
     return {
-        "name": type(error).__name__,
+        "name": type(conflict if conflict is not None else error).__name__,
         "message": str(error),
         "stack": "".join(traceback.format_exception(error)),
     }

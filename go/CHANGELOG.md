@@ -103,6 +103,28 @@ and the `Admin` formatted that value with `fmt.Sprint`. This applied to `Prerequ
 `WorkerRegistryEntry.InstanceID` from `ListWorkers`. The `Admin` now returns canonical UUID text
 for each of these fields.
 
+### Each heartbeat result goes to the lease that it belongs to
+
+A new attempt of a task can register its lease before the old attempt unregisters. A heartbeat round
+then sends the task twice, with two fence tokens. The Go worker read the results by task ID, so the
+result of the old fence could reach the new attempt. The worker then ended an attempt whose lease
+PostgreSQL had renewed (SM-1494). The worker now matches each result row to the lease that it sent,
+by its position in the statement.
+
+### A heartbeat round sends at most 100 leases in each statement
+
+`heartbeat_many_v2` accepts at most 100 leases. A fused completion claim registers its tasks before
+the completing attempts unregister, so a round can hold more leases than the concurrency limit. That
+round raised an error, and no lease in it renewed (SM-1495). The worker now splits a round into
+statements of at most 100 leases. If one statement fails, the round fails, as before.
+
+### The default heartbeat interval is at least 100 ms
+
+Before this release, the Go worker set the default heartbeat interval to lease / 3. For a lease
+below 300 ms, that is below the 100 ms that every SDK supports. The default is now `max(100 ms,
+lease / 3)`, as in TypeScript, Python, Ruby, and the JVM (SM-1510). A lease of 100 ms thus needs an
+explicit, shorter heartbeat interval.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

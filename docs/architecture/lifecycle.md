@@ -799,7 +799,7 @@ infinities, and fractions throw before any queue operation.
 
 | Option                     | Accepted range                                                   |
 | -------------------------- | ---------------------------------------------------------------- |
-| `leaseMs`                  | At least 1.                                                      |
+| `leaseMs`                  | 100 through 86,400,000.                                          |
 | `heartbeatMs`              | 1 through 2,147,483,647, and less than `leaseMs`.                |
 | `pollMs`                   | 0 through 2,147,483,647.                                         |
 | fixed `retryDelayMs`       | At least 0.                                                      |
@@ -1109,9 +1109,13 @@ no single-lease function.
 row. A mixed batch goes through `heartbeat_v1` one lease at a time, in task ID order. It never
 returns `busy`. It stays for workers that do not know the status.
 
-Each worker runs one heartbeat round at a time. It sends every active lease in one round, and Ruby
-and JVM send one statement for each worker on the pool. Per-task deadline timers and abort signals
-stay independent.
+Each worker runs one heartbeat round at a time. It sends every active lease in one round. One
+statement carries at most 100 leases. A fused completion claim can register its tasks before the
+completing attempts leave the round, so a TypeScript, Python, Go, Ruby, or JVM round can hold more
+than 100 leases. These workers then send one statement for each 100 leases. Ruby and JVM also send
+one statement for each worker on the pool. Rust sends one statement in each round. Its rounds cannot
+hold more than 100 leases, because a completing attempt leaves the round before its fused claim
+runs. Per-task deadline timers and abort signals stay independent.
 
 #### A renewal that meets a lock
 
@@ -1497,10 +1501,13 @@ round needs. Then a round can miss its deadline every time. Each failed round al
 connection, so the worker must take a new one, as step 2 of [Heartbeat round
 deadline](#heartbeat-round-deadline) describes.
 
-If every renewal of a lease misses its deadline, the worker never renews that lease. In Ruby and
-JVM, one round can send more than one statement, so one statement can renew its leases while a later
-statement fails. When the watchdog of an attempt expires, the attempt loses its lease, and recovery
-makes the task available again.
+If every renewal of a lease misses its deadline, the worker never renews that lease. In TypeScript,
+Python, Go, Ruby, and JVM, one round can send more than one statement. Each statement runs in its
+own transaction, so one statement can renew its leases in PostgreSQL while a later statement fails.
+Ruby and JVM then count the renewals of the earlier statements. TypeScript, Python, and Go fail the
+whole round, so the worker counts no renewal of that round, and the next round sends every lease
+again. When the watchdog of an attempt expires, the attempt loses its lease, and recovery makes the
+task available again.
 
 In Ruby and JVM, one heartbeat thread sends the rounds of every worker on a pool that uses its
 dedicated connection. The shortest interval among the leases in those rounds sets the round bound.
@@ -1572,22 +1579,26 @@ without a wait timeout can keep it pending for several rounds. In Ruby and JVM, 
 opens the connection itself. If the open ends after the next slot, the next round is overdue, and it
 starts when the open ends. Only one round is in flight in each case.
 
-A Ruby or JVM round sends one statement for each worker on the pool, and JVM also one for each 100
-leases. On the dedicated connection, all statements of one round share one deadline: the start of
-the round plus the round bound. A statement that would start after that deadline is not sent, and
-its leases wait for the next round. Thus a slow statement of one worker cannot move the renewal of
-another worker past the margin. Each dedicated round starts with the next statement in turn
-(`ordered_groups` in Ruby, `nextFirstBatch` in JVM). So a statement that is always slow cannot keep
-a later statement from its turn. A shared round has no deadline, and sends every statement.
+A Ruby or JVM round sends one statement for each worker on the pool, and also one for each 100
+leases of a worker. On the dedicated connection, all statements of one round share one deadline: the
+start of the round plus the round bound. A statement that would start after that deadline is not
+sent, and its leases wait for the next round. Thus a slow statement of one worker cannot move the
+renewal of another worker past the margin. Each dedicated round starts with the next worker in turn
+in Ruby (`ordered_groups`), and with the next statement in turn in JVM (`nextFirstBatch`). So a
+statement that is always slow cannot keep a later statement from its turn. A shared round has no
+deadline, and sends every statement. A TypeScript, Python, or Go round sends one statement for each
+100 leases. On the dedicated connection, all of them share the deadline of the round. If one of them
+fails or reaches the deadline, the round fails.
 
 **Margin rule.** After one timed-out round, the next round falls due two intervals after the start
 of the last accepted round. That round ends by its deadline. So an attempt keeps its lease after one
 timed-out round when `2 × interval + round bound < lease`. This rule gives a margin only where the
 bound is below the interval. From an interval of 200 ms up, the round bound is three quarters of the
-interval. The default interval is one third of the lease. The rule then leaves one quarter of the
-interval for timer delay and for the answer to reach the watchdog. Below an interval of 200 ms the
-bound is larger, so the margin at the default ratio is smaller. Up to an interval of 50 ms, the
-bound equals the interval. A timed-out round then leaves about 0 ms of margin, as before SM-1444.
+interval. From a lease of 300 ms up, the default interval is one third of the lease. The rule then
+leaves one quarter of the interval for timer delay and for the answer to reach the watchdog. Below
+an interval of 200 ms the bound is larger, so the margin at the default ratio is smaller. Up to an
+interval of 50 ms, the bound equals the interval. A timed-out round then leaves about 0 ms of
+margin, as before SM-1444.
 
 A round that uses its whole bound of one interval ends at the next slot. The scheduler then starts
 the next round at once, as one overdue round. Only one round is in flight at a time.

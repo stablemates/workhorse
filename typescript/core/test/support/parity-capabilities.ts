@@ -1494,28 +1494,32 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Heartbeat interval",
     jvm: {
-      value: "Lease duration / 3",
+      value: "max(100 ms, lease duration / 3)",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
       pattern: "Math.max(100, leaseMs / 3)",
     },
     rust: {
-      value: "Lease duration / 3",
+      value: "max(100 ms, lease duration / 3)",
       file: "rust/src/worker/mod.rs",
-      pattern: "lease.as_millis() / 3",
+      pattern: "(lease.as_millis() / 3).max(100)",
     },
     typescript: {
-      value: "Lease duration / 3",
+      value: "max(100 ms, lease duration / 3)",
       file: "typescript/core/src/worker.ts",
       pattern: "Math.max(100, Math.floor(this.leaseMs / 3))",
     },
     python: {
-      value: "Lease duration / 3",
+      value: "max(100 ms, lease duration / 3)",
       file: "python/src/workhorse/worker.py",
       pattern: "max(100, lease_ms // 3)",
     },
-    go: { value: "Lease duration / 3", file: "go/worker.go", pattern: "leaseDuration / 3" },
+    go: {
+      value: "max(100 ms, lease duration / 3)",
+      file: "go/worker.go",
+      pattern: "max(minimumDefaultHeartbeat, leaseDuration/3",
+    },
     ruby: {
-      value: "Lease duration / 3",
+      value: "max(100 ms, lease duration / 3)",
       file: "ruby/lib/stablemates/workhorse/worker.rb",
       pattern: "[100, @lease_ms / 3].max",
     },

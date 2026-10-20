@@ -30,7 +30,7 @@ function recordingQueue() {
 }
 
 const invalid: Array<[keyof WorkerOptions, number[]]> = [
-  ["leaseMs", [Number.NaN, Infinity, -1, 0, 1.5]],
+  ["leaseMs", [Number.NaN, Infinity, -1, 0, 1.5, 99, 86_400_001]],
   ["heartbeatMs", [Number.NaN, Infinity, -1, 0, 1.5, overTimerMaximum]],
   ["pollMs", [Number.NaN, Infinity, -1, 1.5, overTimerMaximum]],
   ["maintenanceIntervalMs", [Number.NaN, Infinity, -1, 99, 100.5, overTimerMaximum]],
@@ -64,7 +64,7 @@ describe("Worker timing and limit options", () => {
           scheduleCatchupLimit: 10_000,
           maintenanceIntervalMs: 100,
           maintenanceRoutinePollMs: 100,
-          leaseMs: 2,
+          leaseMs: 100,
           heartbeatMs: 1,
         }),
     ).not.toThrow();
@@ -75,8 +75,9 @@ describe("Worker timing and limit options", () => {
           maintenanceIntervalMs: MAX_TIMER_DELAY_MS,
           maintenanceRoutinePollMs: MAX_TIMER_DELAY_MS,
           registryIntervalMs: MAX_TIMER_DELAY_MS,
-          leaseMs: MAX_TIMER_DELAY_MS + 1,
-          heartbeatMs: MAX_TIMER_DELAY_MS,
+          // The heartbeat must stay shorter than the largest lease.
+          leaseMs: 86_400_000,
+          heartbeatMs: 86_399_999,
         }),
     ).not.toThrow();
     expect(() => new Worker(queue, { retryDelayMs: () => undefined })).not.toThrow();

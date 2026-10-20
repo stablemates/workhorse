@@ -2031,6 +2031,8 @@ def execute_replay_conflict_fixture(
                 raise ChildLimitExceededError(task_id)
             if kind == "transient":
                 raise Exception("transient")
+            if kind == "wrapped-checkpoint":
+                raise Exception("handler") from CheckpointConflictError(task_id, "saved")
             raise errors[kind](task_id, "child set" if kind == "child-set" else "saved")
 
         subject = Worker(

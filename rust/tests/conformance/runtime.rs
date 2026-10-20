@@ -2022,6 +2022,22 @@ async fn maintenance_phase_error(database: &ScratchDatabase, fixture: &Value) ->
     observed
 }
 
+/// A plain handler error with a cause, for the `wrapped-checkpoint` conflict case.
+#[derive(Debug)]
+struct WrappedError(Error);
+
+impl std::fmt::Display for WrappedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("handler")
+    }
+}
+
+impl std::error::Error for WrappedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let client = database.connect().await;
     for entry in fixture["cases"].as_array().unwrap() {
@@ -2068,7 +2084,7 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
             let kind = kind.clone();
             async move {
                 let operation = match kind.as_str() {
-                    "checkpoint" => workhorse::Operation::Checkpoint,
+                    "checkpoint" | "wrapped-checkpoint" => workhorse::Operation::Checkpoint,
                     "wait" => workhorse::Operation::Sleep,
                     "child" | "redacted-child" | "child-limit" => workhorse::Operation::RunChild,
                     "child-set" => workhorse::Operation::RunChildren,
@@ -2082,6 +2098,9 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
                     }
                     "signal-wait" => {
                         Error::AlreadyWaiting { operation, name: "saved".into() }.into()
+                    }
+                    "wrapped-checkpoint" => {
+                        WrappedError(Error::Conflict { operation, name: "saved".into() }).into()
                     }
                     _ => Error::Conflict { operation, name: "saved".into() }.into(),
                 };

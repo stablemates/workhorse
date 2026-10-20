@@ -105,6 +105,31 @@ now compares the decimal that `JSON.stringify` writes to PostgreSQL, and `multip
 decimals (ADR 0039). A result that `multipleOf` refused for a fraction can now pass. TypeScript
 still reads a stored schema constant that a double cannot hold as a double (SM-1541).
 
+### A wrapped durable replay conflict is terminal
+
+Before this release, the TypeScript worker checked only the outermost error for a durable replay
+conflict (ADR 0098). If a handler wrapped a conflict in its own error, the worker recorded a
+retryable failure, and the conflict repeated until `max_attempts` (SM-1512). The worker now follows
+the cause chain of the error, as the Go and Rust workers do. It reads at most 16 errors, so a cyclic
+chain cannot stop it. It reads the `cause` property. A wrapped conflict fails the task at once. The
+failure envelope records the name of the conflict. Its fields `message` and `stack` stay those of
+the outer error.
+
+### A heartbeat round sends at most 100 leases in each statement
+
+`heartbeat_many_v2` accepts at most 100 leases. If the fused completion of a task is rejected, for
+example by a cancel request, the attempt keeps its lease registered while it waits for PostgreSQL.
+The task that the same statement claimed registers its lease too. A round can then hold more leases
+than the concurrency limit. That round raised an error, and no lease in it renewed (SM-1495).
+`Queue.heartbeatMany` now sends at most 100 leases in each statement. If one statement fails, the
+call fails, and the worker counts no renewal of that round, as before.
+
+### A worker lease is from 100 through 86,400,000 ms
+
+Before this release, the TypeScript `Worker` accepted a `leaseMs` from 1 ms, with no maximum. The
+other five SDKs accept 100 through 86,400,000 ms, which is the range of the SQL protocol. The
+TypeScript `Worker` now rejects a `leaseMs` outside that range when you construct it (SM-1510).
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

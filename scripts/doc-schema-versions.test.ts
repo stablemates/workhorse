@@ -91,6 +91,20 @@ describe("schema numbers in the documentation", () => {
     }
   });
 
+  it("states the current schema version in docs/parity.md", () => {
+    const file = "docs/parity.md";
+    // The first paragraph names the schema version that the support matrix describes.
+    const [schema] = stated(
+      file,
+      read(file),
+      /support matrix for the Workhorse SDKs, anchored to schema\s+version (\d+)\./,
+      "the schema version of the support matrix",
+    );
+    expect(schema, `${file}: the matrix must name schema version ${WORKHORSE_SCHEMA_VERSION}`).toBe(
+      WORKHORSE_SCHEMA_VERSION,
+    );
+  });
+
   it("states the SDK compatibility boundary in docs/compatibility.md", () => {
     const file = "docs/compatibility.md";
     const heading = "## Packages and versioning";

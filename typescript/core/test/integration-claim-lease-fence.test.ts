@@ -55,6 +55,20 @@ describe("claim lease fence", () => {
     );
   });
 
+  it("splits a heartbeat of more than 100 leases into statements of at most 100", async () => {
+    // A rejected fused completion keeps its lease registered while it waits for PostgreSQL, and
+    // the task that it claimed registers too. So a worker round can hold more than 100 leases.
+    const workerId = `heartbeat-split-${randomUUID()}`;
+    const [id] = await queue.enqueueMany([{ type: "heartbeat-split", payload: null }]);
+    const owned = await queue.claim(workerId, { leaseMs: 5_000 });
+    expect(owned?.id).toBe(id);
+    const unknown = Array.from({ length: 150 }, () => ({ ...owned!, id: randomUUID() }));
+    const statuses = await queue.heartbeatMany([...unknown, owned!], workerId, 5_000);
+    expect(statuses.size).toBe(151);
+    expect(statuses.get(owned!.id)).toBe("accepted");
+    expect(unknown.every((task) => statuses.get(task.id) === "stale")).toBe(true);
+  });
+
   it("preserves strict priority through promotion and retry under competing claims", async () => {
     const queueName = `priority-${randomUUID()}`;
     const low = await queue.enqueue("low", null, { queue: queueName, priority: 10 });
