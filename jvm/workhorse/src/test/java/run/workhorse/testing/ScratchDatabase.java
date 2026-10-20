@@ -41,6 +41,9 @@ public final class ScratchDatabase implements BeforeAllCallback {
   private static final Object LOCK = new Object();
   private static @Nullable Database database;
 
+  private static final Object TEMPLATE_LOCK = new Object();
+  private static @Nullable String template;
+
   @Override
   public void beforeAll(ExtensionContext context) throws Exception {
     synchronized (LOCK) {
@@ -74,6 +77,9 @@ public final class ScratchDatabase implements BeforeAllCallback {
    * <p>The name is {@code <source>_jvm_<digest>} with a digest of the purpose and the process, so
    * {@code pnpm db:sweep} recognizes it if the drop never runs. The caller closes the handle, which
    * drops the database.
+   *
+   * <p>The database is a copy of a schema template that the first call of the process makes, so the
+   * process installs the schema for its extra databases once (SM-1559).
    */
   public static Extra extra(String purpose) throws Exception {
     Database main;
@@ -83,33 +89,70 @@ public final class ScratchDatabase implements BeforeAllCallback {
     if (main == null || main.url == null || main.adminUrl == null) {
       throw new IllegalStateException("Extend the test class with ScratchDatabase");
     }
-    String source = main.name.substring(0, main.name.lastIndexOf("_jvm_"));
-    byte[] hash =
-        MessageDigest.getInstance("SHA-256")
-            .digest(
-                ("jvm:" + purpose + ":" + ProcessHandle.current().pid())
-                    .getBytes(StandardCharsets.UTF_8));
-    String name =
-        source.substring(0, Math.min(source.length(), 43))
-            + "_jvm_"
-            + HexFormat.of().formatHex(hash).substring(0, 10);
-    String url = main.url.replaceFirst("/" + main.name + "(?=\\?|$)", "/" + name);
-    Extra extra = new Extra(url, main.adminUrl, main.credentials, name);
-    try (Connection admin = DriverManager.getConnection(main.adminUrl, main.credentials)) {
+    String name = extraName(main, "jvm:" + purpose + ":" + ProcessHandle.current().pid());
+    Extra extra = new Extra(extraUrl(main, name), main.adminUrl, main.credentials, name);
+    synchronized (TEMPLATE_LOCK) {
+      String source = template(main);
+      try (Connection admin = DriverManager.getConnection(main.adminUrl, main.credentials)) {
+        dropDatabase(admin, name);
+        try (Statement statement = admin.createStatement()) {
+          statement.execute(
+              "CREATE DATABASE " + quoteIdentifier(name) + " TEMPLATE " + quoteIdentifier(source));
+        }
+      }
+    }
+    report("running against extra scratch database " + name);
+    return extra;
+  }
+
+  /**
+   * The schema template of the extra databases. The first call creates it and installs the schema.
+   * No session stays connected to it, because PostgreSQL copies only a template without sessions.
+   * The caller holds {@link #TEMPLATE_LOCK}.
+   */
+  private static String template(Database main) throws Exception {
+    if (template != null) {
+      return template;
+    }
+    String adminUrl = main.adminUrl;
+    if (adminUrl == null) {
+      throw new IllegalStateException("Extend the test class with ScratchDatabase");
+    }
+    String name = extraName(main, "jvm-template:" + ProcessHandle.current().pid());
+    try (Connection admin = DriverManager.getConnection(adminUrl, main.credentials)) {
       dropDatabase(admin, name);
       try (Statement statement = admin.createStatement()) {
         statement.execute("CREATE DATABASE " + quoteIdentifier(name));
       }
+      try (Connection connection =
+              DriverManager.getConnection(extraUrl(main, name), main.credentials);
+          Statement statement = connection.createStatement()) {
+        statement.execute(Files.readString(schema()));
+      } catch (Exception error) {
+        dropDatabase(admin, name);
+        throw error;
+      }
     }
-    try (Connection connection = extra.connect();
-        Statement statement = connection.createStatement()) {
-      statement.execute(Files.readString(schema()));
-    } catch (Exception error) {
-      extra.close();
-      throw error;
+    template = name;
+    report("installed the schema into template database " + name);
+    return name;
+  }
+
+  /** {@code <source>_jvm_<digest>} for an extra database or the template, from {@code seed}. */
+  private static String extraName(Database main, String seed) throws NoSuchAlgorithmException {
+    String source = main.name.substring(0, main.name.lastIndexOf("_jvm_"));
+    byte[] hash =
+        MessageDigest.getInstance("SHA-256").digest(seed.getBytes(StandardCharsets.UTF_8));
+    return source.substring(0, Math.min(source.length(), 43))
+        + "_jvm_"
+        + HexFormat.of().formatHex(hash).substring(0, 10);
+  }
+
+  private static String extraUrl(Database main, String name) {
+    if (main.url == null) {
+      throw new IllegalStateException("Extend the test class with ScratchDatabase");
     }
-    report("running against extra scratch database " + name);
-    return extra;
+    return main.url.replaceFirst("/" + main.name + "(?=\\?|$)", "/" + name);
   }
 
   /** An extra scratch database. {@link #close} drops it. */
@@ -206,20 +249,46 @@ public final class ScratchDatabase implements BeforeAllCallback {
     synchronized (LOCK) {
       current = database;
     }
+    String copied;
+    synchronized (TEMPLATE_LOCK) {
+      copied = template;
+      template = null;
+    }
     if (current == null || current.adminUrl == null) {
       return;
     }
-    try (Connection admin = DriverManager.getConnection(current.adminUrl, current.credentials)) {
-      dropDatabase(admin, current.name);
-      report("dropped scratch database " + current.name);
+    // Each drop runs even if the other fails, and the first failure is thrown.
+    SQLException failure = dropAndReport(current, current.name, null);
+    if (copied != null) {
+      failure = dropAndReport(current, copied, failure);
+    }
+    if (failure != null) {
+      throw failure;
+    }
+  }
+
+  private static @Nullable SQLException dropAndReport(
+      Database current, String name, @Nullable SQLException earlier) {
+    String adminUrl = current.adminUrl;
+    if (adminUrl == null) {
+      return earlier;
+    }
+    try (Connection admin = DriverManager.getConnection(adminUrl, current.credentials)) {
+      dropDatabase(admin, name);
+      report("dropped scratch database " + name);
+      return earlier;
     } catch (SQLException error) {
       report(
           "could not drop scratch database "
-              + current.name
+              + name
               + ": "
               + error.getMessage()
               + "; run pnpm db:sweep");
-      throw error;
+      if (earlier != null) {
+        earlier.addSuppressed(error);
+        return earlier;
+      }
+      return error;
     }
   }
 
