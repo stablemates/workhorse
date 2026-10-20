@@ -1,5 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { PoolClient } from "pg";
 import { describe, expect, it, vi } from "vitest";
+import { ReservedConnection } from "../src/heartbeat-connection.js";
 import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -56,7 +58,73 @@ async function expiresAt(taskId: string): Promise<Date> {
   return result.rows[0]!.expires_at;
 }
 
+/**
+ * A pool that lends clients of the test pool and records each statement they receive. While
+ * `delay` returns a positive number for a statement, the client waits that long before it sends it.
+ */
+function recordingPool(delay: (text: string) => number) {
+  const statements: string[] = [];
+  return {
+    statements,
+    pool: {
+      options: { max: 10 },
+      async connect(): Promise<PoolClient> {
+        const client = await pool.connect();
+        const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+        const release = client.release.bind(client);
+        Object.assign(client, {
+          async query(text: string, values?: unknown[]) {
+            statements.push(text);
+            const ms = delay(text);
+            if (ms > 0) await sleep(ms);
+            return query(text, values);
+          },
+          release(error?: Error | boolean) {
+            // The pool lends this client again, so it gets its own query method back.
+            delete (client as Partial<PoolClient>).query;
+            client.release = release;
+            release(error);
+          },
+        });
+        return client;
+      },
+    },
+  };
+}
+
 describe("heartbeat server bound", () => {
+  it("keeps the connection when a round expires after BEGIN and before its heartbeat", async () => {
+    let slowSettings = false;
+    const recording = recordingPool((text) =>
+      slowSettings && text.includes("set_config") ? 400 : 0,
+    );
+    const connection = new ReservedConnection(recording.pool);
+    const backend = () =>
+      connection.run(
+        async (client) =>
+          (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid,
+        1_000,
+      );
+    try {
+      const before = await backend();
+      const sentBefore = recording.statements.length;
+      // The settings statement uses more than the quarter of the round kept for COMMIT, but the
+      // round still has time to roll back.
+      slowSettings = true;
+      await expect(backend()).rejects.toThrow(/before its heartbeat/);
+      slowSettings = false;
+      expect(recording.statements.slice(sentBefore)).toEqual([
+        "BEGIN",
+        expect.stringContaining("set_config"),
+        "ROLLBACK",
+      ]);
+      // The next round uses the same backend, so the worker kept the connection.
+      expect(await backend()).toBe(before);
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("ends a timed-out round on the server, so it holds no lock and renews no lease", async () => {
     const id = await queue.enqueue("bounded", {}, { queue: "heartbeat-bound-round" });
     const task = await queue.claim("bound-round-worker", { queue: "heartbeat-bound-round" });

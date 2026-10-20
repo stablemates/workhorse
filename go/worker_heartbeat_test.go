@@ -1669,3 +1669,175 @@ func TestAFailedHeartbeatRoundAcquiresItsReplacementBeforeTheNextRound(t *testin
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// roundStatement is one statement that a round sent, and the backend that ran it.
+type roundStatement struct {
+	pid uint32
+	sql string
+}
+
+// roundStatementTracer is a pgx tracer that keeps each statement a round sends. Before it sends the
+// settings statement it waits for settingsDelay, so the round finds that the statement used more
+// than its quarter. The wait comes before the round's idle timeout applies, so PostgreSQL keeps the
+// session. A wait after the settings statement would pass that timeout and end the session.
+type roundStatementTracer struct {
+	mu            sync.Mutex
+	statements    []roundStatement
+	settingsDelay time.Duration
+}
+
+func (tracer *roundStatementTracer) TraceQueryStart(
+	ctx context.Context,
+	conn *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	tracer.mu.Lock()
+	tracer.statements = append(tracer.statements, roundStatement{pid: conn.PgConn().PID(), sql: data.SQL})
+	delay := tracer.settingsDelay
+	tracer.mu.Unlock()
+	if strings.Contains(data.SQL, "set_config('statement_timeout'") {
+		time.Sleep(delay)
+	}
+	return ctx
+}
+
+func (*roundStatementTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// take returns the statements so far, forgets them, and sets the wait after the next settings
+// statements.
+func (tracer *roundStatementTracer) take(settingsDelay time.Duration) []roundStatement {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	statements := tracer.statements
+	tracer.statements = nil
+	tracer.settingsDelay = settingsDelay
+	return statements
+}
+
+func newRoundStatementPool(t *testing.T, name string) (*pgxpool.Pool, *roundStatementTracer) {
+	t.Helper()
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), name)
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer := &roundStatementTracer{}
+	config.ConnConfig.Tracer = tracer
+	// One connection, so a round that discards its connection gets a new backend.
+	config.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool, tracer
+}
+
+// roundBackend returns the one backend that ran statements.
+func roundBackend(t *testing.T, statements []roundStatement) uint32 {
+	t.Helper()
+	if len(statements) == 0 {
+		t.Fatal("the round sent no statement")
+	}
+	for _, statement := range statements {
+		if statement.pid != statements[0].pid {
+			t.Fatalf("the round ran on backends %d and %d; want one", statements[0].pid, statement.pid)
+		}
+	}
+	return statements[0].pid
+}
+
+// assertCleanExpiry checks that a round expired after BEGIN, sent no heartbeat statement, and
+// rolled back.
+func assertCleanExpiry(t *testing.T, statements []roundStatement, heartbeat string) {
+	t.Helper()
+	var sent []string
+	for _, statement := range statements {
+		sent = append(sent, strings.ToLower(statement.sql))
+	}
+	for _, sql := range sent {
+		if strings.Contains(sql, heartbeat) {
+			t.Fatalf("the expired round sent its heartbeat statement: %v", sent)
+		}
+	}
+	if len(sent) == 0 || sent[0] != "begin" || sent[len(sent)-1] != "rollback" {
+		t.Fatalf("the expired round sent %v; want BEGIN first and ROLLBACK last", sent)
+	}
+}
+
+// TestARoundThatExpiresBeforeItsHeartbeatKeepsTheReservedConnection pins SM-1492: the round sent
+// no heartbeat statement, so its ROLLBACK leaves the connection clean, and the next round uses it.
+// Handlers cannot take that connection, so keeping it keeps renewals going (ADR 0071).
+func TestARoundThatExpiresBeforeItsHeartbeatKeepsTheReservedConnection(t *testing.T) {
+	pool, tracer := newRoundStatementPool(t, "heartbeat-clean-expiry")
+	ctx := context.Background()
+	connection := workhorse.NewHeartbeatConnectionForTest(pool)
+	t.Cleanup(connection.Release)
+
+	if err := connection.QueryRound(ctx, 2*time.Second, "SELECT 'first round'"); err != nil {
+		t.Fatal(err)
+	}
+	backend := roundBackend(t, tracer.take(300*time.Millisecond))
+
+	// The settings statement and the wait after it take more than a quarter of the 800 ms bound.
+	err := connection.QueryRound(ctx, 800*time.Millisecond, "SELECT 'expired round'")
+	if err == nil || !workhorse.RoundKeptItsConnectionForTest(err) {
+		t.Fatalf("the round that expired after BEGIN returned %v; want a clean expiry", err)
+	}
+	statements := tracer.take(0)
+	assertCleanExpiry(t, statements, "expired round")
+	if pid := roundBackend(t, statements); pid != backend {
+		t.Fatalf("the expired round ran on backend %d; want %d", pid, backend)
+	}
+	if !connection.Held() {
+		t.Fatal("the expired round gave up the reserved connection")
+	}
+
+	// Too little time is left before BEGIN, so the round sends nothing.
+	err = connection.QueryRound(ctx, 5*time.Millisecond, "SELECT 'short round'")
+	if err == nil || !workhorse.RoundKeptItsConnectionForTest(err) {
+		t.Fatalf("the round without time for BEGIN returned %v; want a clean expiry", err)
+	}
+	if statements := tracer.take(0); len(statements) != 0 {
+		t.Fatalf("the round without time for BEGIN sent %v", statements)
+	}
+	if !connection.Held() {
+		t.Fatal("the round without time for BEGIN gave up the reserved connection")
+	}
+
+	if err := connection.QueryRound(ctx, 2*time.Second, "SELECT 'next round'"); err != nil {
+		t.Fatal(err)
+	}
+	if pid := roundBackend(t, tracer.take(0)); pid != backend {
+		t.Fatalf("the next round ran on backend %d; want the kept backend %d", pid, backend)
+	}
+}
+
+// TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen pins SM-1492 for
+// SharedHeartbeats: the round returns the clean connection to the pool without closing it.
+func TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen(t *testing.T) {
+	pool, tracer := newRoundStatementPool(t, "heartbeat-pool-clean-expiry")
+	ctx := context.Background()
+
+	if err := workhorse.BoundedPoolQueryForTest(ctx, pool, 2*time.Second, "SELECT 'first round'"); err != nil {
+		t.Fatal(err)
+	}
+	backend := roundBackend(t, tracer.take(300*time.Millisecond))
+
+	err := workhorse.BoundedPoolQueryForTest(ctx, pool, 800*time.Millisecond, "SELECT 'expired round'")
+	if err == nil || !workhorse.RoundKeptItsConnectionForTest(err) {
+		t.Fatalf("the round that expired after BEGIN returned %v; want a clean expiry", err)
+	}
+	statements := tracer.take(0)
+	assertCleanExpiry(t, statements, "expired round")
+	if pid := roundBackend(t, statements); pid != backend {
+		t.Fatalf("the expired round ran on backend %d; want %d", pid, backend)
+	}
+
+	if err := workhorse.BoundedPoolQueryForTest(ctx, pool, 2*time.Second, "SELECT 'next round'"); err != nil {
+		t.Fatal(err)
+	}
+	if pid := roundBackend(t, tracer.take(0)); pid != backend {
+		t.Fatalf("the next round ran on backend %d; want the kept backend %d", pid, backend)
+	}
+}

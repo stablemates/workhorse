@@ -13,12 +13,21 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from threading import Lock
 from time import monotonic, sleep
+from typing import Any
 
+import pytest
 from eventual_conditions import eventually
 
 from workhorse import CancellationToken
-from workhorse._heartbeat_round import BUSY_RETRY_BASE_MS, busy_retry_delay_ms
-from workhorse.worker import ClaimedTask, Worker
+from workhorse._heartbeat_round import (
+    BUSY_RETRY_BASE_MS,
+    BUSY_RETRY_MINIMUM_MS,
+    MINIMUM_ROUND_REMAINING_MS,
+    ROUND_TIMEOUTS,
+    busy_retry_delay_ms,
+)
+from workhorse._statements import DriverStatement
+from workhorse.worker import _STATEMENTS, ClaimedTask, Worker
 
 HEARTBEAT_MS = 200
 INTERVAL = HEARTBEAT_MS / 1000
@@ -323,3 +332,140 @@ def test_a_result_for_a_lease_that_was_replaced_or_left_is_ignored() -> None:
     assert second.started_at - first.started_at >= INTERVAL - 0.01
     assert second.task_ids == ["replaced"]
     assert replacement.statuses == ["accepted"]
+
+
+# SM-1492: a bounded busy retry with less than BUSY_RETRY_MINIMUM_MS before its deadline would fail
+# before its heartbeat. It does not start, and the regular slot renews the lease.
+
+
+def test_the_busy_retry_minimum_is_the_round_minimum_plus_a_margin() -> None:
+    assert MINIMUM_ROUND_REMAINING_MS == 8
+    assert BUSY_RETRY_MINIMUM_MS == 20
+
+
+class FakeConnection:
+    """A reserved heartbeat connection. `respond` gives the statuses of each heartbeat in turn."""
+
+    def __init__(self, respond: Respond) -> None:
+        self._lock = Lock()
+        self._respond = respond
+        self.statements: list[str] = []
+        self.rounds: list[Round] = []
+        self.closed = False
+
+    def command(self, statement: DriverStatement, _parameters: Sequence[object] = ()) -> None:
+        with self._lock:
+            self.statements.append(statement.psycopg)
+
+    def rows(
+        self, statement: DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Mapping[str, object]]:
+        with self._lock:
+            self.statements.append(statement.psycopg)
+        if statement is ROUND_TIMEOUTS:
+            return [{}]
+        task_ids = [lease["taskId"] for lease in json.loads(str(parameters[1]))]
+        with self._lock:
+            index = len(self.rounds)
+            self.rounds.append(Round(monotonic(), task_ids, 0.0))
+        statuses = self._respond(index, task_ids)
+        return [{"task_id": task_id, "status": statuses[task_id]} for task_id in task_ids]
+
+    def close(self) -> None:
+        self.closed = True
+
+    def snapshot(self) -> list[Round]:
+        with self._lock:
+            return list(self.rounds)
+
+    def heartbeats(self) -> int:
+        with self._lock:
+            return self.statements.count(_STATEMENTS.heartbeat_many.psycopg)
+
+
+class BoundedWorker:
+    """A worker whose heartbeat rounds run bounded on fake reserved connections."""
+
+    def __init__(self, respond: Respond) -> None:
+        self.opened: list[FakeConnection] = []
+        self._respond = respond
+        self.worker = Worker(
+            _Pool(),
+            queue="busy-retry",
+            worker_id="busy-retry-worker",
+            lease_ms=60_000,
+            heartbeat_ms=HEARTBEAT_MS,
+            _heartbeat_executor_factory=self.open,
+        )
+
+    def open(self) -> tuple[Any, Callable[[], None]]:
+        connection = FakeConnection(self._respond)
+        self.opened.append(connection)
+        return connection, connection.close
+
+
+class EndsSoon(Lease):
+    """A lease whose local window ends `left` seconds after each read, once the first round ran."""
+
+    def __init__(self, task_id: str, left: float) -> None:
+        super().__init__(task_id)
+        self.left = left
+        self.short = False
+
+    def lease_ends_at(self) -> float:
+        return monotonic() + self.left if self.short else self.ends_at
+
+
+def test_a_bounded_busy_retry_with_too_little_time_does_not_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The retry falls due 25 ms after the busy answer, and the window ends 10 ms after that. The
+    # window end is fixed, so a retry that starts late has even less time, or none.
+    retry_delay = 0.025
+    monkeypatch.setattr(
+        "workhorse.worker._busy_retry_delay_ms", lambda _heartbeat_ms: retry_delay * 1000
+    )
+    held = Lease("held")
+
+    def respond(index: int, task_ids: list[str]) -> Mapping[str, str]:
+        if index == 0:
+            held.ends_at = monotonic() + retry_delay + 0.01
+        return dict.fromkeys(task_ids, "busy" if index == 0 else "accepted")
+
+    bounded = BoundedWorker(respond)
+    _register(bounded.worker, held)
+    try:
+        eventually(lambda: held.statuses != [], "the regular round never renewed the lease")
+    finally:
+        _stop(bounded.worker, held)
+
+    (connection,) = bounded.opened
+    first, regular = connection.snapshot()[:2]
+    # No retry ran. The next round is the regular one, on the same connection.
+    assert regular.started_at - first.started_at >= INTERVAL - 0.01
+    assert connection.statements[: connection.statements.index("COMMIT") + 1].count("BEGIN") == 1
+    assert held.statuses[0] == "accepted"
+    assert not connection.closed
+
+
+def test_a_bounded_busy_retry_with_enough_time_runs() -> None:
+    # The window ends 60 ms after each read, more than BUSY_RETRY_MINIMUM_MS.
+    held = EndsSoon("held", 0.06)
+
+    def respond(index: int, task_ids: list[str]) -> Mapping[str, str]:
+        if index == 0:
+            held.short = True
+        return dict.fromkeys(task_ids, "busy" if index == 0 else "accepted")
+
+    bounded = BoundedWorker(respond)
+    _register(bounded.worker, held)
+    try:
+        eventually(lambda: held.statuses != [], "no round renewed the lease")
+    finally:
+        _stop(bounded.worker, held)
+
+    (connection,) = bounded.opened
+    first, retry = connection.snapshot()[:2]
+    assert retry.task_ids == ["held"]
+    assert retry.started_at - first.started_at < LONGEST_RETRY_DELAY + SLACK
+    assert held.statuses[0] == "accepted"

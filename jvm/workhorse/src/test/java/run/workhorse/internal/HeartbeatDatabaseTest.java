@@ -3,6 +3,9 @@ package run.workhorse.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -14,16 +17,21 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.postgresql.PGConnection;
+import org.postgresql.core.BaseConnection;
 import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
 import run.workhorse.Queue;
@@ -77,6 +85,9 @@ class HeartbeatDatabaseTest {
     final AtomicInteger renewals = new AtomicInteger();
     final AtomicLong renewedAt = new AtomicLong();
 
+    /** The local lease window always ends this many nanoseconds after each read. */
+    final AtomicLong windowLeft = new AtomicLong(TimeUnit.SECONDS.toNanos(30));
+
     Recorded(UUID taskId, Lease lease) {
       this.taskId = taskId;
       this.lease = lease;
@@ -109,7 +120,7 @@ class HeartbeatDatabaseTest {
 
     @Override
     public long leaseEndsAt() {
-      return System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+      return System.nanoTime() + windowLeft.get();
     }
 
     @Override
@@ -204,6 +215,266 @@ class HeartbeatDatabaseTest {
       unregister.run();
       release.countDown();
       runner.shutdownNow();
+    }
+  }
+
+  /**
+   * A task whose handler runs until {@link #close}. The worker's own heartbeat is far away, so only
+   * the test's heartbeat renews in the test.
+   */
+  private final class RunningTask implements AutoCloseable {
+    final UUID taskId;
+    final Lease claimed;
+    private final CountDownLatch release = new CountDownLatch(1);
+    private final ExecutorService runner = Executors.newSingleThreadExecutor();
+    private final Future<Boolean> run;
+
+    RunningTask(String name) throws Exception {
+      String queueName = "jvm-heartbeat-" + name + "-" + UUID.randomUUID();
+      taskId =
+          new Queue(ConnectionSource.of(dataSource))
+              .enqueue("held", Map.of(), EnqueueOptions.builder().queue(queueName).build())
+              .taskId();
+      CountDownLatch started = new CountDownLatch(1);
+      Worker worker =
+          Worker.builder(dataSource)
+              .queues(queueName)
+              .workerId("jvm-heartbeat-" + name)
+              .pollingOnly(true)
+              .pollInterval(Duration.ofMillis(10))
+              .disableRegistry(true)
+              .lease(Duration.ofSeconds(30))
+              .heartbeat(Duration.ofSeconds(10))
+              .handle(
+                  "held",
+                  Object.class,
+                  (ctx, payload) -> {
+                    started.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                    return Map.of();
+                  })
+              .build();
+      run = runner.submit(worker::runOnce);
+      assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
+      claimed = lease(taskId);
+    }
+
+    @Override
+    public void close() throws ExecutionException, TimeoutException {
+      release.countDown();
+      try {
+        assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(interrupted);
+      } finally {
+        runner.shutdownNow();
+      }
+    }
+  }
+
+  /**
+   * A source over {@code source} that records, in order, what the heartbeat does on each
+   * connection, with the backend PID of the connection. While {@link #slowSettingsMs} is above
+   * zero, the next settings statement waits that long before it goes out, so the round passes the
+   * quarter that it keeps for {@code COMMIT}.
+   */
+  private static final class Watched {
+    final AtomicInteger checkouts = new AtomicInteger();
+    final List<String> events = new CopyOnWriteArrayList<>();
+    final AtomicLong slowSettingsMs = new AtomicLong();
+    final AtomicLong slowRollbackMs = new AtomicLong();
+
+    DataSource over(DataSource source) {
+      return (DataSource)
+          Proxy.newProxyInstance(
+              DataSource.class.getClassLoader(),
+              new Class<?>[] {DataSource.class},
+              (proxy, method, arguments) -> {
+                Object result = invoke(method, source, arguments);
+                if (!method.getName().equals("getConnection")) {
+                  return result;
+                }
+                checkouts.incrementAndGet();
+                return connection((Connection) result);
+              });
+    }
+
+    private Connection connection(Connection connection) throws SQLException {
+      int pid = connection.unwrap(PGConnection.class).getBackendPID();
+      return (Connection)
+          Proxy.newProxyInstance(
+              Connection.class.getClassLoader(),
+              new Class<?>[] {Connection.class},
+              (proxy, method, arguments) -> {
+                switch (method.getName()) {
+                  case "rollback" ->
+                      events.add(
+                          "rollback "
+                              + connection.unwrap(BaseConnection.class).getTransactionState()
+                              + " "
+                              + pid);
+                  case "close", "abort" -> events.add(method.getName() + " " + pid);
+                  default -> {}
+                }
+                Object result = invoke(method, connection, arguments);
+                if (method.getName().equals("rollback")) {
+                  long delay = slowRollbackMs.getAndSet(0);
+                  if (delay > 0) {
+                    // After the rollback, so it succeeds on the server but returns late.
+                    Thread.sleep(delay);
+                  }
+                }
+                if (!method.getName().equals("prepareStatement")) {
+                  return result;
+                }
+                String sql = String.valueOf(arguments[0]);
+                if (sql.contains("heartbeat_many_v2")) {
+                  events.add("heartbeat " + pid);
+                } else if (sql.contains("statement_timeout")) {
+                  events.add("settings " + pid);
+                  return settings((PreparedStatement) result);
+                }
+                return result;
+              });
+    }
+
+    private PreparedStatement settings(PreparedStatement statement) {
+      return (PreparedStatement)
+          Proxy.newProxyInstance(
+              PreparedStatement.class.getClassLoader(),
+              new Class<?>[] {PreparedStatement.class},
+              (proxy, method, arguments) -> {
+                if (method.getName().equals("execute")) {
+                  long delay = slowSettingsMs.getAndSet(0);
+                  if (delay > 0) {
+                    // Before the statement, so BEGIN and the settings then go out at once, and no
+                    // idle gap ends the session.
+                    Thread.sleep(delay);
+                  }
+                }
+                return invoke(method, statement, arguments);
+              });
+    }
+
+    private static Object invoke(Method method, Object target, Object[] arguments)
+        throws Throwable {
+      try {
+        return method.invoke(target, arguments);
+      } catch (InvocationTargetException error) {
+        throw error.getCause();
+      }
+    }
+  }
+
+  /**
+   * SM-1492: a round whose settings statement uses more than its quarter rolls back before its
+   * heartbeat statement. It keeps the connection, and the next round renews on it.
+   */
+  @Test
+  void keepsTheConnectionWhenARoundExpiresAfterBeginBeforeItsHeartbeat() throws Exception {
+    Watched watched = new Watched();
+    // The round bound of a 1 s interval is 750 ms, so its quarter is about 187 ms.
+    watched.slowSettingsMs.set(300);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("expired")) {
+      Recorded member = new Recorded(task.taskId, task.claimed);
+      unregister = heartbeat.register(member);
+      waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
+      unregister.run();
+      List<String> events = watched.events;
+      assertTrue(events.size() >= 4, "events: " + events);
+      String pid = events.get(0).substring("settings ".length());
+      assertEquals(
+          List.of("settings " + pid, "rollback OPEN " + pid, "settings " + pid, "heartbeat " + pid),
+          events.subList(0, 4),
+          "the first round sent no heartbeat and rolled back; the next one used the same backend");
+      assertEquals(1, watched.checkouts.get(), "the heartbeat kept its connection");
+      assertTrue(member.statuses.isEmpty(), "statuses: " + member.statuses);
+      assertTrue(
+          lease(task.taskId).expiresAt().isAfter(task.claimed.expiresAt()),
+          "the lease was renewed");
+    } finally {
+      unregister.run();
+    }
+  }
+
+  /**
+   * SM-1492: a round that expires before its heartbeat statement, and whose ROLLBACK returns after
+   * the round deadline, does not keep its connection. The next round checks out a new one.
+   */
+  @Test
+  void abortsTheConnectionWhenTheRollbackOfAnExpiredRoundEndsAfterTheDeadline() throws Exception {
+    Watched watched = new Watched();
+    // The round bound of a 1 s interval is 750 ms. The settings use more than its quarter, and the
+    // rollback returns after the deadline.
+    watched.slowSettingsMs.set(300);
+    watched.slowRollbackMs.set(600);
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("late-rollback")) {
+      Recorded member = new Recorded(task.taskId, task.claimed);
+      unregister = heartbeat.register(member);
+      waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
+      unregister.run();
+      List<String> events = watched.events;
+      assertTrue(events.size() >= 3, "events: " + events);
+      String pid = events.get(0).substring("settings ".length());
+      assertEquals(
+          List.of("settings " + pid, "rollback OPEN " + pid, "abort " + pid),
+          events.subList(0, 3),
+          "the first round sent no heartbeat, and its late rollback discarded the connection");
+      assertEquals(2, watched.checkouts.get(), "the next round checked out a new connection");
+    } finally {
+      unregister.run();
+    }
+  }
+
+  /**
+   * SM-1492: a busy retry whose lease window ends 5 ms after it falls due has less than the 20 ms
+   * minimum. It sends nothing, and the regular round at the next slot renews the lease on the same
+   * connection.
+   */
+  @Test
+  void skipsABusyRetryWithTooLittleTimeAndRenewsAtTheNextSlot() throws Exception {
+    Watched watched = new Watched();
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("short-retry");
+        Connection blocker = ScratchDatabase.connect()) {
+      blocker.setAutoCommit(false);
+      try (PreparedStatement lock =
+          blocker.prepareStatement(
+              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
+        lock.setString(1, task.taskId.toString());
+        lock.execute();
+      }
+      Recorded member = new Recorded(task.taskId, task.claimed);
+      member.windowLeft.set(TimeUnit.MILLISECONDS.toNanos(5));
+      long registeredAt = System.nanoTime();
+      unregister = heartbeat.register(member);
+      waitUntil("a round reported the lease busy", () -> !member.statuses.isEmpty());
+      blocker.commit();
+      waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
+      unregister.run();
+      // The first round falls due at 1 s, and the next regular round at 2 s.
+      double renewedMs = (member.renewedAt.get() - registeredAt) / 1e6;
+      assertTrue(renewedMs > 1_900, "the lease was renewed " + renewedMs + " ms after the start");
+      assertEquals(List.of("busy"), member.statuses, "no retry ran");
+      List<String> heartbeats =
+          watched.events.stream().filter(event -> event.startsWith("heartbeat ")).toList();
+      assertEquals(2, heartbeats.size(), "events: " + watched.events);
+      assertEquals(heartbeats.get(0), heartbeats.get(1), "both rounds used the same backend");
+      assertTrue(
+          watched.events.stream().noneMatch(event -> event.startsWith("rollback ")),
+          "events: " + watched.events);
+      assertEquals(1, watched.checkouts.get(), "the heartbeat kept its connection");
+      assertTrue(
+          lease(task.taskId).expiresAt().isAfter(task.claimed.expiresAt()),
+          "the lease was renewed");
+    } finally {
+      unregister.run();
     }
   }
 }

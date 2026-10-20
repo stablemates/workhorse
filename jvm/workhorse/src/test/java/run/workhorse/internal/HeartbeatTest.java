@@ -2,9 +2,11 @@ package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -219,6 +221,13 @@ class HeartbeatTest {
     final UUID taskId;
     final long intervalNanos;
     final AtomicLong leaseEndsAt = new AtomicLong(System.nanoTime() + millis(60_000));
+
+    /**
+     * When it is above zero, the lease window always ends this many nanoseconds after each read,
+     * instead of at {@link #leaseEndsAt}.
+     */
+    final AtomicLong windowLeft = new AtomicLong();
+
     final AtomicInteger renewals = new AtomicInteger();
     final List<String> statuses = new CopyOnWriteArrayList<>();
 
@@ -264,7 +273,8 @@ class HeartbeatTest {
 
     @Override
     public long leaseEndsAt() {
-      return leaseEndsAt.get();
+      long left = windowLeft.get();
+      return left > 0 ? System.nanoTime() + left : leaseEndsAt.get();
     }
 
     @Override
@@ -505,5 +515,137 @@ class HeartbeatTest {
     }
     double gap = gapMillis(round.calls.get(0), round.calls.get(1));
     assertTrue(gap > 290, "the second round came after " + gap + " ms");
+  }
+
+  // SM-1492: a busy retry with too little time, and a round that expires before its heartbeat.
+
+  @Test
+  void runsABusyRetryOnlyWithAtLeast20MsBeforeItsDeadline() {
+    assertEquals(millis(20), Heartbeat.BUSY_RETRY_MIN_NANOS);
+    assertTrue(Heartbeat.busyRetryFits(0, millis(20)), "a retry with exactly the minimum runs");
+    assertTrue(Heartbeat.busyRetryFits(0, millis(300)));
+    assertFalse(Heartbeat.busyRetryFits(0, millis(20) - 1));
+    assertFalse(Heartbeat.busyRetryFits(0, millis(10)));
+  }
+
+  @Test
+  void skipsABusyRetryWhoseLeaseWindowEndsTooSoonAndRenewsAtTheNextSlot() throws Exception {
+    long interval = millis(300);
+    FakeMember busy = new FakeMember("worker", interval);
+    FakeMember accepted = new FakeMember("worker", interval);
+    List<FakeMember> all = List.of(busy, accepted);
+    Recorder round =
+        new Recorder(
+            0,
+            (index, call) -> {
+              if (index == 0) {
+                // When the retry falls due, the busy lease window ends 5 ms later.
+                busy.windowLeft.set(millis(5));
+                return answer(call, all, busy);
+              }
+              return answer(call, all, null);
+            });
+    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Runnable removeBusy = heartbeat.register(busy);
+    Runnable removeAccepted = heartbeat.register(accepted);
+    try {
+      waitUntil("a round renewed the busy lease", () -> busy.renewals.get() >= 1);
+    } finally {
+      removeBusy.run();
+      removeAccepted.run();
+    }
+    // The retry sent no statement, so the second statement is the regular round at the slot.
+    Call next = round.calls.get(1);
+    assertTrue(next.sends(busy) && next.sends(accepted), "the next round is a regular round");
+    double gap = gapMillis(round.calls.get(0), next);
+    assertTrue(gap > 290, "the second round came after " + gap + " ms");
+    assertEquals(1, busy.renewals.get(), "the regular round renews the busy lease");
+  }
+
+  @Test
+  void runsABusyRetryWhoseLeaseWindowLeavesTheMinimum() throws Exception {
+    long interval = millis(300);
+    FakeMember busy = new FakeMember("worker", interval);
+    FakeMember accepted = new FakeMember("worker", interval);
+    List<FakeMember> all = List.of(busy, accepted);
+    Recorder round =
+        new Recorder(
+            0,
+            (index, call) -> {
+              if (index == 0) {
+                busy.windowLeft.set(millis(30));
+                return answer(call, all, busy);
+              }
+              return answer(call, all, null);
+            });
+    Heartbeat heartbeat = new Heartbeat(null, true, round);
+    Runnable removeBusy = heartbeat.register(busy);
+    Runnable removeAccepted = heartbeat.register(accepted);
+    try {
+      waitUntil("a second round ran", () -> round.calls.size() >= 2);
+    } finally {
+      removeBusy.run();
+      removeAccepted.run();
+    }
+    Call retry = round.calls.get(1);
+    assertTrue(retry.sends(busy) && !retry.sends(accepted), "the second statement is the retry");
+    double gap = gapMillis(round.calls.get(0), retry);
+    assertTrue(gap < 250, "the retry came after " + gap + " ms");
+  }
+
+  /** One member of each of three workers, so a round sends three batches. */
+  private static List<Heartbeat.Member> threeWorkers() {
+    return List.of(member("first"), member("second"), member("third"));
+  }
+
+  @Test
+  void endsADedicatedRoundWithoutAThrowWhenABatchExpiresBeforeItsHeartbeat() throws Exception {
+    List<Heartbeat.Member> due = threeWorkers();
+    // The fixed round is never due within the test: the member interval is 10 s.
+    Heartbeat dedicated =
+        new Heartbeat(null, true, (timeoutNanos, statement, parameters) -> List.of());
+    List<Runnable> removals = new ArrayList<>();
+    due.forEach(member -> removals.add(dedicated.register(member)));
+    List<String> sent = new ArrayList<>();
+    try {
+      List<Heartbeat.Member> busy =
+          dedicated.sendBatches(
+              Heartbeat.batches(due),
+              0,
+              System.nanoTime() + millis(ROUND_DEADLINE_MS),
+              (timeoutNanos, statement, parameters) -> {
+                sent.add((String) parameters[0]);
+                if (sent.size() == 2) {
+                  throw new Heartbeat.RoundExpired("injected expiry");
+                }
+                Map<String, @Nullable Object> values = new LinkedHashMap<>();
+                values.put("task_id", due.get(0).taskId().toString());
+                values.put("status", "busy");
+                return List.of(new Row(values));
+              });
+      assertEquals(List.of("first", "second"), sent, "no batch goes out after the expired one");
+      assertEquals(List.of(due.get(0)), busy, "the earlier batch result still counts");
+    } finally {
+      removals.forEach(Runnable::run);
+    }
+  }
+
+  @Test
+  void stillThrowsWhenABatchTimesOutWithAStatementInFlight() {
+    List<Heartbeat.Member> due = threeWorkers();
+    Heartbeat dedicated = new Heartbeat(null, true);
+    List<String> sent = new ArrayList<>();
+    assertThrows(
+        SQLTimeoutException.class,
+        () ->
+            dedicated.sendBatches(
+                Heartbeat.batches(due),
+                0,
+                System.nanoTime() + millis(ROUND_DEADLINE_MS),
+                (timeoutNanos, statement, parameters) -> {
+                  sent.add((String) parameters[0]);
+                  throw new SQLTimeoutException("injected in-flight deadline");
+                }));
+    assertEquals(List.of("first"), sent);
   }
 }

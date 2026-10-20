@@ -2378,6 +2378,14 @@ func heartbeatRoundBoundFor(interval time.Duration) time.Duration {
 // with base = min(busyRetryBase, heartbeatInterval / 8).
 const busyRetryBase = 100 * time.Millisecond
 
+// busyRetryMargin is the part of busyRetryMinimum above minimumRoundRemaining.
+const busyRetryMargin = 12 * time.Millisecond
+
+// busyRetryMinimum is the least time a busy retry must have before its deadline, or it does not run.
+// It is the time a round needs at the settings statement, plus a margin for the payload, the wait
+// for the connection, and BEGIN.
+const busyRetryMinimum = minimumRoundRemaining + busyRetryMargin
+
 // busyRetryDelay is the wait before a busy retry. The jitter keeps two workers from meeting the
 // same lock holder in step. Every SDK uses the same formula.
 func busyRetryDelay(interval time.Duration) time.Duration {
@@ -2456,7 +2464,9 @@ func (worker *Worker) heartbeatSnapshot() []*heartbeatMember {
 // gone, and its local lease window has not ended. With no such member it returns nil, and the
 // loop waits for the regular slot. The deadline is the earliest of the round bound, the next
 // regular slot, and the end of each selected lease window, so a retry never renews a lease that
-// the worker has already given up.
+// the worker has already given up. Every round is bounded, so a deadline less than busyRetryMinimum
+// after now also returns nil: such a retry could fail before its heartbeat statement and renew
+// nothing. The regular round renews the busy leases instead.
 func (worker *Worker) busyRetrySelection(
 	busy []*heartbeatMember, now time.Time, next time.Time,
 ) ([]*heartbeatMember, time.Time) {
@@ -2475,6 +2485,9 @@ func (worker *Worker) busyRetrySelection(
 		if end.Before(deadline) {
 			deadline = *end
 		}
+	}
+	if deadline.Sub(now) < busyRetryMinimum {
+		return nil, deadline
 	}
 	return selection, deadline
 }

@@ -272,7 +272,8 @@ of your own code, can still cost the lease.
 
 **Busy retry.** A busy retry sends only the busy leases after `base × (1 + random)`, with
 `base = min(100 ms, interval / 8)`. It ends by the earliest of the round deadline, the next regular
-slot, and the watchdog end. It does not move the regular rounds. With the defaults (30,000 ms lease,
+slot, and the watchdog end. A bounded retry with less than 20 ms left sends nothing, and the next
+regular round renews the lease. It does not move the regular rounds. With the defaults (30,000 ms lease,
 10,000 ms interval), the regular rounds at 10 s and 20 s can both be busy before the watchdog ends
 at 30 s. `SKIP LOCKED` does not stop every wait: an update-chain wait can still occur, and the round
 deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartbeatMany` still wait
@@ -281,7 +282,9 @@ for a row lock and never report `busy`.
 **Round deadline.** A round on the reserved connection sends `heartbeat_many_v2` in its own
 transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
 before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
-the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
+the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`. If a round expires before it
+sends `heartbeat_many_v2`, it rolls back and keeps its connection. If a statement of the round can
+still run, the worker discards the connection.
 
 **Smallest supported interval.** The smallest supported interval is 100 ms, in all six SDKs. Its
 round deadline is 75 ms. Below 100 ms, the worker accepts the interval and its behavior does not

@@ -180,3 +180,17 @@ the change would not fix the mixed batch.
 
 With the defaults, a lease survives only two busy regular rounds. Progress updates, checkpoint
 writes, and durable sleep replay can lock the row many times in that period.
+
+## Amendment: a busy retry with less than 20 ms left sends nothing (2026-10-20)
+
+Worker rule 6 gives a bounded busy retry the deadline `min(retry start + round bound, next regular
+slot, earliest watchdog end of its leases)`. Until this amendment, a retry ran when that deadline
+was later than its start, so it could start with a few milliseconds left. The round then failed
+after `BEGIN`, and the worker discarded its reserved heartbeat connection. SM-1492 found this case.
+
+A bounded busy retry now runs only if its deadline is at least 20 ms after its start. The 20 ms is
+the 8 ms that a round needs at its settings statement, plus a margin of 12 ms for the payload, the
+wait for the connection, and `BEGIN`. If less time remains, the retry sends nothing and schedules no
+other retry. The regular round then sends every registered lease, the busy ones too. A retry
+without a client deadline does not skip. Under shared heartbeats, only Go bounds its rounds, so only
+a Go retry under shared heartbeats can skip. All six SDKs use the same rule and the same values.

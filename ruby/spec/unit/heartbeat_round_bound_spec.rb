@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "logger"
 require "spec_helper"
 
 RSpec.describe "Worker heartbeat round bound" do
@@ -34,5 +35,190 @@ RSpec.describe "Worker heartbeat statement order" do
     heartbeat = heartbeat_class.new(nil, dedicated: false)
     firsts = Array.new(3) { heartbeat.send(:ordered_groups, members).first.first }
     expect(firsts).to eq(%w[a a a])
+  end
+end
+
+# A connection that answers each statement after +delay+ seconds. +delay+ receives the kind of
+# the statement and how many statements of that kind the connection sent before. A heartbeat
+# statement accepts every lease. Each statement is recorded in +sent+ as [kind, worker_id].
+class FakeHeartbeatConnection
+  Result = Struct.new(:rows) do
+    def type_map=(_map)
+      nil
+    end
+
+    def to_a = rows
+
+    def clear = nil
+  end
+
+  attr_reader :sent
+
+  def initialize(&delay)
+    @delay = delay || ->(_kind, _count) { 0 }
+    @sent = Concurrent::Array.new
+    @closed = false
+  end
+
+  def closed? = @closed
+
+  def send_query_params(sql, params, _format, _type_map)
+    kind = if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 then :heartbeat
+    elsif sql.start_with?("SELECT set_config") then :settings
+    else sql.downcase.to_sym
+    end
+    @pending = [kind, params]
+    @sent << [kind, (kind == :heartbeat) ? params[0] : nil]
+  end
+
+  def block(timeout)
+    kind, = @pending
+    took = @delay.call(kind, @sent.count { |entry| entry[0] == kind } - 1)
+    sleep [took, timeout].min
+    took <= timeout
+  end
+
+  def get_last_result
+    kind, params = @pending
+    return Result.new([]) unless kind == :heartbeat
+
+    Result.new(JSON.parse(params[1]).map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} })
+  end
+
+  def close
+    @closed = true
+  end
+end
+
+# A pool that lends one connection at a time from +connections+ and records each discard.
+class FakeHeartbeatPool
+  attr_reader :lent, :discarded
+
+  def initialize(connections)
+    @connections = connections
+    @lent = Concurrent::Array.new
+    @discarded = Concurrent::Array.new
+  end
+
+  def with
+    @current = @connections.shift
+    @lent << @current
+    yield @current
+  end
+
+  def discard_current_connection
+    @discarded << @current
+    yield @current
+  end
+end
+
+# SM-1492: a dedicated round that expires before its heartbeat statement leaves its connection
+# clean. The worker keeps that connection, because handlers can hold every other pool connection.
+RSpec.describe "Worker heartbeat round expiry" do
+  heartbeat_class = Stablemates::Workhorse::Worker.const_get(:Heartbeat)
+
+  def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+  def claimed(number)
+    W::ClaimedTask.new(
+      id: format("00000000-0000-4000-8000-%012d", number), queue: "default", type: "t", priority: 0, payload: {},
+      contract_version: nil, result_max_bytes: nil, redact_error_details: false, trace_context: nil,
+      attempt: 1, max_attempts: 3, retry_policy: nil, deadline_at: nil, execution_timeout_ms: nil,
+      attempt_timeout_at: nil, fence_token: 7, lease_expires_at: nil
+    )
+  end
+
+  def member(worker_id, number, interval, renewals)
+    W::Worker::Heartbeat::Member.new(
+      worker_id: worker_id, task: claimed(number), lease_ms: 30_000, interval: interval, logger: Logger.new(IO::NULL),
+      renew: ->(_sent_at) { renewals << worker_id }, settle: ->(_status) {}, fail: ->(_error) {},
+      lease_ends_at: -> { monotonic + 60 }
+    )
+  end
+
+  def wait_until(timeout = 5)
+    deadline = monotonic + timeout
+    sleep 0.005 until yield || monotonic > deadline
+    raise "condition not met within #{timeout} seconds" unless yield
+  end
+
+  # The kinds of the statements of each round on +connection+, split at each BEGIN.
+  def rounds_of(connection)
+    connection.sent.map(&:first).slice_before(:begin).to_a
+  end
+
+  # An interval of 0.6 s gives a round bound of 0.45 s, so a settings statement of 0.2 s uses more
+  # than its quarter and still leaves time for the ROLLBACK.
+  let(:interval) { 0.6 }
+  let(:renewals) { Concurrent::Array.new }
+
+  after { @unregister&.each(&:call) }
+
+  it "sends nothing and keeps the connection when a round has less than 8 ms left before BEGIN" do
+    connection = FakeHeartbeatConnection.new
+    heartbeat = heartbeat_class.new(nil, dedicated: true)
+    expect { heartbeat.send(:bounded_rows, connection, W::SqlCatalogue::HEARTBEAT_MANY_V2, ["w", "[]"], 0.005) }
+      .to raise_error(heartbeat_class.const_get(:RoundExpired))
+    expect(connection.sent).to be_empty
+    expect(connection.closed?).to be(false)
+  end
+
+  it "rolls back a round whose settings statement used more than its quarter, and keeps the connection" do
+    connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count.zero?) ? 0.2 : 0 }
+    pool = FakeHeartbeatPool.new([connection])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
+    wait_until { renewals.any? }
+    expect(rounds_of(connection).first(2)).to eq([%i[begin settings rollback], %i[begin settings heartbeat commit]])
+    expect(pool.lent).to eq([connection])
+    expect(pool.discarded).to be_empty
+    expect(connection.closed?).to be(false)
+  end
+
+  it "discards the connection when the ROLLBACK does not end by the round's deadline" do
+    first = FakeHeartbeatConnection.new do |kind, count|
+      if kind == :settings && count.zero? then 0.2
+      elsif kind == :rollback then 1
+      else 0
+      end
+    end
+    second = FakeHeartbeatConnection.new
+    pool = FakeHeartbeatPool.new([first, second])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
+    wait_until { renewals.any? }
+    expect(rounds_of(first)).to eq([%i[begin settings rollback]])
+    expect(pool.discarded).to eq([first])
+    expect(first.closed?).to be(true)
+    expect(rounds_of(second).first).to eq(%i[begin settings heartbeat commit])
+  end
+
+  it "discards the connection when the round's deadline passes while its heartbeat statement runs" do
+    first = FakeHeartbeatConnection.new { |kind, _count| (kind == :heartbeat) ? 1 : 0 }
+    second = FakeHeartbeatConnection.new
+    pool = FakeHeartbeatPool.new([first, second])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = [heartbeat.register(member("w", 1, interval, renewals))]
+    wait_until { renewals.any? }
+    expect(rounds_of(first)).to eq([%i[begin settings heartbeat]])
+    expect(pool.discarded).to eq([first])
+    expect(first.closed?).to be(true)
+  end
+
+  it "stops a round at a statement that expires cleanly, and keeps the results of the earlier statements" do
+    # The second settings statement of the round, for the second worker, is slow.
+    connection = FakeHeartbeatConnection.new { |kind, count| (kind == :settings && count == 1) ? 0.2 : 0 }
+    pool = FakeHeartbeatPool.new([connection])
+    heartbeat = heartbeat_class.new(pool, dedicated: true)
+    @unregister = %w[a b c].each_with_index.map { |worker_id, index| heartbeat.register(member(worker_id, index + 1, interval, renewals)) }
+    wait_until { renewals.size >= 4 }
+    expect(rounds_of(connection).first(2)).to eq([%i[begin settings heartbeat commit], %i[begin settings rollback]])
+    # The first round sent no statement for the third worker. The next round sends all three.
+    first_round = connection.sent.take_while { |entry| entry[0] != :rollback }
+    expect(first_round.filter_map { |kind, worker_id| worker_id if kind == :heartbeat }).to eq(["a"])
+    expect(renewals.first).to eq("a")
+    expect(renewals.drop(1).first(3)).to contain_exactly("a", "b", "c")
+    expect(pool.lent).to eq([connection])
+    expect(pool.discarded).to be_empty
   end
 end

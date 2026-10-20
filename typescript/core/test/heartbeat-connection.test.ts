@@ -54,6 +54,25 @@ function bounded(statement: string): string[] {
   return ["BEGIN", ROUND_TIMEOUTS, statement, "COMMIT"];
 }
 
+/**
+ * A monotonic clock that a test moves forward. `deadline` is the test's own estimate of the
+ * round's deadline, and `shiftTo` moves the clock so that it reads `at` now.
+ */
+function shiftedClock() {
+  const now = performance.now.bind(performance);
+  let offset = 0;
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => now() + offset);
+  return {
+    deadline: Number.POSITIVE_INFINITY,
+    shiftTo(at: number): void {
+      offset = at - now();
+    },
+    restore(): void {
+      spy.mockRestore();
+    },
+  };
+}
+
 function never(): Promise<never> {
   return new Promise<never>(() => {
     // A statement stuck behind a lock never answers.
@@ -144,9 +163,144 @@ describe("reserved heartbeat connection", () => {
       return client.query("SELECT 1");
     }, 200);
     await expect(round).rejects.toThrow(/deadline/);
+    expect(sent(clients[0]!)).toEqual(["BEGIN", ROUND_TIMEOUTS, "ROLLBACK"]);
+    // The heartbeat never went out and the ROLLBACK returned, so the next round uses the client.
+    expect(clients[0]!.release).not.toHaveBeenCalled();
+    clients[0]!.query.mockImplementation(async () => emptyResult);
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
+    await connection.close();
+
+    expect(pool.connect).toHaveBeenCalledOnce();
+    expect(sent(clients[0]!).slice(3)).toEqual(bounded("SELECT 1"));
+    expect(clients[0]!.release).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("keeps the connection when less than the round minimum is left after BEGIN", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    const clock = shiftedClock();
+    try {
+      const round = connection.run(async (client) => {
+        clients[0]!.query.mockImplementation(async (text) => {
+          // BEGIN answers with 5 ms of the round left.
+          if (text === "BEGIN") clock.shiftTo(clock.deadline - 5);
+          return emptyResult;
+        });
+        return client.query("SELECT 1");
+      }, 1_000);
+      clock.deadline = performance.now() + 1_000;
+      await expect(round).rejects.toThrow(/before its heartbeat/);
+    } finally {
+      clock.restore();
+    }
+    expect(sent(clients[0]!)).toEqual(["BEGIN", "ROLLBACK"]);
+    expect(clients[0]!.release).not.toHaveBeenCalled();
+    clients[0]!.query.mockImplementation(async () => emptyResult);
+    await connection.run((client) => client.query("SELECT 2"), 1_000);
+    await connection.close();
+
+    expect(pool.connect).toHaveBeenCalledOnce();
+    expect(sent(clients[0]!).slice(2)).toEqual(bounded("SELECT 2"));
+  });
+
+  it("sends nothing and keeps the connection when less than the round minimum is left", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    await connection.run((client) => client.query("SELECT 1"), 1_000);
+    const clock = shiftedClock();
+    try {
+      const round = connection.run(async (client) => {
+        // The payload takes all but 5 ms of the round before the first statement.
+        clock.shiftTo(clock.deadline - 5);
+        return client.query("SELECT 2");
+      }, 1_000);
+      clock.deadline = performance.now() + 1_000;
+      await expect(round).rejects.toThrow(/before its heartbeat/);
+    } finally {
+      clock.restore();
+    }
+    expect(sent(clients[0]!)).toEqual(bounded("SELECT 1"));
+    expect(clients[0]!.release).not.toHaveBeenCalled();
+    await connection.run((client) => client.query("SELECT 3"), 1_000);
+    await connection.close();
+
+    expect(pool.connect).toHaveBeenCalledOnce();
+    expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 3")]);
+  });
+
+  it("destroys a client whose ROLLBACK fails after the round expired before its heartbeat", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    const reset = new Error("connection reset");
+
+    const round = connection.run(async (client) => {
+      clients[0]!.query.mockImplementation(async (text) => {
+        if (text === ROUND_TIMEOUTS) await sleep(60);
+        if (text === "ROLLBACK") throw reset;
+        return emptyResult;
+      });
+      return client.query("SELECT 1");
+    }, 200);
+    await expect(round).rejects.toThrow(/reached its deadline$/);
     await connection.close();
 
     expect(sent(clients[0]!)).toEqual(["BEGIN", ROUND_TIMEOUTS, "ROLLBACK"]);
+    expect(clients[0]!.release).toHaveBeenCalledOnce();
+    expect(clients[0]!.release.mock.calls[0]![0]).toBeInstanceOf(Error);
+  });
+
+  it("destroys a client whose ROLLBACK ends after the deadline of a round that expired before its heartbeat", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    const clock = shiftedClock();
+    try {
+      const round = connection.run(async (client) => {
+        clients[0]!.query.mockImplementation(async (text) => {
+          // BEGIN answers with 5 ms of the round left, and ROLLBACK answers after the deadline.
+          if (text === "BEGIN") clock.shiftTo(clock.deadline - 5);
+          if (text === "ROLLBACK") clock.shiftTo(clock.deadline + 1);
+          return emptyResult;
+        });
+        return client.query("SELECT 1");
+      }, 1_000);
+      clock.deadline = performance.now() + 1_000;
+      await expect(round).rejects.toThrow(/reached its deadline$/);
+    } finally {
+      clock.restore();
+    }
+    await connection.close();
+
+    expect(sent(clients[0]!)).toEqual(["BEGIN", "ROLLBACK"]);
+    expect(clients[0]!.release).toHaveBeenCalledOnce();
+    expect(clients[0]!.release.mock.calls[0]![0]).toBeInstanceOf(Error);
+  });
+
+  it("destroys a client whose round resends after a heartbeat failed, even before the next heartbeat", async () => {
+    const { pool, clients } = fakePool();
+    const connection = new ReservedConnection(asDatabase(pool));
+    const deadlock = Object.assign(new Error("deadlock detected"), { code: "40P01" });
+    const clock = shiftedClock();
+    try {
+      const round = connection.run(async (client) => {
+        clients[0]!.query.mockImplementation(async (text) => {
+          if (text === "SELECT 1") throw deadlock;
+          return emptyResult;
+        });
+        await client.query("SELECT 1").catch(() => undefined);
+        // The resend has too little time left, but the first heartbeat statement already ran.
+        clock.shiftTo(clock.deadline - 5);
+        return client.query("SELECT 1");
+      }, 1_000);
+      clock.deadline = performance.now() + 1_000;
+      await expect(round).rejects.toThrow(/reached its deadline$/);
+    } finally {
+      clock.restore();
+    }
+    await connection.close();
+
+    expect(sent(clients[0]!)).toEqual(["BEGIN", ROUND_TIMEOUTS, "SELECT 1", "ROLLBACK"]);
+    expect(clients[0]!.release).toHaveBeenCalledOnce();
+    expect(clients[0]!.release.mock.calls[0]![0]).toBeInstanceOf(Error);
   });
 
   it("sends no command after the deadline, even when an answer arrives late", async () => {
@@ -170,6 +324,9 @@ describe("reserved heartbeat connection", () => {
     await connection.close();
 
     expect(sent(clients[0]!)).toEqual(["BEGIN"]);
+    // BEGIN was in flight at the deadline, so the client is destroyed.
+    expect(clients[0]!.release).toHaveBeenCalledOnce();
+    expect(clients[0]!.release.mock.calls[0]![0]).toBeInstanceOf(Error);
   });
 
   it("runs one round at a time, so transactions of two workers never mix", async () => {

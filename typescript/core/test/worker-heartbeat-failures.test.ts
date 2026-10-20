@@ -1,7 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import type { ClaimedTask, HeartbeatStatus } from "../src/types.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClaimedTask, HeartbeatBatchStatus, HeartbeatStatus } from "../src/types.js";
 import { Worker, type WorkerQueueApi } from "../src/worker.js";
+import { workerHeartbeatReservation, type WorkerHeartbeatChannel } from "../src/worker-internal.js";
 
 function claimedTask(id: string): ClaimedTask {
   return {
@@ -109,5 +110,96 @@ describe("worker heartbeat failures", () => {
     expect(abortedAfterMs!).toBeLessThan(leaseMs * 3);
     expect(completed).toEqual([]);
     expect(fail).not.toHaveBeenCalled();
+  });
+});
+
+interface ChannelRound {
+  startedAt: number;
+  timeoutMs: number;
+}
+
+/**
+ * A queue that lends a reserved heartbeat channel. `answer` runs for each round on the channel,
+ * with its index, and returns the statuses.
+ */
+function reservingQueue(
+  task: ClaimedTask,
+  answer: (round: number) => Promise<HeartbeatBatchStatus>,
+) {
+  const { queue, completed } = fakeQueue(task, async () => "accepted");
+  const rounds: ChannelRound[] = [];
+  const channel = {
+    reserve: vi.fn<() => void>(),
+    heartbeatMany: vi.fn<WorkerHeartbeatChannel["heartbeatMany"]>(
+      async (tasks, _workerId, _leaseMs, timeoutMs) => {
+        const index = rounds.push({ startedAt: performance.now(), timeoutMs }) - 1;
+        const status = await answer(index);
+        return new Map(tasks.map((claimed) => [claimed.id, status]));
+      },
+    ),
+    close: vi.fn<() => Promise<void>>(async () => undefined),
+  };
+  Object.assign(queue, { [workerHeartbeatReservation]: () => channel });
+  return { queue, completed, channel, rounds };
+}
+
+describe("worker busy retry deadline", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // With heartbeatMs 400, a round has a bound of 300 ms, and a busy retry falls due 50 ms after
+  // the busy round ends, because the jitter is 0. The busy round ends `gapMs` + 50 ms before the
+  // next regular slot, so the retry falls due about `gapMs` before that slot.
+  const heartbeatMs = 400;
+  const retryDelayMs = 50;
+
+  async function runBusyRound(gapMs: number) {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { queue, completed, channel, rounds } = reservingQueue(
+      claimedTask(`busy-retry-gap-${gapMs}`),
+      async (round) => {
+        if (round > 0) return "accepted";
+        await sleep(heartbeatMs - retryDelayMs - gapMs);
+        return "busy";
+      },
+    );
+    const worker = new Worker(queue, {
+      registryIntervalMs: 0,
+      leaseMs: 30_000,
+      heartbeatMs,
+    }).handle("heartbeat-failure", async () => {
+      await vi.waitFor(() => expect(rounds.length).toBeGreaterThanOrEqual(2), {
+        timeout: 5 * heartbeatMs,
+        interval: 5,
+      });
+      return null;
+    });
+    await expect(worker.runOnce()).resolves.toBe(true);
+    return { completed, channel, rounds };
+  }
+
+  it("skips a busy retry with less than the minimum left and renews at the next regular slot", async () => {
+    const { completed, channel, rounds } = await runBusyRound(10);
+
+    // The second round is the regular one: it has the full bound and starts one interval after
+    // the first. The retry sent nothing in between.
+    expect(rounds).toHaveLength(2);
+    expect(rounds[1]!.timeoutMs).toBe(300);
+    expect(rounds[1]!.startedAt - rounds[0]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
+    // The worker used one reserved channel for both rounds.
+    expect(channel.reserve).toHaveBeenCalled();
+    expect(channel.close).toHaveBeenCalledOnce();
+    expect(completed).toEqual(["busy-retry-gap-10"]);
+  });
+
+  it("runs a busy retry with at least the minimum left, bounded by the next regular slot", async () => {
+    const { completed, rounds } = await runBusyRound(80);
+
+    expect(rounds[1]!.timeoutMs).toBeGreaterThanOrEqual(20);
+    // Timers can fire a little early or late, so the bound gets a few milliseconds of slack.
+    expect(rounds[1]!.timeoutMs).toBeLessThanOrEqual(90);
+    expect(rounds[1]!.startedAt - rounds[0]!.startedAt).toBeLessThan(heartbeatMs);
+    expect(completed).toEqual(["busy-retry-gap-80"]);
   });
 });

@@ -126,6 +126,55 @@ RSpec.describe "Worker heartbeat busy retry" do
     expect(events).to be_empty
   end
 
+  # SM-1492: a bounded retry that starts with less than the busy retry minimum left would fail at its
+  # settings statement. It sends nothing, and the next regular round renews every lease.
+  it "skips a busy retry that falls due 10 ms before the regular slot, and renews the lease in the regular round" do
+    interval = 0.4
+    # The retry falls due 10 ms before the next regular slot, so its deadline leaves at most 10 ms.
+    allow(heartbeat_class).to receive(:busy_retry_delay) do
+      heartbeat.instance_variable_get(:@previous) + interval - 0.01 - monotonic
+    end
+    @unregister = [first, second].map { |task| heartbeat.register(member(task, interval, events)) }
+    drive(heartbeat, calls) do |ids, number|
+      ids.to_h { |id| [id, (number == 1 && id == second.id) ? "busy" : "accepted"] }
+    end
+    wait_until { calls.size >= 2 }
+    expect(calls[1][:ids]).to eq([first.id, second.id])
+    expect(calls[1][:at] - calls[0][:at]).to be_within(0.05).of(interval)
+    wait_until { events.count { |event| event[0] == :renew } >= 3 }
+    expect(events.map { |event| event.first(2) }.first(3))
+      .to eq([[:renew, first.id], [:renew, first.id], [:renew, second.id]])
+  end
+
+  it "runs a busy retry whose deadline leaves at least the busy retry minimum" do
+    interval = 0.4
+    # The retry falls due 60 ms before the next regular slot.
+    allow(heartbeat_class).to receive(:busy_retry_delay) do
+      heartbeat.instance_variable_get(:@previous) + interval - 0.06 - monotonic
+    end
+    @unregister = [first, second].map { |task| heartbeat.register(member(task, interval, events)) }
+    drive(heartbeat, calls) do |ids, number|
+      ids.to_h { |id| [id, (number == 1 && id == second.id) ? "busy" : "accepted"] }
+    end
+    wait_until { calls.size >= 2 }
+    expect(calls[1][:ids]).to eq([second.id])
+    expect(calls[1][:timeout]).to be_between(0.02, 0.07)
+  end
+
+  it "runs the busy retry of a borrowing heartbeat, which has no deadline, also 15 ms before the regular slot" do
+    interval = 0.4
+    borrowing = heartbeat_class.new(nil, dedicated: false).tap { |made| made.instance_variable_set(:@thread, Thread.current) }
+    allow(heartbeat_class).to receive(:busy_retry_delay) do
+      borrowing.instance_variable_get(:@previous) + interval - 0.015 - monotonic
+    end
+    @unregister = [first, second].map { |task| borrowing.register(member(task, interval, events)) }
+    drive(borrowing, calls) do |ids, number|
+      ids.to_h { |id| [id, (number == 1 && id == second.id) ? "busy" : "accepted"] }
+    end
+    wait_until { calls.size >= 2 }
+    expect(calls[1][:ids]).to eq([second.id])
+  end
+
   it "ignores a result for a member that was replaced or left while the round ran" do
     replacement = member(first, 0.4, events)
     unregister = [first, second].map { |task| heartbeat.register(member(task, 0.4, events)) }

@@ -2,9 +2,11 @@
 //!
 //! Each worker reserves one pooled connection for its rounds before handlers can exhaust the pool.
 //! A round that fails or outlives its deadline discards that connection, and the next round
-//! acquires a fresh one. Server timeouts end the round's heartbeat statement and its idle waits by
-//! the same deadline; a `COMMIT` that PostgreSQL has already started can finish later. Go shares
-//! one reserved connection per pool; a Rust worker holds its own.
+//! acquires a fresh one. A round that expires before it sends its heartbeat statement rolls back
+//! and keeps the connection, because no statement of it can still run. Server timeouts end the
+//! round's heartbeat statement and its idle waits by the same deadline; a `COMMIT` that PostgreSQL
+//! has already started can finish later. Go shares one reserved connection per pool; a Rust worker
+//! holds its own.
 //!
 //! A lease whose row another transaction holds comes back `busy`: no renewal and no ownership
 //! verdict. A short busy retry then renews only those leases before the next regular round.
@@ -23,6 +25,11 @@ use crate::fenced_write::fenced_rows;
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter};
 use crate::Error;
+
+/// The scratch databases of the integration tests, for the round tests that need PostgreSQL.
+#[cfg(test)]
+#[path = "../../tests/support/mod.rs"]
+mod scratch;
 
 /// What one round reports to the supervising execution. A busy lease gets no beat.
 pub(super) enum Beat {
@@ -58,6 +65,20 @@ impl LeaseStatus {
 /// The base of the delay before a busy retry, at most. The retry waits `base × (1 + random)`, with
 /// `base = min(BUSY_RETRY_BASE, interval / 8)`.
 const BUSY_RETRY_BASE: Duration = Duration::from_millis(100);
+
+/// The part of `BUSY_RETRY_MINIMUM` above `MINIMUM_REMAINING`.
+const BUSY_RETRY_MARGIN: Duration = Duration::from_millis(12);
+
+/// A bounded busy retry with less time than this before its deadline does not run. It is the time
+/// a round needs at the settings statement, plus a margin for the payload, the wait for the
+/// connection, and BEGIN.
+const BUSY_RETRY_MINIMUM: Duration = MINIMUM_REMAINING.saturating_add(BUSY_RETRY_MARGIN);
+
+/// Whether a bounded busy retry that starts at `started` has too little time before `deadline`.
+/// Such a retry sends nothing, and the next regular round renews its leases.
+fn busy_retry_too_short(started: Instant, deadline: Instant) -> bool {
+    deadline.saturating_duration_since(started) < BUSY_RETRY_MINIMUM
+}
 
 /// The delay before a busy retry for `interval`. The jitter keeps two workers from meeting the
 /// same lock holder in step. Every SDK uses the same formula.
@@ -194,6 +215,27 @@ const ROUND_TIMEOUTS: &str = "SELECT set_config('statement_timeout', $1, true), 
 /// budget of `round_timeouts` is at least 1 ms, and the budgets still fit in the time left.
 const MINIMUM_REMAINING: Duration = Duration::from_millis(8);
 
+/// Why a round on the reserved connection failed.
+enum BoundedRoundError {
+    /// The round expired before it sent its heartbeat statement, and its transaction rolled back
+    /// or never started. No statement of the round can still run, so the connection stays.
+    Expired,
+    /// Any other failure. A statement of the round can still run, so the connection goes.
+    Failed(Error),
+}
+
+impl From<Error> for BoundedRoundError {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<tokio_postgres::Error> for BoundedRoundError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
 /// The server budgets for the rest of a round that has `remaining` left, in whole milliseconds.
 ///
 /// PostgreSQL measures `statement_timeout` for each statement and
@@ -212,13 +254,19 @@ fn round_timeouts(remaining: Duration) -> (String, String) {
 /// it next writes to it. So the server must end a round that the client stopped waiting for. The
 /// timeouts (`round_timeouts`) end the heartbeat, and a transaction whose client stopped before
 /// `COMMIT`, by the deadline. A `COMMIT` that PostgreSQL has already started can still finish
-/// later. Both settings end with the transaction, so the connection keeps no session state. A deadlock aborts the transaction, so it fails the round, and
-/// the next round sends again.
+/// later. Both settings end with the transaction, so the connection keeps no session state. A
+/// deadlock aborts the transaction, so it fails the round, and the next round sends again.
+///
+/// A round that expires before its heartbeat statement returns `BoundedRoundError::Expired`. If
+/// it has not sent `BEGIN`, it sends nothing. Otherwise it rolls back first.
 async fn server_bounded_rows(
     connection: &mut deadpool_postgres::Object,
     deadline: Instant,
     params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-) -> Result<Vec<tokio_postgres::Row>, Error> {
+) -> Result<Vec<tokio_postgres::Row>, BoundedRoundError> {
+    if deadline.saturating_duration_since(Instant::now()) < MINIMUM_REMAINING {
+        return Err(BoundedRoundError::Expired);
+    }
     let transaction = connection.transaction().await?;
     // tokio-postgres prepares a statement in its own cycle, and PostgreSQL restarts the statement
     // timer at the end of that cycle. Preparing first keeps that cycle out of the heartbeat's budget.
@@ -226,22 +274,45 @@ async fn server_bounded_rows(
     let set_at = Instant::now();
     let remaining = deadline.saturating_duration_since(set_at);
     if remaining < MINIMUM_REMAINING {
-        return Err(Error::invalid("heartbeat round reached its deadline before the statement"));
+        return roll_back_expired(transaction, deadline).await;
     }
     let (statement_ms, idle_ms) = round_timeouts(remaining);
+    #[cfg(test)]
+    if let Ok(delay) = tests::SETTINGS_DELAY.try_with(|delay| *delay) {
+        tokio::time::sleep(delay).await;
+    }
     transaction.execute(ROUND_TIMEOUTS, &[&statement_ms, &idle_ms]).await?;
     // The budgets fit only if the settings statement used at most the quarter kept for `COMMIT`.
     if set_at.elapsed() > remaining / 4 {
-        return Err(Error::invalid("heartbeat round settings took too long"));
+        return roll_back_expired(transaction, deadline).await;
     }
     let rows = transaction.query(&heartbeat, params).await?;
     // Dropping the transaction without this commit rolls it back.
     transaction.commit().await?;
     // A `COMMIT` that ends after the deadline does not count as a renewal.
     if Instant::now() >= deadline {
-        return Err(Error::invalid("heartbeat round reached its deadline after the commit"));
+        return Err(Error::invalid("heartbeat round reached its deadline after the commit").into());
     }
     Ok(rows)
+}
+
+/// Ends a round that expired after `BEGIN` and before its heartbeat statement.
+///
+/// The `ROLLBACK` must not start after `deadline`, and the caller bounds its wait by the same
+/// deadline. If the `ROLLBACK` cannot start, fails, or does not return in time, the round fails as
+/// any other round, and the caller discards the connection. Dropping a `Transaction` only queues a
+/// `ROLLBACK`, so this function waits for it.
+async fn roll_back_expired(
+    transaction: deadpool_postgres::Transaction<'_>,
+    deadline: Instant,
+) -> Result<Vec<tokio_postgres::Row>, BoundedRoundError> {
+    if Instant::now() >= deadline {
+        return Err(
+            Error::invalid("heartbeat round reached its deadline before the statement").into()
+        );
+    }
+    transaction.rollback().await?;
+    Err(BoundedRoundError::Expired)
 }
 
 /// The deadline of one heartbeat round for `interval`. It is three quarters of the interval, so
@@ -336,7 +407,8 @@ impl Inner {
     ///
     /// Between two slots, a busy retry renews only the leases that the latest round reported busy.
     /// It is a round for the one-round-in-flight rule, and it never moves the regular slot. A round
-    /// of either kind replaces the busy selection, and a failed round leaves none.
+    /// of either kind replaces the busy selection, and a failed round leaves none. A bounded retry
+    /// with less than `BUSY_RETRY_MINIMUM` before its deadline does not run, and leaves none either.
     async fn run_heartbeats(self: Arc<Self>) {
         let interval = self.heartbeat_interval;
         let mut next = Instant::now() + interval;
@@ -382,7 +454,14 @@ impl Inner {
                 }
                 // A busy retry ends by the next regular slot and by the end of the earliest lease
                 // window in it, so it never renews a lease that the watchdog has given up.
-                Some(lease_ends_at) => bounded.min(next).min(lease_ends_at),
+                Some(lease_ends_at) => {
+                    let deadline = bounded.min(next).min(lease_ends_at);
+                    // A shared retry has no client deadline, so only a bounded retry can skip.
+                    if !self.options.shared_heartbeats && busy_retry_too_short(started, deadline) {
+                        continue;
+                    }
+                    deadline
+                }
             };
             retry = match self.heartbeat_round(&members, deadline).await {
                 Ok(busy) if !busy.is_empty() => {
@@ -479,7 +558,7 @@ impl Inner {
             let mut reserved = timeout_at(deadline, self.heartbeats.reserved.lock())
                 .await
                 .map_err(|_| expired())?;
-            let rows = timeout_at(deadline, async {
+            let round = timeout_at(deadline, async {
                 if reserved.is_none() {
                     *reserved = Some(self.replacement_connection(deadline).await?);
                 }
@@ -487,14 +566,21 @@ impl Inner {
                 server_bounded_rows(connection, deadline, &params).await
             })
             .await
-            .map_err(|_| expired())
-            .and_then(|rows| rows);
-            if rows.is_err() {
-                // A failed round discards the connection instead of returning it to the pool.
-                if let Some(connection) = reserved.take() {
-                    drop(deadpool_postgres::Object::take(connection));
+            .unwrap_or_else(|_| Err(BoundedRoundError::Failed(expired())));
+            let rows = match round {
+                Ok(rows) => Ok(rows),
+                // No statement of the round can still run, so the next round uses the connection.
+                Err(BoundedRoundError::Expired) => {
+                    Err(Error::invalid("heartbeat round reached its deadline before the statement"))
                 }
-            }
+                Err(BoundedRoundError::Failed(error)) => {
+                    // A failed round discards the connection instead of returning it to the pool.
+                    if let Some(connection) = reserved.take() {
+                        drop(deadpool_postgres::Object::take(connection));
+                    }
+                    Err(error)
+                }
+            };
             if self.heartbeats.release_pending.swap(false, Ordering::SeqCst) {
                 reserved.take();
             }
@@ -590,10 +676,23 @@ mod tests {
             + Sync,
     >;
 
+    tokio::task_local! {
+        /// Delays the settings statement of a round on the reserved connection, as a slow one would.
+        pub(in crate::worker) static SETTINGS_DELAY: Duration;
+    }
+
     const BUSY: LeaseStatus = LeaseStatus::Busy;
     const ACCEPTED: LeaseStatus = LeaseStatus::Owner(OwnershipStatus::Accepted);
 
     fn worker_with(interval: Duration, lease: Duration) -> Worker {
+        worker_sharing(interval, lease, false)
+    }
+
+    fn shared_worker_with(interval: Duration, lease: Duration) -> Worker {
+        worker_sharing(interval, lease, true)
+    }
+
+    fn worker_sharing(interval: Duration, lease: Duration, shared_heartbeats: bool) -> Worker {
         let manager = deadpool_postgres::Manager::new(
             "postgresql://localhost/unused".parse().unwrap(),
             tokio_postgres::NoTls,
@@ -606,6 +705,7 @@ mod tests {
                 polling_only: true,
                 lease_duration: lease,
                 heartbeat_interval: Some(interval),
+                shared_heartbeats,
                 ..WorkerOptions::default()
             },
         )
@@ -994,5 +1094,168 @@ mod tests {
         // The watchdog removed the lease, so no round follows.
         tokio::time::sleep(interval * 3).await;
         assert_eq!(rounds.calls().len(), count);
+    }
+
+    #[test]
+    fn a_busy_retry_needs_the_executor_minimum_plus_a_margin() {
+        assert_eq!(BUSY_RETRY_MINIMUM, Duration::from_millis(20));
+        let started = Instant::now();
+        assert!(!busy_retry_too_short(started, started + BUSY_RETRY_MINIMUM));
+        assert!(busy_retry_too_short(
+            started,
+            started + BUSY_RETRY_MINIMUM - Duration::from_micros(1)
+        ));
+        assert!(busy_retry_too_short(started, started));
+    }
+
+    /// Answers the first round of a lease with `busy` and every later round with `accepted`. Each
+    /// round takes 20 ms, so with a 40 ms interval each retry falls due 5 ms to 10 ms after the
+    /// round ends, which leaves 10 ms to 15 ms before the next regular slot.
+    fn late_retry_rounds(worker: &Worker) -> Rounds {
+        Rounds::install(worker, Duration::from_millis(20), move |index, members| {
+            Ok(answer(members, if index == 0 { BUSY } else { ACCEPTED }, &[]))
+        })
+    }
+
+    // A bounded busy retry with less than the minimum before the next slot sends nothing. The next
+    // regular round renews the busy lease.
+    #[tokio::test(start_paused = true)]
+    async fn a_busy_retry_too_close_to_the_next_slot_waits_for_it() {
+        let interval = Duration::from_millis(40);
+        let worker = worker_with(interval, Duration::from_secs(30));
+        let rounds = late_retry_rounds(&worker);
+        let started = Instant::now();
+        let task = Uuid::new_v4();
+        let mut membership =
+            worker.0.register_heartbeat(task, 1, started + Duration::from_secs(30));
+        tokio::time::sleep(interval * 2 + Duration::from_millis(30)).await;
+        let calls = rounds.calls();
+        assert_eq!(calls.len(), 2, "a busy retry ran with too little time");
+        assert_eq!(calls[0].at, started + interval);
+        assert_eq!(calls[1].at, started + interval * 2, "the regular round did not come next");
+        assert_eq!(calls[1].tasks, [task]);
+        assert!(matches!(membership.beats.try_recv(), Ok(Beat::Renewed(at)) if at == calls[1].at));
+    }
+
+    // A shared busy retry has no client deadline, so it runs however close the next slot is.
+    #[tokio::test(start_paused = true)]
+    async fn a_shared_busy_retry_runs_close_to_the_next_slot() {
+        let interval = Duration::from_millis(40);
+        let worker = shared_worker_with(interval, Duration::from_secs(30));
+        let rounds = late_retry_rounds(&worker);
+        let started = Instant::now();
+        let _membership =
+            worker.0.register_heartbeat(Uuid::new_v4(), 1, started + Duration::from_secs(30));
+        tokio::time::sleep(interval * 2 - Duration::from_millis(1)).await;
+        let calls = rounds.calls();
+        assert_eq!(calls.len(), 2, "the shared busy retry did not run");
+        assert!(calls[1].at > started + interval && calls[1].at < started + interval * 2);
+    }
+
+    /// A worker whose rounds use the reserved connection to `database`, with that connection taken.
+    async fn database_worker(database: &scratch::ScratchDatabase) -> Worker {
+        let manager =
+            deadpool_postgres::Manager::new(database.url().parse().unwrap(), tokio_postgres::NoTls);
+        let pool = deadpool_postgres::Pool::builder(manager).max_size(3).build().unwrap();
+        let options = WorkerOptions {
+            queues: vec!["unused".into()],
+            polling_only: true,
+            heartbeat_interval: Some(Duration::from_secs(1)),
+            ..WorkerOptions::default()
+        };
+        let worker = Worker::new(pool, options).unwrap();
+        worker.0.reserve_heartbeat_connection().await;
+        worker
+    }
+
+    /// The backend process of the reserved connection, or `None` after a round discarded it.
+    async fn reserved_backend(worker: &Worker) -> Option<i32> {
+        let reserved = worker.0.heartbeats.reserved.lock().await;
+        let connection = reserved.as_ref()?;
+        Some(connection.query_one("SELECT pg_backend_pid()", &[]).await.unwrap().get(0))
+    }
+
+    /// The state and the latest statement of `backend`, as PostgreSQL reports them.
+    async fn activity(observer: &tokio_postgres::Client, backend: i32) -> (String, String) {
+        let row = observer
+            .query_one("SELECT state, query FROM pg_stat_activity WHERE pid = $1", &[&backend])
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    }
+
+    /// One lease that no worker owns, so a round that runs answers `stale`.
+    fn unowned() -> [Sent; 1] {
+        [Sent { task: Uuid::new_v4(), fence: 1, registration: 1 }]
+    }
+
+    const BEFORE_THE_STATEMENT: &str = "heartbeat round reached its deadline before the statement";
+
+    // A settings statement that uses more than its quarter of the round ends the round before the
+    // heartbeat statement. The round rolls back, and the next round uses the same connection.
+    #[tokio::test]
+    async fn a_round_that_expires_before_its_heartbeat_keeps_the_connection() {
+        let Some(database) = scratch::scratch_database("heartbeat_expired_round").await else {
+            return;
+        };
+        let observer = database.connect().await;
+        let worker = database_worker(&database).await;
+        let backend = reserved_backend(&worker).await.expect("no reserved connection");
+        let members = unowned();
+        // The quarter of a 750 ms round is about 187 ms, so a 300 ms delay fails the check.
+        let round = worker.0.send_heartbeats(&members, Instant::now() + Duration::from_millis(750));
+        let error = SETTINGS_DELAY.scope(Duration::from_millis(300), round).await.unwrap_err();
+        assert_eq!(error.to_string(), BEFORE_THE_STATEMENT);
+        // The settings statement came last before the ROLLBACK, so no heartbeat statement went out.
+        assert_eq!(activity(&observer, backend).await, ("idle".into(), "ROLLBACK".into()));
+        assert_eq!(reserved_backend(&worker).await, Some(backend), "the round discarded it");
+        let statuses = worker
+            .0
+            .send_heartbeats(&members, Instant::now() + Duration::from_millis(750))
+            .await
+            .unwrap();
+        assert_eq!(
+            statuses.get(&members[0].task.to_string()),
+            Some(&LeaseStatus::Owner(OwnershipStatus::Stale))
+        );
+        assert_eq!(reserved_backend(&worker).await, Some(backend));
+    }
+
+    // A round with less than the executor minimum before its deadline sends no BEGIN.
+    #[tokio::test]
+    async fn a_round_without_time_for_begin_sends_nothing_and_keeps_the_connection() {
+        let Some(database) = scratch::scratch_database("heartbeat_round_without_time").await else {
+            return;
+        };
+        let observer = database.connect().await;
+        let worker = database_worker(&database).await;
+        let backend = reserved_backend(&worker).await.expect("no reserved connection");
+        let deadline = Instant::now() + MINIMUM_REMAINING - Duration::from_millis(1);
+        let error = worker.0.send_heartbeats(&unowned(), deadline).await.unwrap_err();
+        assert_eq!(error.to_string(), BEFORE_THE_STATEMENT);
+        let latest = ("idle".into(), "SELECT pg_backend_pid()".into());
+        assert_eq!(activity(&observer, backend).await, latest, "the round sent a statement");
+        assert_eq!(reserved_backend(&worker).await, Some(backend), "the round discarded it");
+    }
+
+    // A round whose deadline passes while its heartbeat statement waits discards the connection,
+    // because that statement can still run.
+    #[tokio::test]
+    async fn a_round_that_outlives_its_heartbeat_statement_discards_the_connection() {
+        let Some(database) = scratch::scratch_database("heartbeat_outlived_round").await else {
+            return;
+        };
+        let mut locker = database.connect().await;
+        let worker = database_worker(&database).await;
+        assert!(reserved_backend(&worker).await.is_some(), "no reserved connection");
+        let lock = locker.transaction().await.unwrap();
+        // `heartbeat_many_v2` waits on this lock, as in the integration tests.
+        lock.batch_execute("LOCK TABLE workhorse.fast_task_runtime IN EXCLUSIVE MODE")
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_millis(300);
+        worker.0.send_heartbeats(&unowned(), deadline).await.unwrap_err();
+        assert_eq!(reserved_backend(&worker).await, None, "the round kept the connection");
+        lock.rollback().await.unwrap();
     }
 }

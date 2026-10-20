@@ -74,11 +74,16 @@ reserved heartbeat connection:
   that remains, and each idle gap one eighth. If less than 8 ms remains at the settings statement,
   the round fails before the heartbeat. The worker counts a renewal only after a `COMMIT` that ends
   before the deadline. No setting bounds `COMMIT` on PostgreSQL 15 and later.
-- **A failed round discards its connection.** Under load, PostgreSQL can log
+- **A failed round discards its connection only when a statement may still run** (SM-1492). A
+  round that expires before it sends the heartbeat statement rolls back and keeps its connection.
+  Under load, PostgreSQL can log
   `canceling statement due to statement timeout` for a heartbeat statement. It can also end the
   session with `terminating connection due to idle-in-transaction timeout`. Each message means that
   one round failed. Every task continues, and the next round tries again. A deadlock (`40P01`) is
   sent again in a new transaction with the time that remains.
+- **A busy retry with less than 20 ms left sends nothing** (SM-1492). A bounded busy retry runs
+  only if its deadline is at least 20 ms after its start: the 8 ms that a round needs at its
+  settings statement, plus a 12 ms margin. Otherwise the next regular round renews the busy leases.
 - **Replacement connections.** A failed round now asks the pool for its replacement connection when
   the round ends, so the connect starts before the next round.
 - **100 ms is the smallest supported heartbeat interval** (SM-1471). This applies to

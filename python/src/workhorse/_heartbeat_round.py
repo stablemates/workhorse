@@ -24,8 +24,17 @@ def heartbeat_round_bound_ms(heartbeat_ms: int) -> int:
     return max(1, heartbeat_ms * 3 // 4, min(50, heartbeat_ms))
 
 
+# A bounded round with less time than this left, in milliseconds, fails before it sends its
+# heartbeat.
+MINIMUM_ROUND_REMAINING_MS = 8
+
 # The longest base delay before a busy retry, in milliseconds.
 BUSY_RETRY_BASE_MS = 100
+BUSY_RETRY_MARGIN_MS = 12
+# A bounded busy retry with less time than this before its deadline, in milliseconds, does not
+# start. It is the time a round needs at the settings statement, plus a margin for the payload, the
+# wait for the connection, and BEGIN.
+BUSY_RETRY_MINIMUM_MS = MINIMUM_ROUND_REMAINING_MS + BUSY_RETRY_MARGIN_MS
 
 
 def busy_retry_delay_ms(heartbeat_ms: int, sample: Callable[[], float] = random.random) -> float:

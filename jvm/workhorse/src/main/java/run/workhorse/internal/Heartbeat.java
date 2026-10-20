@@ -54,6 +54,16 @@ public final class Heartbeat {
    */
   private static final long BUSY_RETRY_BASE_MS = 100;
 
+  /** The time that a bounded busy retry adds to {@link #MIN_REMAINING_NANOS}. */
+  private static final long BUSY_RETRY_MARGIN_NANOS = TimeUnit.MILLISECONDS.toNanos(12);
+
+  /**
+   * A bounded busy retry with less time than this before its deadline does not run: the time a
+   * round needs at the settings statement, plus a margin for the payload, the wait for the
+   * connection, and BEGIN.
+   */
+  static final long BUSY_RETRY_MIN_NANOS = MIN_REMAINING_NANOS + BUSY_RETRY_MARGIN_NANOS;
+
   /**
    * Sets both server timeouts for the current transaction only. {@code SET LOCAL} cannot take a
    * bind parameter, and {@code set_config(..., true)} has the same scope.
@@ -132,6 +142,13 @@ public final class Heartbeat {
 
   /** When the busy retry falls due, a {@link System#nanoTime} value. */
   private long busyRetryAt;
+
+  /**
+   * True when the latest {@link #sendBatches} call stopped at a batch that expired before its
+   * heartbeat statement ({@link RoundExpired}). A busy retry that stops this way fails, so it
+   * schedules no other retry. Only the heartbeat thread uses it.
+   */
+  private boolean roundExpired;
 
   Heartbeat(DataSource dataSource, boolean dedicated) {
     this(dataSource, dedicated, null);
@@ -238,7 +255,9 @@ public final class Heartbeat {
     // Holds one connection across rounds. A round that fails discards the connection, and the
     // next round checks out a new one at once: rounds waits for the slot itself, and starts one
     // overdue round at once. A pool that refuses a connection is asked again after a wait, and the
-    // lease watchdog covers the rounds that keep failing.
+    // lease watchdog covers the rounds that keep failing. A round that expires before its
+    // heartbeat statement with a clean connection does not throw out of rounds (RoundExpired), so
+    // the next round uses the same connection.
     while (true) {
       Held held;
       try {
@@ -291,7 +310,9 @@ public final class Heartbeat {
    * <p>Between two regular slots, a busy retry sends only the members that the latest round
    * reported busy ({@link #takeBusyRetry}). It is a round of this one thread, so it never overlaps
    * another round, and it does not move the regular schedule. Its deadline is {@link
-   * #retryDeadline}. A round that throws schedules no retry.
+   * #retryDeadline}. A round that throws schedules no retry. A bounded retry with less than {@link
+   * #BUSY_RETRY_MIN_NANOS} before its deadline does not run ({@link #busyRetryFits}), and the
+   * regular round at the next slot renews its members.
    */
   private boolean rounds(Round round) throws SQLException {
     while (true) {
@@ -343,6 +364,11 @@ public final class Heartbeat {
       List<Batch> batches;
       if (retry) {
         deadline = retryDeadline(start, interval, previous + interval, due);
+        // A retry that cannot finish in time sends nothing. It does not touch the connection, and
+        // the loop waits for the regular slot, as after an empty selection.
+        if (dedicated && !busyRetryFits(start, deadline)) {
+          continue;
+        }
         batches = batches(due);
         // A retry starts with its first batch, so it does not move the rotation of regular rounds.
         first = 0;
@@ -354,7 +380,7 @@ public final class Heartbeat {
         first = nextFirstBatch(batches.size());
       }
       List<Member> busy = sendBatches(batches, first, deadline, round);
-      if (!busy.isEmpty()) {
+      if (!busy.isEmpty() && !(retry && roundExpired)) {
         busyRetry = busy;
         busyRetryAt = System.nanoTime() + busyRetryDelayNanos(interval);
       }
@@ -411,6 +437,14 @@ public final class Heartbeat {
   }
 
   /**
+   * Whether a bounded busy retry that starts at {@code start} has time before {@code deadline}: at
+   * least {@link #BUSY_RETRY_MIN_NANOS}.
+   */
+  static boolean busyRetryFits(long start, long deadline) {
+    return deadline - start >= BUSY_RETRY_MIN_NANOS;
+  }
+
+  /**
    * One {@code heartbeat_many_v2} statement: the leases of one worker, at most {@link
    * #ROUND_LIMIT}.
    */
@@ -450,11 +484,14 @@ public final class Heartbeat {
   /**
    * Sends {@code batches} in order from {@code first}, and returns the registered members that came
    * back {@code busy}. On the dedicated connection a batch that would start after {@code deadline}
-   * is not sent, and a failed batch throws. A borrowing round sends every batch and skips a failed
-   * one.
+   * is not sent, and a failed batch throws. A batch that expires before its heartbeat statement
+   * ({@link RoundExpired}) ends the round without a throw: the results of the earlier batches
+   * count, and the caller keeps the connection. A busy retry that ends this way schedules no other
+   * retry ({@link #roundExpired}). A borrowing round sends every batch and skips a failed one.
    */
   List<Member> sendBatches(List<Batch> batches, int first, long deadline, Round round)
       throws SQLException {
+    roundExpired = false;
     List<Member> busy = new ArrayList<>();
     for (int index = 0; index < batches.size(); index++) {
       Batch batch = batches.get((first + index) % batches.size());
@@ -467,6 +504,12 @@ public final class Heartbeat {
         String payload = leases(batch.members());
         long remaining = deadline - System.nanoTime();
         rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V2, batch.workerId(), payload);
+      } catch (RoundExpired expired) {
+        if (dedicated) {
+          roundExpired = true;
+          return busy;
+        }
+        continue;
       } catch (SQLException | RuntimeException error) {
         if (dedicated) {
           throw error;
@@ -590,6 +633,20 @@ public final class Heartbeat {
     return true;
   }
 
+  /**
+   * A round that reached its deadline before its heartbeat statement, and left the connection
+   * clean: it sent nothing, or its {@code ROLLBACK} finished before the deadline. It is not a
+   * {@link SQLTimeoutException}, so it cannot be confused with a deadline that passed while a
+   * statement was in flight.
+   */
+  static final class RoundExpired extends SQLException {
+    private static final long serialVersionUID = 1L;
+
+    RoundExpired(String message) {
+      super(message);
+    }
+  }
+
   interface Round {
     /** Sends one statement within {@code timeoutNanos}, the time left of the round's bound. */
     List<Row> send(
@@ -633,18 +690,28 @@ public final class Heartbeat {
      * Sends {@code statement} in its own transaction within {@code timeoutNanos}. A round that
      * fails rolls back; a connection that cannot roll back is aborted, because its state is not
      * known.
+     *
+     * <p>A round that expires before {@code statement} goes out throws {@link RoundExpired} when
+     * the connection stays clean: the round sent nothing, or its {@code ROLLBACK} finished before
+     * the deadline. PgJDBC sends {@code BEGIN} with the first statement after {@code
+     * setAutoCommit(false)}, so nothing goes out before the settings statement.
      */
     List<Row> round(
         long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)
         throws SQLException {
       long deadline = System.nanoTime() + timeoutNanos;
+      if (timeoutNanos < MIN_REMAINING_NANOS) {
+        throw new RoundExpired("Heartbeat round reached its deadline before BEGIN");
+      }
       boundUntil(deadline);
       connection.setAutoCommit(false);
+      // Becomes true just before BEGIN goes out with the settings statement.
+      boolean begun = false;
       try {
         long setAt = System.nanoTime();
         long remaining = deadline - setAt;
         if (remaining < MIN_REMAINING_NANOS) {
-          throw new SQLTimeoutException("Heartbeat round reached its deadline");
+          throw new RoundExpired("Heartbeat round reached its deadline before BEGIN");
         }
         // PostgreSQL measures statement_timeout for each statement and the idle timeout for each
         // idle gap, and restarts both every time. While the round can hold a row lock, it has one
@@ -654,11 +721,15 @@ public final class Heartbeat {
         try (PreparedStatement timeouts = connection.prepareStatement(ROUND_TIMEOUTS)) {
           timeouts.setString(1, Long.toString(Math.max(1, milliseconds / 2)));
           timeouts.setString(2, Long.toString(Math.max(1, milliseconds / 8)));
+          begun = true;
           timeouts.execute();
         }
         // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
         if (System.nanoTime() - setAt > remaining / 4) {
-          throw new SQLTimeoutException("Heartbeat round settings took too long");
+          throw new RoundExpired("Heartbeat round settings took too long");
+        }
+        if (deadline - System.nanoTime() <= 0) {
+          throw new RoundExpired("Heartbeat round reached its deadline");
         }
         boundUntil(deadline);
         List<Row> rows = Sql.rows(connection, statement, parameters);
@@ -669,6 +740,29 @@ public final class Heartbeat {
           throw new SQLTimeoutException("Heartbeat round reached its deadline");
         }
         return rows;
+      } catch (RoundExpired expired) {
+        if (begun) {
+          try {
+            // The rollback keeps the round's deadline, so no command goes out after it.
+            boundUntil(deadline);
+            connection.rollback();
+          } catch (SQLException rollback) {
+            // The heartbeat statement did not go out, but the transaction state is not known.
+            connection.abort(Runnable::run);
+            SQLTimeoutException failed = new SQLTimeoutException(expired.getMessage(), rollback);
+            failed.addSuppressed(expired);
+            throw failed;
+          }
+          // A rollback that ends after the deadline did not end in the round's bound, so the
+          // connection is discarded, as in every SDK.
+          if (System.nanoTime() - deadline >= 0) {
+            connection.abort(Runnable::run);
+            SQLTimeoutException late = new SQLTimeoutException(expired.getMessage());
+            late.addSuppressed(expired);
+            throw late;
+          }
+        }
+        throw expired;
       } catch (SQLException | RuntimeException error) {
         try {
           if (!connection.isClosed()) {

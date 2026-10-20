@@ -75,6 +75,14 @@ async function outcomeState(taskId: string): Promise<string | undefined> {
   return result.rows[0]?.state;
 }
 
+async function expiresAt(taskId: string): Promise<number> {
+  const result = await pool.query<{ expires_at: Date }>(
+    "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1",
+    [taskId],
+  );
+  return result.rows[0]!.expires_at.getTime();
+}
+
 function expectNoOverlap(rounds: readonly Round[]): void {
   for (let index = 1; index < rounds.length; index += 1) {
     expect(rounds[index - 1]!.endedAt).toBeDefined();
@@ -247,6 +255,48 @@ describe("busy heartbeat retry", () => {
     expect(rounds[1]!.startedAt - rounds[0]!.endedAt!).toBeLessThan(heartbeatMs / 2);
     // The failed retry scheduled no retry. The next round is the regular one.
     expect(rounds[2]!.startedAt - rounds[0]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
+    expect(await outcomeState(id)).toBe("succeeded");
+  });
+
+  it("skips a retry with too little time before the next regular round, which renews the lease", async () => {
+    // With no jitter, a retry falls due min(100 ms, heartbeatMs / 8) after the busy round ends.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const heartbeatMs = 400;
+    const retryDelayMs = heartbeatMs / 8;
+    const queueName = "busy-retry-short";
+    const id = await queue.enqueue("short", {}, { queue: queueName });
+    let rounds: Round[] = [];
+    onReservedChannel((channel) => {
+      rounds = interceptRounds(channel, async (round, tasks) => {
+        if (round > 0) return undefined;
+        // The busy answer arrives so late that the retry falls due 10 ms before the next slot.
+        await sleep(heartbeatMs - retryDelayMs - 10);
+        return new Map(tasks.map((task) => [task.id, "busy" as const]));
+      });
+    });
+    let claimedUntil: number | undefined;
+    let renewedUntil: number | undefined;
+    const worker = new Worker(queue, {
+      workerId: "busy-retry-short-worker",
+      queue: queueName,
+      leaseMs: 30_000,
+      heartbeatMs,
+      registryIntervalMs: 0,
+    }).handle("short", async () => {
+      claimedUntil = await expiresAt(id);
+      await vi.waitFor(() => expect(rounds[1]?.endedAt).toBeDefined(), {
+        timeout: 5_000,
+        interval: 10,
+      });
+      renewedUntil = await expiresAt(id);
+      return null;
+    });
+    expect(await worker.runOnce()).toBe(true);
+    // The second round is the regular one, one interval after the first. It did not fail, and it
+    // renewed the lease that the first round reported busy.
+    expect(rounds[1]!.startedAt - rounds[0]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
+    expect(rounds[1]!.failed).toBeUndefined();
+    expect(renewedUntil).toBeGreaterThan(claimedUntil!);
     expect(await outcomeState(id)).toBe("succeeded");
   });
 

@@ -31,6 +31,30 @@ func (test HeartbeatConnectionForTest) FailRound(ctx context.Context, bound time
 	})
 }
 
+// QueryRound runs one round that sends statement through the bounded executor on the reserved
+// connection.
+func (test HeartbeatConnectionForTest) QueryRound(ctx context.Context, bound time.Duration, statement string) error {
+	return test.connection.run(ctx, bound, func(roundContext context.Context, executor Executor) error {
+		_, err := executor.Query(roundContext, statement)
+		return err
+	})
+}
+
+// BoundedPoolQueryForTest runs one round that sends statement through the bounded executor on a
+// connection acquired from pool, bounded by bound.
+func BoundedPoolQueryForTest(ctx context.Context, pool *pgxpool.Pool, bound time.Duration, statement string) error {
+	roundContext, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	return runBoundedOnPool(roundContext, pool, func(roundContext context.Context, executor Executor) error {
+		_, err := executor.Query(roundContext, statement)
+		return err
+	})
+}
+
+// RoundKeptItsConnectionForTest reports whether a failed round left its connection clean, so the
+// round kept it.
+func RoundKeptItsConnectionForTest(err error) bool { return keepsConnection(err) }
+
 // Held reports whether a connection waits for the next round.
 func (test HeartbeatConnectionForTest) Held() bool {
 	test.connection.mu.Lock()

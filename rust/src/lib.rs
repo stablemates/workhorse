@@ -3,6 +3,11 @@
 //! PostgreSQL owns queue state and every lifecycle decision. This crate issues the versioned
 //! protocol calls through a caller-supplied [`Executor`], so a transaction executor makes a
 //! call part of the caller's transaction.
+// The scratch database support of the integration tests names this crate `workhorse`, and the
+// heartbeat round tests use it.
+#[cfg(test)]
+extern crate self as workhorse;
+
 mod admin;
 mod checkpoint_input;
 mod children;
