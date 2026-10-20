@@ -200,14 +200,14 @@
                     "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-counts.",
                     "value": {
                       "json": {
-                        "all": 15,
+                        "all": 16,
                         "queued": 6,
                         "blocked": 0,
                         "retried": 0,
                         "running": 0,
                         "waiting": 2,
                         "canceled": 0,
-                        "completed": 3,
+                        "completed": 4,
                         "discarded": 3,
                         "scheduled": 3
                       }
@@ -1154,6 +1154,35 @@
                             "lastWorkerId": null,
                             "blockedReason": null,
                             "prerequisiteTaskIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.fast",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-fast",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "succeeded",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "enqueueMode": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "prerequisiteTaskIds": []
                           }
                         ],
                         "total": null,
@@ -1253,6 +1282,7 @@
                         ],
                         "queues": [
                           "conformance",
+                          "conformance-fast",
                           "conformance-groups",
                           "conformance-preserved",
                           "conformance-purge",
@@ -1264,6 +1294,7 @@
                         "taskTypes": [
                           "conformance.cancel-target",
                           "conformance.fail",
+                          "conformance.fast",
                           "conformance.group-member",
                           "conformance.human",
                           "conformance.preserve",
@@ -2299,6 +2330,22 @@
                             "terminalCountsApproximate": false
                           },
                           {
+                            "tier": "fast",
+                            "queue": "conformance-fast",
+                            "ready": 0,
+                            "active": 0,
+                            "failed": 0,
+                            "paused": false,
+                            "canceled": 0,
+                            "scheduled": 0,
+                            "succeeded": 1,
+                            "recordClaims": false,
+                            "recordAttempts": false,
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "terminalCountsApproximate": false
+                          },
+                          {
                             "tier": "full",
                             "queue": "conformance-groups",
                             "ready": 3,
@@ -2581,6 +2628,20 @@
                             "completedPerMinute": 0.03333333333333333
                           },
                           {
+                            "queue": "conformance-fast",
+                            "ready": 0,
+                            "active": 0,
+                            "paused": false,
+                            "dueSoon": 0,
+                            "retrying": 0,
+                            "oldestReadyMs": null,
+                            "priorityBacklog": [],
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "enqueuedPerMinute": 0,
+                            "completedPerMinute": 0
+                          },
+                          {
                             "queue": "conformance-groups",
                             "ready": 3,
                             "active": 0,
@@ -2655,6 +2716,20 @@
                             {
                               "code": "rollup-stalled",
                               "budget": 1800000,
+                              "observed": 0,
+                              "severity": "degraded"
+                            },
+                            {
+                              "code": "retention-lag",
+                              "budget": 21600000,
+                              "category": "taskIdentity",
+                              "observed": 0,
+                              "severity": "degraded"
+                            },
+                            {
+                              "code": "retention-lag",
+                              "budget": 21600000,
+                              "category": "terminalOutcome",
                               "observed": 0,
                               "severity": "degraded"
                             }
@@ -3320,17 +3395,17 @@
                             "totalBytes": 0
                           },
                           "retention": {
-                            "maxLagMs": null,
+                            "maxLagMs": 0,
                             "categories": [
                               {
-                                "lagMs": null,
+                                "lagMs": 0,
                                 "category": "taskIdentity",
                                 "retentionDays": 14,
                                 "oldestRetainedAt": "2026-01-01T00:00:00.000Z",
                                 "prunedByPartition": false
                               },
                               {
-                                "lagMs": null,
+                                "lagMs": 0,
                                 "category": "terminalOutcome",
                                 "retentionDays": 14,
                                 "oldestRetainedAt": "2026-01-01T00:00:00.000Z",
@@ -3365,7 +3440,7 @@
                                 "prunedByPartition": false
                               }
                             ],
-                            "maxLagCategory": null,
+                            "maxLagCategory": "string",
                             "policyUpdatedAt": "2026-01-01T00:00:00.000Z",
                             "oldestRetainedAt": "2026-01-01T00:00:00.000Z",
                             "defaultHistoryRows": {
@@ -3789,6 +3864,20 @@
                               "budget": 1800000,
                               "observed": 0,
                               "severity": "degraded"
+                            },
+                            {
+                              "code": "retention-lag",
+                              "budget": 21600000,
+                              "category": "taskIdentity",
+                              "observed": 0,
+                              "severity": "degraded"
+                            },
+                            {
+                              "code": "retention-lag",
+                              "budget": 21600000,
+                              "category": "terminalOutcome",
+                              "observed": 0,
+                              "severity": "degraded"
                             }
                           ],
                           "statistics": {
@@ -4010,7 +4099,7 @@
                     "value": {
                       "json": {
                         "eligible": {
-                          "terminalTasks": 0,
+                          "terminalTasks": 1,
                           "taskEvents": 0,
                           "attemptHistory": 0,
                           "scheduleOccurrences": 0,

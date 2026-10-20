@@ -31,6 +31,18 @@ with jitter, and does not move the regular heartbeat schedule. A busy answer nev
 lease watchdog, so a lease that stays busy until the watchdog ends is lost, as before. Old and new
 workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
 
+### The retention preview counts finished fast-tier tasks
+
+Before this release, the Go dashboard did not count a finished fast-tier task in the
+`terminalTasks` count of the retention preview. Its SQL read only `workhorse.task_outcome`, and
+Workhorse keeps the outcome of a fast-tier task in `workhorse.fast_task_outcome`. The dashboard now
+sends the shared `retention_policy_preview` statement, which reads both tables, as the TypeScript,
+Rust, Ruby, and JVM dashboards do (SM-1477).
+
+The Go dashboard also used the current policy value when the preview set a retention setting to
+`null`. A `null` setting disables its category, so the preview now counts no rows for it, as the
+TypeScript, Python, Ruby, and JVM dashboards do.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
