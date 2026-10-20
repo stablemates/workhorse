@@ -11,7 +11,7 @@ import java.util.Map;
  * <p>That text keeps the last of duplicate keys, puts a space after each {@code :} and {@code ,},
  * escapes strings as {@code JSON.stringify} does, and writes numbers in plain decimal notation
  * without the sign of a zero. Each number is measured from its own token, because {@code jsonb}
- * keeps the scale that a {@code double} loses. The input must be JSON that {@link Json#parse}
+ * keeps the scale that a {@code double} loses. The input must be JSON that {@link Json#parseExact}
  * accepts.
  */
 public final class JsonbSize {

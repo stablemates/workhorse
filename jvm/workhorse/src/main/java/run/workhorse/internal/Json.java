@@ -61,10 +61,13 @@ public final class Json {
    * double equal the token in value. Otherwise it is the {@code BigDecimal} of the token, and
    * {@link #write(Object)} writes its digits unchanged. So a value that a double cannot hold, such
    * as {@code 12345678901234567.89} or {@code 1E+400}, reaches PostgreSQL exactly. The parse
-   * refuses a {@code BigDecimal} that PostgreSQL's {@code numeric} type cannot store.
+   * refuses a {@code BigDecimal} that PostgreSQL's {@code numeric} type cannot store. It also
+   * refuses a {@code BigDecimal} with fraction digits outside the double range, because {@link
+   * #parse(String)} cannot read the stored value back.
    *
    * @throws IllegalArgumentException if the text is not one strict JSON value, or if it holds a
-   *     number token that is too long or outside the {@code numeric} range
+   *     number token that is too long, outside the {@code numeric} range, or a fraction outside the
+   *     double range
    */
   public static @Nullable Object parseExact(String text) {
     Parser parser = new Parser(text, MAX_NUMBER_LENGTH, true);
@@ -432,6 +435,11 @@ public final class Json {
       long integerDigits = (long) decimal.precision() - decimal.scale();
       if (integerDigits > MAX_INTEGER_DIGITS || decimal.scale() > MAX_FRACTION_DIGITS) {
         throw error("a number outside the numeric range");
+      }
+      // PostgreSQL writes such a value back with its fraction digits, and parse() refuses that text
+      // (SM-1537). A decimal without a fraction reads back as an integer.
+      if (decimal.scale() > 0 && !Double.isFinite(value)) {
+        throw error("a fraction outside the double range");
       }
       return decimal;
     }

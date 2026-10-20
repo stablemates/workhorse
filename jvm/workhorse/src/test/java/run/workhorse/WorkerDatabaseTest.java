@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -411,6 +412,206 @@ class WorkerDatabaseTest {
     Status status = status(taskId);
     assertEquals("failed", status.state(), "the attempt fails, and the worker keeps running");
     assertEquals("IllegalArgumentException", Json.object(json(status.error())).get("name"));
+  }
+
+  // SM-1537: a BigDecimal keeps every digit on the worker's write paths.
+
+  private static final BigDecimal AMOUNT = new BigDecimal("12345678901234567.89");
+
+  /** The text of the JSON value at {@code path} in the jsonb {@code column} of a task's row. */
+  private static @Nullable String storedText(String table, String column, UUID taskId, String path)
+      throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT "
+                    + column
+                    + " #>> ?::text[] FROM workhorse."
+                    + table
+                    + " WHERE task_id = ?::uuid")) {
+      statement.setString(1, "{" + path + "}");
+      statement.setString(2, taskId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        assertTrue(result.next(), "the " + table + " row exists");
+        return result.getString(1);
+      }
+    }
+  }
+
+  @Test
+  void storesEveryDigitOfADecimalInAResult() throws SQLException {
+    UUID taskId = enqueue("decimal", Map.of(), EnqueueOptions.builder().maxAttempts(1));
+
+    assertTrue(
+        worker()
+            .handle(
+                "decimal",
+                Object.class,
+                (ctx, p) ->
+                    Map.of(
+                        "amount",
+                        AMOUNT,
+                        "rate",
+                        0.1,
+                        "huge",
+                        new BigDecimal("1E+400"),
+                        "list",
+                        List.of(AMOUNT)))
+            .build()
+            .runOnce());
+
+    assertEquals("succeeded", status(taskId).state());
+    assertEquals(AMOUNT.toPlainString(), storedText("task_outcome", "result", taskId, "amount"));
+    assertEquals("0.1", storedText("task_outcome", "result", taskId, "rate"));
+    assertEquals(AMOUNT.toPlainString(), storedText("task_outcome", "result", taskId, "list,0"));
+    String huge = storedText("task_outcome", "result", taskId, "huge");
+    assertNotNull(huge);
+    assertEquals(0, new BigDecimal(huge).compareTo(new BigDecimal("1E+400")));
+  }
+
+  @Test
+  void validatesAnExactDecimalResultAgainstAContract() throws SQLException {
+    String taskType = "decimal-contract." + queueName;
+    queue.syncContracts(
+        Map.of(
+            taskType,
+            new TaskTypeContracts(
+                "v1",
+                Map.of(
+                    "v1",
+                    new TaskContractVersion(
+                        Map.of(),
+                        Map.of(
+                            "type",
+                            "object",
+                            "properties",
+                            Map.of("count", Map.of("type", "integer"))))))));
+    UUID whole = enqueue(taskType, Map.of("count", "12345678901234567.00"));
+    UUID fraction =
+        enqueue(
+            taskType,
+            Map.of("count", "12345678901234567.01"),
+            EnqueueOptions.builder().maxAttempts(1));
+
+    assertTrue(
+        worker()
+            .handle(
+                taskType,
+                Map.class,
+                (ctx, payload) -> Map.of("count", new BigDecimal((String) payload.get("count"))))
+            .build()
+            .runOnce());
+
+    assertEquals("succeeded", status(whole).state());
+    Status failed = status(fraction);
+    assertEquals("failed", failed.state(), "a double would round the fraction to an integer");
+    assertEquals("ContractValidationException", Json.object(json(failed.error())).get("name"));
+  }
+
+  @Test
+  void storesEveryDigitOfADecimalInACheckpointValue() throws SQLException {
+    UUID taskId = enqueue("decimal", Map.of());
+    AtomicReference<@Nullable Object> returned = new AtomicReference<>();
+
+    assertTrue(
+        worker()
+            .handle(
+                "decimal",
+                Object.class,
+                (ctx, p) -> {
+                  returned.set(
+                      ctx.checkpoint(
+                          "charge",
+                          Object.class,
+                          () -> Map.of("amount", AMOUNT, "huge", new BigDecimal("1E+400"))));
+                  return null;
+                })
+            .build()
+            .runOnce());
+
+    assertEquals("succeeded", status(taskId).state());
+    assertEquals(
+        AMOUNT.toPlainString(),
+        storedText("task_checkpoint", "checkpoint_value", taskId, "amount"));
+    String huge = storedText("task_checkpoint", "checkpoint_value", taskId, "huge");
+    assertNotNull(huge);
+    assertEquals(0, new BigDecimal(huge).compareTo(new BigDecimal("1E+400")));
+    Map<String, @Nullable Object> value = Json.object(returned.get());
+    assertNotNull(value);
+    assertEquals(
+        AMOUNT.doubleValue(),
+        value.get("amount"),
+        "the default codec decodes a fraction as a Double");
+  }
+
+  @Test
+  void storesEveryDigitOfADecimalInProgress() throws SQLException {
+    UUID taskId = enqueue("decimal", Map.of());
+    AtomicReference<@Nullable TaskProgress> saved = new AtomicReference<>();
+
+    assertTrue(
+        worker()
+            .handle(
+                "decimal",
+                Object.class,
+                (ctx, p) -> {
+                  saved.set(ctx.setProgress(Map.of("amount", AMOUNT)));
+                  return null;
+                })
+            .build()
+            .runOnce());
+
+    assertEquals("succeeded", status(taskId).state());
+    assertEquals(
+        AMOUNT.toPlainString(), storedText("task_progress", "progress_value", taskId, "amount"));
+    assertNotNull(saved.get());
+  }
+
+  @Test
+  void storesEveryDigitOfADecimalInAHumanWaitContext() throws SQLException {
+    UUID taskId = enqueue("decimal", Map.of());
+
+    assertTrue(
+        worker()
+            .handle(
+                "decimal",
+                Object.class,
+                (ctx, p) ->
+                    ctx.waitForHuman(
+                        "review", Map.of("amount", AMOUNT), Object.class, Duration.ofHours(1)))
+            .build()
+            .runOnce());
+
+    assertFalse(status(taskId).state().equals("succeeded"), "the task waits for the decision");
+    assertEquals(
+        AMOUNT.toPlainString(), storedText("task_human_wait", "context", taskId, "amount"));
+  }
+
+  @Test
+  void refusesACheckpointFractionThatTheWorkerCannotReadBack() throws SQLException {
+    UUID taskId = enqueue("decimal", Map.of(), EnqueueOptions.builder().maxAttempts(1));
+
+    assertTrue(
+        worker()
+            .handle(
+                "decimal",
+                Object.class,
+                (ctx, p) ->
+                    ctx.checkpoint(
+                        "charge",
+                        Object.class,
+                        () -> Map.of("amount", new BigDecimal("1E+400").setScale(2))))
+            .build()
+            .runOnce());
+
+    Status failed = status(taskId);
+    assertEquals("failed", failed.state(), "the attempt fails before PostgreSQL stores the value");
+    assertEquals("IllegalArgumentException", Json.object(json(failed.error())).get("name"));
+    assertEquals(
+        0,
+        count(
+            "SELECT count(*) FROM workhorse.task_checkpoint WHERE task_id = ?::uuid",
+            taskId.toString()));
   }
 
   // Bounded worker concurrency.
