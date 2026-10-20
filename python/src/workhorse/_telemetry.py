@@ -164,7 +164,9 @@ def _histogram(name: str, description: str, unit: str) -> _Histogram:
 _claimed = _counter("workhorse.tasks.claimed", "Tasks claimed for handler execution", "{task}")
 _completed = _counter("workhorse.tasks.completed", "Tasks completed under a valid lease", "{task}")
 _failed = _counter("workhorse.tasks.failed", "Handler failures submitted to PostgreSQL", "{task}")
-_retried = _counter("workhorse.tasks.retried", "Failed tasks returned to live work", "{task}")
+_retried = _counter(
+    "workhorse.tasks.retried", "Failed or expired tasks returned to live work", "{task}"
+)
 _expired_leases = _counter(
     "workhorse.leases.expired", "Expired leases recovered by maintenance", "{lease}"
 )

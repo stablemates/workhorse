@@ -1732,6 +1732,8 @@ async fn a_worker_runs_terminal_storage_maintenance() {
     assert!(observer.query_one(completed, &[]).await.unwrap().get::<_, bool>(0));
 }
 
+/// The worker records to the global provider with the units and attribute keys of the shared
+/// TypeScript catalog and the descriptions of `api/telemetry.txt`.
 #[cfg(feature = "opentelemetry")]
 #[tokio::test]
 async fn worker_metrics_reach_the_global_meter_provider() {
@@ -1749,24 +1751,123 @@ async fn worker_metrics_reach_the_global_meter_provider() {
     harness.enqueue("rust.metered", json!({}), EnqueueOptions::default()).await;
     assert!(worker.run_once().await.unwrap());
     provider.force_flush().unwrap();
-    let mut recorded = std::collections::BTreeSet::new();
+    let mut recorded = BTreeMap::new();
+    let mut descriptions = BTreeMap::new();
     for resource in exporter.get_finished_metrics().unwrap() {
         for scope in resource.scope_metrics() {
             for metric in scope.metrics() {
                 // Other tests share the global provider, so only this task type counts.
-                if format!("{:?}", metric.data()).contains("rust.metered") {
-                    recorded.insert(metric.name().to_owned());
+                let keys: std::collections::BTreeSet<String> = metric_points(metric.data())
+                    .into_iter()
+                    .filter(|point| {
+                        point.iter().any(|attribute| {
+                            attribute.key.as_str() == "workhorse.task.type"
+                                && attribute.value.as_str() == "rust.metered"
+                        })
+                    })
+                    .flatten()
+                    .map(|attribute| attribute.key.as_str().to_owned())
+                    .collect();
+                if !keys.is_empty() {
+                    descriptions.insert(metric.name().to_owned(), metric.description().to_owned());
+                    recorded.insert(
+                        metric.name().to_owned(),
+                        json!({ "unit": metric.unit(), "attributes": keys }),
+                    );
                 }
             }
         }
     }
+    let catalog = typescript_worker_metric_catalog();
+    let contract = contract_instrument_descriptions();
     for name in [
         "workhorse.tasks.claimed",
         "workhorse.tasks.completed",
         "workhorse.handler.executions",
         "workhorse.handler.duration",
+        "workhorse.handler.runtime",
     ] {
-        assert!(recorded.contains(name), "{name} missing from {recorded:?}");
+        assert!(recorded.contains_key(name), "{name} missing from {recorded:?}");
+    }
+    for (name, observed) in &recorded {
+        assert_eq!(Some(observed), catalog.get(name), "{name} differs from the catalog");
+        assert_eq!(descriptions.get(name), contract.get(name), "{name} description");
+    }
+}
+
+/// The description of each instrument in `api/telemetry.txt`.
+#[cfg(feature = "opentelemetry")]
+fn contract_instrument_descriptions() -> BTreeMap<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../api/telemetry.txt");
+    let contract = std::fs::read_to_string(path).unwrap();
+    let instruments = contract.split("## Instruments").nth(1).unwrap();
+    let instruments = instruments.split("## Spans").next().unwrap();
+    instruments
+        .lines()
+        .filter(|line| line.starts_with("workhorse."))
+        .map(|line| {
+            // A row is the name, the kind, the unit, and the description, split by spaces.
+            let mut rest = line;
+            let mut fields = Vec::new();
+            for _ in 0..3 {
+                let (field, tail) = rest.split_once(char::is_whitespace).unwrap();
+                fields.push(field);
+                rest = tail.trim_start();
+            }
+            (fields[0].to_owned(), rest.trim_end().to_owned())
+        })
+        .collect()
+}
+
+/// The unit and attribute keys of each worker instrument, as TypeScript records them.
+#[cfg(feature = "opentelemetry")]
+fn typescript_worker_metric_catalog() -> serde_json::Map<String, Value> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let output = std::process::Command::new("pnpm")
+        .args([
+            "exec",
+            "tsx",
+            "--conditions=workhorse-source",
+            "typescript/core/test/worker-telemetry-catalog.ts",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("pnpm runs the TypeScript metric catalog");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// The attributes of each data point in one exported metric.
+#[cfg(feature = "opentelemetry")]
+fn metric_points(
+    data: &opentelemetry_sdk::metrics::data::AggregatedMetrics,
+) -> Vec<Vec<opentelemetry::KeyValue>> {
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+    macro_rules! points {
+        ($data:expr) => {
+            match $data {
+                MetricData::Gauge(gauge) => {
+                    gauge.data_points().map(|point| point.attributes().cloned().collect()).collect()
+                }
+                MetricData::Sum(sum) => {
+                    sum.data_points().map(|point| point.attributes().cloned().collect()).collect()
+                }
+                MetricData::Histogram(histogram) => histogram
+                    .data_points()
+                    .map(|point| point.attributes().cloned().collect())
+                    .collect(),
+                MetricData::ExponentialHistogram(histogram) => histogram
+                    .data_points()
+                    .map(|point| point.attributes().cloned().collect())
+                    .collect(),
+            }
+        };
+    }
+    match data {
+        AggregatedMetrics::F64(data) => points!(data),
+        AggregatedMetrics::U64(data) => points!(data),
+        AggregatedMetrics::I64(data) => points!(data),
     }
 }
 

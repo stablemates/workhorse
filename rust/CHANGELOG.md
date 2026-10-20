@@ -100,6 +100,19 @@ when the request set a retention setting to `null` (SM-1509). A `null` setting d
 category, so the preview counted rows that the other SDK hosts do not count. The Rust host now uses
 the current value only when the request does not have the setting.
 
+### Worker telemetry matches `api/telemetry.txt`
+
+Before this release, the Rust worker added `workhorse.handler.outcome` to
+`workhorse.handler.runtime`. A chart of that counter by queue thus had one series for each outcome,
+and the series did not match the other SDKs (SM-1514). The counter now carries only
+`workhorse.queue.name` and `workhorse.task.type`. If a dashboard groups the Rust runtime counter by
+outcome, use `workhorse.handler.duration` or `workhorse.handler.executions` for that grouping.
+
+The `workhorse.handler.batch_dispatched` log record now names its linger
+`workhorse.handler.batch.linger_ms`, as the contract does. Before this release, it used the
+instrument name `workhorse.handler.batch.linger`. Each Rust instrument now also has the description
+from `api/telemetry.txt`.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

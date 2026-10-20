@@ -47,3 +47,20 @@ RSpec.describe "The workhorse.handler span" do
     expect(tracer.parents.fetch("workhorse.claim")).to eq(unrelated.context)
   end
 end
+
+RSpec.describe "The worker instruments" do
+  # The kind, unit, and description of each instrument in api/telemetry.txt.
+  let(:contract) do
+    text = File.read(File.expand_path("../../../api/telemetry.txt", __dir__))
+    rows = text.split("## Instruments", 2).last.split("## Spans", 2).first.lines
+    rows.map { |line| line.split(/\s+/, 4).map(&:strip) }
+      .select { |row| row.size == 4 && row.first.start_with?("workhorse.") }
+      .to_h { |name, kind, unit, description| [name, [kind.to_sym, description, unit]] }
+  end
+
+  it "match the kind, unit, and description in api/telemetry.txt" do
+    W::Telemetry.const_get(:INSTRUMENTS).each do |name, declared|
+      expect(declared).to eq(contract.fetch(name)), name
+    end
+  end
+end

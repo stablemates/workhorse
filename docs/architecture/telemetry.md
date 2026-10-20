@@ -88,6 +88,61 @@ It uses the same units and attribute keys as the TypeScript runtime. Recovery ca
 original queue and type from its aggregate SQL result. Thus its retry count uses `unknown` for both
 bounded dimensions. This matches the TypeScript fallback.
 
+### Rust worker metrics
+
+The Rust worker records metrics only when the crate's `opentelemetry` feature is on.
+`rust/src/telemetry.rs` binds the instruments to the global meter provider when the worker is
+built. The Rust worker emits these 12 instruments from the table:
+
+- `workhorse.tasks.claimed`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
+  `workhorse.tasks.retried`
+- `workhorse.leases.expired`
+- `workhorse.claim.duration`
+- all five `workhorse.handler.*` instruments
+- `workhorse.worker.heartbeat.failure`
+
+It uses the same units, descriptions, and attribute keys as the TypeScript runtime. The Rust worker
+does not record `workhorse.schedule.*`, `workhorse.maintenance.*`, enqueue, cancellation, or redrive
+instruments.
+
+Recovery adds one to `workhorse.tasks.retried` for each entry in the `retry_dimensions` of its
+result. An entry without a queue or a task type uses `unknown` for that attribute. A retry that
+`retry_dimensions` does not list adds nothing. The other workers count it with `unknown` for both
+attributes.
+
+### Ruby worker metrics
+
+The Ruby worker records metrics only when the application loads `opentelemetry-metrics-api` and a
+global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these 18 instruments:
+
+- `workhorse.tasks.claimed`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
+  `workhorse.tasks.retried`
+- `workhorse.leases.expired`
+- `workhorse.claim.duration`
+- all five `workhorse.handler.*` instruments
+- `workhorse.worker.heartbeat.failure`
+- `workhorse.schedule.fired` and `workhorse.schedule.lag`
+- `workhorse.maintenance.runs`, `workhorse.maintenance.rows`, `workhorse.maintenance.duration`, and
+  `workhorse.maintenance.errors`
+
+It uses the same units, descriptions, and attribute keys as the Python worker. Recovery uses
+`unknown` for the queue and the task type of a retry that its result does not attribute. The Ruby
+worker does not record `workhorse.maintenance.drift`, enqueue, cancellation, or redrive instruments.
+
+### JVM worker metrics
+
+The Java worker records metrics only when the application includes the optional OpenTelemetry API.
+By default, `run.workhorse.internal.telemetry.Telemetry` reads `GlobalOpenTelemetry` on each use.
+`WorkhorseTelemetry.of(OpenTelemetry)` gives an explicit instance instead. Without the API,
+telemetry does nothing and loads no OpenTelemetry code. The Kotlin module and the Spring Boot
+starter run the same Java worker.
+
+The Java worker emits the same 18 instruments as the Ruby worker. The `Instrument` enum declares
+them with the same units and descriptions, and `WorkerTelemetry` records the same attribute keys.
+Recovery uses `unknown` for the queue and the task type of a retry that its result does not
+attribute. The Java worker does not record
+`workhorse.maintenance.drift`, enqueue, cancellation, or redrive instruments.
+
 ### Metrics observer
 
 `WorkhorseMetricsObserver` is in `typescript/core/src/metrics-observer.ts`. It records its gauges
@@ -199,10 +254,14 @@ Each enqueue path stores a W3C trace context in the new task's `task.trace_conte
 - TypeScript `Queue.enqueueMany` creates `workhorse.enqueue` and injects that span's context.
 - Python `Queue.enqueue_many` and `AsyncQueue.enqueue_many` inject the active caller context.
 - Go `Queue.EnqueueMany` injects the active caller context.
+- Rust enqueue injects the active OpenTelemetry context when the `opentelemetry` feature is on.
+- Ruby `Queue` injects the active caller context when the application loads `opentelemetry-api`.
+- The Java `Queue` creates `workhorse.enqueue` and injects that span's context.
 
 Each language enforces 1,024 bytes before enqueue. The constants are TypeScript
-`MAX_TRACE_CONTEXT_BYTES`, Python `_telemetry.MAX_TRACE_CONTEXT_BYTES`, and Go
-`maxTraceContextBytes`.
+`MAX_TRACE_CONTEXT_BYTES`, Python `_telemetry.MAX_TRACE_CONTEXT_BYTES`, Go `maxTraceContextBytes`,
+Ruby `Telemetry::MAX_TRACE_CONTEXT_BYTES`, and Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`. Rust
+`queue::trace_context` checks the same limit inline.
 
 The `task.trace_context` column has these rules:
 
@@ -231,6 +290,8 @@ follows:
   under the caller's `tracing` span.
 - Ruby `Telemetry.span` starts a consumer span from `OpenTelemetry::Context.empty` and extracts a
   stored context onto it.
+- Java `OpenTelemetryTelemetry.consumerSpan` starts from `Context.root()` and extracts a stored
+  context onto it.
 
 Child tasks prefer the stored context of the parent task over the ambient handler context. Thus
 replay keeps the original trace chain.
@@ -264,7 +325,7 @@ so that SDK span limits can match it.
 
 #### Go spans
 
-The Go worker's `workhorse.handler` span carries these attributes:
+The Go worker emits only the `workhorse.handler` consumer span. It carries these attributes:
 
 - `workhorse.queue.name`
 - `workhorse.task.id`
@@ -274,9 +335,11 @@ The Go worker's `workhorse.handler` span carries these attributes:
 
 #### Python spans
 
-The synchronous Python worker emits `workhorse.claim`, `workhorse.handler`, `workhorse.heartbeat`,
-`workhorse.retry`, `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`. They
-have the same attributes and parent relationships as the TypeScript spans.
+The synchronous Python worker emits `workhorse.claim`, `workhorse.handler`, `workhorse.retry`,
+`workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`. They have the same
+attributes and parent relationships as the TypeScript spans. The Python worker does not emit
+`workhorse.heartbeat`. It records a rejected heartbeat only as a log record and in
+`workhorse.worker.heartbeat.failure`.
 
 `python/src/workhorse/_telemetry.py` exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8` and
 `METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2,000`.
@@ -286,6 +349,37 @@ these cases, worker behavior does not change:
 
 - If the API extra is absent, the module supplies local no-op instruments.
 - If the API is present without an SDK, the OpenTelemetry providers stay no-ops.
+
+#### Rust spans
+
+The Rust worker emits only the `workhorse.handler` consumer span. `telemetry::handler_span` creates
+it as a `tracing` span. With the `opentelemetry` feature, a `tracing-opentelemetry` layer that the
+application installs exports it. The span carries `workhorse.queue.name`, `workhorse.task.id`,
+`workhorse.task.type`, and `workhorse.task.attempt`. If the outcome is not `succeeded` or
+`unknown`, the worker sets the span status to error.
+
+The Rust worker does not emit `workhorse.enqueue`, `workhorse.claim`, `workhorse.complete`,
+`workhorse.retry`, `workhorse.heartbeat`, `workhorse.recovery`, `workhorse.maintenance`, or
+`workhorse.schedule.synchronize`.
+
+#### Ruby spans
+
+The Ruby worker emits `workhorse.claim`, `workhorse.handler`, `workhorse.retry`,
+`workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`. They have the same
+attributes and parent relationships as the Python spans. The worker emits spans only when the
+application loads `opentelemetry-api`. The Ruby queue emits no `workhorse.enqueue` span.
+
+#### JVM spans
+
+The Java worker and queue emit `workhorse.enqueue`, `workhorse.claim`, `workhorse.handler`,
+`workhorse.retry`, `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
+`run.workhorse.internal.telemetry.Names` declares these names. The `workhorse.enqueue` span has the
+TypeScript attributes: the queue when every request names one queue, the task type of a single
+request, and `workhorse.enqueue.count`.
+
+`run.workhorse.internal.telemetry.Telemetry` exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8` and
+`MAX_TRACE_CONTEXT_BYTES = 1,024`. The Java SDK does not emit `workhorse.heartbeat` or
+`workhorse.schedule.synchronize`.
 
 ### Structured logs
 

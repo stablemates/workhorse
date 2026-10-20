@@ -114,6 +114,12 @@ writes to PostgreSQL (ADR 0039). The validator replaces `minimum`, `maximum`, `e
 public API does not change. Python still reads a stored schema constant that a double cannot hold as
 a float (SM-1541).
 
+### The `workhorse.tasks.retried` description matches `api/telemetry.txt`
+
+The Python worker now describes `workhorse.tasks.retried` as "Failed or expired tasks returned to
+live work", as the contract does (SM-1514). The counter already counted expired tasks. Only the
+description changes.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

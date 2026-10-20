@@ -158,7 +158,8 @@ impl Inner {
             ("workhorse.handler.outcome", Attribute::Text(outcome)),
         ];
         self.metrics.add(Counter::HandlerExecutions, 1.0, &attributes);
-        self.metrics.add(Counter::HandlerRuntime, elapsed, &attributes);
+        // The runtime counter has no outcome, so each queue and task type is one series.
+        self.metrics.add(Counter::HandlerRuntime, elapsed, &attributes[..2]);
         self.metrics.record(Histogram::HandlerDuration, elapsed, &attributes);
         if outcome != "succeeded" && outcome != "unknown" {
             span.record("otel.status_code", "error");

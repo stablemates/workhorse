@@ -106,28 +106,66 @@ mod otel {
     impl Instruments {
         pub(super) fn new() -> Self {
             let meter = opentelemetry::global::meter("workhorse");
-            let counter = |name: &'static str, unit: &'static str| {
-                meter.u64_counter(name).with_unit(unit).build()
+            let counter = |name: &'static str, description: &'static str, unit: &'static str| {
+                meter.u64_counter(name).with_description(description).with_unit(unit).build()
             };
-            let histogram = |name: &'static str| meter.f64_histogram(name).with_unit("ms").build();
+            let histogram = |name: &'static str, description: &'static str| {
+                meter.f64_histogram(name).with_description(description).with_unit("ms").build()
+            };
             Self {
                 counters: vec![
-                    counter("workhorse.tasks.claimed", "{task}"),
-                    counter("workhorse.tasks.completed", "{task}"),
-                    counter("workhorse.tasks.failed", "{task}"),
-                    counter("workhorse.tasks.retried", "{task}"),
-                    counter("workhorse.leases.expired", "{lease}"),
-                    counter("workhorse.handler.executions", "{execution}"),
-                    counter("workhorse.worker.heartbeat.failure", "{heartbeat}"),
+                    counter(
+                        "workhorse.tasks.claimed",
+                        "Tasks claimed for handler execution",
+                        "{task}",
+                    ),
+                    counter(
+                        "workhorse.tasks.completed",
+                        "Tasks completed under a valid lease",
+                        "{task}",
+                    ),
+                    counter(
+                        "workhorse.tasks.failed",
+                        "Handler failures submitted to PostgreSQL",
+                        "{task}",
+                    ),
+                    counter(
+                        "workhorse.tasks.retried",
+                        "Failed or expired tasks returned to live work",
+                        "{task}",
+                    ),
+                    counter(
+                        "workhorse.leases.expired",
+                        "Expired leases recovered by maintenance",
+                        "{lease}",
+                    ),
+                    counter(
+                        "workhorse.handler.executions",
+                        "Worker handler activations by outcome",
+                        "{execution}",
+                    ),
+                    counter(
+                        "workhorse.worker.heartbeat.failure",
+                        "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
+                        "{heartbeat}",
+                    ),
                 ],
-                runtime: meter.f64_counter("workhorse.handler.runtime").with_unit("ms").build(),
+                runtime: meter
+                    .f64_counter("workhorse.handler.runtime")
+                    .with_description("Cumulative handler execution time")
+                    .with_unit("ms")
+                    .build(),
                 histograms: vec![
-                    histogram("workhorse.claim.duration"),
-                    histogram("workhorse.handler.duration"),
-                    histogram("workhorse.handler.batch.linger"),
+                    histogram("workhorse.claim.duration", "PostgreSQL claim operation latency"),
+                    histogram("workhorse.handler.duration", "Handler execution latency"),
+                    histogram(
+                        "workhorse.handler.batch.linger",
+                        "Time from the first batch member arriving until dispatch",
+                    ),
                 ],
                 batch_size: meter
                     .u64_histogram("workhorse.handler.batch.size")
+                    .with_description("Tasks delivered in one batch handler invocation")
                     .with_unit("{task}")
                     .build(),
             }

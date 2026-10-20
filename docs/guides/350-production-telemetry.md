@@ -110,7 +110,9 @@ difficult to limit and to remove.
 **Stored context.** `task.trace_context` holds `traceparent` and an optional `tracestate`.
 
 - Each language enforces 1,024 bytes before enqueue: TypeScript `MAX_TRACE_CONTEXT_BYTES`, Python
-  `_telemetry.MAX_TRACE_CONTEXT_BYTES`, and Go `maxTraceContextBytes`.
+  `_telemetry.MAX_TRACE_CONTEXT_BYTES`, Go `maxTraceContextBytes`, Ruby
+  `Telemetry::MAX_TRACE_CONTEXT_BYTES`, and Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`. Rust checks
+  the same limit inline.
 - The column is separate from `task.payload` and excluded from operator projections.
 - An idempotent replay keeps the first accepted context.
 - Workhorse never persists baggage.
@@ -124,7 +126,15 @@ difficult to limit and to remove.
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.queue.name`. Workhorse emits at most
 eight attributes on one span and exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8`.
 
-More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), and [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry).
+**Spans in other runtimes.** The other runtimes emit a subset of the TypeScript spans with the same
+names:
+
+- Python and Ruby workers: `workhorse.claim`, `workhorse.handler`, `workhorse.retry`,
+  `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
+- The Java queue and worker: the same six spans and `workhorse.enqueue`.
+- The Go and Rust workers: only `workhorse.handler`.
+
+More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](../architecture/telemetry.md#python-spans), [Telemetry: Go spans](../architecture/telemetry.md#go-spans), [Telemetry: Rust spans](../architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](../architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](../architecture/telemetry.md#jvm-spans), and [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry).
 
 </details>
 
