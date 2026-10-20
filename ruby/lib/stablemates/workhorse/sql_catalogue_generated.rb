@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 72
-      MAXIMUM_SCHEMA_VERSION = 72
+      MINIMUM_SCHEMA_VERSION = 73
+      MAXIMUM_SCHEMA_VERSION = 73
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -137,6 +137,9 @@ module Stablemates
 
       # `heartbeat_v1` (protocol)
       HEARTBEAT_V1 = 'SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status'
+
+      # `heartbeat_v2` (protocol)
+      HEARTBEAT_V2 = 'SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status'
 
       # `list_checkpoint` (internal)
       LIST_CHECKPOINT = 'SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text'

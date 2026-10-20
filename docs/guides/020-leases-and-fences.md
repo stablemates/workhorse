@@ -90,13 +90,14 @@ phrase means that the write occurs only if the worker still owns the task.
 These functions lock the exact active `task_id`, `worker_id`, and `fence_token` row before they
 write:
 
-- `heartbeat_v1`, `heartbeat_many_v1`, and `heartbeat_many_v2`;
+- `heartbeat_v1`, `heartbeat_v2`, `heartbeat_many_v1`, and `heartbeat_many_v2`;
 - `complete_v1` and `fail_v1`;
 - `schedule_wait_v1`, `wait_for_signal_v1`, and `wait_for_human_v1`;
 - `update_progress_v1` and `save_checkpoint_v1`.
 
-A mismatch writes nothing. A heartbeat reports it as `stale`. `heartbeat_many_v2` does not wait for
-a row that another transaction locks. It reports that lease as `busy` and writes nothing.
+A mismatch writes nothing. A heartbeat reports it as `stale`. `heartbeat_v2` and `heartbeat_many_v2`
+do not wait for a row that another transaction locks. They report that lease as `busy` and write
+nothing.
 
 More detail: [Task lifecycle: Terminal transitions](../architecture/lifecycle.md#terminal-transitions).
 
@@ -178,7 +179,8 @@ both be busy before the watchdog ends at 30 s. Busy retries run between them.
 
 `SKIP LOCKED` does not stop every wait: an update-chain wait can still occur, and the round
 deadline bounds it. `heartbeat_v1` and a custom `WorkerQueueApi` without `heartbeatMany` still wait
-for a row lock and never report `busy`.
+for a row lock and never report `busy`. TypeScript `Queue.tryHeartbeat()` calls `heartbeat_v2`,
+which renews one lease by the rule of `heartbeat_many_v2`, but it has no busy retry.
 
 More detail: [Task lifecycle: Batched renewal](../architecture/lifecycle.md#batched-renewal), [Task lifecycle: A renewal that meets a lock](../architecture/lifecycle.md#a-renewal-that-meets-a-lock), [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry), and [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval).
 
@@ -196,6 +198,10 @@ More detail: [Task lifecycle: Batched renewal](../architecture/lifecycle.md#batc
 - The function returns `(ordinal, task_id, status)` in input order.
 
 `heartbeat_many_v1` has the same input. It waits for a locked row and never returns `busy`.
+
+**`heartbeat_v2(p_task_id, p_worker_id, p_fence_token, p_lease_ms)`** renews one lease. It returns
+the status that `heartbeat_many_v2` gives that lease, and `stale` for a null task ID or fence token.
+`heartbeat_v1` takes the same input. It waits for a locked row and never returns `busy`.
 
 **Schedule.** A round falls due one heartbeat interval after the previous round started. Only one
 round is in flight at a time. A round that ends after its next slot starts one overdue round, and
@@ -220,16 +226,16 @@ transaction. Before the statement, the round sets `statement_timeout` to one hal
 before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
 the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`.
 
-**Statuses** (`heartbeat_v1` and `heartbeat_many_v2`)
+**Statuses** (`heartbeat_v1`, `heartbeat_v2`, and `heartbeat_many_v2`)
 
-| Status              | Effect                                                      |
-| ------------------- | ----------------------------------------------------------- |
-| `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`. |
-| `busy`              | No change. Only `heartbeat_many_v2` returns it.             |
-| `cancel_requested`  | No change.                                                  |
-| `deadline_exceeded` | No change.                                                  |
-| `timeout_exceeded`  | No change.                                                  |
-| `stale`             | No change. The worker no longer owns this fence.            |
+| Status              | Effect                                                            |
+| ------------------- | ----------------------------------------------------------------- |
+| `accepted`          | Updates the heartbeat time, `expires_at`, and `updated_at`.       |
+| `busy`              | No change. Only `heartbeat_v2` and `heartbeat_many_v2` return it. |
+| `cancel_requested`  | No change.                                                        |
+| `deadline_exceeded` | No change.                                                        |
+| `timeout_exceeded`  | No change.                                                        |
+| `stale`             | No change. The worker no longer owns this fence.                  |
 
 **Lease watchdog.** Each attempt also keeps a local countdown. It starts when the claim request
 leaves. Every `accepted` heartbeat restarts it from the moment that round's request left. A `busy` answer

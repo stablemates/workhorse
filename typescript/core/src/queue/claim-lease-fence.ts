@@ -341,16 +341,39 @@ export class ClaimLeaseFenceModule extends QueueModule {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
+    // heartbeat_v1 waits for a row lock that another transaction holds, so it never reports busy.
+    return (await this.heartbeatOneLease(
+      "heartbeat_v1",
+      task,
+      workerId,
+      leaseMs,
+    )) as HeartbeatStatus;
+  }
+
+  async tryHeartbeat(
+    task: ClaimedTask,
+    workerId: string,
+    leaseMs = 30_000,
+  ): Promise<HeartbeatBatchStatus> {
+    return this.heartbeatOneLease("heartbeat_v2", task, workerId, leaseMs);
+  }
+
+  private async heartbeatOneLease(
+    statement: "heartbeat_v1" | "heartbeat_v2",
+    task: ClaimedTask,
+    workerId: string,
+    leaseMs: number,
+  ): Promise<HeartbeatBatchStatus> {
     return withSpan("workhorse.heartbeat", taskSpanAttributes(task), async (span) => {
       const lease = FencedLease.from(task, workerId);
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
-      const result = await queryFencedWrite<{ status: HeartbeatStatus }>(
+      const result = await queryFencedWrite<{ status: HeartbeatBatchStatus }>(
         this.context.database,
-        SQL_STATEMENTS["heartbeat_v1"],
+        SQL_STATEMENTS[statement],
         [...lease.sqlParameters, leaseMs],
       );
-      const status = expectOneRow(result, "workhorse.heartbeat_v1").status;
+      const status = expectOneRow(result, `workhorse.${statement}`).status;
       span.setAttribute("workhorse.heartbeat.status", status);
       if (status !== "accepted") {
         recordHeartbeatFailure(status);

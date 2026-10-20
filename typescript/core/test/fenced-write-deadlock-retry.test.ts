@@ -50,6 +50,7 @@ const fencedWrites: Array<[string, QueryResultRow, (queue: Queue) => Promise<unk
   ["complete_v1", { accepted: true }, (queue) => queue.complete(task, "worker", null)],
   ["fail_v1", { state: "failed" }, (queue) => queue.fail(task, "worker", new Error("failed"))],
   ["heartbeat_v1", { status: "accepted" }, (queue) => queue.heartbeat(task, "worker")],
+  ["heartbeat_v2", { status: "busy" }, (queue) => queue.tryHeartbeat(task, "worker")],
   ["acknowledge_cancel_v1", { accepted: true }, (queue) => queue.acknowledgeCancel(task, "worker")],
   [
     "update_progress_v1",

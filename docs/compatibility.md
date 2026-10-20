@@ -434,7 +434,7 @@ rest are optional TypeScript packages.
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK declare no TypeScript peer
-range. SQL protocol 5 and schema version 72 are their compatibility boundary instead. Their version numbers
+range. SQL protocol 5 and schema version 73 are their compatibility boundary instead. Their version numbers
 still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
@@ -1361,29 +1361,32 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 
 0.9.0 renews leases through `heartbeat_many_v2`, which does not wait for a locked
 task row ([ADR 0105](decisions/0105-skip-a-locked-row-in-a-heartbeat-and-report-the-lease-as-busy.md)).
-Its SDKs call the new function, so the schema floor rises. The upgrade is a rolling deployment, and
-a mixed fleet is supported while it runs.
+It also adds `heartbeat_v2`, which renews one lease by the same rule. Its SDKs call the new
+functions, so the schema floor rises. The upgrade is a rolling deployment, and a mixed fleet is
+supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0073 through 0073 and leaves the schema at
-   version 72.
+1. Run `workhorse schema migrate`. It applies migrations 0073 through 0074 and leaves the schema at
+   version 73.
 2. Roll out the new processes, producers too.
 
-A 0.8.0 database is at schema version 71. The migration only adds:
+A 0.8.0 database is at schema version 71. The migrations only add:
 
-| Migration                                   | Schema version | Adds                                                        |
-| ------------------------------------------- | -------------- | ----------------------------------------------------------- |
-| `0073-skip-a-locked-row-in-a-heartbeat.sql` | 72             | `heartbeat_many_v2`, which reports a locked lease as `busy` |
+| Migration                                             | Schema version | Adds                                                        |
+| ----------------------------------------------------- | -------------- | ----------------------------------------------------------- |
+| `0073-skip-a-locked-row-in-a-heartbeat.sql`           | 72             | `heartbeat_many_v2`, which reports a locked lease as `busy` |
+| `0074-skip-a-locked-row-in-a-one-lease-heartbeat.sql` | 73             | `heartbeat_v2`, which reports a locked lease as `busy`      |
 
-The SDK schema floor rises from 69 to 72. Every SDK statement catalogue names `heartbeat_many_v2`.
-A new process refuses a schema below version 72 at startup. Thus the migration must run before the
-first new process starts. 0.9.0 freezes `sql/releases/0072.sql`.
+The SDK schema floor rises from 69 to 73. Every SDK statement catalogue names `heartbeat_many_v2`
+and `heartbeat_v2`. A new process refuses a schema below version 73 at startup. Thus the migrations
+must run before the first new process starts. 0.9.0 freezes `sql/releases/0073.sql`.
 
-A 0.8 process keeps working on schema version 72. It calls `heartbeat_many_v1`, which does not
-change, so it still waits for a locked row. A new worker calls `heartbeat_many_v2` and does not
-wait. Both renew the same columns.
+A 0.8 process keeps working on schema version 73. It calls `heartbeat_many_v1` and `heartbeat_v1`,
+which do not change, so it still waits for a locked row. A new worker calls `heartbeat_many_v2` and
+does not wait. Both renew the same columns.
 
 The TypeScript return type of the batched heartbeat surfaces gains `busy`, as
-[`CHANGELOG.md`](../CHANGELOG.md) states.
+[`CHANGELOG.md`](../CHANGELOG.md) states. The new `Queue.tryHeartbeat` calls `heartbeat_v2`.
+`Queue.heartbeat` and `Queue.heartbeatStatus` still call `heartbeat_v1` and wait for a locked row.
 
 ## Upgrade from 0.7.x to 0.8.0
 

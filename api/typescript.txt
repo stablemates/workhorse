@@ -3615,7 +3615,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 72;
+const MAXIMUM_SCHEMA_VERSION = 73;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3693,7 +3693,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 72;
+const MINIMUM_SCHEMA_VERSION = 73;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -4018,6 +4018,14 @@ class Queue {
   }): Promise<ClaimedTask<TPayload>[]>;
   heartbeat(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<boolean>;
   heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  /**
+  * Renew one lease without a wait for a row lock that another transaction holds.
+  *
+  * The result is a {@link HeartbeatStatus} or `busy`. `busy` means that another transaction
+  * locks the row: Workhorse did not renew the lease and gives no ownership verdict. Call again
+  * later. {@link Queue.heartbeat} and {@link Queue.heartbeatStatus} wait for the lock instead.
+  */
+  tryHeartbeat(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatBatchStatus>;
   expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
   /** Give an owned task back to its queue with its attempt intact. */
   releaseOwned(task: ClaimedTask, workerId: string): Promise<ReleaseOwnedStatus>;
@@ -5329,7 +5337,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 72;
+const WORKHORSE_SCHEMA_VERSION = 73;
 
 const WORKHORSE_VERSION = "0.9.0";
 

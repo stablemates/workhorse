@@ -22,15 +22,16 @@ upgrade steps.
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
 
-Requires **schema v72**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+Requires **schema v73**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migration 0073 moves the schema to version **72**.
-The SDK compatibility floor rises from 69 to **72**, because every SDK statement catalogue now names
-`heartbeat_many_v2`. An updated process refuses a schema below version 72 at startup. A 0.8 process
-keeps working on version 72, because a migration inside a major line only adds.
+process of this release starts, producers too. Migrations 0073 and 0074 move the schema to version
+**73**. The SDK compatibility floor rises from 69 to **73**, because every SDK statement catalogue
+now names `heartbeat_many_v2` and `heartbeat_v2`. An updated process refuses a schema below version
+73 at startup. A 0.8 process keeps working on version 73, because a migration inside a major line
+only adds.
 
 ### Heartbeats do not wait for a locked task row
 
@@ -50,6 +51,13 @@ unchanged. Code that reads its result and checks every status must handle `busy`
 no verdict". The scalar `HeartbeatStatus`, `Queue.heartbeat()`, and `Queue.heartbeatStatus()` do
 not change, and they still wait for a row lock. A `Worker` with a custom `WorkerQueueApi` that has
 no `heartbeatMany` renews through `heartbeatStatus`, so it never sees `busy`.
+
+**New: `Queue.tryHeartbeat()`.** Migration 0074 adds `heartbeat_v2`, a one-lease successor of
+`heartbeat_v1` (SM-1461). It renews one lease by the rule of `heartbeat_many_v2`: it skips a locked
+row and reports the lease as `busy`. `Queue.tryHeartbeat(task, workerId, leaseMs?)` calls it and
+returns a `HeartbeatBatchStatus`. On `busy`, call it again later. `Queue.heartbeat()`,
+`Queue.heartbeatStatus()`, and `heartbeat_v1` do not change. A custom `WorkerQueueApi` should
+implement `heartbeatMany` to get the busy retry.
 
 ### Heartbeat rounds keep a renewal margin and end on the server
 

@@ -1077,6 +1077,19 @@ Since migration 0051 (schema version 50), it reads `clock_timestamp()` after the
 The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or
 `stale`. It changes heartbeat, expiry, and `updated_at` only for `accepted`.
 
+`heartbeat_v2(p_task_id, p_worker_id, p_fence_token, p_lease_ms)` renews one lease without a wait
+for a row lock. Migration 0074 (schema version 73) adds it, and TypeScript `Queue.tryHeartbeat()`
+calls it.
+
+1. It checks `p_worker_id` and `p_lease_ms` as `heartbeat_v1` does, with the same errors. The
+   default lease is 30000 ms.
+2. If `p_task_id` or `p_fence_token` is null, it returns `stale`, as `heartbeat_v1` does.
+3. Else it returns the status that `heartbeat_many_v2` gives the one lease. Thus it has the lock
+   step, the clock rule, the filters, and the `busy` rule of [Batched renewal](#batched-renewal), on
+   both tiers.
+
+`heartbeat_v1` does not change. It stays for callers that do not know `busy`.
+
 #### Batched renewal
 
 `heartbeat_many_v2(p_worker_id, p_leases jsonb)` accepts 1 through 100
@@ -1209,10 +1222,12 @@ time of each round. If no round locks the row by 30 s, the watchdog ends the att
 [Lease watchdog](#lease-watchdog) describes. Settlement then records `lease_lost`.
 
 **Paths outside the busy retry.** `heartbeat_v1`, which TypeScript `Queue.heartbeat()` and
-`Queue.heartbeatStatus()` call, renews one lease and still waits for a row lock. A TypeScript
-`Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` renews each lease through
-`heartbeatStatus`. That path never reports `busy`, and it can wait. The built-in `Queue` always has
-`heartbeatMany`. SM-1461 owns a successor for the single-lease path.
+`Queue.heartbeatStatus()` call, renews one lease and still waits for a row lock.
+`Queue.tryHeartbeat()` calls `heartbeat_v2` and does not wait, but it has no busy retry: on `busy`,
+the caller decides when to call again. A TypeScript `Worker` with a custom `WorkerQueueApi` that has
+no `heartbeatMany` renews each lease through `heartbeatStatus`. That path never reports `busy`, and
+it can wait. To get the busy rule and the busy retry, a custom `WorkerQueueApi` must implement
+`heartbeatMany`. The built-in `Queue` always has `heartbeatMany`.
 
 #### Lease watchdog
 

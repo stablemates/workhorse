@@ -536,7 +536,7 @@ as a second protection. It still covers:
 `fail_v1`, `timeout_owned_v1`, `expire_owned_v1`, `heartbeat_v1`, `heartbeat_many_v1`,
 `release_owned_v1`, and `acknowledge_cancel_v1` branch to their fast-tier helpers.
 `heartbeat_many_v2` updates `fast_task_runtime` itself, as `fast_heartbeat_many_v1` does, and calls
-no helper:
+no helper. `heartbeat_v2` calls `heartbeat_many_v2` for its one lease. The helpers are:
 
 - `fast_fail_v1(task, worker, fence, error, retry_delay_ms)` redacts the error and either retries
   through the PostgreSQL delay selector and `fast_retry_v1`, or closes the task `failed` with null

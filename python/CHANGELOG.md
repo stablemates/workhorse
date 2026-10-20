@@ -12,15 +12,16 @@ adds.
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
 
-Requires **schema v72** and Python **3.12** or newer.
+Requires **schema v73** and Python **3.12** or newer.
 
 ### Upgrade steps
 
 **Migrate the schema before starting updated processes.** Run `workhorse schema migrate` before any
-process of this release starts, producers too. Migration 0073 moves the schema to version **72**.
-The SDK compatibility floor rises from 69 to **72**, because every SDK statement catalogue now names
-`heartbeat_many_v2`. An updated process refuses a schema below version 72 at startup. A 0.8 process
-keeps working on version 72, because a migration inside a major line only adds.
+process of this release starts, producers too. Migrations 0073 and 0074 move the schema to version
+**73**. The SDK compatibility floor rises from 69 to **73**, because every SDK statement catalogue
+now names `heartbeat_many_v2` and `heartbeat_v2`. An updated process refuses a schema below version
+73 at startup. A 0.8 process keeps working on version 73, because a migration inside a major line
+only adds.
 
 ### Heartbeats do not wait for a locked task row
 
@@ -35,6 +36,10 @@ workers can run together: an old worker keeps calling `heartbeat_many_v1`, which
 
 The `heartbeat_many` statement binding now names `heartbeat_many_v2`, and its rows can carry the
 status `busy`. The synchronous psycopg, asynchronous psycopg, and asyncpg workers handle it.
+
+**One-lease heartbeat without a row lock wait.** Migration 0074 adds `heartbeat_v2` (SM-1461). It
+renews one lease by the rule of `heartbeat_many_v2`, so it reports a locked row as `busy`. This SDK
+names it in its statement catalogue but does not call it. `heartbeat_v1` does not change.
 
 ### The retention preview counts finished fast-tier tasks
 

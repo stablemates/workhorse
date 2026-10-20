@@ -297,7 +297,7 @@ describe("0.8.0 release notes", () => {
   });
 });
 
-/** The 0.9.0 release: the first entry whose notes cover migration 0073 and the JVM SDK. */
+/** The 0.9.0 release: the first entry whose notes cover migrations 0073 and 0074 and the JVM SDK. */
 const heartbeats = "## 0.9.0 — 2026-10-20";
 
 describe("0.9.0 release notes", () => {
@@ -307,23 +307,24 @@ describe("0.9.0 release notes", () => {
     const section = entry(path, heartbeats);
 
     it("states the current schema, compatibility floor, and migration before rollout", () => {
-      expect(section).toMatch(/^Requires \*\*schema v72\*\*/m);
-      expect(section).toMatch(phrase("Migration 0073 moves the schema to version **72**"));
-      expect(section).toMatch(phrase("compatibility floor rises from 69 to **72**"));
+      expect(section).toMatch(/^Requires \*\*schema v73\*\*/m);
+      expect(section).toMatch(phrase("Migrations 0073 and 0074 move the schema to version **73**"));
+      expect(section).toMatch(phrase("compatibility floor rises from 69 to **73**"));
       expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
     });
   });
 
   it("names every migration added after 0.8.0 in the root notes", () => {
-    // 0.8.0 shipped schema version 71, and 0.9.0 ships 72, so migration 0073 is new in 0.9.0.
+    // 0.8.0 shipped schema version 71, and 0.9.0 ships 73, so migrations 0073 and 0074 are new
+    // in 0.9.0.
     const section = entry("CHANGELOG.md", heartbeats);
     const added = readdirSync(join(root, "sql/migrations"))
       .map((name) => /^(\d{4})-/.exec(name)?.[1])
       .filter(
         (number): number is string =>
-          number !== undefined && Number(number) > 72 && Number(number) <= 73,
+          number !== undefined && Number(number) > 72 && Number(number) <= 74,
       );
-    expect(added).toEqual(["0073"]);
+    expect(added).toEqual(["0073", "0074"]);
     for (const number of added) expect(section, `migration ${number}`).toContain(number);
   });
 
@@ -336,9 +337,9 @@ describe("0.9.0 release notes", () => {
   it("state the three JVM artifacts, the schema, and the Java and PostgreSQL floors", () => {
     const section = entry("jvm/CHANGELOG.md", heartbeats);
     expect(section).toMatch(
-      /^Requires \*\*schema v72\*\*, Java \*\*21\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m,
+      /^Requires \*\*schema v73\*\*, Java \*\*21\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m,
     );
-    expect(section).toMatch(phrase("compatibility floor is schema version **72**"));
+    expect(section).toMatch(phrase("compatibility floor is schema version **73**"));
     for (const artifact of ["workhorse", "workhorse-kotlin", "workhorse-spring-boot-starter"]) {
       expect(section).toContain(`\`${artifact}\``);
     }

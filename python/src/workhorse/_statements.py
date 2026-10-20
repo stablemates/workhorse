@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 72
-MAXIMUM_SCHEMA_VERSION = 72
+MINIMUM_SCHEMA_VERSION = 73
+MAXIMUM_SCHEMA_VERSION = 73
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -126,6 +126,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "heartbeat_v1": (
         "SELECT workhorse.heartbeat_v1(%s::uuid, %s::text, %s::bigint, %s::integer) AS status",
         "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+    ),
+    "heartbeat_v2": (
+        "SELECT workhorse.heartbeat_v2(%s::uuid, %s::text, %s::bigint, %s::integer) AS status",
+        "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
     ),
     "list_checkpoint": (
         "SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = %s::uuid AND checkpoint_name = %s::text",

@@ -683,6 +683,21 @@ export class Queue {
     return this.modules.claimLeaseFence.heartbeatStatus(task, workerId, leaseMs);
   }
 
+  /**
+   * Renew one lease without a wait for a row lock that another transaction holds.
+   *
+   * The result is a {@link HeartbeatStatus} or `busy`. `busy` means that another transaction
+   * locks the row: Workhorse did not renew the lease and gives no ownership verdict. Call again
+   * later. {@link Queue.heartbeat} and {@link Queue.heartbeatStatus} wait for the lock instead.
+   */
+  async tryHeartbeat(
+    task: ClaimedTask,
+    workerId: string,
+    leaseMs = 30_000,
+  ): Promise<HeartbeatBatchStatus> {
+    return this.modules.claimLeaseFence.tryHeartbeat(task, workerId, leaseMs);
+  }
+
   /** @internal Renew every active lease owned by one worker in a single statement. */
   async heartbeatMany(
     tasks: readonly ClaimedTask[],

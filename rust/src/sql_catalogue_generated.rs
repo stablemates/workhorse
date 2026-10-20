@@ -5,8 +5,8 @@
 pub const CLIENT_PROTOCOL_VERSION: i32 = 5;
 pub const MINIMUM_PROTOCOL_VERSION: i32 = 5;
 pub const MAXIMUM_PROTOCOL_VERSION: i32 = 5;
-pub const MINIMUM_SCHEMA_VERSION: i32 = 72;
-pub const MAXIMUM_SCHEMA_VERSION: i32 = 72;
+pub const MINIMUM_SCHEMA_VERSION: i32 = 73;
+pub const MAXIMUM_SCHEMA_VERSION: i32 = 73;
 /// PostgreSQL's atomic enqueue batch limit.
 pub const MAX_ENQUEUE_BATCH_SIZE: usize = 1000;
 pub const DEFAULT_TASK_VALUE_MAX_BYTES: i64 = 1048576;
@@ -140,6 +140,10 @@ pub const HEARTBEAT_MANY_V2: &str = r#"SELECT task_id::text AS task_id, status F
 /// `heartbeat_v1` (protocol)
 pub const HEARTBEAT_V1: &str =
     r#"SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status"#;
+
+/// `heartbeat_v2` (protocol)
+pub const HEARTBEAT_V2: &str =
+    r#"SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"#;
 
 /// `list_checkpoint` (internal)
 pub const LIST_CHECKPOINT: &str = r#"SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text"#;
