@@ -50,6 +50,7 @@ dev = [
   "pydantic-ai-slim==2.57.0",
   "pytest>=8.4,<10",
   "pytest-asyncio>=1.2,<2",
+  "pytest-xdist>=3.8,<4",
   "ruff>=0.12,<1",
   "sqlalchemy[asyncio]>=2,<3",
   "tomli>=2.2,<3",

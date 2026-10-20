@@ -1,14 +1,16 @@
 from __future__ import annotations
 # ruff: noqa
 
+import functools
 import hashlib
 import os
 import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import asyncpg
 import psycopg
@@ -20,10 +22,17 @@ from distributions import BUILD_CONSTRAINTS, install_distribution
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Keep every test that provisions PostgreSQL out of the fast unit lane."""
+    """Keep every test that provisions PostgreSQL out of the fast unit lane.
+
+    Under ``pytest -n --dist loadgroup``, also send every test that uses the built distributions
+    to one worker process, so that only one process builds and installs them.
+    """
     for item in items:
-        if "database_url" in getattr(item, "fixturenames", ()):
+        fixtures = getattr(item, "fixturenames", ())
+        if "database_url" in fixtures:
             item.add_marker(pytest.mark.integration)
+        if "built_distributions" in fixtures:
+            item.add_marker(pytest.mark.xdist_group("built_distributions"))
 
 
 REPOSITORY = Path(__file__).parents[2]
@@ -102,11 +111,12 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     admin_url = urlunsplit(parsed._replace(path="/postgres"))
     isolated_url = urlunsplit(parsed._replace(path=f"/{database_name}"))
     with psycopg.connect(admin_url, autocommit=True) as admin:
+        template_name = ensure_schema_template(admin, parsed)
         drop_scratch_database(admin, database_name)
-        admin.execute(f'CREATE DATABASE "{database_name}"')
+        admin.execute(f'CREATE DATABASE "{database_name}" TEMPLATE "{template_name}"')
     try:
         with psycopg.connect(isolated_url, autocommit=True) as connection:
-            connection.execute((REPOSITORY / "sql/schema/current.sql").read_text())
+            connection.execute(REFRESH_INSTALL_CLOCK)
         yield isolated_url
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
@@ -116,6 +126,92 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
                 raise RuntimeError(
                     f"could not drop scratch database {database_name}; run pnpm db:sweep"
                 ) from error
+
+
+SCHEMA = REPOSITORY / "sql/schema/current.sql"
+
+# Shared with `typescript/core/test/support/schema-template.ts`. Both suites install the same
+# `current.sql`, so they share one template, and `pnpm db:sweep` keeps it and retires the others.
+SCHEMA_TEMPLATE_PREFIX = "workhorse_test_template_"
+
+# The install seeds these values from the clock. A copy of the template has the values of the
+# moment the template was built, so set them again as `current.sql` sets them. The list holds
+# every seeded row with a `clock_timestamp()` default and every clock-derived seed value.
+REFRESH_INSTALL_CLOCK = """
+UPDATE workhorse.schema_version SET installed_at = clock_timestamp();
+UPDATE workhorse.schema_migration SET applied_at = clock_timestamp();
+UPDATE workhorse.protocol_version SET recorded_at = clock_timestamp();
+UPDATE workhorse.maintenance_policy SET updated_at = clock_timestamp();
+UPDATE workhorse.queue_health_policy SET updated_at = clock_timestamp();
+UPDATE workhorse.maintenance_state SET updated_at = clock_timestamp();
+UPDATE workhorse.cold_export_policy SET updated_at = clock_timestamp();
+UPDATE workhorse.retention_policy SET updated_at = clock_timestamp();
+UPDATE workhorse.task_stat_state
+   SET updated_at = clock_timestamp(),
+       rolled_up_through = date_bin(
+         '1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
+       ),
+       hourly_rolled_up_through = date_bin(
+         '1 hour', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
+       ),
+       daily_rolled_up_through = date_bin(
+         '1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
+       )
+ WHERE singleton;
+UPDATE workhorse.maintenance_state
+   SET history_retained_before = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
+         AT TIME ZONE 'UTC' - interval '14 days'
+ WHERE routine_name = 'history_retention';
+SELECT workhorse.create_history_day_v1(
+         ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
+       )
+  FROM workhorse.maintenance_policy policy
+  CROSS JOIN generate_series(
+    0, workhorse.history_partition_horizon_days_v1(policy.partition_preparation_interval_ms)
+  ) AS days(day_offset)
+ WHERE policy.singleton;
+"""
+
+
+@functools.cache
+def schema_digest() -> str:
+    return hashlib.sha256(SCHEMA.read_bytes()).hexdigest()[:16]
+
+
+def schema_template_name() -> str:
+    """The name `schemaTemplateName` gives the current schema on the current UTC day."""
+    utc_day = datetime.now(UTC).strftime("%Y%m%d")
+    return f"{SCHEMA_TEMPLATE_PREFIX}{schema_digest()}_{utc_day}"
+
+
+def ensure_schema_template(admin: psycopg.Connection, source: SplitResult) -> str:
+    """Install ``current.sql`` once into a template database, as ``ensureSchemaTemplate`` does.
+
+    A copy of the template costs much less than a new install of the 1 MB schema in each test.
+    The advisory lock and the staging name let a TypeScript run build the same template at the
+    same time: the first builder renames a complete staging database, and the other one reuses it.
+    """
+    name = schema_template_name()
+    staging_name = f"{name}_building"
+    admin.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (name,))
+    try:
+        existing = admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+        if existing.fetchone() is not None:
+            return name
+        drop_scratch_database(admin, staging_name)
+        admin.execute(f'CREATE DATABASE "{staging_name}"')
+        try:
+            with psycopg.connect(
+                urlunsplit(source._replace(path=f"/{staging_name}")), autocommit=True
+            ) as staging:
+                staging.execute(SCHEMA.read_text())
+        except BaseException:
+            drop_scratch_database(admin, staging_name)
+            raise
+        admin.execute(f'ALTER DATABASE "{staging_name}" RENAME TO "{name}"')
+        return name
+    finally:
+        admin.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (name,))
 
 
 # Drop attempts before giving up. PostgreSQL waits a few seconds inside each attempt for other
