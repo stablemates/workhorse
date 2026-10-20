@@ -939,25 +939,28 @@ class WorkerDatabaseTest {
 
   /**
    * SM-1444: a round that ends after its next slot starts one overdue round at once, also when it
-   * replaces its connection. The interval is 40 ms, so the round bound equals the interval. The
-   * first heartbeat round commits only after its deadline, so it fails after its next slot. The
-   * worker then checks out a new connection at once, and starts the overdue round on it at once.
+   * replaces its connection. The interval is 40 ms, so the round bound equals the interval. Each of
+   * the first five heartbeat rounds commits only after its deadline, so it fails after its next
+   * slot. The worker then checks out a new connection at once, and starts the overdue round on it
+   * at once.
    *
    * <p>The test measures that gap without the time of the connect. The old loop waited 100 ms
-   * before the new connection, so its gap is at least 100 ms. The limit is 90 ms. The lease is 30
-   * s, so the delay from the claim to the handler on a loaded host does not change the result. An
-   * earlier version checked a lease of 180 ms instead, which left about 80 ms for that delay
-   * (SM-1479).
+   * before the new connection, so each of its gaps is at least 100 ms. The limit is 90 ms for the
+   * shortest of the five gaps. One gap can be longer on a loaded host, because the heartbeat thread
+   * can wait for a CPU (SM-1543). The handler runs until the overdue round after the last failed
+   * round starts, and not for a fixed time. The lease is 30 s, so the delay from the claim to the
+   * handler on a loaded host does not change the result (SM-1479).
    */
   @Test
   void startsAnOverdueRoundAtOnceAfterAFailedRoundReplacesItsConnection() throws Exception {
     long intervalMs = 40;
+    int failures = 5;
     UUID taskId = enqueue("overdue", Map.of());
     CountDownLatch started = new CountDownLatch(1);
-    AtomicLong failedAt = new AtomicLong();
+    List<Long> failedAt = new CopyOnWriteArrayList<>();
     List<HeartbeatSend> sends = new CopyOnWriteArrayList<>();
     Worker worker =
-        Worker.builder(delayingFirstHeartbeatCommit(dataSource, intervalMs, failedAt, sends))
+        Worker.builder(delayingHeartbeatCommits(dataSource, intervalMs, failures, failedAt, sends))
             .queues(queueName)
             .pollingOnly(true)
             .pollInterval(Duration.ofMillis(10))
@@ -969,31 +972,51 @@ class WorkerDatabaseTest {
                 Object.class,
                 (ctx, payload) -> {
                   started.countDown();
-                  Thread.sleep(400);
+                  waitUntil(
+                      "a round started after the last failed round",
+                      () ->
+                          failedAt.size() == failures
+                              && overdueRound(sends, failedAt.get(failures - 1)) != null);
                   return Map.of();
                 })
             .build();
     assertTrue(worker.runOnce(), "the worker ran the task");
     assertTrue(started.await(1, TimeUnit.SECONDS), "the handler started");
     assertEquals("succeeded", status(taskId).state());
-    long failed = failedAt.get();
-    assertTrue(failed != 0, "precondition not met: no heartbeat round failed");
-    HeartbeatSend overdue =
-        sends.stream()
-            .filter(send -> send.connectStartedAt() - failed >= 0)
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no round started after the failed round"));
-    long gapMs =
-        TimeUnit.NANOSECONDS.toMillis(
-            (overdue.connectStartedAt() - failed) + (overdue.sentAt() - overdue.connectedAt()));
-    assertTrue(gapMs < 90, "the overdue round started " + gapMs + " ms after the failed round");
+    assertEquals(failures, failedAt.size(), "precondition not met: a heartbeat round did not fail");
+    List<Long> gapsMs = new ArrayList<>();
+    for (long failed : failedAt) {
+      HeartbeatSend overdue = overdueRound(sends, failed);
+      assertNotNull(overdue, "no round started after a failed round");
+      gapsMs.add(
+          TimeUnit.NANOSECONDS.toMillis(
+              (overdue.connectStartedAt() - failed) + (overdue.sentAt() - overdue.connectedAt())));
+    }
+    assertTrue(
+        gapsMs.stream().anyMatch(gapMs -> gapMs < 90),
+        "each overdue round started at least 90 ms after its failed round: " + gapsMs);
+  }
+
+  /** The first heartbeat statement whose connection was requested at {@code failed} or later. */
+  private static @Nullable HeartbeatSend overdueRound(List<HeartbeatSend> sends, long failed) {
+    for (HeartbeatSend send : sends) {
+      if (send.connectStartedAt() - failed >= 0) {
+        return send;
+      }
+    }
+    return null;
   }
 
   /**
    * SM-1443: a busy round renews nothing and gives no verdict. While another transaction holds the
    * task's row, every round is busy, so the lease watchdog ends the attempt with a lost lease at
-   * the end of its local window, and not earlier. The lock comes after one accepted round, which
-   * sent at most one interval before it.
+   * the end of its local window, and not earlier. The window ends one lease after the last accepted
+   * round left.
+   *
+   * <p>The test reads the time of that round from the worker, at the cancellation. An earlier
+   * version measured from the time after the lock, and allowed two intervals for the last accepted
+   * round. Under load, the heartbeat thread sent that round late, or the test recorded the lock
+   * late, and the attempt seemed to end early (SM-1543).
    */
   @Test
   void endsAnAttemptWhoseLeaseStaysBusyAtTheEndOfItsLeaseWindow() throws Exception {
@@ -1002,7 +1025,9 @@ class WorkerDatabaseTest {
     UUID taskId = enqueue("held", Map.of());
     CountDownLatch started = new CountDownLatch(1);
     AtomicLong cancelledAt = new AtomicLong();
+    AtomicLong renewedAt = new AtomicLong();
     AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
+    AtomicReference<@Nullable Worker> self = new AtomicReference<>();
     Worker worker =
         worker()
             .lease(Duration.ofMillis(leaseMs))
@@ -1013,13 +1038,19 @@ class WorkerDatabaseTest {
                 (ctx, payload) -> {
                   started.countDown();
                   ctx.cancellation().await(WAIT);
-                  cancelledAt.set(System.nanoTime());
+                  long now = System.nanoTime();
+                  Worker running = self.get();
+                  assertNotNull(running);
+                  renewedAt.set(running.leaseRenewedAt(ctx.task().id()));
                   reason.set(ctx.cancellation().reason());
+                  // Last, because the test thread waits for it.
+                  cancelledAt.set(now);
                   return Map.of();
                 })
             .build();
+    self.set(worker);
     ExecutorService runner = Executors.newSingleThreadExecutor();
-    long[] lockedAt = new long[1];
+    long lockedAt;
     try (Connection blocker = ScratchDatabase.connect()) {
       var run = runner.submit(worker::runOnce);
       assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
@@ -1032,7 +1063,7 @@ class WorkerDatabaseTest {
         lock.setString(1, taskId.toString());
         lock.execute();
       }
-      lockedAt[0] = System.nanoTime();
+      lockedAt = System.nanoTime();
       Instant locked = expiresAt(taskId);
       waitUntil("the handler was cancelled", () -> cancelledAt.get() != 0);
       Instant busy = expiresAt(taskId);
@@ -1043,13 +1074,22 @@ class WorkerDatabaseTest {
       runner.shutdownNow();
     }
     assertEquals(CancellationReason.LEASE_LOST, reason.get());
-    // The window ends one lease after the last accepted round left, which is at most about one
-    // interval before the lock. The slack allows for a slow host.
-    double elapsedMs = (cancelledAt.get() - lockedAt[0]) / 1e6;
+    // Each round that leaves after the lock is busy. So an accepted round left before it.
     assertTrue(
-        elapsedMs > leaseMs - 2 * intervalMs,
-        "the attempt ended " + elapsedMs + " ms after the lock");
-    assertTrue(elapsedMs < leaseMs + 400, "the attempt ended " + elapsedMs + " ms after the lock");
+        renewedAt.get() - lockedAt < 0,
+        "a round that left "
+            + (renewedAt.get() - lockedAt) / 1e6
+            + " ms after the lock renewed the local window");
+    double elapsedMs = (cancelledAt.get() - renewedAt.get()) / 1e6;
+    assertTrue(
+        elapsedMs >= leaseMs,
+        "the attempt ended " + elapsedMs + " ms after the last accepted round");
+    // The check above finds a busy round that renews the window. This bound shows only that the
+    // watchdog acts. Its slack is for the watchdog and the handler threads, which can wake late on
+    // a loaded host (SM-1543).
+    assertTrue(
+        elapsedMs < leaseMs + 2_000,
+        "the attempt ended " + elapsedMs + " ms after the last accepted round");
   }
 
   private static Instant expiresAt(UUID taskId) {
@@ -1071,13 +1111,14 @@ class WorkerDatabaseTest {
   private record HeartbeatSend(long connectStartedAt, long connectedAt, long sentAt) {}
 
   /**
-   * A source over {@code source} whose first {@code COMMIT} after a heartbeat statement returns
-   * {@code delayMs} late, so that heartbeat round ends after its deadline. It sets {@code failedAt}
-   * when that commit returns, and adds each heartbeat statement to {@code sends}.
+   * A source over {@code source} whose first {@code count} {@code COMMIT}s after a heartbeat
+   * statement return {@code delayMs} late, so each of those heartbeat rounds ends after its
+   * deadline. It adds to {@code failedAt} when each of those commits returns, and adds each
+   * heartbeat statement to {@code sends}.
    */
-  private static DataSource delayingFirstHeartbeatCommit(
-      DataSource source, long delayMs, AtomicLong failedAt, List<HeartbeatSend> sends) {
-    AtomicBoolean delayed = new AtomicBoolean();
+  private static DataSource delayingHeartbeatCommits(
+      DataSource source, long delayMs, int count, List<Long> failedAt, List<HeartbeatSend> sends) {
+    AtomicInteger delayed = new AtomicInteger();
     return (DataSource)
         Proxy.newProxyInstance(
             DataSource.class.getClassLoader(),
@@ -1109,7 +1150,7 @@ class WorkerDatabaseTest {
                     boolean delay =
                         call.getName().equals("commit")
                             && heartbeat.getAndSet(false)
-                            && delayed.compareAndSet(false, true);
+                            && delayed.getAndUpdate(n -> n < count ? n + 1 : n) < count;
                     Object answer;
                     try {
                       answer = call.invoke(connection, values);
@@ -1119,7 +1160,7 @@ class WorkerDatabaseTest {
                     if (delay) {
                       // After the commit, so no idle gap ends the session first.
                       Thread.sleep(delayMs);
-                      failedAt.set(System.nanoTime());
+                      failedAt.add(System.nanoTime());
                     }
                     return answer;
                   });
@@ -1693,8 +1734,9 @@ class WorkerDatabaseTest {
                   try {
                     Thread.sleep(WAIT.toMillis());
                   } catch (InterruptedException error) {
-                    interrupted.set(true);
+                    // The reason first, so a test that sees the interrupt also sees the reason.
                     reason.set(ctx.cancellation().reason());
+                    interrupted.set(true);
                     throw error;
                   }
                   return null;
@@ -1705,13 +1747,20 @@ class WorkerDatabaseTest {
     long stoppedAt = System.nanoTime();
     worker.stop();
     finish.countDown();
-    worker.close();
+    try {
+      worker.close();
+    } catch (ShutdownIncompleteException slow) {
+      // After the interrupt, the stuck attempt has one unwind window of 250 ms to release its
+      // task. Under load, the release can take longer, and close throws while the attempt still
+      // ends (SM-1543, as SM-1534). The test waits below for the release itself.
+    }
     Duration drained = Duration.ofNanos(System.nanoTime() - stoppedAt);
 
     assertEquals("succeeded", status(quick).state(), "the drain let the quick task finish");
     assertEquals(Map.of("cancelled", false), json(status(quick).result()));
-    assertTrue(interrupted.get(), "the deadline interrupted the stuck handler");
+    waitUntil("the deadline interrupted the stuck handler", interrupted::get);
     assertEquals(CancellationReason.SHUTDOWN, reason.get());
+    waitForState(stuck, "ready");
     Status released = status(stuck);
     assertEquals("ready", released.state(), "an interrupted handler releases its task");
     assertNull(released.error(), "the release charges no attempt");
