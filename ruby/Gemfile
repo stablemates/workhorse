@@ -13,7 +13,7 @@ group :development do
     gem "railties", ">= 8.0", "< 9"
   end
   gem "opentelemetry-api", "~> 1.11"
-  gem "opentelemetry-metrics-api", "~> 0.9"
+  gem "opentelemetry-metrics-api", "~> 0.10"
   gem "rack", ">= 3.1", "< 4"
   gem "bundler-audit", "~> 0.9", require: false
   gem "rake", "~> 13.2"
