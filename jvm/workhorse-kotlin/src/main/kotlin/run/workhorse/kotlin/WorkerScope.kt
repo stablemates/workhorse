@@ -1,5 +1,6 @@
 package run.workhorse.kotlin
 
+import java.lang.reflect.Type
 import java.time.Duration
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
@@ -17,6 +18,7 @@ import run.workhorse.Handler
 import run.workhorse.HandlerContext
 import run.workhorse.JsonCodec
 import run.workhorse.RetryDelay
+import run.workhorse.TaskHandler
 import run.workhorse.Worker
 import run.workhorse.WorkhorseTelemetry
 
@@ -72,30 +74,31 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   public var telemetry: WorkhorseTelemetry? = null
 
   /**
-   * Registers [handler] for [taskType]. The worker decodes each payload as [P]. Registering a task
-   * type again replaces its handler.
+   * Registers [handler] for [taskType]. The worker decodes each payload as [P], with its type
+   * arguments, so `handle<List<Order>>` receives a list of `Order`. Registering a task type again
+   * replaces its handler.
    */
   public inline fun <reified P> handle(taskType: String, handler: SuspendHandler<P>) {
-    @Suppress("UNCHECKED_CAST") register(taskType, javaClassOf<P>() as Class<P>, handler)
+    register(taskType, javaTypeOf<P>(), handler)
   }
 
   /**
    * Registers the blocking batch [handler] for [taskType], as `Worker.Builder.handleBatch` does.
-   * The worker decodes each payload as [P]. The module has no suspend batch handler.
+   * The worker decodes each payload as [P], with its type arguments. The module has no suspend
+   * batch handler.
    */
   public inline fun <reified P> handleBatch(
     taskType: String,
     options: BatchOptions,
     handler: BatchHandler<P>,
   ) {
-    @Suppress("UNCHECKED_CAST")
-    registerBatch(taskType, javaClassOf<P>() as Class<P>, options, handler)
+    registerBatch(taskType, javaTypeOf<P>(), options, handler)
   }
 
   @PublishedApi
   internal fun <P> registerBatch(
     taskType: String,
-    payloadType: Class<P>,
+    payloadType: Type,
     options: BatchOptions,
     handler: BatchHandler<P>,
   ) {
@@ -103,8 +106,8 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   }
 
   @PublishedApi
-  internal fun <P> register(taskType: String, payloadType: Class<P>, handler: SuspendHandler<P>) {
-    builder.handle(taskType, payloadType, SuspendHandlerAdapter(scope, handler))
+  internal fun <P> register(taskType: String, payloadType: Type, handler: SuspendHandler<P>) {
+    builder.handle(SuspendTaskHandler(taskType, payloadType, SuspendHandlerAdapter(scope, handler)))
   }
 
   /** Configures the core's builder directly, for an option that this scope has no property for. */
@@ -140,8 +143,21 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   }
 }
 
-/** The boxed and erased Java class of [P], which the core decodes a payload as. */
-@PublishedApi internal inline fun <reified P> javaClassOf(): Class<*> = erasure(javaTypeOf<P>())
+/**
+ * Registers a suspend handler through `Worker.Builder.handle(TaskHandler)`, so the core decodes
+ * each payload as the full [payloadType], with its type arguments.
+ */
+internal class SuspendTaskHandler<P>(
+  private val taskType: String,
+  private val payloadType: Type,
+  private val handler: Handler<P>,
+) : TaskHandler<P> {
+  override fun taskType(): String = taskType
+
+  override fun payloadType(): Type = payloadType
+
+  override fun handle(ctx: HandlerContext, payload: P): Any? = handler.handle(ctx, payload)
+}
 
 /**
  * Runs a [SuspendHandler] for the core. The core calls [handle] on the task's handler thread, which

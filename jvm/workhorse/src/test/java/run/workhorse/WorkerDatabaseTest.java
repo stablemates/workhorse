@@ -1018,6 +1018,100 @@ class WorkerDatabaseTest {
             });
   }
 
+  /** A logger that keeps each record at {@code ERROR}, with its message and its error. */
+  private static final class ErrorRecords implements System.Logger {
+    final List<String> messages = new CopyOnWriteArrayList<>();
+    final List<@Nullable Throwable> errors = new CopyOnWriteArrayList<>();
+
+    @Override
+    public String getName() {
+      return "errors";
+    }
+
+    @Override
+    public boolean isLoggable(Level level) {
+      return true;
+    }
+
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String message,
+        @Nullable Throwable thrown) {
+      if (level == Level.ERROR) {
+        errors.add(thrown);
+        messages.add(String.valueOf(message));
+      }
+    }
+
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String format,
+        @Nullable Object... parameters) {
+      log(level, bundle, format, (Throwable) null);
+    }
+  }
+
+  // SM-1517: the owner of a started worker learns of a failed run only at close, so the worker
+  // logs the error at once.
+  @Test
+  void logsAStartedRunThatEndsWithoutAStopAtErrorAtOnce() throws Exception {
+    ErrorRecords records = new ErrorRecords();
+    Worker worker =
+        Worker.builder(failingTicks(dataSource))
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .maintenanceInterval(Duration.ofMillis(100))
+            .disableRegistry(true)
+            .logger(records)
+            .build();
+    worker.start();
+    waitUntil("the run ends", () -> !worker.isRunning());
+
+    assertEquals(1, records.errors.size(), "one ERROR record before close: " + records.messages);
+    assertTrue(records.errors.get(0) instanceof InjectedError, "the record carries the error");
+    assertTrue(records.messages.get(0).contains("event.name=workhorse.worker.run_failed"));
+    assertThrows(InjectedError.class, worker::close);
+    assertEquals(1, records.errors.size(), "close does not log the error again");
+  }
+
+  @Test
+  void logsAStartedRunThatAHandlerErrorEndsAtErrorAtOnce() {
+    // A handler Error also changes the stop version inside the worker, but it is not a stop.
+    ErrorRecords records = new ErrorRecords();
+    Worker worker =
+        worker()
+            .logger(records)
+            .handle(
+                "fatal",
+                Object.class,
+                (ctx, payload) -> {
+                  throw new InjectedError();
+                })
+            .build();
+    worker.start();
+    enqueue("fatal", null);
+    waitUntil("the run ends", () -> !worker.isRunning());
+
+    assertEquals(1, records.errors.size(), "one ERROR record before close: " + records.messages);
+    assertTrue(records.errors.get(0) instanceof InjectedError, "the record carries the error");
+    assertThrows(InjectedError.class, worker::close);
+  }
+
+  @Test
+  void logsNoRunFailureForAStartedRunThatAStopEnds() {
+    ErrorRecords records = new ErrorRecords();
+    Worker worker = worker().logger(records).build();
+    worker.start();
+    worker.close();
+
+    assertEquals(List.of(), records.messages, "a stopped run logs nothing at ERROR");
+  }
+
   // ADR 0078 rule 4: a failed maintenance pass ends the run, also for an Error (SM-1458).
   @Test
   void endsTheRunWhenAMaintenancePassThrowsAnError() throws Exception {

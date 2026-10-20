@@ -1,17 +1,18 @@
 package run.workhorse.kotlin
 
+import java.lang.reflect.ParameterizedType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/** The class that `WorkerScope.handle` registers for each reified payload type. */
+/** The type that `WorkerScope.handle` and `handleBatch` register for each reified payload type. */
 class PayloadTypeTest {
   @Test
-  fun erasesEachPayloadTypeToTheClassTheCoreDecodes() {
-    assertEquals(Long::class.javaObjectType, javaClassOf<Long>())
-    assertEquals(Map::class.java, javaClassOf<Map<String, Any?>?>())
-    assertEquals(arrayOf<List<Long>>().javaClass, javaClassOf<Array<List<Long>>>())
-    assertEquals(Array<String>::class.java, javaClassOf<Array<String>>())
-    assertEquals(LongArray::class.java, javaClassOf<LongArray>())
-    assertEquals(Any::class.java, javaClassOf<Any?>())
+  fun keepsTheTypeArgumentsOfEachPayloadType() {
+    assertEquals(Long::class.javaObjectType, javaTypeOf<Long>())
+    assertEquals(Any::class.java, javaTypeOf<Any?>())
+    assertEquals(LongArray::class.java, javaTypeOf<LongArray>())
+    val list = javaTypeOf<List<String>>() as ParameterizedType
+    assertEquals(List::class.java, list.rawType)
+    assertEquals(listOf(String::class.java), list.actualTypeArguments.toList())
   }
 }

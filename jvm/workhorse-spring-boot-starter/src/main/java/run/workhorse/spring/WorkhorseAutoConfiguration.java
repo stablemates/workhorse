@@ -14,14 +14,17 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.PlatformTransactionManager;
 import run.workhorse.Admin;
 import run.workhorse.ConnectionSource;
 import run.workhorse.JsonCodec;
@@ -65,17 +68,44 @@ import tools.jackson.databind.json.JsonMapper;
 public final class WorkhorseAutoConfiguration {
   private static final Log LOG = LogFactory.getLog(WorkhorseAutoConfiguration.class);
 
+  /** The class name that {@link #isJta} looks for in the class hierarchy of a manager. */
+  static final String JTA_TRANSACTION_MANAGER =
+      "org.springframework.transaction.jta.JtaTransactionManager";
+
   /** Created by Spring. */
   public WorkhorseAutoConfiguration() {}
 
   // The class stays public, so an application can name it in `exclude`. Each @Bean method is
   // package-private, so a new bean dependency does not change the public API in api/java.txt.
 
-  /** The connection source that joins the current Spring transaction. */
+  /**
+   * The connection source that joins the current Spring transaction. With a {@code
+   * JtaTransactionManager} bean, it joins any actual transaction that holds the connection.
+   */
   @Bean
   @ConditionalOnMissingBean
-  ConnectionSource workhorseConnectionSource(DataSource dataSource) {
-    return new TransactionAwareConnectionSource(dataSource);
+  ConnectionSource workhorseConnectionSource(
+      DataSource dataSource, ObjectProvider<PlatformTransactionManager> transactionManagers) {
+    boolean jta = transactionManagers.orderedStream().anyMatch(WorkhorseAutoConfiguration::isJta);
+    return new TransactionAwareConnectionSource(dataSource, jta);
+  }
+
+  /**
+   * Whether {@code manager} is a {@code JtaTransactionManager}. The check compares class names, so
+   * it loads no JTA class when the application has no JTA API.
+   */
+  static boolean isJta(PlatformTransactionManager manager) {
+    return extendsClassNamed(manager.getClass(), JTA_TRANSACTION_MANAGER);
+  }
+
+  /** Whether {@code type} or one of its superclasses has the name {@code name}. */
+  static boolean extendsClassNamed(Class<?> type, String name) {
+    for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+      if (current.getName().equals(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -182,10 +212,33 @@ public final class WorkhorseAutoConfiguration {
       return builder.build();
     }
 
-    @Bean
-    @ConditionalOnMissingBean
-    WorkerLifecycle workhorseWorkerLifecycle(Worker worker) {
-      return new WorkerLifecycle(worker);
+    /**
+     * The lifecycle of an application that serves no web requests: a run that ends without a stop
+     * exits the process with a non-zero status, so a supervisor can restart it.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnNotWebApplication
+    static class ProcessLifecycleConfiguration {
+      @Bean
+      @ConditionalOnMissingBean
+      WorkerLifecycle workhorseWorkerLifecycle(
+          Worker worker, ConfigurableApplicationContext context) {
+        return new WorkerLifecycle(worker, failure -> ProcessExit.exit(context, System::exit));
+      }
+    }
+
+    /**
+     * The lifecycle of a web application: a run that ends without a stop leaves the application
+     * running, and the health indicator reports the worker as down.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnWebApplication
+    static class WebLifecycleConfiguration {
+      @Bean
+      @ConditionalOnMissingBean
+      WorkerLifecycle workhorseWorkerLifecycle(Worker worker) {
+        return new WorkerLifecycle(worker);
+      }
     }
 
     /**

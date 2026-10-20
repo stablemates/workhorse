@@ -1657,3 +1657,31 @@ a filter, reads every row. The Kotlin functions `listConcurrencyPoliciesSuspend`
 `listRateLimitPoliciesSuspend`, and `listBudgetsSuspend` keep the parameter `List<String>? = null`,
 because a Kotlin default argument has no overload ambiguity. They pass an empty list for `null`.
 The SM-1487 coordinator chose this form during SM-1523.
+
+## Amendment: the builder registers a batch handler with a full Type (2026-10-20)
+
+The Worker surface section lists `handleBatch(String, Class<P>, BatchOptions, BatchHandler<P>)` as
+the only batch registration. This amendment adds one overload to `Worker.Builder`.
+
+```java
+public <P extends @Nullable Object> Builder handleBatch(String taskType, Type payloadType,
+    BatchOptions options, BatchHandler<P> handler);
+```
+
+The codec decodes each payload as `payloadType`, with its type arguments. A `Class` argument still
+selects the `Class<P>` overload, because that overload is more specific. Both overloads give the
+same result for a `Class`, and both refuse a `null` payload type.
+
+The Kotlin module section says that reified type parameters replace the `Class` argument of the
+Java form. `WorkerScope.handle<P>` and `handleBatch<P>` registered the erased class of `P`. So a
+`handle<List<Order>>` handler received a list of maps, and failed with `ClassCastException` (SM-1521).
+`handle<P>` now registers through `handle(TaskHandler)`, whose `payloadType()` returns the full
+type of `P`. A `handleBatch<P>` has no such path in the Java form. A refusal of every generic `P`
+would also refuse `handleBatch<Map<String, Any?>>`, the natural payload type for the standard codec.
+So `handleBatch<P>` passes the full type of `P` to the new overload.
+
+`api/java.txt` gains the overload. In `api/kotlin.txt`, the `@PublishedApi` entries `register` and
+`registerBatch` take a `Type`, and `javaClassOf` and `erasure` go away. No JVM artifact is
+published yet, so this change breaks no user.
+
+The SM-1487 coordinator chose this form during SM-1521.

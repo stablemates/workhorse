@@ -10,10 +10,7 @@
 # is fully qualified. Any other name is a Kotlin default import or a type parameter.
 
 package run.workhorse.kotlin
-run.workhorse.kotlin: @PublishedApi internal fun erasure(type: java.lang.reflect.Type): Class<*>
-run.workhorse.kotlin: @PublishedApi internal inline fun <reified P> javaClassOf(): Class<*>
 run.workhorse.kotlin: @PublishedApi internal inline fun <reified T> javaTypeOf(): java.lang.reflect.Type
-run.workhorse.kotlin: @PublishedApi internal suspend fun <T> blocking(call: () -> T): T
 run.workhorse.kotlin: public fun workhorseWorker(dataSource: javax.sql.DataSource, configure: run.workhorse.kotlin.WorkerScope.() -> Unit): run.workhorse.Worker
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.cancelTaskGroupSuspend(groupId: java.util.UUID, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.TaskGroup?
@@ -94,8 +91,8 @@ run.workhorse.kotlin.SuspendTaskGroupContext: public suspend fun get(): run.work
 run.workhorse.kotlin.SuspendTaskGroupContext: public val java: run.workhorse.TaskGroupContext
 
 @WorkhorseDsl public final class run.workhorse.kotlin.WorkerScope
-run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> register(taskType: String, payloadType: Class<P>, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
-run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> registerBatch(taskType: String, payloadType: Class<P>, options: run.workhorse.BatchOptions, handler: run.workhorse.BatchHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> register(taskType: String, payloadType: java.lang.reflect.Type, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
+run.workhorse.kotlin.WorkerScope: @PublishedApi internal fun <P> registerBatch(taskType: String, payloadType: java.lang.reflect.Type, options: run.workhorse.BatchOptions, handler: run.workhorse.BatchHandler<P>): Unit
 run.workhorse.kotlin.WorkerScope: public fun java(configure: run.workhorse.Worker.Builder.() -> Unit): Unit
 run.workhorse.kotlin.WorkerScope: public inline fun <reified P> handle(taskType: String, handler: run.workhorse.kotlin.SuspendHandler<P>): Unit
 run.workhorse.kotlin.WorkerScope: public inline fun <reified P> handleBatch(taskType: String, options: run.workhorse.BatchOptions, handler: run.workhorse.BatchHandler<P>): Unit

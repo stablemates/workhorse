@@ -34,9 +34,11 @@ import run.workhorse.Queue
 import run.workhorse.TaskCheckpoint
 import run.workhorse.Worker
 import run.workhorse.WorkhorseTelemetry
+import run.workhorse.spring.JacksonJsonCodec
 import run.workhorse.testing.RecordingOpenTelemetry
 import run.workhorse.testing.ScratchDataSource
 import run.workhorse.testing.ScratchDatabase
+import tools.jackson.databind.json.JsonMapper
 
 /**
  * Suspend handlers and the suspend wrappers against PostgreSQL. Every wait is bounded: a latch or a
@@ -272,6 +274,45 @@ class SuspendWorkerDatabaseTest {
     assertEquals("2", state(second).result)
   }
 
+  // SM-1521: handle and handleBatch decode the full reified payload type.
+  @Test
+  fun decodesTheTypeArgumentsOfAReifiedPayloadTypeWithTheJacksonCodec() {
+    val taskId = enqueue("ship", listOf(mapOf("id" to "A-1"), mapOf("id" to "A-2")))
+    val worker =
+      worker("kotlin-generic") {
+        codec = JacksonJsonCodec(JsonMapper.builder().build())
+        handle<List<ShippedOrder>>("ship") { _, orders -> orders.map { it.id } }
+      }
+
+    assertTrue(worker.runOnce())
+
+    val done = state(taskId)
+    assertEquals("succeeded", done.state, "the handler receives a list of ShippedOrder")
+    assertEquals("[\"A-1\", \"A-2\"]", done.result)
+  }
+
+  @Test
+  fun decodesTheTypeArgumentsOfABatchPayloadTypeWithTheJacksonCodec() {
+    val taskId = enqueue("ship-batch", listOf(mapOf("id" to "B-1")))
+    val worker =
+      worker("kotlin-generic-batch") {
+        codec = JacksonJsonCodec(JsonMapper.builder().build())
+        handleBatch<List<ShippedOrder>>("ship-batch", BatchOptions(1, Duration.ofMillis(10))) {
+          items ->
+          items.map<_, BatchHandlerOutcome> { BatchSucceeded(it.payload().first().id) }
+        }
+      }
+
+    worker.start()
+    try {
+      waitForState(taskId, "succeeded")
+    } finally {
+      worker.close()
+    }
+
+    assertEquals("\"B-1\"", state(taskId).result)
+  }
+
   private fun <T : Any> present(value: T?, message: String): T =
     value ?: throw AssertionError(message)
 
@@ -338,4 +379,9 @@ class SuspendWorkerDatabaseTest {
         " LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id" +
         " WHERE t.id = ?::uuid"
   }
+}
+
+/** The element of a generic payload type. Jackson decodes it through its setter. */
+class ShippedOrder {
+  var id: String = ""
 }

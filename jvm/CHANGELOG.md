@@ -54,3 +54,17 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   PostgreSQL with all its digits, and the enqueue refuses a decimal that `numeric` cannot store.
   `Queue` and `Admin` check compatibility once for each physical connection behind a pool, and the
   check does not hold the queue lock. The ADR 0103 amendments of 2026-10-20 state each rule.
+- If a run that `Worker.start()` began ends without a `stop()`, the worker logs the error at once
+  at `ERROR`, as `workhorse.worker.run_failed`. In a Spring application that serves no web requests,
+  the starter then exits the process with a non-zero status, so a supervisor can restart it. A web
+  application keeps running, and its health indicator reports the worker as `DOWN`.
+- `TransactionAwareConnectionSource` joins only a transaction of its own `DataSource`, for example
+  one of `DataSourceTransactionManager` or `JpaTransactionManager`. Under a transaction of another
+  transaction manager, it runs the call in autocommit, so the task commits also when the pool turns
+  autocommit off. When the context has a `JtaTransactionManager`, it still joins the JTA
+  transaction.
+- Kotlin `handle<P>` and `handleBatch<P>` decode each payload as the full type of `P`, with its type
+  arguments, such as `List<Order>`. `Worker.Builder.handleBatch(String, Type, BatchOptions,
+  BatchHandler)` is the new Java overload that `handleBatch<P>` uses.
+- The internal Kotlin helper `blocking` is no longer `@PublishedApi`, so it is not part of the
+  published API.

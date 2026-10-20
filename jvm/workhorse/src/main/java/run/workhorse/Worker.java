@@ -192,6 +192,12 @@ public final class Worker implements AutoCloseable {
   private final AtomicReference<@Nullable Throwable> startedFailure = new AtomicReference<>();
   private volatile long lastRegistryAt = NEVER;
 
+  /**
+   * Counts the calls of {@link #stop}. A failed run also changes {@link #stopVersion}, so only this
+   * count tells an explicit stop apart.
+   */
+  private final AtomicLong stops = new AtomicLong();
+
   /** The end of the shutdown grace of the current stop, or {@link #NEVER} before a stop. */
   private final AtomicLong stopDeadline = new AtomicLong(NEVER);
 
@@ -387,12 +393,15 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * Runs {@link #run} on a worker-owned platform thread, and returns at once.
+   * Runs {@link #run} on a worker-owned platform thread, and returns at once. If the run ends
+   * without a {@link #stop}, the worker logs its error at {@code ERROR} at once, as the event
+   * {@code workhorse.worker.run_failed}, and {@link #close} throws it.
    *
    * @throws IllegalStateException if the worker already runs on its own thread
    */
   public void start() {
     long version = stopVersion.get();
+    long stopsAtStart = stops.get();
     Thread thread =
         new Thread(
             () -> {
@@ -400,6 +409,10 @@ public final class Worker implements AutoCloseable {
                 runFrom(version);
               } catch (Throwable error) {
                 startedFailure.set(error);
+                if (stops.get() == stopsAtStart) {
+                  // The owner learns of the failure only at close, so report it at once.
+                  logFailure(error);
+                }
               }
             },
             "workhorse-worker-" + workerId);
@@ -415,6 +428,7 @@ public final class Worker implements AutoCloseable {
   public void stop() {
     long deadline = System.nanoTime() + shutdownGraceNanos;
     stopDeadline.accumulateAndGet(deadline, (current, next) -> current == NEVER ? next : current);
+    stops.incrementAndGet();
     stopVersion.incrementAndGet();
     log(
         System.Logger.Level.INFO,
@@ -3297,6 +3311,18 @@ public final class Worker implements AutoCloseable {
     logger.log(level, body + " " + fields);
   }
 
+  /** Logs the error that ended a run of {@link #start} without a stop, with its stack trace. */
+  private void logFailure(Throwable error) {
+    if (!logger.isLoggable(System.Logger.Level.ERROR)) {
+      return;
+    }
+    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
+    fields.put("event.name", "workhorse.worker.run_failed");
+    fields.put("workhorse.worker.id", workerId);
+    fields.put("error.type", error.getClass().getName());
+    logger.log(System.Logger.Level.ERROR, "Worker run ended without a stop " + fields, error);
+  }
+
   private static RuntimeException unchecked(Throwable error) {
     if (error instanceof RuntimeException runtime) {
       return runtime;
@@ -3670,6 +3696,18 @@ public final class Worker implements AutoCloseable {
      */
     public <P extends @Nullable Object> Builder handleBatch(
         String taskType, Class<P> payloadType, BatchOptions options, BatchHandler<P> handler) {
+      return handleBatch(taskType, (Type) payloadType, options, handler);
+    }
+
+    /**
+     * Registers a batch handler for {@code taskType}, as {@link #handleBatch(String, Class,
+     * BatchOptions, BatchHandler)} does. The worker's codec decodes each payload as {@code
+     * payloadType}, with its type arguments, so a payload type such as {@code List<Order>} decodes
+     * each element as {@code Order}. A {@code Class} argument selects the other overload, with the
+     * same result. A {@code null} payload type is refused.
+     */
+    public <P extends @Nullable Object> Builder handleBatch(
+        String taskType, Type payloadType, BatchOptions options, BatchHandler<P> handler) {
       if (taskType.isEmpty()) {
         throw new IllegalArgumentException("taskType must be a non-empty String");
       }

@@ -12,9 +12,11 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import javax.sql.DataSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -235,6 +237,106 @@ class SuspendCancellationDatabaseTest {
     )
   }
 
+  /**
+   * A checkpoint operation that runs on another dispatcher, and ignores the cancellation until the
+   * test releases it. It records when it ends, and the handler records when it returns.
+   */
+  private class OtherDispatcher {
+    val started = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val ended = AtomicReference<Long?>()
+    val returned = AtomicReference<Long?>()
+
+    suspend fun operation(): Long =
+      withContext(Dispatchers.IO) {
+        started.countDown()
+        // A blocking call that does not answer the cancellation, as a blocking HTTP request.
+        while (!release.await(10, TimeUnit.MILLISECONDS)) {
+          // Waits for the test.
+        }
+        ended.set(System.nanoTime())
+        7L
+      }
+  }
+
+  private fun otherDispatcherHandler(other: OtherDispatcher, observed: Observed) =
+    SuspendHandler<Any?> { ctx, _ ->
+      observed.job.set(currentCoroutineContext()[Job])
+      try {
+        observed.returned.set(ctx.checkpoint<Long>("charge") { other.operation() })
+      } catch (error: Throwable) {
+        observed.thrown.set(error)
+        throw error
+      } finally {
+        other.returned.set(System.nanoTime())
+        observed.done.countDown()
+      }
+    }
+
+  // SM-1522: the checkpoint call returns only after the operation's Job ends.
+  @Test
+  fun aCancelledCheckpointWaitsForItsOperationOnAnotherDispatcher() {
+    val taskId = enqueue("charged")
+    val other = OtherDispatcher()
+    val observed = Observed()
+    val worker = worker(scratch) { handle("charged", otherDispatcherHandler(other, observed)) }
+    worker.start()
+    try {
+      assertTrue(other.started.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the operation started")
+      present(observed.job.get(), "the handler ran in a Job").cancel()
+      assertFalse(
+        observed.done.await(200, TimeUnit.MILLISECONDS),
+        "the checkpoint call waits while the operation runs",
+      )
+      assertEquals("active", state(taskId), "the task does not settle while the operation runs")
+      other.release.countDown()
+      assertTrue(observed.done.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the handler ended")
+    } finally {
+      other.release.countDown()
+      worker.close()
+    }
+
+    val ended = present(other.ended.get(), "the operation ended")
+    assertTrue(ended <= present(other.returned.get(), "the call returned"), "the order of the ends")
+    assertEquals(0L, checkpoints(taskId), "a cancelled operation saves no checkpoint")
+    assertTrue(
+      observed.thrown.get() is CancellationException,
+      "the handler sees the cancellation: ${observed.thrown.get()}",
+    )
+  }
+
+  @Test
+  fun theDrainDoesNotReleaseATaskWhileItsCheckpointOperationRuns() {
+    val taskId = enqueue("charged")
+    val other = OtherDispatcher()
+    val observed = Observed()
+    val worker =
+      worker(scratch) {
+        shutdownGrace = Duration.ZERO
+        handle("charged", otherDispatcherHandler(other, observed))
+      }
+    worker.start()
+    val drain: Thread
+    try {
+      assertTrue(other.started.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the operation started")
+      val job = present(observed.job.get(), "the handler ran in a Job")
+      drain = Thread.ofVirtual().start { worker.close() }
+      waitUntil("the drain cancels the handler's Job") { job.isCancelled }
+      assertFalse(observed.done.await(100, TimeUnit.MILLISECONDS), "the call waits")
+      assertEquals("active", state(taskId), "the drain does not release the task yet")
+      other.release.countDown()
+      assertTrue(observed.done.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the handler ended")
+    } finally {
+      other.release.countDown()
+      worker.close()
+    }
+    assertTrue(drain.join(WAIT), "the drain ended")
+
+    val ended = present(other.ended.get(), "the operation ended")
+    assertTrue(ended <= present(other.returned.get(), "the call returned"), "the order of the ends")
+    assertEquals(0L, checkpoints(taskId), "a cancelled operation saves no checkpoint")
+  }
+
   @Test
   fun doesNotStartADurableCallAfterTheCancellation() {
     val taskId = enqueue("late")
@@ -276,6 +378,23 @@ class SuspendCancellationDatabaseTest {
       Thread.sleep(1)
     }
   }
+
+  private fun state(taskId: UUID): String =
+    ScratchDatabase.connect().use { connection ->
+      connection
+        .prepareStatement(
+          "SELECT COALESCE(o.state, r.state) FROM workhorse.task t" +
+            " LEFT JOIN workhorse.task_runtime r ON r.task_id = t.id" +
+            " LEFT JOIN workhorse.task_outcome o ON o.task_id = t.id WHERE t.id = ?::uuid",
+        )
+        .use { statement ->
+          statement.setString(1, taskId.toString())
+          statement.executeQuery().use { result ->
+            assertTrue(result.next(), "the task exists")
+            result.getString(1)
+          }
+        }
+    }
 
   private fun checkpoints(taskId: UUID): Long =
     count("SELECT count(*) FROM workhorse.task_checkpoint WHERE task_id = ?::uuid", taskId)
