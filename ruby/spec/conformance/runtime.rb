@@ -412,7 +412,9 @@ module Conformance
       seen = Concurrent::Array.new
       with_pool do |pool|
         subject = worker(pool, fixture, concurrency: fixture["concurrency"])
-        subject.handle_batch(fixture["taskType"], max_size: fixture["batchMaxSize"], linger: 0.1) do |items|
+        # SM-1538: a full batch dispatches at once. A short linger can split the batch when one
+        # member starts late under host load, which changes the handler order.
+        subject.handle_batch(fixture["taskType"], max_size: fixture["batchMaxSize"], linger: 1.0) do |items|
           seen.concat(items.map { |item| item.payload["key"] })
           subject.pause
           items.map do |item|

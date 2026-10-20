@@ -1,6 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,32 +41,58 @@ export async function compareGenerated(
   return differences.toSorted();
 }
 
+function sha256(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+// Several checkouts share one archive cache. A cached archive is read once and checked; it is
+// never rewritten in place. A new download goes to a file unique to this process and replaces the
+// cached file with an atomic rename, so a concurrent reader sees the old file or the new file.
+export async function loadVerifiedArchive(
+  archivePath: string,
+  digest: string,
+  download: () => Promise<Buffer>,
+): Promise<Buffer> {
+  try {
+    const cached = await readFile(archivePath);
+    if (sha256(cached) === digest) return cached;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const archive = await download();
+  if (sha256(archive) !== digest) throw new Error("sqlc archive checksum mismatch");
+  await mkdir(path.dirname(archivePath), { recursive: true });
+  const partial = `${archivePath}.${process.pid}.${randomUUID()}.partial`;
+  try {
+    await writeFile(partial, archive);
+    await rename(partial, archivePath);
+  } finally {
+    await rm(partial, { force: true });
+  }
+  return archive;
+}
+
 async function generate(check: boolean): Promise<void> {
   const platform = `${process.platform}_${process.arch === "x64" ? "amd64" : process.arch}`;
   const digest = digests[platform];
   if (digest === undefined) throw new Error(`No pinned sqlc binary for ${platform}`);
   const filename = `sqlc_${version}_${platform}.tar.gz`;
-  const cache = path.join(tmpdir(), "workhorse-sqlc", digest);
-  await mkdir(cache, { recursive: true });
-  const archivePath = path.join(cache, filename);
-  let archive: Buffer;
-  try {
-    archive = await readFile(archivePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const response = await fetch(
-      `https://github.com/sqlc-dev/sqlc/releases/download/v${version}/${filename}`,
-    );
-    if (!response.ok)
-      throw new Error(`sqlc download failed: HTTP ${response.status}`, { cause: error });
-    archive = Buffer.from(await response.arrayBuffer());
-  }
-  if (createHash("sha256").update(archive).digest("hex") !== digest) {
-    throw new Error(`sqlc ${version} archive checksum mismatch`);
-  }
-  await writeFile(archivePath, archive);
+  const archive = await loadVerifiedArchive(
+    path.join(tmpdir(), "workhorse-sqlc", digest, filename),
+    digest,
+    async () => {
+      const response = await fetch(
+        `https://github.com/sqlc-dev/sqlc/releases/download/v${version}/${filename}`,
+      );
+      if (!response.ok) throw new Error(`sqlc ${version} download failed: HTTP ${response.status}`);
+      return Buffer.from(await response.arrayBuffer());
+    },
+  );
   const temporary = await mkdtemp(path.join(tmpdir(), "workhorse-sqlc-generate-"));
   try {
+    // Extract from a private copy of the checked bytes, never from the shared cache file.
+    const archivePath = path.join(temporary, filename);
+    await writeFile(archivePath, archive);
     execFileSync("tar", ["-xzf", archivePath, "-C", temporary, "sqlc"]);
     const binary = path.join(temporary, "sqlc");
     if (execFileSync(binary, ["version"], { encoding: "utf8" }).trim() !== `v${version}`) {

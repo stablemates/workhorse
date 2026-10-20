@@ -230,7 +230,9 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
         fixture["taskType"],
         handle_batch,
         max_size=fixture["batchMaxSize"],
-        linger_ms=100,
+        # SM-1538: a full batch dispatches at once. A short linger split the batch when one member
+        # thread started late under host load, which changed the handler order.
+        linger_ms=1_000,
     )
 
     assert worker.run_once() is True
