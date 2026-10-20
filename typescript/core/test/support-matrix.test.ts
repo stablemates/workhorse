@@ -678,6 +678,7 @@ describe("continuous integration", () => {
       "rust",
       "ruby",
       "jvm",
+      "jvm-verification-metadata",
       "spring-boot",
       "ruby-rails",
       "demo",
@@ -691,7 +692,7 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(12);
+    ).toHaveLength(13);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: github.event_name != 'schedule'",
@@ -965,6 +966,26 @@ describe("continuous integration", () => {
     expect(job).not.toContain("secrets.");
     // The action runs `rake release`, which only Bundler's gem tasks define.
     expect(rakefile).toContain('require "bundler/gem_tasks"');
+  });
+
+  // SM-1556: the check writes the Gradle verification metadata from nothing, which takes minutes.
+  // Its own job runs it beside the jvm lanes, on every change, and the required check gates on it.
+  it("checks the JVM verification metadata on the Java floor in its own gating job", async () => {
+    const ci = await read(".github/workflows/ci.yml");
+    const lane = (name: string) =>
+      new RegExp(`\\n  ${name}:\\n[\\s\\S]*?(?=\\n\\n  \\S)`).exec(ci)?.[0] ?? "";
+    const job = lane("jvm-verification-metadata");
+    expect(job).toContain("    needs: plan\n");
+    expect(job).toContain(
+      "    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'\n",
+    );
+    expect(job).toContain(
+      "java-version: ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }}\n",
+    );
+    expect(job).toMatch(/\n {6}- run: pnpm jvm:verification-metadata:check$/);
+    expect(job).not.toContain("services:");
+    expect(ci.match(/pnpm jvm:verification-metadata:check/g)).toHaveLength(1);
+    expect(ci.slice(ci.indexOf("\n  notify:"))).toMatch(/\n {8}jvm-verification-metadata,\n/);
   });
 
   it("uploads the JVM artifacts to the Central Portal from the protected maven-central environment", async () => {

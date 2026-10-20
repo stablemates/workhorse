@@ -247,9 +247,9 @@ unreadable one refuses the run. Each refusal names the database and no acceptanc
 `jvm/gradle/verification-metadata.xml` holds the sha256 checksum of each artifact that the `jvm/`
 build resolves, and Gradle refuses an artifact that differs from it.
 `pnpm jvm:verification-metadata:check` fails if that file is not current. `pnpm check` runs it, and
-the CI `jvm` job runs it on the Java floor. That file does not decide what a caller resolves, because
-the caller's own conflict resolution selects the versions from the POM and the Gradle module
-metadata of each artifact.
+the CI `jvm-verification-metadata` job runs it on the Java floor. That file does not decide what a
+caller resolves, because the caller's own conflict resolution selects the versions from the POM and
+the Gradle module metadata of each artifact.
 
 Thus the scan reads the runtime classpaths that a caller resolves, and its consumer build has no
 verification metadata. The script publishes `workhorse`, `workhorse-kotlin`, and
