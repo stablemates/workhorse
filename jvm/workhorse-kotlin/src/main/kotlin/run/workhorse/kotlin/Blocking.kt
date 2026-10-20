@@ -40,19 +40,24 @@ internal val VirtualThreads: CoroutineDispatcher =
 internal suspend fun <T> blocking(call: () -> T): T = runInterruptible(VirtualThreads, call)
 
 /**
- * Runs a `Queue` or `Admin` call of a suspend wrapper. Spring binds its transaction to a thread. So
- * a source form call, with no [connection], runs on the calling thread when that thread is in a
- * Spring transaction scope. The call then behaves as the Java method on that thread. It joins the
- * active transaction. If the scope has no active transaction, the call runs in autocommit. That is
- * the case under `NOT_SUPPORTED`, and under `SUPPORTS` with no outer transaction.
+ * Runs a `Queue` or `Admin` call of a suspend wrapper. Two kinds of call run in [bound], on the
+ * calling thread with no interrupt:
+ * - A call with a [connection]. The connection belongs to the caller, and often to the caller's
+ *   transaction.
+ * - A source form call, with no [connection], when the calling thread is in a Spring transaction
+ *   scope. Spring binds its transaction to a thread, so the call then behaves as the Java method on
+ *   that thread. It joins the active transaction. If the scope has no active transaction, the call
+ *   runs in autocommit. That is the case under `NOT_SUPPORTED`, and under `SUPPORTS` with no outer
+ *   transaction.
  *
- * On that path, a cancellation does not interrupt the thread. The connection belongs to the
- * caller's transaction, and an interrupt closes the socket of a virtual thread. The statement ends,
- * and then the caller gets the cancellation. Every other call runs in [blocking] (ADR 0103,
- * "Amendment: a Kotlin suspend wrapper joins the caller's Spring transaction").
+ * On that path, a cancellation does not interrupt the thread. An interrupt closes the socket of a
+ * virtual thread, and PostgreSQL then ends the caller's transaction. The statement ends, and then
+ * the caller gets the cancellation. Every other call runs in [blocking] (ADR 0103, "Amendment: a
+ * Kotlin suspend wrapper joins the caller's Spring transaction" and "Amendment: a Kotlin suspend
+ * wrapper does not interrupt a call on the caller's connection").
  */
 internal suspend fun <T> client(connection: Connection?, call: () -> T): T =
-  if (connection == null && SpringTransactionScope.active()) bound(call) else blocking(call)
+  if (connection != null || SpringTransactionScope.active()) bound(call) else blocking(call)
 
 /**
  * Runs [call] on the calling thread with no interrupt. A cancellation of the caller reaches it

@@ -1,11 +1,11 @@
 // The suspend wrappers of `Queue`. Each public Java method family has one wrapper. A `connection`
 // argument runs the call inside the caller's transaction, as the Java overload that takes a
 // `Connection` does; `null` lets the core take a connection from its source. Each wrapper runs in
-// `client`: a call with no `connection` on a thread in a Spring transaction scope runs on that
-// thread, with no interrupt, so it joins the Spring transaction. Every other call runs on a virtual
-// thread in `runInterruptible`, so a cancellation interrupts that thread. An interrupt closes the
-// socket of a JDBC read on a virtual thread, and the caller's connection is not usable after a
-// cancelled call.
+// `client`. A call with a `connection`, and a call with no `connection` on a thread in a Spring
+// transaction scope, run on the calling thread with no interrupt. The second kind joins the Spring
+// transaction. A cancellation reaches the caller after the statement ends, so the caller's
+// transaction stays usable. Every other call runs on a virtual thread in `runInterruptible`, so a
+// cancellation interrupts that thread.
 @file:JvmName("QueueSuspend")
 
 package run.workhorse.kotlin
