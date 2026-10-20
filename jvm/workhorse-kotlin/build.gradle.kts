@@ -48,6 +48,15 @@ val springBootTestVersion =
     .get()
     .requiredVersion
 
+// A snapshot changes without notice, so no checksum in `jvm/gradle/verification-metadata.xml` can
+// pin it (SM-1489). In the snapshot lane, only the two test class paths that take the snapshot BOM
+// skip dependency verification. The plugin class path and every other configuration stay verified.
+if (springBootLine == "snapshot") {
+  listOf("testCompileClasspath", "testRuntimeClasspath").forEach {
+    configurations.named(it) { resolutionStrategy.disableDependencyVerification() }
+  }
+}
+
 dependencies {
   api(project(":workhorse"))
   api(libs.kotlinx.coroutines.core)

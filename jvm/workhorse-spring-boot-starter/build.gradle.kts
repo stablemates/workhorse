@@ -25,6 +25,15 @@ val springBootTestVersion =
     .get()
     .requiredVersion
 
+// A snapshot changes without notice, so no checksum in `jvm/gradle/verification-metadata.xml` can
+// pin it (SM-1489). In the snapshot lane, only the two test class paths that take the snapshot BOM
+// skip dependency verification. The plugin class path and every other configuration stay verified.
+if (springBootLine == "snapshot") {
+  listOf("testCompileClasspath", "testRuntimeClasspath").forEach {
+    configurations.named(it) { resolutionStrategy.disableDependencyVerification() }
+  }
+}
+
 // Each optional dependency is a feature variant of the main source set, as the core does (ADR 0103,
 // "Three artifacts and their dependencies"). The published POM marks each one
 // `<optional>true</optional>`, and the Gradle module metadata gives each its own capability, so a

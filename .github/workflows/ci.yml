@@ -621,6 +621,12 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.java }}
       - run: pnpm install --frozen-lockfile
+      # Gradle refuses each plugin and library whose sha256 is not in
+      # jvm/gradle/verification-metadata.xml, so every JVM step fails on an artifact with no entry,
+      # for example after a Dependabot update. This step writes the file again from nothing and
+      # fails if it differs from the committed file, so an entry that nothing resolves also fails.
+      - if: matrix.java == fromJSON(needs.plan.outputs.jvm).include[0].java
+        run: pnpm jvm:verification-metadata:check
       - run: pnpm jvm:build
       # Each database test makes its own scratch database from DATABASE_URL_TEST.
       - run: pnpm jvm:test
@@ -683,6 +689,8 @@ jobs:
     name: Spring Boot snapshot starter (non-blocking)
     # The next Spring Boot snapshot changes without notice, so this job never blocks a merge: it
     # is not a need of `required` or `notify`. It runs weekly, as ADR 0083 places extra versions.
+    # A snapshot cannot have a checksum, so this lane skips dependency verification for the two
+    # test class paths that take the snapshot BOM. The build refuses `stageRelease` in this lane.
     needs: plan
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
     continue-on-error: true

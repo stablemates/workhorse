@@ -18,7 +18,12 @@ import {
  * (https://osv.dev) about every module on them, and the build fails unless the repository has
  * written down why a reported advisory is acceptable.
  *
- * The JVM build has no lockfile, so the scan reads what the artifacts publish. The run publishes
+ * The JVM build has no lockfile. `jvm/gradle/verification-metadata.xml` holds the sha256 checksum of
+ * each artifact that the JVM build resolves, and Gradle refuses an artifact that differs from it
+ * (`scripts/jvm-verification-metadata.ts`). That file does not decide what a caller resolves: the
+ * caller's own conflict resolution selects the versions from the POM and the Gradle module
+ * metadata of each artifact. The consumer build of this scan has no verification metadata, so it
+ * resolves as a caller does. The scan therefore reads what the artifacts publish. The run publishes
  * `workhorse`, `workhorse-kotlin` and `workhorse-spring-boot-starter` to a scratch Maven repository
  * through `scripts/jvm-dependency-scan/publish.init.gradle.kts`, without a change to the JVM build.
  * The consumer build in `scripts/jvm-dependency-scan/` then resolves each artifact for Java 21 with
