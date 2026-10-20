@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0 — 2026-10-20
+
+- No code changes. The peer range on `@stablemates/workhorse` is `>=0.9.0 <0.10.0`, so the adapter
+  installs beside the 0.9.0 core.
+
 ## 0.8.0 — 2026-10-13
 
 - No code changes. The peer range on `@stablemates/workhorse` is `>=0.8.0 <0.9.0`, so the adapter

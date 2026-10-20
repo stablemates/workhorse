@@ -18,7 +18,9 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
-## Unreleased
+## 0.9.0 — 2026-10-20
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
 
 Requires **schema v72**, Node.js **22** or newer, and PostgreSQL **15** or newer.
 
