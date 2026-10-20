@@ -1,4 +1,8 @@
 pre-commit:
+  # The hook runs the unit scope of each language only. A unit scope needs no database. CI runs the
+  # database suites, and the full suite of each language, on every pull request and `main` push.
+  # One exception remains: a change under `sql/` runs the schema suites (`pnpm test:schema`), which
+  # use PostgreSQL. SM-1549 moves them to CI.
   # The build runs alone, before the checks, so that no check reads a `dist` directory while
   # TypeScript rewrites it. Piped jobs stop at the first failure, so a failed build skips the checks.
   piped: true
@@ -18,9 +22,11 @@ pre-commit:
           - name: check parity tables
             glob: "{rust/**,rust/PARITY.md,ruby/spec/**,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
             run: mise exec -- pnpm parity:check
+          # `pnpm rust:conformance:check` also runs `pnpm parity:check`, which the job above
+          # already runs for the same Rust paths. This job runs only the conformance check.
           - name: check generated Rust conformance evidence
             glob: "{rust/**,rust/PARITY.md,docs/rust-conformance.md,scripts/generate-rust-conformance.ts}"
-            run: mise exec -- pnpm rust:conformance:check
+            run: mise exec -- pnpm exec tsx scripts/generate-rust-conformance.ts --check
           - name: check the TypeScript public API snapshot
             glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
             run: mise exec -- pnpm typescript-api:check
@@ -93,9 +99,13 @@ pre-commit:
           - name: check Rust formatting
             glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock,rustfmt.toml,rust/rust-toolchain.toml}"
             run: mise exec -- pnpm rust:format:check
-          - name: test Rust workspace
+          # `pnpm rust:test:unit` runs the library and binary targets with `WORKHORSE_NO_DATABASE=1`,
+          # which skips the library tests that need a scratch database. The CI `rust` job runs those
+          # tests and the integration targets in `rust/tests` and `rust/demo-worker/tests` with
+          # `pnpm rust:test` in `pnpm rust:gates`.
+          - name: test Rust unit scope
             glob: "{rust/**/*.rs,rust/Cargo.toml,rust/Cargo.lock}"
-            run: mise exec -- pnpm rust:test
+            run: mise exec -- pnpm rust:test:unit
           - name: lint Ruby
             glob: "ruby/**"
             run: mise exec -- pnpm ruby:lint
