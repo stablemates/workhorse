@@ -687,8 +687,8 @@ Stable metrics include `workhorse.tasks.enqueued`, `workhorse.tasks.claimed`,
 Go recovery cannot see the queue and type of a recovered task. Its retry count uses `unknown` for
 both, as the TypeScript fallback does.
 
-Rust recovery counts one retry for each queue and type that its result lists. It does not count a
-retry that the result does not list.
+Rust recovery counts one retry for each queue and type that its result lists. It counts a retry
+that the result does not list with `unknown` for both, as the other workers do.
 
 The JVM column covers Java, Kotlin, and the Spring Boot starter.
 

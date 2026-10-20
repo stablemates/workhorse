@@ -1010,16 +1010,13 @@ impl Inner {
             if expired > 0 {
                 self.metrics.add(Counter::LeasesExpired, f64::from(expired), &[]);
             }
+            let retried = row.try_get::<_, Option<i32>>("retried")?.unwrap_or(0);
             let dimensions =
                 row.try_get::<_, Option<Value>>("retry_dimensions")?.unwrap_or(Value::Null);
-            for dimension in dimensions.as_array().into_iter().flatten() {
-                let text = |key: &str| {
-                    dimension.get(key).and_then(Value::as_str).unwrap_or("unknown").to_owned()
-                };
-                let (queue, task_type) = (text("queue"), text("type"));
+            for (queue, task_type, count) in recovery_retries(retried, &dimensions) {
                 self.metrics.add(
                     Counter::Retried,
-                    1.0,
+                    count as f64,
                     &[
                         ("workhorse.queue.name", Attribute::Text(&queue)),
                         ("workhorse.task.type", Attribute::Text(&task_type)),
@@ -1246,6 +1243,25 @@ fn claimed_task(
     })
 }
 
+/// The `workhorse.tasks.retried` additions for one recovery result: one for each entry of
+/// `retry_dimensions`, by queue and task type, and `unknown` for both when `retried` is larger than
+/// the list. A missing queue or task type is `unknown`. Every SDK counts recovery retries this way.
+fn recovery_retries(retried: i32, dimensions: &Value) -> Vec<(String, String, u64)> {
+    let listed = dimensions.as_array().map_or(&[][..], Vec::as_slice);
+    let text = |dimension: &Value, key: &str| {
+        dimension.get(key).and_then(Value::as_str).unwrap_or("unknown").to_owned()
+    };
+    let mut retries: Vec<_> = listed
+        .iter()
+        .map(|dimension| (text(dimension, "queue"), text(dimension, "type"), 1))
+        .collect();
+    let unlisted = u64::try_from(retried).unwrap_or(0).saturating_sub(listed.len() as u64);
+    if unlisted > 0 {
+        retries.push(("unknown".to_owned(), "unknown".to_owned(), unlisted));
+    }
+    retries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1397,6 +1413,31 @@ mod tests {
             lease(100),
             "worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration",
         );
+    }
+
+    #[test]
+    fn recovery_counts_the_retries_that_its_dimensions_do_not_list() {
+        let dimensions = serde_json::json!([
+            { "queue": "emails", "type": "send" },
+            { "queue": "emails", "type": "send" },
+            { "queue": "reports" }
+        ]);
+        let entry =
+            |queue: &str, task_type: &str, count| (queue.to_owned(), task_type.to_owned(), count);
+        assert_eq!(
+            recovery_retries(5, &dimensions),
+            vec![
+                entry("emails", "send", 1),
+                entry("emails", "send", 1),
+                entry("reports", "unknown", 1),
+                entry("unknown", "unknown", 2),
+            ],
+        );
+        // A list that holds every retry, or more, adds no unknown retries.
+        assert_eq!(recovery_retries(3, &dimensions).len(), 3);
+        assert_eq!(recovery_retries(1, &dimensions).len(), 3);
+        assert_eq!(recovery_retries(2, &Value::Null), vec![entry("unknown", "unknown", 2)]);
+        assert!(recovery_retries(0, &Value::Null).is_empty());
     }
 
     #[tokio::test]

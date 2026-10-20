@@ -106,9 +106,9 @@ does not record `workhorse.schedule.*`, `workhorse.maintenance.*`, enqueue, canc
 instruments.
 
 Recovery adds one to `workhorse.tasks.retried` for each entry in the `retry_dimensions` of its
-result. An entry without a queue or a task type uses `unknown` for that attribute. A retry that
-`retry_dimensions` does not list adds nothing. The other workers count it with `unknown` for both
-attributes.
+result. An entry without a queue or a task type uses `unknown` for that attribute. If the `retried`
+count of the result is larger than the number of entries, recovery adds the difference with
+`unknown` for both attributes, as the other workers do.
 
 ### Ruby worker metrics
 

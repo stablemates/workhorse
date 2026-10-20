@@ -67,7 +67,7 @@
     "covers": ["cooperative-cancellation-delivery"],
     "taskType": "protocol.cooperative-cancellation",
     "leaseMs": 5000,
-    "heartbeatMs": 20,
+    "heartbeatMs": 100,
     "cancelReason": "runtime fixture cancellation",
     "expectedAbortReason": "CancellationRequestedError",
     "expectedState": { "state": "canceled", "attempt": 1 },
