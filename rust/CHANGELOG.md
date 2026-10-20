@@ -113,6 +113,11 @@ The `workhorse.handler.batch_dispatched` log record now names its linger
 instrument name `workhorse.handler.batch.linger`. Each Rust instrument now also has the description
 from `api/telemetry.txt`.
 
+Before this release, lease recovery added to `workhorse.tasks.retried` only the retries that the
+`retry_dimensions` of its result listed. If the result held more retries than entries, a fleet chart
+showed too few retries for Rust workers (SM-1551). Recovery now adds the difference with `unknown`
+for `workhorse.queue.name` and `workhorse.task.type`, as the other SDKs do.
+
 ### The default heartbeat interval is at least 100 ms
 
 Before this release, the Rust worker set the default heartbeat interval to lease / 3. For a lease
