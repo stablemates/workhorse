@@ -1103,6 +1103,22 @@ public final class Worker implements AutoCloseable {
     return pauseObservations.get();
   }
 
+  /**
+   * The {@code sentAt} of the latest accepted heartbeat round of the running attempt of {@code
+   * taskId}, a {@link System#nanoTime} value. The local lease window ends one lease after it. It
+   * exists for tests, which compare the end of an attempt with this time and not with a time that
+   * they record themselves (SM-1543). Throws when no attempt of the task holds an ownership.
+   */
+  long leaseRenewedAt(UUID taskId) {
+    for (Active task : active) {
+      Ownership ownership = task.ownership.get();
+      if (ownership != null && task.claimed.task.id().equals(taskId)) {
+        return ownership.renewedAt.get();
+      }
+    }
+    throw new IllegalStateException("no attempt of " + taskId + " holds a lease");
+  }
+
   /** Runs one claim on its own virtual thread. The dispatch loop already reserved its slots. */
   private void startClaim(ClaimPlan plan, long wakeVersion, boolean backingOff, RunState run) {
     // The notification delay spreads idle workers that one notification woke together. A worker
