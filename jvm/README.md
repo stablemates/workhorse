@@ -149,7 +149,8 @@ call a suspend form, such as `enqueueSuspend`. `workhorseWorker` builds a `Worke
 ### Spring Boot
 
 `workhorse-spring-boot-starter` builds `Queue` and `Admin` beans from the application's
-`DataSource`. The starter requires only the core, `spring-boot-autoconfigure`, and
+`DataSource`. With several `DataSource` beans, set `workhorse.data-source` to the bean name that
+Workhorse uses, or mark one bean `@Primary`. The starter requires only the core, `spring-boot-autoconfigure`, and
 `spring-boot-jdbc`. Add Jackson, Spring Boot health, `spring-web`, or the OpenTelemetry API to use
 the feature that needs it. An enqueue inside `@Transactional` joins that transaction. The worker is
 off by default. A worker process sets `workhorse.worker.enabled=true`, and the starter then

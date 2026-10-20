@@ -722,6 +722,7 @@ page, because the compilation of its programs is a stronger check.
 | Go         | gofmt and the Go compiler check the `go verify` fence.                                                              |
 | Rust       | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
 | Ruby       | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
+| Java, Kotlin | The fence must equal a `docs:start` region in `jvm/examples/src/main/`, which `pnpm jvm:build` compiles and `pnpm jvm:test` runs against PostgreSQL. |
 
 More detail: [ADR 0049: Decision](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0049-publish-one-agent-documentation-layer.md#decision).
 

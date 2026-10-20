@@ -12,9 +12,28 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties("workhorse")
 public class WorkhorseProperties {
+  /**
+   * The bean name of the DataSource that every Workhorse bean uses. When unset, the starter uses
+   * the only DataSource bean or the @Primary one, and it builds no bean when neither exists.
+   */
+  private @Nullable String dataSource;
+
   private final QueueProperties queue = new QueueProperties();
   private final WorkerProperties worker = new WorkerProperties();
   private final DashboardProperties dashboard = new DashboardProperties();
+
+  /**
+   * The bean name of the {@code DataSource} that every Workhorse bean uses, or {@code null} for the
+   * only {@code DataSource} bean or the {@code @Primary} one.
+   */
+  public @Nullable String getDataSource() {
+    return dataSource;
+  }
+
+  /** Sets the bean name of the {@code DataSource} that every Workhorse bean uses. */
+  public void setDataSource(@Nullable String dataSource) {
+    this.dataSource = dataSource;
+  }
 
   /** The properties of the {@code Queue} bean. */
   public QueueProperties getQueue() {

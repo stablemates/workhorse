@@ -2805,9 +2805,8 @@ handler.
 
 ### Spring Boot starter
 
-`workhorse-spring-boot-starter` registers `run.workhorse.spring.WorkhorseAutoConfiguration`. It
-applies only when the context has one `DataSource` candidate. Each bean in the table below backs
-off when the application defines its own bean of that type. The health indicator and the dashboard
+`workhorse-spring-boot-starter` registers `run.workhorse.spring.WorkhorseAutoConfiguration`. Each
+bean in the table below backs off when the application defines its own bean of that type. The health indicator and the dashboard
 filter back off by bean name, `workhorseHealthIndicator` and `workhorseDashboard`.
 
 The starter requires only the `workhorse` core, `spring-boot-autoconfigure`, and `spring-boot-jdbc`.
@@ -2821,15 +2820,37 @@ application adds each module that it uses.
 | `servlet`       | `spring-web`, `jakarta.servlet-api`       | The dashboard filter                        |
 | `opentelemetry` | `opentelemetry-api`                       | `WorkhorseTelemetry`                        |
 
+The starter builds its beans on one selected `DataSource`:
+
+1. If `workhorse.data-source` has a value, the starter uses the `DataSource` bean of that name. The
+   value `false` is also a bean name. If no
+   `DataSource` bean has that name, the starter throws `IllegalStateException`, and the context does
+   not start. The property wins over a `@Primary` bean.
+2. If the property is unset, the starter uses the only `DataSource` bean or the `@Primary` one.
+3. If the context has no `DataSource` bean, the starter builds no bean.
+4. If the context has several `DataSource` beans and no rule above selects one, the starter builds
+   no bean. It logs one warning that names the beans, `workhorse.data-source`, and `@Primary`.
+
+The starter's `ConnectionSource` and `Worker` both use that `DataSource`. A `ConnectionSource` bean
+of the application replaces the source of `Queue`, `Admin`, and the dashboard filter, but not
+of the worker. Thus that source must reach the database of the selected `DataSource`.
+
 | Bean                        | Condition                                                                                      |
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `ConnectionSource`          | Always. It is a `TransactionAwareConnectionSource`.                                            |
-| `Queue`, `Admin`            | Always. `Queue` uses `workhorse.queue.default-queue`.                                          |
+| `ConnectionSource`          | A `DataSource` is selected. It is a `TransactionAwareConnectionSource`.                        |
+| `Queue`, `Admin`            | A `DataSource` is selected. `Queue` uses `workhorse.queue.default-queue`.                      |
 | `JsonCodec`                 | Jackson and a `JsonMapper` bean are present.                                                   |
 | `WorkhorseTelemetry`        | The OpenTelemetry API and one `OpenTelemetry` bean are present.                                |
 | `Worker`, `WorkerLifecycle` | `workhorse.worker.enabled=true`.                                                               |
 | `HealthIndicator`           | The worker is on, Actuator is present, and `management.health.workhorse.enabled` is not false. |
-| Dashboard filter            | `workhorse.dashboard.enabled=true`, a servlet application, and one `DashboardAuthorizer` bean. |
+| Dashboard filter            | `workhorse.dashboard.enabled=true` and a servlet application.                                  |
+
+Each bean in the table also needs a selected `DataSource`. The dashboard filter takes the
+`DashboardAuthorizer` bean through `ObjectProvider.getIfUnique()`: the only bean, or the `@Primary`
+one. If the context has no such bean, or several and none is `@Primary`, the starter throws
+`IllegalStateException`, and the context does not start. The filter reports the
+`workhorse.worker.maintenance-interval` value in milliseconds as `tickIntervalMs` of its
+`maintenanceLoops`. A `DashboardCustomizer` runs after that and can replace the value.
 
 `TransactionAwareConnectionSource` acquires through `DataSourceUtils.getConnection`. Inside a
 Spring transaction of this `DataSource`, it returns the connection that holds the transaction, and
@@ -2861,13 +2882,18 @@ that lookup fails, the starter logs one warning. Each source then treats every c
 actual transaction holds as owned, so an enqueue under a manager of another `DataSource` does not
 commit on its own.
 
-The worker bean uses `Worker.builder(dataSource)` and the `workhorse.worker.*` properties. It
-registers every `TaskHandler` bean, and then applies each `WorkerCustomizer`. If the context holds
-`TaskHandler` beans and the worker is off, the starter logs one warning that names
-`workhorse.worker.enabled`.
+The worker bean uses `Worker.builder(dataSource)` on the selected `DataSource` and the
+`workhorse.worker.*` properties. It registers every `TaskHandler` bean, and then applies each
+`WorkerCustomizer`. If two `TaskHandler` beans return the same `taskType()`, the starter throws
+`IllegalStateException` that names both beans, and the context does not start. If the context holds
+`TaskHandler` beans and no `Worker` bean, the starter logs one warning that names
+`workhorse.worker.enabled`. A value such as `on` or `1` builds no worker, so it also gets the
+warning.
 
-`WorkerLifecycle` is a `SmartLifecycle` bean in `SmartLifecycle.DEFAULT_PHASE`. It starts the worker
-with `start()` after the context refreshes. On stop, it calls `worker.stop()` and then `close()` on
+`WorkerLifecycle` is a `SmartLifecycle` bean in `SmartLifecycle.DEFAULT_PHASE`, the highest phase.
+Spring stops it before every lifecycle bean of a lower phase, for example the web server. Spring
+gives no order to beans of the same phase, so a lifecycle bean of the default phase can stop while
+the worker drains. It starts the worker with `start()` after the context refreshes. On stop, it calls `worker.stop()` and then `close()` on
 its own thread. Spring waits for that drain only for `spring.lifecycle.timeout-per-shutdown-phase`.
 Keep that timeout above `workhorse.worker.shutdown-grace` plus 2 seconds. The worker cleanup after
 the grace takes up to about 2 seconds, as the JVM running and stopping section shows.

@@ -1093,10 +1093,11 @@ worker sends its rounds through it ([ADR 0105](../decisions/0105-skip-a-locked-r
 The function returns `(ordinal, task_id, status)` in input order. The statuses are the statuses of
 `heartbeat_v1`, and `busy`:
 
-| Status  | Condition                                                                                                    | Changes |
-| ------- | ------------------------------------------------------------------------------------------------------------ | ------- |
-| `busy`  | The function did not lock the row, and a plain read in the same statement still shows the generation active. | nothing |
-| `stale` | No `UPDATE` matched, and the lease is not `busy`. This includes a missing or replaced generation.            | nothing |
+| Status  | Condition                                                                                                                                                                            | Changes |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `busy`  | The function did not lock the row, and a plain read in the same statement still shows the generation active.                                                                         | nothing |
+| `stale` | No `UPDATE` matched, and the lease is not `busy`. This includes a missing or replaced generation.                                                                                    | nothing |
+| `stale` | The `UPDATE` matched, but `expires_at` is at or before the time of step 2. No cancel request, passed deadline, or passed attempt timeout applies, because those statuses come first. | nothing |
 
 `busy` means no renewal and no ownership verdict. It does not mean that the worker still owns the
 lease: a settlement can have changed the row in a transaction that has not committed yet. A
@@ -1217,12 +1218,14 @@ fails a task because of it.
 
 Each attempt instead keeps a local lease watchdog:
 
-| SDK        | Watchdog                                                                                                       |
-| ---------- | -------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `TaskAttempt`                                                                                                  |
-| Python     | the per-attempt expiration thread                                                                              |
-| Go         | the attempt's watchdog timer                                                                                   |
-| Rust       | the `watchdog` timer in `Inner::execute`, which cancels the `CancellationToken` with `CancelReason::LeaseLost` |
+| SDK          | Watchdog                                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript   | `TaskAttempt`                                                                                                                                               |
+| Python       | the per-attempt expiration thread                                                                                                                           |
+| Go           | the attempt's watchdog timer                                                                                                                                |
+| Rust         | the `watchdog` timer in `Inner::execute`, which cancels the `CancellationToken` with `CancelReason::LeaseLost`                                              |
+| Ruby         | the `workhorse-expiration-<task ID>` thread that `Worker#own` starts, which runs `watch_expiration` and cancels with `:lease_lost`                          |
+| Java, Kotlin | the `workhorse-expiration-<task ID>` virtual thread that `Worker.own` starts, which runs `watchExpiration` and cancels with `CancellationReason.LEASE_LOST` |
 
 The watchdog measures from the time when the claim request left. Every `accepted` heartbeat moves
 the start to the time when the request of that round left. A `busy` answer does not move it. Both times are earlier than the renewal
@@ -1258,6 +1261,14 @@ A Rust task leaves the heartbeat round when its handler returns. A TypeScript, P
 stays in the heartbeat round, and keeps its watchdog, until the worker writes its final transition.
 Thus result validation and the fenced write can wait on the pool for longer than a lease. They do
 not give a finished task to recovery. Every accepted renewal still extends the lease.
+
+A Ruby or JVM task keeps its heartbeat membership and its watchdog while the handler runs, which
+includes its checkpoint and durable wait writes, and while the worker encodes and checks the
+result. Then `Worker.Ownership.release` (Ruby `Worker::Ownership#release`) leaves the heartbeat
+round and waits for the watchdog. The final write runs after that release: the completion, the
+failure, the release for shutdown, or the acknowledgement of a cancellation. No round renews the
+lease while that write waits. If the write waits until the lease expires, recovery can take the
+task, and the fence then refuses the write.
 
 The SDKs differ in what a refusal does after the handler has returned.
 

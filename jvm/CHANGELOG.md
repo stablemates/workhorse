@@ -67,6 +67,16 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   transaction manager, it runs the call in autocommit, so the task commits also when the pool turns
   autocommit off. When the context has a `JtaTransactionManager`, it still joins the JTA
   transaction.
+- The starter has a new property, `workhorse.data-source`, the bean name of the `DataSource` for
+  every Workhorse bean. It is an additive API change: `WorkhorseProperties` gets
+  `getDataSource()` and `setDataSource(String)`. If the property names no `DataSource` bean, the
+  context does not start. Without the property, the starter uses the only or the `@Primary`
+  `DataSource`. With several `DataSource` beans and no selection, it builds no bean and logs a
+  warning (SM-1527).
+- The starter refuses two `TaskHandler` beans for one task type at startup. It logs the worker-off
+  warning when `TaskHandler` beans exist and no `Worker` bean exists, for example for
+  `workhorse.worker.enabled=on`. The dashboard filter reports `workhorse.worker.maintenance-interval`
+  as its tick interval (SM-1527).
 - Kotlin `handle<P>` and `handleBatch<P>` decode each payload as the full type of `P`, with its type
   arguments, such as `List<Order>`. `Worker.Builder.handleBatch(String, Type, BatchOptions,
   BatchHandler)` is the new Java overload that `handleBatch<P>` uses.

@@ -2,14 +2,19 @@ package run.workhorse.spring;
 
 import io.opentelemetry.api.OpenTelemetry;
 import jakarta.servlet.Filter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import javax.sql.DataSource;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.springframework.beans.factory.BeanFactoryUtils;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.AllNestedConditions;
+import org.springframework.boot.autoconfigure.condition.AnyNestedCondition;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -17,13 +22,18 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.autoconfigure.condition.NoneNestedConditions;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Condition;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.transaction.PlatformTransactionManager;
 import run.workhorse.Admin;
 import run.workhorse.ConnectionSource;
@@ -40,6 +50,11 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Builds the Workhorse beans from the application's {@code DataSource} (ADR 0103, "Spring Boot
  * starter").
+ *
+ * <p>The starter uses the {@code DataSource} bean that {@code workhorse.data-source} names. When
+ * that property is unset, it uses the only {@code DataSource} bean or the {@code @Primary} one. If
+ * the context holds several {@code DataSource} beans and none of these rules selects one, the
+ * starter builds no Workhorse bean and logs one warning.
  *
  * <ul>
  *   <li>A {@link TransactionAwareConnectionSource}, and {@link Queue} and {@link Admin} beans on
@@ -63,7 +78,6 @@ import tools.jackson.databind.json.JsonMapper;
       "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
       "org.springframework.boot.opentelemetry.autoconfigure.OpenTelemetrySdkAutoConfiguration"
     })
-@ConditionalOnSingleCandidate(DataSource.class)
 @EnableConfigurationProperties(WorkhorseProperties.class)
 public final class WorkhorseAutoConfiguration {
   private static final Log LOG = LogFactory.getLog(WorkhorseAutoConfiguration.class);
@@ -77,6 +91,127 @@ public final class WorkhorseAutoConfiguration {
 
   // The class stays public, so an application can name it in `exclude`. Each @Bean method is
   // package-private, so a new bean dependency does not change the public API in api/java.txt.
+  // Each bean and nested configuration that builds a Workhorse bean carries
+  // @Conditional(DataSourceSelected.class). The class itself carries no condition, so the
+  // back-off warning can run when no DataSource is selected.
+
+  /**
+   * Matches when {@code workhorse.data-source} has any value. Unlike
+   * {@code @ConditionalOnProperty}, it treats the value {@code false} as a bean name.
+   */
+  static final class DataSourcePropertySet implements Condition {
+    @Override
+    public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+      return context.getEnvironment().containsProperty("workhorse.data-source");
+    }
+  }
+
+  /**
+   * Matches when {@code workhorse.data-source} is set, or when the context has one {@code
+   * DataSource} candidate: the only bean or the {@code @Primary} one.
+   */
+  static final class DataSourceSelected extends AnyNestedCondition {
+    DataSourceSelected() {
+      super(ConfigurationPhase.REGISTER_BEAN);
+    }
+
+    @Conditional(DataSourcePropertySet.class)
+    static final class Named {}
+
+    @ConditionalOnSingleCandidate(DataSource.class)
+    static final class Single {}
+  }
+
+  /** Matches when neither rule of {@link DataSourceSelected} matches. */
+  static final class NoDataSourceSelected extends NoneNestedConditions {
+    NoDataSourceSelected() {
+      super(ConfigurationPhase.REGISTER_BEAN);
+    }
+
+    @Conditional(DataSourcePropertySet.class)
+    static final class Named {}
+
+    @ConditionalOnSingleCandidate(DataSource.class)
+    static final class Single {}
+  }
+
+  /** Matches when the context holds {@code DataSource} beans, but no rule selects one. */
+  static final class SeveralDataSources extends AllNestedConditions {
+    SeveralDataSources() {
+      super(ConfigurationPhase.REGISTER_BEAN);
+    }
+
+    @ConditionalOnBean(DataSource.class)
+    static final class Present {}
+
+    @Conditional(NoDataSourceSelected.class)
+    static final class NotSelected {}
+  }
+
+  /**
+   * The {@code DataSource} of every Workhorse bean: the bean that {@code workhorse.data-source}
+   * names, or else the only candidate.
+   */
+  static DataSource dataSource(
+      WorkhorseProperties properties,
+      ListableBeanFactory beans,
+      ObjectProvider<DataSource> dataSources) {
+    String name = properties.getDataSource();
+    if (name == null) {
+      return dataSources.getObject();
+    }
+    requireNamedDataSource(beans, name);
+    return beans.getBean(name, DataSource.class);
+  }
+
+  /** Throws {@link IllegalStateException} when {@code name} names no {@code DataSource} bean. */
+  static void requireNamedDataSource(ListableBeanFactory beans, String name) {
+    if (!beans.containsBean(name) || !beans.isTypeMatch(name, DataSource.class)) {
+      throw new IllegalStateException(
+          "workhorse.data-source=" + name + " names no DataSource bean in the context");
+    }
+  }
+
+  /**
+   * The startup check of {@code workhorse.data-source}. It runs also when the application defines
+   * every Workhorse bean itself, so no starter bean reads the property.
+   */
+  @Configuration(proxyBeanMethods = false)
+  @Conditional(DataSourcePropertySet.class)
+  static class DataSourcePropertyConfiguration {
+    @Bean
+    static SmartInitializingSingleton workhorseDataSourceCheck(
+        ListableBeanFactory beans, ObjectProvider<WorkhorseProperties> properties) {
+      return () -> {
+        String name = properties.getObject().getDataSource();
+        if (name != null) {
+          requireNamedDataSource(beans, name);
+        }
+      };
+    }
+  }
+
+  /** The warning when the starter backs off because several DataSource beans exist. */
+  @Configuration(proxyBeanMethods = false)
+  @Conditional(SeveralDataSources.class)
+  static class DataSourceBackOffConfiguration {
+    @Bean
+    static SmartInitializingSingleton workhorseDataSourceWarning(ListableBeanFactory beans) {
+      return () -> {
+        String[] names =
+            BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
+                beans, DataSource.class, true, false);
+        LOG.warn(
+            "The context holds "
+                + names.length
+                + " DataSource beans ("
+                + String.join(", ", names)
+                + ") and none is @Primary, so the starter builds no Workhorse bean. Set"
+                + " workhorse.data-source to the bean name of the DataSource for Workhorse, or"
+                + " mark one DataSource bean @Primary.");
+      };
+    }
+  }
 
   /**
    * The connection source that joins the current Spring transaction. With a {@code
@@ -84,10 +219,14 @@ public final class WorkhorseAutoConfiguration {
    */
   @Bean
   @ConditionalOnMissingBean
+  @Conditional(DataSourceSelected.class)
   ConnectionSource workhorseConnectionSource(
-      DataSource dataSource, ObjectProvider<PlatformTransactionManager> transactionManagers) {
+      WorkhorseProperties properties,
+      ListableBeanFactory beans,
+      ObjectProvider<DataSource> dataSources,
+      ObjectProvider<PlatformTransactionManager> transactionManagers) {
     boolean jta = transactionManagers.orderedStream().anyMatch(WorkhorseAutoConfiguration::isJta);
-    return new TransactionAwareConnectionSource(dataSource, jta);
+    return new TransactionAwareConnectionSource(dataSource(properties, beans, dataSources), jta);
   }
 
   /**
@@ -114,6 +253,7 @@ public final class WorkhorseAutoConfiguration {
    */
   @Bean
   @ConditionalOnMissingBean
+  @Conditional(DataSourceSelected.class)
   Queue workhorseQueue(
       ConnectionSource connections,
       WorkhorseProperties properties,
@@ -130,6 +270,7 @@ public final class WorkhorseAutoConfiguration {
   /** The operator API. */
   @Bean
   @ConditionalOnMissingBean
+  @Conditional(DataSourceSelected.class)
   Admin workhorseAdmin(ConnectionSource connections) {
     return new Admin(connections);
   }
@@ -137,6 +278,7 @@ public final class WorkhorseAutoConfiguration {
   /** The codec on the application's Jackson {@code JsonMapper}. */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnClass(JsonMapper.class)
+  @Conditional(DataSourceSelected.class)
   static class JacksonCodecConfiguration {
     @Bean
     @ConditionalOnBean(JsonMapper.class)
@@ -155,6 +297,7 @@ public final class WorkhorseAutoConfiguration {
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnClass(OpenTelemetry.class)
   @ConditionalOnSingleCandidate(OpenTelemetry.class)
+  @Conditional(DataSourceSelected.class)
   static class OpenTelemetryConfiguration {
     @Bean
     @ConditionalOnMissingBean
@@ -166,21 +309,23 @@ public final class WorkhorseAutoConfiguration {
   /** The worker. Only {@code workhorse.worker.enabled=true} builds it. */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnBooleanProperty("workhorse.worker.enabled")
+  @Conditional(DataSourceSelected.class)
   static class WorkerConfiguration {
     // Worker is AutoCloseable, so Spring calls close() when it destroys the bean. That runs before
     // the DataSource closes, and it waits for a drain that the lifecycle stop did not finish.
     @Bean
     @ConditionalOnMissingBean
     Worker workhorseWorker(
-        DataSource dataSource,
         WorkhorseProperties properties,
+        ListableBeanFactory beans,
+        ObjectProvider<DataSource> dataSources,
         ObjectProvider<JsonCodec> codec,
         ObjectProvider<WorkhorseTelemetry> telemetry,
         ObjectProvider<TaskHandler<?>> handlers,
         ObjectProvider<WorkerCustomizer> customizers) {
       WorkhorseProperties.WorkerProperties options = properties.getWorker();
       Worker.Builder builder =
-          Worker.builder(dataSource)
+          Worker.builder(dataSource(properties, beans, dataSources))
               .queues(options.getQueues().toArray(String[]::new))
               .concurrency(options.getConcurrency())
               .lease(options.getLease())
@@ -207,9 +352,37 @@ public final class WorkhorseAutoConfiguration {
         builder.pollInterval(pollInterval);
       }
       telemetry.ifAvailable(builder::telemetry);
+      requireOneHandlerPerTaskType(beans);
       handlers.orderedStream().forEach(builder::handle);
       customizers.orderedStream().forEach(customizer -> customizer.customize(builder));
       return builder.build();
+    }
+
+    /**
+     * Throws {@link IllegalStateException} when two {@code TaskHandler} beans name one task type.
+     * The core builder keeps only the last registration of a task type, so the other bean would
+     * never run.
+     */
+    @SuppressWarnings("rawtypes")
+    static void requireOneHandlerPerTaskType(ListableBeanFactory beans) {
+      Map<String, String> owners = new LinkedHashMap<>();
+      Map<String, TaskHandler> handlers =
+          BeanFactoryUtils.beansOfTypeIncludingAncestors(beans, TaskHandler.class, true, false);
+      handlers.forEach(
+          (name, handler) -> {
+            String taskType = handler.taskType();
+            String owner = owners.putIfAbsent(taskType, name);
+            if (owner != null) {
+              throw new IllegalStateException(
+                  "The TaskHandler beans "
+                      + owner
+                      + " and "
+                      + name
+                      + " both handle task type "
+                      + taskType
+                      + ". Define one TaskHandler bean for each task type.");
+            }
+          });
     }
 
     /**
@@ -258,19 +431,22 @@ public final class WorkhorseAutoConfiguration {
 
   /**
    * The warning for a worker process that forgot the property: the context holds {@code
-   * TaskHandler} beans, but the worker is off.
+   * TaskHandler} beans, but no {@code Worker} bean. The check reads the beans, not the property, so
+   * a value such as {@code on} that builds no worker also logs the warning.
    */
   @Configuration(proxyBeanMethods = false)
-  @ConditionalOnBooleanProperty(
-      name = "workhorse.worker.enabled",
-      havingValue = false,
-      matchIfMissing = true)
+  @Conditional(DataSourceSelected.class)
   static class WorkerOffConfiguration {
     @Bean
     static SmartInitializingSingleton workhorseWorkerOffWarning(ListableBeanFactory beans) {
       return () -> {
-        String[] names = beans.getBeanNamesForType(TaskHandler.class, true, false);
-        if (names.length > 0) {
+        // The worker registers handler beans of a parent context too, so the check reads them.
+        String[] names =
+            BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
+                beans, TaskHandler.class, true, false);
+        String[] workers =
+            BeanFactoryUtils.beanNamesForTypeIncludingAncestors(beans, Worker.class, true, false);
+        if (names.length > 0 && workers.length == 0) {
           LOG.warn(
               "The context holds "
                   + names.length
@@ -286,6 +462,7 @@ public final class WorkhorseAutoConfiguration {
   @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
   @ConditionalOnClass({Filter.class, FilterRegistrationBean.class})
   @ConditionalOnBooleanProperty("workhorse.dashboard.enabled")
+  @Conditional(DataSourceSelected.class)
   static class DashboardConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "workhorseDashboard")
@@ -310,6 +487,10 @@ public final class WorkhorseAutoConfiguration {
               .browserModules(List.copyOf(options.getBrowserModules()))
               .configuredWorkers(List.copyOf(options.getConfiguredWorkers()))
               .allowedHosts(List.copyOf(options.getAllowedHosts()))
+              // The worker's tick interval, so the cron page shows the configured value.
+              .maintenanceLoops(
+                  Map.of(
+                      "tickIntervalMs", properties.getWorker().getMaintenanceInterval().toMillis()))
               .codec(codec.getIfAvailable(JsonCodec::standard));
       customizers.orderedStream().forEach(customizer -> customizer.customize(builder));
       // The filter passes every request outside its path to the rest of the chain.

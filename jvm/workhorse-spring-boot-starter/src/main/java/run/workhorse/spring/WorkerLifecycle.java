@@ -262,8 +262,11 @@ public final class WorkerLifecycle implements SmartLifecycle {
   }
 
   /**
-   * The highest phase: the worker starts after every other lifecycle bean and stops before them.
-   * Spring destroys the {@code DataSource} only after every phase stops.
+   * {@link SmartLifecycle#DEFAULT_PHASE}, the highest phase. The worker starts after every
+   * lifecycle bean of a lower phase and stops before them, for example before the web server stops.
+   * Spring gives no order to beans of the same phase, so a lifecycle bean of the default phase can
+   * stop while the worker drains. Spring destroys the {@code DataSource} only after every phase
+   * stops.
    */
   @Override
   public int getPhase() {

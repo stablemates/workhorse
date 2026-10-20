@@ -678,7 +678,9 @@ the rest of the function runs outside the transaction.
   and `HibernateTransactionManager` begin such a transaction.
 - Outside such a transaction, it runs the call in autocommit. This includes a transaction of
   another transaction manager, such as one of a second `DataSource`.
-- The starter applies only when the context has one `DataSource` candidate.
+- The starter uses the `DataSource` bean that `workhorse.data-source` names. Without that property,
+  it uses the only `DataSource` candidate or the `@Primary` one. With several candidates and no
+  selection, it builds no bean and logs a warning.
 - Spring takes its coroutine transaction path only for a `ReactiveTransactionManager`.
 - With a `DataSourceTransactionManager`, a `suspend` `@Transactional` method commits at its first
   suspension point.
