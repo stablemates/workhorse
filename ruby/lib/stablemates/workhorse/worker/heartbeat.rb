@@ -21,6 +21,10 @@ module Stablemates
         # A round that did not finish by its deadline.
         class RoundTimeout < StandardError; end
 
+        # A round that stopped before it sent its heartbeat statement, and left its connection clean:
+        # it sent nothing, or its transaction rolled back. The worker keeps the connection.
+        class RoundExpired < StandardError; end
+
         STRINGS = PG::TypeMapAllStrings.new
         # Sets both server timeouts for the current transaction only. SET LOCAL cannot take a bind
         # parameter, and set_config(..., true) has the same scope.
@@ -31,7 +35,16 @@ module Stablemates
         MINIMUM_REMAINING = 0.008
         # The longest base delay before a busy retry, in seconds (Heartbeat.busy_retry_delay).
         BUSY_RETRY_BASE = 0.1
-        private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :BUSY_RETRY_BASE
+        # A bounded busy retry with less time than BUSY_RETRY_MINIMUM left does not run, and the next
+        # regular round renews its leases. The minimum is the time a round needs at the settings
+        # statement, plus a margin for the payload, the wait for the connection, and BEGIN.
+        BUSY_RETRY_MARGIN = 0.012
+        BUSY_RETRY_MINIMUM = MINIMUM_REMAINING + BUSY_RETRY_MARGIN
+        # The wait after a shared round raised an unexpected error, in seconds, so that an error that
+        # repeats cannot keep the thread busy.
+        FAILED_ROUND_DELAY = 0.1
+        private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :BUSY_RETRY_BASE, :BUSY_RETRY_MARGIN,
+          :BUSY_RETRY_MINIMUM, :FAILED_ROUND_DELAY
 
         # The deadline of one round, in seconds, for an +interval+ in seconds. It is three quarters
         # of the interval, so that one timed-out round leaves a renewal margin when 2 × interval +
@@ -104,15 +117,27 @@ module Stablemates
           # failed round does not start a new schedule.
           @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           @busy = nil
-          if @dedicated
-            run_dedicated
-          else
-            rounds { |sql, params, _timeout| Executor.for(@source).rows(sql, params) }
+          @dedicated ? run_dedicated : run_shared
+        end
+
+        # Runs the rounds of a borrowing heartbeat. An unexpected error does not end the thread while
+        # a member remains: the thread ends only through +stop_if_idle+, so a register that races
+        # the end starts a new thread.
+        def run_shared
+          loop do
+            return if rounds { |sql, params, _timeout| Executor.for(@source).rows(sql, params) }
+          rescue
+            @busy = nil
+            return if stop_if_idle
+
+            @wake.wait(FAILED_ROUND_DELAY)
+            @wake.reset
           end
         end
 
         # Holds one connection across rounds. A round that fails or overruns discards the
-        # connection, and the next round checks out a new one.
+        # connection, and the next round checks out a new one. A round that expires before its
+        # heartbeat statement keeps the connection (+bounded_rows+).
         def run_dedicated
           loop do
             finished = false
@@ -124,7 +149,7 @@ module Stablemates
               end
             rescue
               # The pool refused a connection. The lease watchdog covers rounds that keep failing.
-              finished = idle?
+              finished = stop_if_idle
             end
             return if finished
           end
@@ -141,13 +166,13 @@ module Stablemates
         # one-round-in-flight rule, and it never moves the regular slot.
         def rounds(&)
           loop do
-            interval = @lock.synchronize { @members.each_value.map(&:interval).min }
+            interval = shortest_interval_or_stop
             if interval.nil?
               @busy = nil
-              return true if stop_if_idle
+              return true
             end
 
-            regular_at = @previous + (interval || 0)
+            regular_at = @previous + interval
             retrying = !@busy.nil? && @busy_at < regular_at
             remaining = (retrying ? @busy_at : regular_at) - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             if remaining.positive?
@@ -160,14 +185,20 @@ module Stablemates
               # With nothing left to retry, the next regular round waits for its slot.
               next if selection.nil?
 
-              send_round(selection, retry_deadline(selection, interval, regular_at), interval, rotate: false, &)
+              started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              deadline = retry_deadline(selection, interval, regular_at, started)
+              # A bounded retry with too little time left would fail before its heartbeat statement.
+              # It sends nothing, and the next regular round renews every lease, the busy ones too.
+              next if @dedicated && deadline - started < BUSY_RETRY_MINIMUM
+
+              send_round(selection, deadline, interval, rotate: false, &)
               next
             end
             @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             # The deadline starts before the payloads are built, so serialization counts against it.
             deadline = @previous + round_bound(interval)
-            members = @lock.synchronize { @members.values }
-            return true if members.empty? && stop_if_idle
+            members = members_or_stop
+            return true if members.nil?
 
             send_round(members, deadline, interval, rotate: true, &)
           end
@@ -182,9 +213,14 @@ module Stablemates
         #
         # A round replaces the pending busy retry. If one or more members are busy, it schedules one
         # retry for them. A round that raises schedules none, and the next regular round tries again.
+        #
+        # A statement that expires before its heartbeat (+RoundExpired+) stops the round on its
+        # connection. The statements before it still count, and the next round sends the rest. A
+        # busy retry that stops this way schedules no other retry.
         def send_round(members, deadline, interval, rotate:)
           @busy = nil
           busy = []
+          expired = false
           ordered_groups(members, rotate:).each do |worker_id, group|
             sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
             leases = group.map do |member|
@@ -196,6 +232,9 @@ module Stablemates
 
             rows = begin
               yield SqlCatalogue::HEARTBEAT_MANY_V2, params, timeout
+            rescue RoundExpired
+              expired = true
+              break
             rescue RoundTimeout, PG::Error
               raise if @dedicated
 
@@ -206,7 +245,7 @@ module Stablemates
             end
             busy.concat(settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at))
           end
-          return if busy.empty?
+          return if busy.empty? || (expired && !rotate)
 
           @busy = busy
           @busy_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + Heartbeat.busy_retry_delay(interval)
@@ -231,9 +270,9 @@ module Stablemates
 
         # A busy retry ends by its own round bound, by the next regular slot, and by the end of the
         # earliest local lease window in it, so it never renews a lease that the worker has already
-        # given up. A borrowing heartbeat ignores the deadline, as in its regular rounds.
-        def retry_deadline(selection, interval, regular_at)
-          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        # given up. A borrowing heartbeat ignores the deadline, as in its regular rounds. +started+ is
+        # the monotonic start of the retry.
+        def retry_deadline(selection, interval, regular_at, started)
           ends = selection.map { |member| member.lease_ends_at.call || started }
           [started + round_bound(interval), regular_at, *ends].min
         end
@@ -293,15 +332,31 @@ module Stablemates
           @lock.synchronize { @members[[member.worker_id, member.task.id]].equal?(member) }
         end
 
-        def idle? = @lock.synchronize { @members.empty? }
-
-        # Ends the thread when no member remains. A register that races this starts a new one.
+        # Ends the thread when no member remains, and returns true then. A register that races this
+        # starts a new one.
         def stop_if_idle
           @lock.synchronize do
-            return false unless @members.empty?
+            @thread = nil if @members.empty?
+            @members.empty?
+          end
+        end
 
-            @thread = nil
-            true
+        # The shortest member interval, or nil when no member remains. Nil also ends the thread. The
+        # read and the end take one lock, so a register between them cannot find a thread that is
+        # about to end.
+        def shortest_interval_or_stop
+          @lock.synchronize do
+            @thread = nil if @members.empty?
+            @members.each_value.map(&:interval).min
+          end
+        end
+
+        # The current members, or nil when none remains. Nil also ends the thread, under the same
+        # lock as the read (+shortest_interval_or_stop+).
+        def members_or_stop
+          @lock.synchronize do
+            @thread = nil if @members.empty?
+            @members.values unless @members.empty?
           end
         end
 
@@ -312,17 +367,24 @@ module Stablemates
         # for. The timeouts (+round_timeouts+) end the heartbeat, and a transaction whose client
         # stopped before COMMIT, by the deadline. A COMMIT that PostgreSQL has already started can
         # still finish later. Both settings end with the transaction, so the connection keeps no
-        # session state. Any failure discards the connection, which rolls back.
+        # session state.
+        #
+        # A round that expires before its heartbeat statement, while no statement is in flight,
+        # raises RoundExpired: with less than MINIMUM_REMAINING left before BEGIN it sends nothing,
+        # and after BEGIN it rolls back first (+expire+). Any other failure raises RoundTimeout or
+        # PG::Error, and the caller discards the connection, which rolls back.
         def bounded_rows(connection, sql, params, timeout)
           deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+          raise RoundExpired if timeout < MINIMUM_REMAINING
+
           bounded_result(connection, "BEGIN", [], deadline).clear
           set_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           remaining = deadline - set_at
-          raise RoundTimeout if remaining < MINIMUM_REMAINING
+          expire(connection, deadline) if remaining < MINIMUM_REMAINING
 
           bounded_result(connection, ROUND_TIMEOUTS, round_timeouts(remaining), deadline).clear
           # The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
-          raise RoundTimeout if Process.clock_gettime(Process::CLOCK_MONOTONIC) - set_at > remaining / 4
+          expire(connection, deadline) if Process.clock_gettime(Process::CLOCK_MONOTONIC) - set_at > remaining / 4
 
           result = bounded_result(connection, sql, params, deadline)
           rows = begin
@@ -336,6 +398,15 @@ module Stablemates
           raise RoundTimeout unless deadline > Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
           rows
+        end
+
+        # Rolls back a round that expired before its heartbeat statement, and raises RoundExpired. The
+        # ROLLBACK has the round's deadline, so it is not sent after it. If the ROLLBACK cannot be
+        # sent, fails, or does not end by the deadline, RoundTimeout or PG::Error goes to the
+        # caller, which discards the connection.
+        def expire(connection, deadline)
+          bounded_result(connection, "ROLLBACK", [], deadline).clear
+          raise RoundExpired
         end
 
         # The server budgets for the rest of a round with +remaining+ seconds left, in whole

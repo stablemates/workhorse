@@ -38,7 +38,10 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
 - The worker renews leases through `heartbeat_many_v2`, and it keeps a lease that the answer marks
   `busy`. Its heartbeat rounds follow the rules of the other SDKs: a fixed schedule, a round bound
   of three quarters of the interval from 200 ms, and server timeouts in each round on the dedicated
-  connection. For `Worker.Builder.heartbeat` and `WorkerScope.heartbeat`, 100 ms is the smallest
-  supported value. The [heartbeat round
+  connection. A round that expires before it sends the heartbeat statement rolls back and keeps
+  the dedicated connection, and a round that may still run a statement discards it. A busy retry
+  with less than 20 ms left before its deadline sends nothing, and the next regular round renews the
+  busy leases (SM-1492). For `Worker.Builder.heartbeat` and `WorkerScope.heartbeat`, 100 ms is the
+  smallest supported value. The [heartbeat round
   deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
   schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.

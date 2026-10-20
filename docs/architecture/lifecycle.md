@@ -1175,19 +1175,26 @@ apply in every SDK:
 6. A bounded busy retry ends by `min(retry start + round bound, next regular slot, earliest watchdog
    end of its leases)`. It uses the same transaction and server timeouts as a regular round. A round
    without a client deadline, under shared heartbeats, retries with no deadline.
+   If the deadline of a bounded busy retry is less than 20 ms after its start, the retry sends
+   nothing. The 20 ms is the 8 ms that a round needs at its settings statement ([Heartbeat round
+   deadline](#heartbeat-round-deadline)), plus a margin of 12 ms for the payload, the wait for the
+   connection, and `BEGIN`. The retry does not touch the connection and schedules no other retry.
+   The regular round then sends every registered lease, busy ones too
+   ([ADR 0105](../decisions/0105-skip-a-locked-row-in-a-heartbeat-and-report-the-lease-as-busy.md),
+   amendment of 2026-10-20).
 7. Each round, regular or retry, replaces the recorded selection. A busy retry that fails schedules
    no other retry, and the next regular round tries again.
 
 A busy retry is an opportunity to renew, not a guarantee.
 
-| SDK        | Base constant        | Where the retry runs                                                                         |
-| ---------- | -------------------- | -------------------------------------------------------------------------------------------- |
-| TypeScript | `BUSY_RETRY_BASE_MS` | `scheduleHeartbeatBatch` and `takeBusyRetry` in `worker.ts`                                  |
-| Python     | `BUSY_RETRY_BASE_MS` | `_run_heartbeats` and `_take_busy_retry` in `worker.py`, for every Python worker             |
-| Go         | `busyRetryBase`      | `runHeartbeats` and `busyRetrySelection` in `worker.go`                                      |
-| Rust       | `BUSY_RETRY_BASE`    | `run_heartbeats` and `State::retry_selection` in `worker/heartbeat.rs`                       |
-| Ruby       | `BUSY_RETRY_BASE`    | `rounds` and `take_busy_retry` in `worker/heartbeat.rb`, on the heartbeat thread of the pool |
-| JVM        | `BUSY_RETRY_BASE_MS` | `rounds` and `takeBusyRetry` in `Heartbeat.java`, on the heartbeat thread of the pool        |
+| SDK        | Base constant        | Minimum constant        | Where the retry runs                                                                         |
+| ---------- | -------------------- | ----------------------- | -------------------------------------------------------------------------------------------- |
+| TypeScript | `BUSY_RETRY_BASE_MS` | `BUSY_RETRY_MINIMUM_MS` | `scheduleHeartbeatBatch` and `takeBusyRetry` in `worker.ts`                                  |
+| Python     | `BUSY_RETRY_BASE_MS` | `BUSY_RETRY_MINIMUM_MS` | `_run_heartbeats` and `_take_busy_retry` in `worker.py`, for every Python worker             |
+| Go         | `busyRetryBase`      | `busyRetryMinimum`      | `runHeartbeats` and `busyRetrySelection` in `worker.go`                                      |
+| Rust       | `BUSY_RETRY_BASE`    | `BUSY_RETRY_MINIMUM`    | `run_heartbeats` and `State::retry_selection` in `worker/heartbeat.rs`                       |
+| Ruby       | `BUSY_RETRY_BASE`    | `BUSY_RETRY_MINIMUM`    | `rounds` and `take_busy_retry` in `worker/heartbeat.rb`, on the heartbeat thread of the pool |
+| JVM        | `BUSY_RETRY_BASE_MS` | `BUSY_RETRY_MIN_NANOS`  | `rounds` and `takeBusyRetry` in `Heartbeat.java`, on the heartbeat thread of the pool        |
 
 **Lease margin with the defaults.** The lease is 30,000 ms and the interval 10,000 ms. After an
 accepted round sent at 0 s, the watchdog ends at 30 s. The regular rounds at 10 s and 20 s can both
@@ -1404,6 +1411,22 @@ A failed statement rolls back while time remains. In TypeScript, Go, and Python,
 JVM, a deadlock fails the round, and a later round sends again. A round
 that fails or passes its deadline discards its connection, because the worker cannot know its state.
 As before, a failed round changes no lease: every task continues, and the next round tries again.
+
+A round that expires before it sends the heartbeat statement keeps its connection, because no
+statement of the round can still run. The worker keeps the connection in these cases:
+
+1. Less than 8 ms remains before step 3. The round sends nothing.
+2. After step 3, and before step 5, less than 8 ms remains at step 4, or the settings statement uses
+   more than its quarter. The round then sends `ROLLBACK`, under the rollback rule above. If the
+   `ROLLBACK` succeeds, the worker keeps the connection, and the next round uses it.
+
+The worker discards the connection if the `ROLLBACK` cannot be sent, fails, or does not end in its
+bound. It also discards the connection if the deadline passes while a statement is in flight, and
+after any failure at or after step 5. The kept round still counts as a failed round: it renews no
+lease, and a busy retry schedules no other retry. In Ruby and JVM, the round then sends no later
+statement, and the results of its earlier statements still count. Thus a handler that holds every
+other pool connection cannot make a short round take the heartbeat connection away
+([ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)).
 
 Each SDK keeps the deadline in one named value, and computes it with one helper that uses the same
 formula in every SDK:

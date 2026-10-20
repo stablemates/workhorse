@@ -20,6 +20,7 @@ import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
 import { heartbeatRoundBoundMs } from "./heartbeat-round.js";
+import { MINIMUM_REMAINING_MS } from "./heartbeat-connection.js";
 import { MAX_TIMER_DELAY_MS, monotonicNow } from "./timers.js";
 import type {
   ScheduleWaitRequest,
@@ -106,6 +107,10 @@ const TIER_PROBE_INTERVAL_MS = 30_000;
 // The longest base delay before a busy retry. The retry waits base × (1 + random), with
 // base = min(BUSY_RETRY_BASE_MS, heartbeatMs / 8).
 const BUSY_RETRY_BASE_MS = 100;
+// The shortest bound a busy retry on the reserved connection runs with: the time a round needs at
+// the settings statement, plus a margin for the payload, the wait for the connection, and BEGIN.
+const BUSY_RETRY_MARGIN_MS = 12;
+const BUSY_RETRY_MINIMUM_MS = MINIMUM_REMAINING_MS + BUSY_RETRY_MARGIN_MS;
 
 /** One registered lease in the heartbeat batch. Each attempt registers its own object. */
 interface HeartbeatLease {
@@ -787,6 +792,13 @@ export class Worker {
             ),
           );
     const channel = this.reservedHeartbeatChannel();
+    // A bounded busy retry with too little time left would fail before its heartbeat. It sends
+    // nothing, and the next regular round renews every lease, the busy ones too.
+    if (retrySelection !== undefined && channel !== undefined && roundMs < BUSY_RETRY_MINIMUM_MS) {
+      this.heartbeatInFlight = false;
+      this.scheduleHeartbeatBatch();
+      return;
+    }
     // A round on the reserved connection is bounded by heartbeatRoundMs, so a statement stuck on
     // it cannot hold back the next round.
     const heartbeat: Promise<Map<string, HeartbeatBatchStatus>> = channel

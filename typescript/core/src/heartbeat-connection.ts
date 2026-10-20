@@ -62,10 +62,21 @@ const ROUND_TIMEOUTS =
  * A round with less time than this left fails before it sends its heartbeat. At this size every
  * budget of `roundTimeouts` is at least 1 ms, and the budgets still fit in the time left.
  */
-const MINIMUM_REMAINING_MS = 8;
+export const MINIMUM_REMAINING_MS = 8;
 
 function roundExpired(): Error {
   return new Error("Heartbeat round reached its deadline");
+}
+
+/**
+ * A round that reached its deadline before it sent its heartbeat, with no statement in flight. It
+ * sent nothing, or its ROLLBACK returned, so the connection is clean and the next round uses it.
+ */
+class HeartbeatRoundExpiredCleanly extends Error {
+  constructor() {
+    super("Heartbeat round reached its deadline before its heartbeat");
+    this.name = "HeartbeatRoundExpiredCleanly";
+  }
 }
 
 /**
@@ -96,12 +107,22 @@ function roundTimeouts(remainingMs: number): [statement: string, idle: string] {
  * Both settings end with the transaction, so the connection keeps no session state.
  *
  * The view sends no command after the deadline. It rolls back a failed statement only while time is
- * left; otherwise the caller discards the connection.
+ * left; otherwise the caller discards the connection. If the round expires before it sends its
+ * heartbeat, and nothing was sent or the ROLLBACK returns, the view rejects with
+ * `HeartbeatRoundExpiredCleanly`, and the caller keeps the connection. A round that sent a
+ * heartbeat statement, also one that failed before a deadlock resend, never expires cleanly.
  */
 function boundOnServer(client: Queryable, deadline: number, expired: () => boolean): Queryable {
-  const send = <R extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+  let heartbeatSent = false;
+  const expiry = (): Error => (heartbeatSent ? roundExpired() : new HeartbeatRoundExpiredCleanly());
+  const send = <R extends QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+    heartbeat = false,
+  ) => {
     // The client timer can fire a little before the clock reaches the deadline, so both count.
-    if (expired() || monotonicNow() >= deadline) throw roundExpired();
+    if (expired() || monotonicNow() >= deadline) throw expiry();
+    if (heartbeat) heartbeatSent = true;
     return client.query<R>(text, values);
   };
   return {
@@ -109,15 +130,17 @@ function boundOnServer(client: Queryable, deadline: number, expired: () => boole
       text: string,
       values?: readonly unknown[],
     ): Promise<QueryResult<R>> {
+      // A round that cannot reach its heartbeat in the time left sends nothing.
+      if (expired() || deadline - monotonicNow() < MINIMUM_REMAINING_MS) throw expiry();
       await send("BEGIN");
       try {
         const setAt = monotonicNow();
         const remaining = deadline - setAt;
-        if (remaining < MINIMUM_REMAINING_MS) throw roundExpired();
+        if (remaining < MINIMUM_REMAINING_MS) throw expiry();
         await send(ROUND_TIMEOUTS, roundTimeouts(remaining));
         // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
-        if (monotonicNow() - setAt > remaining / 4) throw roundExpired();
-        const result = await send<R>(text, values);
+        if (monotonicNow() - setAt > remaining / 4) throw expiry();
+        const result = await send<R>(text, values, true);
         await send("COMMIT");
         // A COMMIT that ends after the deadline does not count as a renewal.
         if (expired() || monotonicNow() >= deadline) throw roundExpired();
@@ -127,7 +150,17 @@ function boundOnServer(client: Queryable, deadline: number, expired: () => boole
         try {
           await send("ROLLBACK");
         } catch {
-          // The round reports its own error below, and the caller discards the connection.
+          // The round reports its own error below, and the caller discards the connection. A
+          // clean expiry is clean only if its ROLLBACK returned.
+          if (error instanceof HeartbeatRoundExpiredCleanly) throw roundExpired();
+        }
+        // A ROLLBACK that ends after the deadline did not end in the round's bound, so the caller
+        // discards the connection, as every SDK does.
+        if (
+          error instanceof HeartbeatRoundExpiredCleanly &&
+          (expired() || monotonicNow() >= deadline)
+        ) {
+          throw roundExpired();
         }
         throw error;
       }
@@ -142,9 +175,10 @@ function boundOnServer(client: Queryable, deadline: number, expired: () => boole
  * because the heartbeat never waits for the shared pool. One deadline bounds a whole round: the wait
  * for the rounds before it, the connect, and the transaction. A round that passes the deadline
  * destroys the connection, and server timeouts end its heartbeat and its idle waits by the same
- * deadline (`boundOnServer`). The timeouts are transaction-scoped, so the connection stays safe
- * behind a transaction-mode pooler. A failed round opens the replacement when it ends, outside the
- * deadline of the next round.
+ * deadline (`boundOnServer`). A round that expires before its heartbeat with no statement in flight
+ * keeps the connection, because nothing of the round can still run on it. The timeouts are
+ * transaction-scoped, so the connection stays safe behind a transaction-mode pooler. A failed round
+ * opens the replacement when it ends, outside the deadline of the next round.
  *
  * Rounds take turns, because every worker on the pool sends its rounds here and one session runs
  * one transaction at a time.
@@ -266,8 +300,12 @@ export class ReservedConnection {
       return await Promise.race([renewal, timedOut]);
     } catch (error) {
       // A client that sent a statement has an unknown state. A connect that the round only waited
-      // for is still clean, so the next round takes it.
-      if (pending !== undefined && lent) this.discard(pending, error);
+      // for is still clean, so the next round takes it. So is a client whose round expired cleanly
+      // before the timer fired: no statement of the round is in flight. If the timer fires first,
+      // the race rejects with its error, and the client is discarded.
+      if (pending !== undefined && lent && !(error instanceof HeartbeatRoundExpiredCleanly)) {
+        this.discard(pending, error);
+      }
       // Rounds start on a fixed schedule, so the next round can start soon after this one. Opening
       // the replacement now starts the connect before that round, which waits for it only if it is
       // still pending. acquire() opens at most one connect at a time.

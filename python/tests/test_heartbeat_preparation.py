@@ -38,6 +38,10 @@ class Server:
 
     now: float = 1_000.0
     prepared: set[str] = field(default_factory=set)
+    # The time that each statement, keyed by a fragment of its SQL, runs on the server.
+    delays: dict[str, float] = field(default_factory=dict)
+    # The error that each statement, keyed by a fragment of its SQL, raises after its delay.
+    errors: dict[str, Exception] = field(default_factory=dict)
     # (kind, sql, at, parameters). A "parse" is a preparation in a cycle of its own; a "run" is an
     # execution cycle, which also parses a statement that is not prepared.
     events: list[tuple[str, str, float, tuple[object, ...]]] = field(default_factory=list)
@@ -56,6 +60,10 @@ class Server:
         if parse_first and sql not in self.prepared:
             self.parse(sql)
         self.events.append(("run", sql, self.now, tuple(parameters)))
+        self.now += sum(delay for fragment, delay in self.delays.items() if fragment in sql)
+        for fragment, error in self.errors.items():
+            if fragment in sql:
+                raise error
         if "set_config" in sql:
             return [("statement",), ("idle",)], [tuple(parameters)]
         return [("ok",)], [(True,)]
@@ -88,6 +96,10 @@ class SyncCursor:
 class SyncConnection:
     def __init__(self, server: Server) -> None:
         self._server = server
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def cursor(self, *, row_factory: Any) -> SyncCursor:  # noqa: ARG002
         return SyncCursor(self._server)
@@ -290,3 +302,163 @@ async def test_asyncpg_runs_a_prepared_round_statement(
     # With a statement cache, the statement stays prepared once. Without one, asyncpg parses it in
     # the cycle that runs it.
     assert prepared == (1 if statement_cache_size else 0)
+
+
+# SM-1492: a round that expires before its heartbeat statement leaves nothing open on the server
+# when its ROLLBACK ends by the deadline. The worker then keeps the connection for the next round.
+EXPIRY_BOUND_SECONDS = 0.1
+
+
+def sent(server: Server) -> list[str]:
+    return [sql for kind, sql, _, _ in server.events if kind == "run"]
+
+
+def sync_round(server: Server, deadline: float) -> list[dict[str, object]]:
+    executor = SyncExecutor(SyncConnection(server), prepare=False)
+    return worker_module._ServerBoundedExecutor(executor, deadline).rows(HEARTBEAT, ("lease",))
+
+
+def test_a_round_with_too_little_time_before_begin_sends_nothing(server: Server) -> None:
+    deadline = server.now + worker_module._MINIMUM_ROUND_REMAINING_SECONDS / 2
+
+    with pytest.raises(worker_module._HeartbeatRoundExpiredCleanly):
+        sync_round(server, deadline)
+
+    assert server.events == []
+
+
+def test_a_slow_begin_that_leaves_too_little_time_rolls_back_cleanly(server: Server) -> None:
+    deadline = server.now + EXPIRY_BOUND_SECONDS
+    # BEGIN leaves 5 ms, less than the round needs at the settings statement.
+    server.delays["BEGIN"] = EXPIRY_BOUND_SECONDS - 0.005
+
+    with pytest.raises(worker_module._HeartbeatRoundExpiredCleanly):
+        sync_round(server, deadline)
+
+    assert sent(server) == ["BEGIN", "ROLLBACK"]
+
+
+def test_a_settings_statement_that_uses_more_than_its_quarter_rolls_back_cleanly(
+    server: Server,
+) -> None:
+    deadline = server.now + EXPIRY_BOUND_SECONDS
+    server.delays["set_config"] = EXPIRY_BOUND_SECONDS / 2
+
+    with pytest.raises(worker_module._HeartbeatRoundExpiredCleanly):
+        sync_round(server, deadline)
+
+    assert sent(server) == ["BEGIN", ROUND_TIMEOUTS.psycopg, "ROLLBACK"]
+
+
+@pytest.mark.parametrize("slow", ["BEGIN", "set_config"])
+def test_a_statement_still_running_at_the_deadline_does_not_expire_cleanly(
+    server: Server, slow: str
+) -> None:
+    deadline = server.now + EXPIRY_BOUND_SECONDS
+    server.delays[slow] = 2 * EXPIRY_BOUND_SECONDS
+
+    with pytest.raises(worker_module._HeartbeatRoundExpired) as raised:
+        sync_round(server, deadline)
+
+    assert not isinstance(raised.value, worker_module._HeartbeatRoundExpiredCleanly)
+    # No command goes out after the deadline, so the transaction stays open until the connection
+    # closes.
+    assert "ROLLBACK" not in sent(server)
+
+
+class Deadlock(Exception):
+    sqlstate = "40P01"
+
+
+def test_a_resend_after_a_rollback_that_could_not_go_out_does_not_expire_cleanly(
+    server: Server,
+) -> None:
+    deadline = server.now + EXPIRY_BOUND_SECONDS
+    # PostgreSQL chooses the heartbeat as a deadlock victim after the deadline, so no ROLLBACK goes
+    # out and the transaction stays open.
+    server.delays["heartbeat"] = 2 * EXPIRY_BOUND_SECONDS
+    server.errors["heartbeat"] = Deadlock("deadlock detected")
+    executor = SyncExecutor(SyncConnection(server), prepare=False)
+    bounded = worker_module._ServerBoundedExecutor(executor, deadline)
+
+    with pytest.raises(worker_module._HeartbeatRoundExpired) as raised:
+        worker_module._fenced_write_rows(bounded, HEARTBEAT, ("lease",))
+
+    assert not isinstance(raised.value, worker_module._HeartbeatRoundExpiredCleanly)
+    assert "ROLLBACK" not in sent(server)
+
+
+class Connections:
+    """A heartbeat executor factory that records each connection it opens and each close."""
+
+    def __init__(self, server: Server) -> None:
+        self._server = server
+        self.opened: list[SyncConnection] = []
+        self.returned: list[SyncConnection] = []
+
+    def open(self) -> tuple[SyncExecutor, Callable[[], None]]:
+        connection = SyncConnection(self._server)
+        self.opened.append(connection)
+        return SyncExecutor(connection, prepare=False), lambda: self.returned.append(connection)
+
+
+class _Pool:
+    """A pool the worker never draws a connection from. The factory opens every connection."""
+
+    max_size = 5
+
+
+def run_round(worker: worker_module.Worker, deadline: float) -> Any:
+    heartbeat_round = worker_module._HeartbeatRound(deadline)
+    worker._run_heartbeat_round(heartbeat_round, ("worker", "[]"), worker._heartbeat_generation)
+    return heartbeat_round.result
+
+
+def bounded_worker(connections: Connections) -> worker_module.Worker:
+    return worker_module.Worker(
+        _Pool(),
+        queue="heartbeat-expiry",
+        worker_id="heartbeat-expiry-worker",
+        _heartbeat_executor_factory=connections.open,
+    )
+
+
+def test_a_round_that_expires_before_its_heartbeat_keeps_the_connection(server: Server) -> None:
+    connections = Connections(server)
+    worker = bounded_worker(connections)
+    server.delays["BEGIN"] = EXPIRY_BOUND_SECONDS - 0.005
+
+    expired = run_round(worker, server.now + EXPIRY_BOUND_SECONDS)
+
+    # The round failed, sent no heartbeat, and rolled back.
+    assert isinstance(expired.exception(), worker_module._HeartbeatRoundExpiredCleanly)
+    assert sent(server) == ["BEGIN", "ROLLBACK"]
+    (connection,) = connections.opened
+    assert not connection.closed and connections.returned == []
+
+    server.events.clear()
+    server.delays.clear()
+    renewed = run_round(worker, server.now + ROUND_BOUND_SECONDS)
+
+    # The next round sends its heartbeat on the same connection.
+    assert renewed.result() == [{"ok": True}]
+    assert connections.opened == [connection]
+    assert sent(server)[-2:] == [worker_module._STATEMENTS.heartbeat_many.psycopg, "COMMIT"]
+    assert not connection.closed and connections.returned == []
+
+
+def test_a_round_whose_begin_runs_past_the_deadline_discards_the_connection(
+    server: Server,
+) -> None:
+    connections = Connections(server)
+    worker = bounded_worker(connections)
+    server.delays["BEGIN"] = 2 * EXPIRY_BOUND_SECONDS
+
+    expired = run_round(worker, server.now + EXPIRY_BOUND_SECONDS)
+
+    assert not isinstance(expired.exception(), worker_module._HeartbeatRoundExpiredCleanly)
+    assert isinstance(expired.exception(), worker_module._HeartbeatRoundExpired)
+    first, replacement = connections.opened
+    # The worker closed the connection under the open transaction, and opened its replacement.
+    assert first.closed and connections.returned == [first]
+    assert not replacement.closed

@@ -168,6 +168,7 @@ of your own code, can still cost the lease.
 | `busy`              | Another transaction holds the row. No renewal and no ownership verdict.         |
 | Busy retry delay    | `base × (1 + random)`, with `base = min(100 ms, interval / 8)`                  |
 | Busy retry deadline | The earliest of the round deadline, the next regular slot, and the watchdog end |
+| Busy retry minimum  | 20 ms (8 ms + 12 ms). A bounded retry with less time sends nothing.             |
 | Regular rounds      | Unchanged. A busy retry does not move them.                                     |
 
 With the defaults (30,000 ms lease, 10,000 ms interval), the regular rounds at 10 s and 20 s can

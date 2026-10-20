@@ -30,6 +30,19 @@ func roundTimeouts(remaining time.Duration) (statement string, idle string) {
 
 var errHeartbeatRoundExpired = errors.New(heartbeatRoundExpiredMessage)
 
+// errHeartbeatRoundExpiredBeforeHeartbeat ends a round that expired before it sent its heartbeat
+// statement and left the connection clean: it sent nothing, or its ROLLBACK succeeded by the
+// deadline. The round still fails, but the caller keeps the connection for the next round.
+var errHeartbeatRoundExpiredBeforeHeartbeat error = heartbeatRoundExpiredBeforeHeartbeat{}
+
+// heartbeatRoundExpiredBeforeHeartbeat has the message of errHeartbeatRoundExpired and wraps it, so
+// errors.Is finds both.
+type heartbeatRoundExpiredBeforeHeartbeat struct{}
+
+func (heartbeatRoundExpiredBeforeHeartbeat) Error() string { return heartbeatRoundExpiredMessage }
+
+func (heartbeatRoundExpiredBeforeHeartbeat) Unwrap() error { return errHeartbeatRoundExpired }
+
 // serverBoundedExecutor sends each statement in its own transaction on conn, with server timeouts
 // that fit in the time left before the deadline of the statement's context.
 //
@@ -51,6 +64,11 @@ func (executor serverBoundedExecutor) Query(
 	if !ok {
 		return nil, errors.New(heartbeatRoundWithoutDeadlineMessage)
 	}
+	// A round without the time for its settings statement sends nothing, so the connection stays
+	// clean.
+	if time.Until(deadline) < minimumRoundRemaining {
+		return nil, errHeartbeatRoundExpiredBeforeHeartbeat
+	}
 	tx, err := executor.conn.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -67,7 +85,7 @@ func (executor serverBoundedExecutor) Query(
 	setAt := time.Now()
 	remaining := deadline.Sub(setAt)
 	if remaining < minimumRoundRemaining {
-		return nil, errHeartbeatRoundExpired
+		return nil, rollBackBeforeHeartbeat(ctx, tx)
 	}
 	statementMS, idleMS := roundTimeouts(remaining)
 	if _, err := tx.Exec(ctx, roundTimeoutsStatement, statementMS, idleMS); err != nil {
@@ -75,7 +93,7 @@ func (executor serverBoundedExecutor) Query(
 	}
 	// The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
 	if time.Since(setAt) > remaining/4 {
-		return nil, errHeartbeatRoundExpired
+		return nil, rollBackBeforeHeartbeat(ctx, tx)
 	}
 	rows, err := NewPGXExecutor(tx).Query(ctx, statement, arguments...)
 	if err != nil {
@@ -91,8 +109,27 @@ func (executor serverBoundedExecutor) Query(
 	return rows, nil
 }
 
+// rollBackBeforeHeartbeat ends a round that expired before its heartbeat statement. No statement is
+// in flight, so the ROLLBACK is the only statement left. It keeps the round's deadline: past it, pgx
+// sends nothing and closes the connection. A ROLLBACK that succeeds leaves the session clean, so the
+// caller keeps the connection (errHeartbeatRoundExpiredBeforeHeartbeat). After any other result, the
+// caller discards it.
+func rollBackBeforeHeartbeat(ctx context.Context, tx pgx.Tx) error {
+	if err := tx.Rollback(ctx); err != nil {
+		return errHeartbeatRoundExpired
+	}
+	return errHeartbeatRoundExpiredBeforeHeartbeat
+}
+
+// keepsConnection reports whether a failed round left its connection clean, so the next round can
+// use it.
+func keepsConnection(err error) bool {
+	return errors.Is(err, errHeartbeatRoundExpiredBeforeHeartbeat)
+}
+
 // runBoundedOnPool runs one round on a connection acquired from pool, bounded by the deadline of ctx.
-// A round that fails closes the connection, because its state is not known.
+// A round that fails closes the connection, because its state is not known. A round that expired
+// before its heartbeat statement and left the connection clean returns it to the pool open.
 func runBoundedOnPool(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -104,7 +141,9 @@ func runBoundedOnPool(
 	}
 	defer held.Release()
 	if err := round(ctx, serverBoundedExecutor{conn: held.Conn()}); err != nil {
-		_ = held.Conn().Close(context.Background())
+		if !keepsConnection(err) {
+			_ = held.Conn().Close(context.Background())
+		}
 		return err
 	}
 	return nil
@@ -145,7 +184,9 @@ func (connection *heartbeatConnection) reserve(ctx context.Context, bound time.D
 }
 
 // run executes one bounded round on the reserved connection. A round that fails discards the
-// connection, so the next round starts from a healthy one.
+// connection, so the next round starts from a healthy one. A round that expired before its heartbeat
+// statement and left the connection clean keeps it, so the next round uses it. This keeps the
+// connection that handlers cannot take (ADR 0071).
 func (connection *heartbeatConnection) run(
 	ctx context.Context,
 	bound time.Duration,
@@ -169,6 +210,9 @@ func (connection *heartbeatConnection) run(
 		return err
 	}
 	if err := round(roundContext, serverBoundedExecutor{conn: held.Conn()}); err != nil {
+		if keepsConnection(err) {
+			return err
+		}
 		connection.discard(held)
 		connection.replace(ctx, bound)
 		return err

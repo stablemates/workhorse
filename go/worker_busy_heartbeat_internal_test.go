@@ -423,3 +423,81 @@ func TestARenewalAndABusyRetrySelectionDoNotRace(t *testing.T) {
 		t.Fatalf("the renewals ended the attempt: %v", attempt.cause())
 	}
 }
+
+func TestTheBusyRetryMinimumIsTheRoundMinimumPlusItsMargin(t *testing.T) {
+	if busyRetryMinimum != 20*time.Millisecond {
+		t.Fatalf("busyRetryMinimum = %s; want %s + %s = 20 ms", busyRetryMinimum, minimumRoundRemaining, busyRetryMargin)
+	}
+}
+
+func TestABusyRetrySelectionNeedsTheMinimumBeforeItsDeadline(t *testing.T) {
+	fake := &fakeHeartbeat{answer: func(_ int, tasks []string) (map[string]ownershipStatus, error) {
+		return statusesFor(tasks, workerOwnershipBusy, nil), nil
+	}}
+	// The regular slot falls due long after the test, so the window end does not move.
+	worker := newBusyHeartbeatWorker(t, time.Minute, 30*time.Second, fake)
+	member := superviseAttempt(t, worker, "task", 1).member()
+	if member == nil {
+		t.Fatal("the attempt did not register for heartbeats")
+	}
+	end := *member.leaseEnd.Load()
+	busy := []*heartbeatMember{member}
+	for _, testCase := range []struct {
+		name string
+		now  time.Time
+		next time.Time
+		runs bool
+	}{
+		{"the next regular slot 10 ms after the retry", end.Add(-time.Second), end.Add(-time.Second + 10*time.Millisecond), false},
+		{"the next regular slot 1 ms short of the minimum", end.Add(-time.Second), end.Add(-time.Second + busyRetryMinimum - time.Millisecond), false},
+		{"the next regular slot at the minimum", end.Add(-time.Second), end.Add(-time.Second + busyRetryMinimum), true},
+		{"the lease window end 10 ms after the retry", end.Add(-10 * time.Millisecond), end.Add(time.Minute), false},
+		{"the lease window end at the minimum", end.Add(-busyRetryMinimum), end.Add(time.Minute), true},
+	} {
+		selection, _ := worker.busyRetrySelection(busy, testCase.now, testCase.next)
+		if runs := len(selection) == 1; runs != testCase.runs {
+			t.Errorf("%s: the retry runs = %t; want %t", testCase.name, runs, testCase.runs)
+		}
+	}
+}
+
+func TestABusyRetryWithoutTheMinimumBeforeTheNextSlotLeavesTheLeaseToTheRegularRound(t *testing.T) {
+	// A busy retry falls due 2 to 4 ms after a round, and the next regular slot is 16 ms after it.
+	// So no retry has the minimum before its deadline, and every round is a regular round.
+	const interval = 16 * time.Millisecond
+	fake := &fakeHeartbeat{answer: func(call int, tasks []string) (map[string]ownershipStatus, error) {
+		if call == 0 {
+			return statusesFor(tasks, workerOwnershipAccepted, map[string]ownershipStatus{"busy": workerOwnershipBusy}), nil
+		}
+		return statusesFor(tasks, workerOwnershipAccepted, nil), nil
+	}}
+	worker := newBusyHeartbeatWorker(t, 4*time.Second, interval, fake)
+	busy := superviseAttempt(t, worker, "busy", 1)
+	superviseAttempt(t, worker, "free", 1)
+	member := busy.member()
+	if member == nil {
+		t.Fatal("the attempt did not register for heartbeats")
+	}
+	endBefore := *member.leaseEnd.Load()
+
+	rounds := fake.waitForRounds(t, 4, 100*interval)
+	for index, round := range rounds {
+		if !slices.Equal(round.tasks, []string{"busy", "free"}) {
+			t.Fatalf("round %d sent %v; want the regular round with both leases", index, round.tasks)
+		}
+	}
+	if gap := rounds[1].at.Sub(rounds[0].at); gap < interval-4*time.Millisecond {
+		t.Fatalf("the round after the busy round came %s after it; want the regular slot", gap)
+	}
+	// The regular round after the busy round renewed the busy lease. The supervisor applies the
+	// renewal, so the test waits for it.
+	for until := time.Now().Add(time.Second); !member.leaseEnd.Load().After(endBefore); {
+		if time.Now().After(until) {
+			t.Fatal("the regular round did not renew the lease that the skipped retry left")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if busy.cause() != nil {
+		t.Fatalf("a skipped busy retry aborted the attempt: %v", busy.cause())
+	}
+}
