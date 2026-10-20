@@ -1507,7 +1507,7 @@ module Stablemates
       def settle_failure(task, error, arbiter)
         envelope = error_envelope(error, task.redact_error_details)
         state = Telemetry.span("workhorse.retry", Telemetry.task_span_attributes(task)) do |span|
-          delay = error.is_a?(ConflictError) ? -1 : retry_delay_override(task)
+          delay = durable_replay_conflict(error) ? -1 : retry_delay_override(task)
           state = fenced_row(SqlCatalogue::FAIL_V1, task, JSON.generate(envelope), delay&.to_s)["state"]
           Telemetry.set_attribute(span, "workhorse.retry.outcome", state.to_s)
           state
@@ -1539,6 +1539,20 @@ module Stablemates
         false
       end
 
+      # The durable replay conflict (ADR 0098) that +error+ is or wraps, or nil. A handler can wrap a
+      # conflict in its own error. The conflict is terminal also then, as in Go and Rust, and the
+      # failure envelope records the name of the conflict. The walk stays bounded against a cyclic
+      # cause chain.
+      def durable_replay_conflict(error)
+        16.times do
+          return nil if error.nil?
+          return error if error.is_a?(ConflictError)
+
+          error = error.cause
+        end
+        nil
+      end
+
       def retry_delay_override(task)
         delay = @retry_delay.respond_to?(:call) ? @retry_delay.call(task.attempt, task) : @retry_delay
         return nil if delay.nil?
@@ -1549,7 +1563,8 @@ module Stablemates
       def error_envelope(error, redact)
         return {"name" => REDACTED_NAME, "message" => REDACTED_MESSAGE} if redact
 
-        {"name" => error.class.name, "message" => error.message.to_s,
+        # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
+        {"name" => (durable_replay_conflict(error) || error).class.name, "message" => error.message.to_s,
          "stack" => error.full_message(highlight: false, order: :top)}
       end
 

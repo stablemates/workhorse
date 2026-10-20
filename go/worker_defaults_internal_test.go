@@ -63,6 +63,24 @@ func TestWorkerResolvesThePublishedDefaults(t *testing.T) {
 	}
 }
 
+func TestTheDefaultHeartbeatIntervalIsAtLeastTheSmallestSupportedInterval(t *testing.T) {
+	// A third of a 150 ms lease is 50 ms, below the 100 ms that every SDK supports.
+	worker := newDefaultWorker(t, WorkerOptions{LeaseDuration: 150 * time.Millisecond})
+	if worker.heartbeatInterval != 100*time.Millisecond {
+		t.Fatalf("heartbeat interval for a 150ms lease: got %s, want 100ms", worker.heartbeatInterval)
+	}
+	worker = newDefaultWorker(t, WorkerOptions{LeaseDuration: 900 * time.Millisecond})
+	if worker.heartbeatInterval != 300*time.Millisecond {
+		t.Fatalf("heartbeat interval for a 900ms lease: got %s, want 300ms", worker.heartbeatInterval)
+	}
+	// The floor is not less than the smallest lease, so the default must still be shorter.
+	if _, err := NewWorker(unconnectedPool(t), WorkerOptions{
+		Queue: "defaults", LeaseDuration: 100 * time.Millisecond, SharedHeartbeats: true,
+	}); err == nil {
+		t.Fatal("a 100ms lease with the default heartbeat interval was accepted")
+	}
+}
+
 func TestWorkerWithoutNotificationsPollsOnTheShorterInterval(t *testing.T) {
 	// A worker that cannot subscribe claims on the poll interval alone, so it starts short and
 	// backs off toward the ceiling the two other SDKs share.

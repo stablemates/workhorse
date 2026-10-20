@@ -28,6 +28,7 @@ import type {
   TraceContext,
 } from "../types.js";
 import { QueueModule } from "./module-context.js";
+import { durableReplayConflict } from "./replay-conflicts.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
 type ClaimRow = {
@@ -110,6 +111,8 @@ class FencedLease {
   }
 }
 
+/** The most leases that one `heartbeat_many_v2` statement accepts. */
+const HEARTBEAT_STATEMENT_LEASE_LIMIT = 100;
 const REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted";
 const REDACTED_ERROR_NAME = "RedactedTaskError";
 /** The name recorded when a handler throws a value that is not an Error. */
@@ -129,7 +132,9 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
   // fields, with a null stack when the thrown value supplies none.
   if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
   if (error instanceof Error) {
-    return { name: error.name, message: error.message, stack: error.stack ?? null };
+    // A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
+    const name = durableReplayConflict(error)?.name ?? error.name;
+    return { name, message: error.message, stack: error.stack ?? null };
   }
   return { name: NON_ERROR_NAME, message: String(error), stack: null };
 }
@@ -374,14 +379,21 @@ export class ClaimLeaseFenceModule extends QueueModule {
       fenceToken: task.fenceToken.toString(),
       leaseMs,
     }));
-    const result = await queryFencedWrite<{
-      task_id: string;
-      status: HeartbeatBatchStatus;
-    }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v2"], [
-      workerId,
-      JSON.stringify(leases),
-    ]);
-    const statuses = new Map(result.rows.map((row) => [row.task_id, row.status]));
+    // One statement accepts at most HEARTBEAT_STATEMENT_LEASE_LIMIT leases. A rejected fused
+    // completion keeps its lease registered while it waits for PostgreSQL, and the tasks that it
+    // claimed register too, so a worker round can hold more. Each statement runs on its own. If a
+    // later statement fails, the call fails, and the worker counts no renewal of the round.
+    const statuses = new Map<string, HeartbeatBatchStatus>();
+    for (let start = 0; start < leases.length; start += HEARTBEAT_STATEMENT_LEASE_LIMIT) {
+      const result = await queryFencedWrite<{
+        task_id: string;
+        status: HeartbeatBatchStatus;
+      }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v2"], [
+        workerId,
+        JSON.stringify(leases.slice(start, start + HEARTBEAT_STATEMENT_LEASE_LIMIT)),
+      ]);
+      for (const row of result.rows) statuses.set(row.task_id, row.status);
+    }
     for (const task of tasks) {
       const status = statuses.get(task.id) ?? "stale";
       if (status !== "accepted") {

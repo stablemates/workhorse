@@ -1664,7 +1664,7 @@ func executeReplayConflictFixture(t *testing.T, fixture workerRuntimeFixture) {
 			subject.Handle(fixture.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
 				var failure error
 				switch entry.ErrorKind {
-				case "checkpoint":
+				case "checkpoint", "wrapped-checkpoint":
 					failure = &workhorse.CheckpointConflictError{TaskID: id, CheckpointName: "saved"}
 				case "wait":
 					failure = &workhorse.WaitConflictError{TaskID: id, WaitName: "saved"}

@@ -70,5 +70,34 @@ func (test HeartbeatConnectionForTest) Release() { test.connection.release() }
 func (worker *Worker) HeartbeatRoundForTest(taskID string, fenceToken int64, bound time.Duration) (string, error) {
 	member := &heartbeatMember{ctx: context.Background(), task: ClaimedTask{ID: taskID, FenceToken: fenceToken}}
 	statuses, err := worker.queryHeartbeatRound([]*heartbeatMember{member}, time.Now().Add(bound))
-	return string(statuses[taskID]), err
+	if err != nil {
+		return emptyString, err
+	}
+	return string(statuses[0]), nil
+}
+
+// HeartbeatLeaseForTest names one lease that HeartbeatRoundManyForTest sends.
+type HeartbeatLeaseForTest struct {
+	TaskID     string
+	FenceToken int64
+}
+
+// HeartbeatRoundManyForTest sends one heartbeat round for leases on the path the worker's own
+// rounds take, bounded by bound, and returns the status of each lease in the order of leases.
+func (worker *Worker) HeartbeatRoundManyForTest(leases []HeartbeatLeaseForTest, bound time.Duration) ([]string, error) {
+	members := make([]*heartbeatMember, 0, len(leases))
+	for _, lease := range leases {
+		members = append(members, &heartbeatMember{
+			ctx: context.Background(), task: ClaimedTask{ID: lease.TaskID, FenceToken: lease.FenceToken},
+		})
+	}
+	statuses, err := worker.queryHeartbeatRound(members, time.Now().Add(bound))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		result = append(result, string(status))
+	}
+	return result, nil
 }

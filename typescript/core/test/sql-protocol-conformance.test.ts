@@ -2201,6 +2201,8 @@ async function executeReplayConflictRuntimeFixture(
       switch (entry.errorKind) {
         case "checkpoint":
           throw new CheckpointConflictError(id, "saved");
+        case "wrapped-checkpoint":
+          throw new Error("handler", { cause: new CheckpointConflictError(id, "saved") });
         case "wait":
           throw new WaitConflictError(id, "saved", {
             taskId: id,

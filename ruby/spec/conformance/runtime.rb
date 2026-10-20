@@ -605,6 +605,12 @@ module Conformance
               when "child-limit" then raise W::LimitExceededError.new(:run_child, "saved")
               when "signal-wait" then raise W::AlreadyWaitingError.new(:wait_for_signal, "saved")
               when "transient" then raise StandardError, "transient"
+              when "wrapped-checkpoint"
+                begin
+                  raise W::ConflictError.new(:checkpoint, "saved")
+                rescue W::ConflictError
+                  raise StandardError, "handler"
+                end
               else raise W::ConflictError.new(operation.fetch(entry["errorKind"]), "saved")
               end
             end

@@ -507,6 +507,8 @@ includes a changed child set. A checkpoint call raises
 
 The worker settles the conflict through `fail_v1` with `p_retry_delay_ms = -1`. The failure keeps
 the current attempt. Operator reads show the conflict class. Redaction records `RedactedTaskError`.
+If the handler wraps the conflict in its own error, the conflict is also terminal. The failure then
+records the conflict class. Its fields `message` and `stack` stay those of the outer error.
 
 Transient failures, lease loss, child-limit refusals, and already-waiting signal refusals keep
 their existing settlement behavior.

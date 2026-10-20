@@ -26,6 +26,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+// minimumDefaultHeartbeat is the smallest default heartbeat interval. It is the smallest supported
+// interval in every SDK.
+const minimumDefaultHeartbeat = 100 * time.Millisecond
+
 const (
 	defaultWorkerLease         = 30 * time.Second
 	defaultWorkerPollInterval  = 250 * time.Millisecond
@@ -205,9 +209,9 @@ type WorkerOptions struct {
 	WorkerID      string
 	Concurrency   int
 	LeaseDuration time.Duration
-	// HeartbeatInterval defaults to a third of LeaseDuration and must be shorter than it. The
-	// smallest supported value is 100 ms. The worker accepts a shorter value, but on a loaded host
-	// it can renew no lease.
+	// HeartbeatInterval defaults to the larger of 100 ms and a third of LeaseDuration, and it must
+	// be shorter than LeaseDuration. The smallest supported value is 100 ms. The worker accepts a
+	// shorter value, but on a loaded host it can renew no lease.
 	HeartbeatInterval   time.Duration
 	PollInterval        time.Duration
 	MaintenanceInterval time.Duration
@@ -292,9 +296,9 @@ type Worker struct {
 	heartbeatRunning           bool
 	heartbeatLease             *heartbeatConnectionLease
 	sharedHeartbeats           bool
-	// heartbeatRound sends one heartbeat statement and returns the status of each task ID. It is
-	// queryHeartbeatRound outside tests.
-	heartbeatRound func(members []*heartbeatMember, deadline time.Time) (map[string]ownershipStatus, error)
+	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
+	// member, in the order of members. It is queryHeartbeatRound outside tests.
+	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
 	// completionClaims is the running dispatch loop's handle for fused completion claims. It is
 	// nil outside Run, so a completion from RunOnce claims nothing.
 	completionClaims atomic.Pointer[completionClaimer]
@@ -394,7 +398,8 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}
 	heartbeatInterval := options.HeartbeatInterval
 	if heartbeatInterval == 0 {
-		heartbeatInterval = leaseDuration / 3 / time.Millisecond * time.Millisecond
+		// The default never goes below the smallest supported interval, as in every SDK.
+		heartbeatInterval = max(minimumDefaultHeartbeat, leaseDuration/3/time.Millisecond*time.Millisecond)
 	}
 	if heartbeatInterval <= 0 || heartbeatInterval >= leaseDuration || heartbeatInterval%time.Millisecond != 0 {
 		return nil, errors.New(workerHeartbeatRangeMessage)
@@ -2508,16 +2513,15 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 	}
 	// A result counts only for the member that the round sent. A member that left or was
 	// replaced while the round ran gets nothing from it.
+	// Two members can name the same task while an old attempt has not unregistered yet, so each
+	// status belongs to the member at its position, not to its task ID.
 	registered := worker.registeredHeartbeats(members)
 	var busy []*heartbeatMember
-	for _, member := range members {
+	for index, member := range members {
 		if !registered[member] {
 			continue
 		}
-		status := statuses[member.task.ID]
-		if status == emptyString {
-			status = workerOwnershipStale
-		}
+		status := statuses[index]
 		switch status {
 		case workerOwnershipAccepted:
 			member.renew(sentAt)
@@ -2535,52 +2539,91 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 	return busy
 }
 
-// queryHeartbeatRound sends one heartbeat statement for members, in task ID order, and returns the
-// status of each task ID. The round ends by deadline, on the client and on the server, so a
-// statement that stalls cannot hold the batch past the next round.
+// heartbeatStatementLeaseLimit is the most leases that one heartbeat statement accepts.
+// heartbeat_many_v2 raises an error above it. A round can hold more members than the concurrency
+// limit, because a fused completion claim registers its tasks before the completing attempts
+// unregister.
+const heartbeatStatementLeaseLimit = 100
+
+// queryHeartbeatRound sends the heartbeat statements of one round for members and returns the
+// status of each member, in the order of members. It sends the leases in task ID order, at most
+// heartbeatStatementLeaseLimit in each statement. The round ends by deadline, on the client and on
+// the server, so a statement that stalls cannot hold the batch past the next round.
 func (worker *Worker) queryHeartbeatRound(
 	members []*heartbeatMember, deadline time.Time,
-) (map[string]ownershipStatus, error) {
+) ([]ownershipStatus, error) {
 	type lease struct {
 		TaskID     string `json:"taskId"`
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
 	leaseMS := int(worker.leaseDuration / time.Millisecond)
-	requests := make([]lease, 0, len(members))
-	// Task ID order matches the order a batched completion locks its rows in.
-	ordered := slices.Clone(members)
-	slices.SortFunc(ordered, func(left, right *heartbeatMember) int {
-		return strings.Compare(left.task.ID, right.task.ID)
-	})
-	for _, member := range ordered {
-		requests = append(requests, lease{
-			TaskID: member.task.ID, FenceToken: strconv.FormatInt(member.task.FenceToken, 10),
-			LeaseMS: leaseMS,
-		})
+	// Task ID order matches the order a batched completion locks its rows in. Each statement
+	// returns its rows in input order, so position maps a row back to its member.
+	order := make([]int, len(members))
+	for index := range order {
+		order[index] = index
 	}
-	payload, err := json.Marshal(requests)
-	if err != nil {
-		return nil, err
+	slices.SortStableFunc(order, func(left, right int) int {
+		return strings.Compare(members[left].task.ID, members[right].task.ID)
+	})
+	var payloads []string
+	for chunk := range slices.Chunk(order, heartbeatStatementLeaseLimit) {
+		requests := make([]lease, 0, len(chunk))
+		for _, index := range chunk {
+			member := members[index]
+			requests = append(requests, lease{
+				TaskID: member.task.ID, FenceToken: strconv.FormatInt(member.task.FenceToken, 10),
+				LeaseMS: leaseMS,
+			})
+		}
+		payload, err := json.Marshal(requests)
+		if err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, string(payload))
 	}
 	roundContext := context.WithoutCancel(members[0].ctx)
 	worker.heartbeatMu.Lock()
 	reserved := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
-	var rows []Row
+	statuses := make([]ownershipStatus, len(members))
 	round := func(ctx context.Context, executor Executor) error {
-		var roundError error
-		rows, roundError = queryFencedWrite(
-			ctx,
-			executor,
-			protocolStatementRegistry[heartbeatManyStatementName],
-			worker.workerID,
-			string(payload),
-		)
-		return roundError
+		// Each statement commits on its own. If a later statement fails, the round fails, and
+		// the renewals of the earlier statements do not count locally.
+		for chunkIndex, payload := range payloads {
+			rows, err := queryFencedWrite(
+				ctx,
+				executor,
+				protocolStatementRegistry[heartbeatManyStatementName],
+				worker.workerID,
+				payload,
+			)
+			if err != nil {
+				return err
+			}
+			chunk := order[chunkIndex*heartbeatStatementLeaseLimit:]
+			chunk = chunk[:min(len(chunk), heartbeatStatementLeaseLimit)]
+			if len(rows) != len(chunk) {
+				return errors.New(invalidOwnershipResultMessage)
+			}
+			for position, row := range rows {
+				member := members[chunk[position]]
+				if stringValue(row[rowTaskIDField]) != member.task.ID {
+					return errors.New(invalidOwnershipResultMessage)
+				}
+				status, parseErr := parseHeartbeatStatusRow(row)
+				if parseErr != nil {
+					return parseErr
+				}
+				statuses[chunk[position]] = status
+			}
+		}
+		return nil
 	}
 	// Serialization counts against the deadline.
 	bound := time.Until(deadline)
+	var err error
 	if reserved == nil {
 		queryContext, cancel := context.WithDeadline(roundContext, deadline)
 		err = runBoundedOnPool(queryContext, worker.pool, round)
@@ -2590,14 +2633,6 @@ func (worker *Worker) queryHeartbeatRound(
 	}
 	if err != nil {
 		return nil, err
-	}
-	statuses := make(map[string]ownershipStatus, len(rows))
-	for _, row := range rows {
-		status, parseErr := parseHeartbeatStatusRow(row)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		statuses[stringValue(row[rowTaskIDField])] = status
 	}
 	return statuses, nil
 }

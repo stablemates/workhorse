@@ -5466,7 +5466,10 @@ interface WorkerOptions {
   * per cohort after the listener and the heartbeat connection. An explicit value is not capped.
   */
   cohorts?: number;
-  /** Ownership duration granted by claim and every accepted heartbeat. */
+  /**
+  * Ownership duration granted by claim and every accepted heartbeat. It must be from 100 through
+  * 86,400,000 ms.
+  */
   leaseMs?: number;
   /**
   * Local heartbeat interval. It must remain shorter than leaseMs. The smallest supported value

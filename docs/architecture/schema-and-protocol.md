@@ -248,6 +248,12 @@ with the fingerprint of a different input
 ([Data model: `task_checkpoint`](data-model.md#task_checkpoint)). A checkpoint call raises it
 only when the call gives an input. `protocol/v1/runtime.json` does not pin it.
 
+A worker also treats a conflict that the handler wraps in its own error as terminal. Each SDK
+follows the cause chain of its language, so Python and Ruby also count an implicit cause.
+TypeScript, Python, Ruby, Rust, and the JVM read the cause chain to a depth of 16 errors, including
+the outer error. Go uses `errors.As`, which reads the whole chain. The failure envelope then
+records the name of the conflict. Its fields `message` and `stack` stay those of the outer error.
+
 - Go identifies wrapped conflicts with `errors.As` and keeps their class names.
 - Rust converts `Error::Conflict` for `Operation::Checkpoint`, `Sleep`, `RunChild`, `RunChildren`,
   and `WaitForHuman` into those named `HandlerError` values. Its generic error conversion requires
@@ -1356,22 +1362,22 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 
 #### Worker options
 
-| Option                                     | Default                                                        | Accepts                                                            |
-| ------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                     |                                                                    |
-| `WorkerOptions.Concurrency`                | 1                                                              | Integers from 1 through 100                                        |
-| `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                            | Whole-millisecond values from 100 through 86,400,000               |
-| `WorkerOptions.PollInterval`               | 5,000 milliseconds, or 250 milliseconds with `PollingOnly`     |                                                                    |
-| `WorkerOptions.HeartbeatInterval`          | One third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                             |
-| `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                             | Positive whole-millisecond values                                  |
-| `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                            | Positive whole-millisecond values                                  |
-| `WorkerOptions.RetryDelay`                 | Unset                                                          | `func(attempt int, task ClaimedTask)` returning a `*time.Duration` |
-| `WorkerOptions.RegistryInterval`           | 5,000 milliseconds                                             | Whole-millisecond values of at least 100                           |
-| `WorkerOptions.ScheduleNamespaces`         | Empty                                                          | Non-empty names; duplicates after the first are removed            |
-| `WorkerOptions.ScheduleCatchupLimit`       | 100                                                            | Integers from 1 through 10,000                                     |
-| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                            | Positive whole-millisecond values                                  |
-| `WorkerOptions.PollingOnly`                | False                                                          |                                                                    |
-| `WorkerOptions.Logger`                     | `slog.Default()`                                               | A `*slog.Logger`                                                   |
+| Option                                     | Default                                                                                           | Accepts                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                                                        |                                                                    |
+| `WorkerOptions.Concurrency`                | 1                                                                                                 | Integers from 1 through 100                                        |
+| `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                                                               | Whole-millisecond values from 100 through 86,400,000               |
+| `WorkerOptions.PollInterval`               | 5,000 milliseconds, or 250 milliseconds with `PollingOnly`                                        |                                                                    |
+| `WorkerOptions.HeartbeatInterval`          | The larger of 100 milliseconds and one third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                             |
+| `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                                                                | Positive whole-millisecond values                                  |
+| `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                                                               | Positive whole-millisecond values                                  |
+| `WorkerOptions.RetryDelay`                 | Unset                                                                                             | `func(attempt int, task ClaimedTask)` returning a `*time.Duration` |
+| `WorkerOptions.RegistryInterval`           | 5,000 milliseconds                                                                                | Whole-millisecond values of at least 100                           |
+| `WorkerOptions.ScheduleNamespaces`         | Empty                                                                                             | Non-empty names; duplicates after the first are removed            |
+| `WorkerOptions.ScheduleCatchupLimit`       | 100                                                                                               | Integers from 1 through 10,000                                     |
+| `WorkerOptions.ShutdownGracePeriod`        | 25,000 milliseconds                                                                               | Positive whole-millisecond values                                  |
+| `WorkerOptions.PollingOnly`                | False                                                                                             |                                                                    |
+| `WorkerOptions.Logger`                     | `slog.Default()`                                                                                  | A `*slog.Logger`                                                   |
 
 The smallest supported `HeartbeatInterval` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
@@ -2149,21 +2155,21 @@ crate. Then it tests the default consumer.
 `Worker::new(pool, options)` accepts a caller-owned `deadpool_postgres::Pool`. It validates
 `WorkerOptions` before it returns. `WorkerOptions::default()` gives the ADR 0072 values.
 
-| Option                         | Default                                                             | Accepts                                                                 |
-| ------------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `WorkerOptions.queues`         | `["default"]`                                                       | Drops empty names and later duplicates; must keep one name              |
-| `worker_id`                    | Host name, process ID, and a random suffix                          |                                                                         |
-| `concurrency`                  | 1                                                                   | 1 through 100                                                           |
-| `lease_duration`               | 30 seconds                                                          | Whole milliseconds from 100 milliseconds through 24 hours               |
-| `heartbeat_interval`           | One third of the lease, truncated to a whole millisecond            | Positive values shorter than the lease                                  |
-| `poll_interval`                | 5 seconds when the worker expects a listener, else 250 milliseconds |                                                                         |
-| `maintenance_interval`         | 1 second                                                            | Positive whole milliseconds                                             |
-| `maintenance_routine_interval` | 60 seconds                                                          | Positive whole milliseconds                                             |
-| `registry_interval`            | 5 seconds                                                           | Whole milliseconds of at least 100                                      |
-| `schedule_namespaces`          | Empty                                                               | Rejects empty names; drops later duplicates                             |
-| `schedule_catchup_limit`       | 100                                                                 | 1 through 10,000                                                        |
-| `shutdown_grace_period`        | 25 seconds                                                          | Positive whole milliseconds                                             |
-| `retry_delay`                  |                                                                     | Overrides one failed attempt's delay; `None` keeps the persisted policy |
+| Option                         | Default                                                                                     | Accepts                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `WorkerOptions.queues`         | `["default"]`                                                                               | Drops empty names and later duplicates; must keep one name              |
+| `worker_id`                    | Host name, process ID, and a random suffix                                                  |                                                                         |
+| `concurrency`                  | 1                                                                                           | 1 through 100                                                           |
+| `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours               |
+| `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                  |
+| `poll_interval`                | 5 seconds when the worker expects a listener, else 250 milliseconds                         |                                                                         |
+| `maintenance_interval`         | 1 second                                                                                    | Positive whole milliseconds                                             |
+| `maintenance_routine_interval` | 60 seconds                                                                                  | Positive whole milliseconds                                             |
+| `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds of at least 100                                      |
+| `schedule_namespaces`          | Empty                                                                                       | Rejects empty names; drops later duplicates                             |
+| `schedule_catchup_limit`       | 100                                                                                         | 1 through 10,000                                                        |
+| `shutdown_grace_period`        | 25 seconds                                                                                  | Positive whole milliseconds                                             |
+| `retry_delay`                  |                                                                                             | Overrides one failed attempt's delay; `None` keeps the persisted policy |
 
 The smallest supported `heartbeat_interval` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).

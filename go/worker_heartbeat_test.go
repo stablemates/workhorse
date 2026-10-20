@@ -1841,3 +1841,102 @@ func TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen(t 
 		t.Fatalf("the next round ran on backend %d; want the kept backend %d", pid, backend)
 	}
 }
+
+// TestAHeartbeatRoundAnswersEachLeaseItSent pins SM-1494 and SM-1495. A round can name one task
+// twice, when an old attempt has not unregistered yet, and it can hold more than the 100 leases
+// that one statement accepts. Each lease gets the status of its own row, and the round splits its
+// leases into statements of at most 100.
+func TestAHeartbeatRoundAnswersEachLeaseItSent(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-ordinal")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	observer := observeDatabase(t, ctx, databaseURL)
+
+	const queueName = "go-worker-heartbeat-ordinal"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, "heartbeat-ordinal", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker's own rounds fall due long after the test ends, so only the test's rounds run.
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "heartbeat-ordinal-worker",
+		LeaseDuration:       time.Minute,
+		HeartbeatInterval:   30 * time.Second,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release, closeRelease := releaseOnce(t)
+	worker.Handle("heartbeat-ordinal", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		close(started)
+		<-release
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		if err == nil && !processed {
+			err = errors.New("worker did not process the heartbeat-ordinal task")
+		}
+		workerResult <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		closeRelease()
+		t.Fatal("worker did not start the handler")
+	}
+	var fenceToken int64
+	if err := observer.QueryRow(
+		ctx, "SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1::uuid", taskID,
+	).Scan(&fenceToken); err != nil {
+		t.Fatal(err)
+	}
+	// An older fence of the task comes first and the current fence second. 150 leases of tasks
+	// that do not exist follow, so the round needs two statements.
+	leases := []workhorse.HeartbeatLeaseForTest{
+		{TaskID: taskID, FenceToken: fenceToken - 1},
+		{TaskID: taskID, FenceToken: fenceToken},
+	}
+	var unknown []string
+	if err := observer.QueryRow(
+		ctx, "SELECT array_agg(gen_random_uuid()::text) FROM generate_series(1, 150)",
+	).Scan(&unknown); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range unknown {
+		leases = append(leases, workhorse.HeartbeatLeaseForTest{TaskID: id, FenceToken: 1})
+	}
+	before := leaseExpiry(t, ctx, observer, taskID)
+	statuses, err := worker.HeartbeatRoundManyForTest(leases, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != len(leases) {
+		t.Fatalf("a round of %d leases returned %d statuses", len(leases), len(statuses))
+	}
+	if statuses[0] != "stale" || statuses[1] != "accepted" {
+		t.Fatalf("the old and current fences reported %q and %q; want stale and accepted", statuses[0], statuses[1])
+	}
+	for index, status := range statuses[2:] {
+		if status != "stale" {
+			t.Fatalf("the lease of unknown task %d reported %q; want stale", index, status)
+		}
+	}
+	if after := leaseExpiry(t, ctx, observer, taskID); !after.After(before) {
+		t.Fatal("the accepted lease was not renewed")
+	}
+	closeRelease()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+}

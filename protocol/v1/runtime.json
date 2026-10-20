@@ -347,6 +347,20 @@
         }
       },
       {
+        "errorKind": "wrapped-checkpoint",
+        "redactErrorDetails": false,
+        "expectedState": "failed",
+        "expectedAttempt": 1,
+        "expectedErrorNames": {
+          "typescript": "CheckpointConflictError",
+          "python": "CheckpointConflictError",
+          "go": "CheckpointConflictError",
+          "rust": "CheckpointConflictError",
+          "ruby": "Stablemates::Workhorse::ConflictError",
+          "java": "ConflictException"
+        }
+      },
+      {
         "errorKind": "wait",
         "redactErrorDetails": false,
         "expectedState": "failed",

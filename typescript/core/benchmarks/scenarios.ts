@@ -2672,8 +2672,9 @@ async function crashBeforeCompletion(
     const worker = new Worker(queue, {
       queue: context.queueName,
       workerId: `crash-${boundary.failpoint}`,
-      leaseMs: context.options.leaseMs,
-      heartbeatMs: Math.max(1, Math.floor(context.options.leaseMs / 2)),
+      // A Worker requires a lease of at least 100 ms.
+      leaseMs: Math.max(100, context.options.leaseMs),
+      heartbeatMs: Math.max(1, Math.floor(Math.max(100, context.options.leaseMs) / 2)),
       pollMs: 1,
       failpoint: boundary.failpoint,
     }).handle("crash", () => {

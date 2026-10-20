@@ -469,3 +469,23 @@ def test_a_bounded_busy_retry_with_enough_time_runs() -> None:
     assert retry.task_ids == ["held"]
     assert retry.started_at - first.started_at < LONGEST_RETRY_DELAY + SLACK
     assert held.statuses[0] == "accepted"
+
+
+def test_a_round_sends_at_most_100_leases_in_each_statement() -> None:
+    # A fused completion claim registers its tasks before the completing attempts unregister, so a
+    # round can hold more leases than the concurrency limit. One statement accepts at most 100.
+    worker = _worker()
+    rounds = FakeRounds(worker, lambda _index, task_ids: dict.fromkeys(task_ids, "accepted"))
+    leases = [_register(worker, Lease(f"task-{index:03}")) for index in range(150)]
+    try:
+        # The worker delivers the statuses after the last statement of the round returns.
+        eventually(lambda: all(lease.statuses for lease in leases), "no round renewed every lease")
+        statements = rounds.snapshot()
+    finally:
+        _stop(worker, *leases)
+
+    assert max(len(statement.task_ids) for statement in statements) <= 100
+    assert sorted(task for statement in statements[:2] for task in statement.task_ids) == [
+        lease.task_id for lease in leases
+    ]
+    assert all(lease.statuses and lease.statuses[0] == "accepted" for lease in leases)
