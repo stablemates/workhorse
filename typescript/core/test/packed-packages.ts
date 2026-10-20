@@ -457,7 +457,7 @@ try {
           typeorm: "0.3.31",
           kysely: "0.29.5",
           knex: "3.3.0",
-          objection: "3.1.5",
+          objection: "3.9.1",
           pg: await declaredRange("typescript/knex/package.json", "pg"),
           stripe: shared.stripe,
           typescript: "5.8.3",

@@ -4,6 +4,8 @@
 - **Date:** 2026-09-23
 - **Amended by:** [SM-1138](https://linear.app/stablemates/issue/SM-1138)
   (the gem declares `logger`, which Ruby 4.0 no longer ships as a default gem)
+  and [SM-1485](https://linear.app/stablemates/issue/SM-1485)
+  (no test loads the gem beside Sitrox's `workhorse`)
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md),
   [ADR 0021](0021-no-framework-integration-packages.md),
   [ADR 0023](0023-language-sdks-and-http-boundaries.md),
@@ -971,3 +973,18 @@ Active Job guide. SM-908 runs the benchmark gate.
   maintenance page. Supporting it would also require a second transaction-deferral path.
 - **Leaving the Rack dashboard until after 1.0.0.** Ruby would be the only SDK that cannot host the
   operator console, which ADR 0029 promises in every language.
+
+## Amendment: no test loads the gem beside Sitrox's `workhorse` (2026-10-20)
+
+The Consequences section says that the gem loads beside Sitrox's `workhorse`. Until this amendment,
+a spec loaded both gems in both orders and checked both adapters. The development bundle installed
+Sitrox's gem for that spec only.
+
+The spec and the development dependency are removed. Each Sitrox release opened a Dependabot pull
+request and added gems to the development bundle, and the spec checked a property that the names
+already give.
+
+The guarantee still holds, because of the names that the Gem name and namespace section chooses. No
+test checks it. A change that defines or reopens the top-level `Workhorse` constant, the
+`WorkhorseAdapter` constant, or the `:workhorse` adapter symbol breaks the guarantee. Review must
+reject such a change.

@@ -214,10 +214,6 @@ GEM
     unicode-emoji (4.3.0)
     uri (1.1.1)
     useragent (0.16.11)
-    workhorse (1.5.2)
-      activerecord (>= 7.0.0)
-      activesupport (>= 7.0.0)
-      concurrent-ruby
     zeitwerk (2.8.3)
 
 PLATFORMS
@@ -246,7 +242,6 @@ DEPENDENCIES
   sequel (= 5.109.0)
   stablemates-workhorse!
   standard (~> 1.56)
-  workhorse (~> 1.5)
 
 CHECKSUMS
   actionpack (8.0.5.1) sha256=a5595c9d824d68884ddc4d3965ab78c897760d3752e190df7efe897371caa1eb
@@ -337,7 +332,6 @@ CHECKSUMS
   unicode-emoji (4.3.0) sha256=11c02fa73290378c066bb0562cd4c87d8e1b706fbbe0059ca12746a4244de8ce
   uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
   useragent (0.16.11) sha256=700e6413ad4bb954bb63547fa098dddf7b0ebe75b40cc6f93b8d54255b173844
-  workhorse (1.5.2) sha256=6da5757626ce9a1c132de2d45cb30bb6141cc19c0e8b87db31a88ba787c0ba85
   zeitwerk (2.8.3) sha256=2c85125a8467ce069e20123d1e709a08955c9d29c118c25b46b7b7fafdbb92e5
 
 BUNDLED WITH
