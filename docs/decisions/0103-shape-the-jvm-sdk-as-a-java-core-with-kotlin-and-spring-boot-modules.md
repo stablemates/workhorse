@@ -1592,3 +1592,68 @@ caller has a version to keep, and no notice is necessary. The first publish carr
 
 The maintainer delegated this decision to the SM-1381 coordinator, who chose this form during
 SM-1467.
+
+## Amendment: a public record grows only at the end of its component list (2026-10-20)
+
+SM-1516 found that the Java API has no rule for a public record that must grow. `api/java.txt`
+lists 77 public records, for example `EnqueueOptions`, `TaskDetail`, and `EnqueueResult`. Many of
+them copy a protocol row or the keywords of an SDK method. A later minor can add a protocol column
+or an enqueue option. Without a rule, the new record component changes the canonical constructor,
+and `java-api:check` reports a breaking change. Under Gate 2 of
+[ADR 0056](0056-set-the-1-0-0-exit-criteria.md), that change starts the Java clock again.
+
+This amendment adds one rule for every public record of the Java API. It supersedes nothing in the
+"Governed surface and release" section. It adds one case to the list of additive changes there.
+
+1. A new record component goes only at the end of the component list.
+2. The new component is nullable, or it has a default that keeps the earlier behavior.
+3. The record keeps each earlier canonical constructor as an explicit constructor. That constructor
+   supplies the default of each new component. So `new`, every accessor, and binary linkage keep
+   working.
+4. A record pattern that names all components of a public Workhorse record is outside the
+   compatibility promise. Such a pattern stops compiling when the record gains a component.
+
+A new component also changes the output of `equals`, `hashCode`, and `toString`. That change is not
+breaking.
+
+The rule applies to every public record in an exported package, including the closed value records
+such as `AdminAudit` and the `DashboardAuthorization` variants. No record has a different rule.
+
+`scripts/jvm-api.ts` applies the rule to `api/java.txt`. A changed record header is additive only if
+two conditions are true. The old component list is a prefix of the new list. The old canonical
+constructor line is still present in the fresh snapshot. The check lists such a header as "grown
+record, additive under ADR 0103". Every other change of a record header stays breaking. The Javadoc
+of `run.workhorse` and `run.workhorse.dashboard` states the same promise for a Java caller.
+
+The `QueueHealth` amendment does not change. A snapshot of about 60 keys that a migration can add
+is still a map, not a record.
+
+The rejected alternative made each record that can grow a final class with accessors and a
+builder. That change touched about 70 types just before the first publish. The chosen rule keeps each
+public type shape of 0.9.0. The SM-1487 coordinator chose this form during SM-1516.
+
+## Amendment: the policy and budget list filters are non-null (2026-10-20)
+
+The "Queue surface" section shows three list methods with a nullable filter:
+
+```java
+public List<ConcurrencyPolicy> listConcurrencyPolicies(@Nullable List<String> queues);
+public List<RateLimitPolicy> listRateLimitPolicies(@Nullable List<String> queues);
+public List<Budget> listBudgets(@Nullable List<String> names);
+```
+
+SM-1523 found that each method also has a caller form with one `Connection` argument. Java and
+Kotlin refuse `queue.listBudgets(null)` as ambiguous, so the nullable parameter could not take
+`null`. This amendment supersedes those three lines.
+
+```java
+public List<ConcurrencyPolicy> listConcurrencyPolicies(List<String> queues);
+public List<RateLimitPolicy> listRateLimitPolicies(List<String> queues);
+public List<Budget> listBudgets(List<String> names);
+```
+
+The filter of each method and of its caller form is non-null. An empty list, or the overload without
+a filter, reads every row. The Kotlin functions `listConcurrencyPoliciesSuspend`,
+`listRateLimitPoliciesSuspend`, and `listBudgetsSuspend` keep the parameter `List<String>? = null`,
+because a Kotlin default argument has no overload ambiguity. They pass an empty list for `null`.
+The SM-1487 coordinator chose this form during SM-1523.

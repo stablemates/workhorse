@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -19,12 +21,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import run.workhorse.internal.Row;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
+import run.workhorse.testing.PooledConnections;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
 
@@ -438,6 +443,7 @@ class QueueDatabaseTest {
         List.of(policy.namespace(), policy.queue(), policy.maxActive(), policy.maxActivePerKey()));
     assertEquals(stored, queue.listConcurrencyPolicies(List.of(name)));
     assertTrue(queue.listConcurrencyPolicies().contains(policy));
+    assertTrue(queue.listConcurrencyPolicies(List.of()).contains(policy));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -467,6 +473,7 @@ class QueueDatabaseTest {
     assertEquals(rate, stored.get(0).rate());
     assertEquals(perKey, stored.get(0).perKey());
     assertEquals(stored, queue.listRateLimitPolicies(List.of(name)));
+    assertTrue(queue.listRateLimitPolicies(List.of()).containsAll(stored));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -489,6 +496,7 @@ class QueueDatabaseTest {
     assertEquals(rate, stored.get(0).rate());
     assertEquals(stored, queue.listBudgets(List.of(name)));
     assertTrue(queue.listBudgets().containsAll(stored));
+    assertTrue(queue.listBudgets(List.of()).containsAll(stored), "an empty filter reads all");
     assertThrows(
         IllegalArgumentException.class,
         () -> queue.syncBudgets(namespace, List.of(new BudgetDefinition(name, null, null))));
@@ -536,6 +544,70 @@ class QueueDatabaseTest {
         0,
         count(sql + " AND configured_enabled", namespace),
         "prune disables a schedule missing from the sync");
+  }
+
+  // Exact decimal payload values (SM-1520).
+
+  private static String storedText(UUID taskId, String path) throws SQLException {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT payload #>> ?::text[] FROM workhorse.task WHERE id = ?")) {
+      statement.setString(1, "{" + path + "}");
+      statement.setObject(2, taskId);
+      try (ResultSet result = statement.executeQuery()) {
+        assertTrue(result.next());
+        return result.getString(1);
+      }
+    }
+  }
+
+  @Test
+  void storesEveryDigitOfADecimalPayloadValue() throws SQLException {
+    BigDecimal amount = new BigDecimal("12345678901234567.89");
+    UUID taskId =
+        queue
+            .enqueue("decimal", Map.of("amount", amount, "rate", 0.1, "list", List.of(amount)))
+            .taskId();
+    assertEquals("12345678901234567.89", storedText(taskId, "amount"));
+    assertEquals("0.1", storedText(taskId, "rate"), "a double keeps its shortest digits");
+    assertEquals("12345678901234567.89", storedText(taskId, "list,0"));
+  }
+
+  @Test
+  void storesADecimalOutsideTheDoubleRange() throws SQLException {
+    UUID taskId = queue.enqueue("decimal", Map.of("huge", new BigDecimal("1E+400"))).taskId();
+    assertEquals(0, new BigDecimal(storedText(taskId, "huge")).compareTo(new BigDecimal("1E+400")));
+  }
+
+  @Test
+  void validatesAnExactDecimalAgainstAContract() {
+    String type = unique("decimal-contract");
+    Map<String, Object> schema =
+        Map.of(
+            "type",
+            "object",
+            "properties",
+            Map.of(
+                "amount", Map.of("type", "number", "maximum", 1e17),
+                "count", Map.of("type", "integer")));
+    queue.syncContracts(
+        Map.of(
+            type,
+            new TaskTypeContracts("v1", Map.of("v1", new TaskContractVersion(schema, true)))));
+    queue.enqueue(
+        type,
+        Map.of(
+            "amount",
+            new BigDecimal("12345678901234567.89"),
+            "count",
+            new BigDecimal("12345678901234567.00")));
+    assertThrows(
+        ContractValidationException.class,
+        () -> queue.enqueue(type, Map.of("amount", new BigDecimal("123456789012345678.9"))));
+    assertThrows(
+        ContractValidationException.class,
+        () -> queue.enqueue(type, Map.of("count", new BigDecimal("12345678901234567.01"))));
   }
 
   // Payload and result contracts.
@@ -666,6 +738,44 @@ class QueueDatabaseTest {
       connection.rollback();
     }
     assertEquals(0, tasksIn(name));
+  }
+
+  @Test
+  void checksCompatibilityOnceForEachPhysicalConnectionBehindAPool() throws SQLException {
+    PooledConnections pool = new PooledConnections();
+    Queue fresh = new Queue(ConnectionSource.of(dataSource));
+    try (Connection first = ScratchDatabase.connect();
+        Connection second = ScratchDatabase.connect()) {
+      for (int checkout = 0; checkout < 3; checkout++) {
+        fresh.listBudgets(pool.checkout(first));
+        fresh.listBudgets(pool.checkout(second));
+      }
+    }
+    assertEquals(2, pool.compatibilityChecks(), "one check for each physical connection");
+  }
+
+  @Test
+  void aCompatibilityCheckDoesNotHoldTheQueueLock() throws Exception {
+    CountDownLatch held = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    PooledConnections slow =
+        new PooledConnections(
+            () -> {
+              held.countDown();
+              release.await();
+            });
+    Queue fresh = new Queue(ConnectionSource.of(dataSource));
+    try (Connection first = ScratchDatabase.connect();
+        Connection second = ScratchDatabase.connect()) {
+      Thread blocked = Thread.ofVirtual().start(() -> fresh.listBudgets(slow.checkout(first)));
+      try {
+        assertTrue(held.await(10, TimeUnit.SECONDS), "the first check started");
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> fresh.listBudgets(second));
+      } finally {
+        release.countDown();
+        blocked.join();
+      }
+    }
   }
 
   @Test

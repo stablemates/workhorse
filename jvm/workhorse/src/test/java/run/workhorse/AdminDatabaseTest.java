@@ -27,6 +27,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import run.workhorse.internal.Row;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
+import run.workhorse.testing.PooledConnections;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
 
@@ -726,5 +727,19 @@ class AdminDatabaseTest {
     try (Connection connection = ScratchDatabase.connect()) {
       admin.assertCompatible(connection);
     }
+  }
+
+  @Test
+  void checksCompatibilityOnceForEachPhysicalConnectionBehindAPool() throws SQLException {
+    PooledConnections pool = new PooledConnections();
+    Admin fresh = new Admin(source);
+    try (Connection first = ScratchDatabase.connect();
+        Connection second = ScratchDatabase.connect()) {
+      for (int checkout = 0; checkout < 3; checkout++) {
+        fresh.listWorkers(pool.checkout(first));
+        fresh.listWorkers(pool.checkout(second));
+      }
+    }
+    assertEquals(2, pool.compatibilityChecks(), "one check for each physical connection");
   }
 }

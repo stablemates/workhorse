@@ -28,6 +28,14 @@ export interface SnapshotContract {
   readonly goneLabel: string;
   /** Heading for a line a fresh reading has and the committed file does not. */
   readonly arrivedLabel: string;
+  /**
+   * A gone line that the surface's own rule treats as additive, for example a record header that
+   * gained a last component. The failure lists such a line under its own heading, not as gone.
+   */
+  readonly additive?: {
+    readonly label: string;
+    readonly test: (line: string, before: readonly string[], after: readonly string[]) => boolean;
+  };
 }
 
 /** Lines present in `before` but not in `after`, counting repeats. */
@@ -64,15 +72,20 @@ export function snapshotDrift(
   if (current === contents) return undefined;
   const before = current.split("\n").filter((line) => line.trim() !== "");
   const after = contents.split("\n").filter((line) => line.trim() !== "");
-  const gone = missing(before, after);
+  const missed = missing(before, after);
+  const additive = contract.additive;
+  const grown = additive ? missed.filter((line) => additive.test(line, before, after)) : [];
+  const gone = missed.filter((line) => !grown.includes(line));
   const arrived = missing(after, before);
   // Both empty means the same lines came back in a different order or spacing. A generator that
   // lets that happen is the defect, so say which one rather than reporting a difference with
   // nothing in it.
   const difference =
-    gone.length === 0 && arrived.length === 0
+    missed.length === 0 && arrived.length === 0
       ? "\nEvery line is still present, so only their order or spacing moved; that generator owes a stable ordering."
-      : report(contract.goneLabel, gone) + report(contract.arrivedLabel, arrived);
+      : report(contract.goneLabel, gone) +
+        report(additive?.label ?? "", grown) +
+        report(contract.arrivedLabel, arrived);
   return (
     `${contract.path} no longer describes this surface; run ${contract.generateCommand}.` +
     ` ${contract.meaning}${difference}`

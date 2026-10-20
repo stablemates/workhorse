@@ -15,10 +15,11 @@ import org.jspecify.annotations.Nullable;
  * <p>A tree value is a {@code Map<String, @Nullable Object>} in source order, a {@code
  * List<@Nullable Object>}, a {@code Long} or a {@code BigInteger} for an integer, a {@code Double}
  * for a number with a fraction or an exponent, a {@code String}, a {@code Boolean}, or {@code
- * null}. The parser is strict: it refuses a token that is not JSON, a lone surrogate, and trailing
- * text. A duplicate object key keeps the last value, as PostgreSQL's {@code jsonb} does. It also
- * refuses a number token that is longer than a limit, because {@code new BigInteger(String)} takes
- * time that grows with the square of the number of digits.
+ * null}. A tree from {@link #parseExact(String)} can also hold a {@code BigDecimal}. The parser is
+ * strict: it refuses a token that is not JSON, a lone surrogate, and trailing text. A duplicate
+ * object key keeps the last value, as PostgreSQL's {@code jsonb} does. It also refuses a number
+ * token that is longer than a limit, because {@code new BigInteger(String)} takes time that grows
+ * with the square of the number of digits.
  */
 public final class Json {
   private static final int MAX_DEPTH = 1000;
@@ -29,6 +30,15 @@ public final class Json {
    * point, so this limit refuses no integer that a stored value can hold.
    */
   public static final int MAX_NUMBER_LENGTH = 131_072;
+
+  /**
+   * The most digits before the decimal point of a {@code BigDecimal} in an exact tree. PostgreSQL's
+   * {@code numeric} type, which {@code jsonb} uses for a number, stores no more.
+   */
+  private static final int MAX_INTEGER_DIGITS = 131_072;
+
+  /** The most digits after the decimal point of a {@code BigDecimal} in an exact tree. */
+  private static final int MAX_FRACTION_DIGITS = 16_383;
 
   private static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE);
   private static final BigInteger LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
@@ -45,6 +55,23 @@ public final class Json {
   }
 
   /**
+   * Parses {@code text} into a tree that keeps the value of every number (SM-1520).
+   *
+   * <p>A number with a fraction or an exponent is a {@code Double} when the shortest digits of that
+   * double equal the token in value. Otherwise it is the {@code BigDecimal} of the token, and
+   * {@link #write(Object)} writes its digits unchanged. So a value that a double cannot hold, such
+   * as {@code 12345678901234567.89} or {@code 1E+400}, reaches PostgreSQL exactly. The parse
+   * refuses a {@code BigDecimal} that PostgreSQL's {@code numeric} type cannot store.
+   *
+   * @throws IllegalArgumentException if the text is not one strict JSON value, or if it holds a
+   *     number token that is too long or outside the {@code numeric} range
+   */
+  public static @Nullable Object parseExact(String text) {
+    Parser parser = new Parser(text, MAX_NUMBER_LENGTH, true);
+    return parser.document();
+  }
+
+  /**
    * Parses {@code text} into a tree, and refuses a number token that has more than {@code
    * maxNumberLength} characters after an optional minus sign.
    *
@@ -55,14 +82,7 @@ public final class Json {
     if (maxNumberLength < 1) {
       throw new IllegalArgumentException("maxNumberLength must be at least 1");
     }
-    Parser parser = new Parser(text, maxNumberLength);
-    parser.skipSpace();
-    Object value = parser.value(0);
-    parser.skipSpace();
-    if (parser.position != text.length()) {
-      throw parser.error("trailing text");
-    }
-    return value;
+    return new Parser(text, maxNumberLength, false).document();
   }
 
   /**
@@ -179,11 +199,23 @@ public final class Json {
   private static final class Parser {
     private final String text;
     private final int maxNumberLength;
+    private final boolean exact;
     private int position;
 
-    Parser(String text, int maxNumberLength) {
+    Parser(String text, int maxNumberLength, boolean exact) {
       this.text = text;
       this.maxNumberLength = maxNumberLength;
+      this.exact = exact;
+    }
+
+    @Nullable Object document() {
+      skipSpace();
+      Object value = value(0);
+      skipSpace();
+      if (position != text.length()) {
+        throw error("trailing text");
+      }
+      return value;
     }
 
     @Nullable Object value(int depth) {
@@ -376,10 +408,32 @@ public final class Json {
         return value;
       }
       double value = Double.parseDouble(token);
+      if (exact) {
+        return exact(token, value);
+      }
       if (!Double.isFinite(value)) {
         throw error("a number outside the double range");
       }
       return value;
+    }
+
+    /** The double when its shortest digits equal the token in value, or else the decimal. */
+    private Object exact(String token, double value) {
+      BigDecimal decimal;
+      try {
+        decimal = new BigDecimal(token);
+      } catch (NumberFormatException failure) {
+        throw error("a number outside the numeric range");
+      }
+      if (Double.isFinite(value)
+          && new BigDecimal(Double.toString(value)).compareTo(decimal) == 0) {
+        return value;
+      }
+      long integerDigits = (long) decimal.precision() - decimal.scale();
+      if (integerDigits > MAX_INTEGER_DIGITS || decimal.scale() > MAX_FRACTION_DIGITS) {
+        throw error("a number outside the numeric range");
+      }
+      return decimal;
     }
 
     private void digits() {

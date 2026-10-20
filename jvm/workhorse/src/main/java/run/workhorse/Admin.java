@@ -14,11 +14,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.WeakHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
-import run.workhorse.internal.Compatibility;
+import run.workhorse.internal.CompatibilityCache;
 import run.workhorse.internal.Json;
 import run.workhorse.internal.PgjdbcVersion;
 import run.workhorse.internal.Row;
@@ -54,11 +52,7 @@ public final class Admin {
   private static final int DEFAULT_GROUP_LIMIT = 1000;
 
   private final ConnectionSource connections;
-  private final ReentrantLock lock = new ReentrantLock();
-  private boolean sourceChecked;
-  private CompatibilityException.@Nullable Code sourceCompatibility;
-  private final Map<Connection, Optional<CompatibilityException.Code>> connectionCompatibility =
-      new WeakHashMap<>();
+  private final CompatibilityCache compatibility = new CompatibilityCache();
 
   /**
    * An admin on {@code connections}.
@@ -90,26 +84,7 @@ public final class Admin {
   }
 
   private @Nullable Void assertCompatible(Call call) {
-    CompatibilityException.Code code;
-    lock.lock();
-    try {
-      if (call.caller) {
-        Optional<CompatibilityException.Code> cached = connectionCompatibility.get(call.connection);
-        if (cached == null) {
-          cached = Optional.ofNullable(Compatibility.evaluate(call.connection));
-          connectionCompatibility.put(call.connection, cached);
-        }
-        code = cached.orElse(null);
-      } else {
-        if (!sourceChecked) {
-          sourceCompatibility = Compatibility.evaluate(call.connection);
-          sourceChecked = true;
-        }
-        code = sourceCompatibility;
-      }
-    } finally {
-      lock.unlock();
-    }
+    CompatibilityException.Code code = compatibility.check(call.connection, call.caller);
     if (code != null) {
       throw new CompatibilityException(code);
     }

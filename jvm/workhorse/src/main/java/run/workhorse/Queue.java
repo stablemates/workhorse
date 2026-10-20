@@ -18,12 +18,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.WeakHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
-import run.workhorse.internal.Compatibility;
+import run.workhorse.internal.CompatibilityCache;
 import run.workhorse.internal.ContractSchema;
 import run.workhorse.internal.Contracts;
 import run.workhorse.internal.Contracts.PayloadContract;
@@ -81,10 +80,7 @@ public final class Queue {
   private final JsonCodec codec;
   private final Telemetry telemetry;
   private final ReentrantLock lock = new ReentrantLock();
-  private boolean sourceChecked;
-  private CompatibilityException.@Nullable Code sourceCompatibility;
-  private final Map<Connection, Optional<CompatibilityException.Code>> connectionCompatibility =
-      new WeakHashMap<>();
+  private final CompatibilityCache compatibility = new CompatibilityCache();
   private boolean contractsEnabled;
   private final Map<String, @Nullable PayloadContract> contracts = new HashMap<>();
 
@@ -130,26 +126,7 @@ public final class Queue {
   }
 
   private @Nullable Void assertCompatible(Call call) {
-    CompatibilityException.Code code;
-    lock.lock();
-    try {
-      if (call.caller) {
-        Optional<CompatibilityException.Code> cached = connectionCompatibility.get(call.connection);
-        if (cached == null) {
-          cached = Optional.ofNullable(Compatibility.evaluate(call.connection));
-          connectionCompatibility.put(call.connection, cached);
-        }
-        code = cached.orElse(null);
-      } else {
-        if (!sourceChecked) {
-          sourceCompatibility = Compatibility.evaluate(call.connection);
-          sourceChecked = true;
-        }
-        code = sourceCompatibility;
-      }
-    } finally {
-      lock.unlock();
-    }
+    CompatibilityException.Code code = compatibility.check(call.connection, call.caller);
     if (code != null) {
       throw new CompatibilityException(code);
     }
@@ -1174,27 +1151,31 @@ public final class Queue {
 
   /** The concurrency policies of every queue. */
   public List<ConcurrencyPolicy> listConcurrencyPolicies() {
-    return listConcurrencyPolicies((List<String>) null);
+    return listConcurrencyPolicies(List.of());
   }
 
-  /** The concurrency policies of {@code queues}, or of every queue when it is null or empty. */
-  public List<ConcurrencyPolicy> listConcurrencyPolicies(@Nullable List<String> queues) {
+  /** The concurrency policies of {@code queues}, or of every queue when it is empty. */
+  public List<ConcurrencyPolicy> listConcurrencyPolicies(List<String> queues) {
+    Objects.requireNonNull(queues, "queues");
     return run(null, call -> listConcurrencyPolicies(call, queues));
   }
 
   /** The concurrency policies of every queue, read inside the caller's transaction. */
   public List<ConcurrencyPolicy> listConcurrencyPolicies(Connection connection) {
-    return listConcurrencyPolicies(connection, null);
+    return listConcurrencyPolicies(connection, List.of());
   }
 
-  /** The concurrency policies of {@code queues}, read inside the caller's transaction. */
+  /**
+   * The concurrency policies of {@code queues}, or of every queue when it is empty, read inside the
+   * caller's transaction.
+   */
   public List<ConcurrencyPolicy> listConcurrencyPolicies(
-      Connection connection, @Nullable List<String> queues) {
+      Connection connection, List<String> queues) {
+    Objects.requireNonNull(queues, "queues");
     return run(connection, call -> listConcurrencyPolicies(call, queues));
   }
 
-  private List<ConcurrencyPolicy> listConcurrencyPolicies(
-      Call call, @Nullable List<String> queues) {
+  private List<ConcurrencyPolicy> listConcurrencyPolicies(Call call, List<String> queues) {
     return list(call, SqlCatalogue.LIST_CONCURRENCY_POLICIES, queues).stream()
         .map(Queue::concurrencyPolicy)
         .toList();
@@ -1202,26 +1183,30 @@ public final class Queue {
 
   /** The rate limit policies of every queue. */
   public List<RateLimitPolicy> listRateLimitPolicies() {
-    return listRateLimitPolicies((List<String>) null);
+    return listRateLimitPolicies(List.of());
   }
 
-  /** The rate limit policies of {@code queues}, or of every queue when it is null or empty. */
-  public List<RateLimitPolicy> listRateLimitPolicies(@Nullable List<String> queues) {
+  /** The rate limit policies of {@code queues}, or of every queue when it is empty. */
+  public List<RateLimitPolicy> listRateLimitPolicies(List<String> queues) {
+    Objects.requireNonNull(queues, "queues");
     return run(null, call -> listRateLimitPolicies(call, queues));
   }
 
   /** The rate limit policies of every queue, read inside the caller's transaction. */
   public List<RateLimitPolicy> listRateLimitPolicies(Connection connection) {
-    return listRateLimitPolicies(connection, null);
+    return listRateLimitPolicies(connection, List.of());
   }
 
-  /** The rate limit policies of {@code queues}, read inside the caller's transaction. */
-  public List<RateLimitPolicy> listRateLimitPolicies(
-      Connection connection, @Nullable List<String> queues) {
+  /**
+   * The rate limit policies of {@code queues}, or of every queue when it is empty, read inside the
+   * caller's transaction.
+   */
+  public List<RateLimitPolicy> listRateLimitPolicies(Connection connection, List<String> queues) {
+    Objects.requireNonNull(queues, "queues");
     return run(connection, call -> listRateLimitPolicies(call, queues));
   }
 
-  private List<RateLimitPolicy> listRateLimitPolicies(Call call, @Nullable List<String> queues) {
+  private List<RateLimitPolicy> listRateLimitPolicies(Call call, List<String> queues) {
     return list(call, SqlCatalogue.LIST_RATE_LIMIT_POLICIES, queues).stream()
         .map(Queue::rateLimitPolicy)
         .toList();
@@ -1229,31 +1214,35 @@ public final class Queue {
 
   /** Every budget. */
   public List<Budget> listBudgets() {
-    return listBudgets((List<String>) null);
+    return listBudgets(List.of());
   }
 
-  /** The budgets named in {@code names}, or every budget when it is null or empty. */
-  public List<Budget> listBudgets(@Nullable List<String> names) {
+  /** The budgets named in {@code names}, or every budget when it is empty. */
+  public List<Budget> listBudgets(List<String> names) {
+    Objects.requireNonNull(names, "names");
     return run(null, call -> listBudgets(call, names));
   }
 
   /** Every budget, read inside the caller's transaction. */
   public List<Budget> listBudgets(Connection connection) {
-    return listBudgets(connection, null);
+    return listBudgets(connection, List.of());
   }
 
-  /** The budgets named in {@code names}, read inside the caller's transaction. */
-  public List<Budget> listBudgets(Connection connection, @Nullable List<String> names) {
+  /**
+   * The budgets named in {@code names}, or every budget when it is empty, read inside the caller's
+   * transaction.
+   */
+  public List<Budget> listBudgets(Connection connection, List<String> names) {
+    Objects.requireNonNull(names, "names");
     return run(connection, call -> listBudgets(call, names));
   }
 
-  private List<Budget> listBudgets(Call call, @Nullable List<String> names) {
+  private List<Budget> listBudgets(Call call, List<String> names) {
     return list(call, SqlCatalogue.LIST_BUDGETS, names).stream().map(Queue::budget).toList();
   }
 
-  private List<Row> list(
-      Call call, SqlCatalogue.Statement statement, @Nullable List<String> names) {
-    String[] array = names == null ? new String[0] : Sql.textArray(names);
+  private List<Row> list(Call call, SqlCatalogue.Statement statement, List<String> names) {
+    String[] array = Sql.textArray(names);
     assertCompatible(call);
     return Sql.rows(call.connection, statement, (Object) array);
   }
@@ -1726,7 +1715,7 @@ public final class Queue {
   /** A value as the core's JSON tree, through the codec and the strict parser. */
   private @Nullable Object tree(@Nullable Object value, String label) {
     try {
-      return Json.parse(codec.encode(value));
+      return Json.parseExact(codec.encode(value));
     } catch (IllegalArgumentException error) {
       throw new IllegalArgumentException(
           label + " is not a JSON value: " + error.getMessage(), error);
