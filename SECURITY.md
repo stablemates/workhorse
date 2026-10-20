@@ -68,7 +68,12 @@ plugin, do these steps:
 2. Run `pnpm jvm:verification-metadata`.
 3. Read the changed entries, and commit them with the version change.
 
-CI runs `pnpm jvm:verification-metadata:check`. It fails if the file is not current.
+Each release consumer in `jvm/release-consumer/` has its own `gradle/verification-metadata.xml`,
+and the same command writes it. That file trusts the `run.workhorse` group with no checksum,
+because the consumer takes those artifacts from a staging directory or from Maven Central. It holds
+the sha256 checksum of each other plugin and library.
+
+CI runs `pnpm jvm:verification-metadata:check`. It fails if a file is not current.
 
 ## Supported versions
 

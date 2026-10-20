@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { componentDifference, withHeader } from "./jvm-verification-metadata.js";
+import { componentDifference, releaseConsumers, withHeader } from "./jvm-verification-metadata.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const read = (file: string) => readFile(path.join(root, file), "utf8");
@@ -36,6 +36,33 @@ describe("the JVM verification metadata", () => {
     const artifacts = metadata.match(/<artifact name="[^"]+">\s*<[a-z0-9]+ /g) ?? [];
     expect(artifacts.length).toBeGreaterThan(0);
     for (const artifact of artifacts) expect(artifact).toMatch(/<sha256 $/);
+  });
+
+  // A consumer takes `run.workhorse` from a staging directory or from Maven Central. Those artifacts
+  // change on each build, so only that group is trusted without a checksum.
+  it.each(releaseConsumers)(
+    "gates every artifact of the %s release consumer outside run.workhorse on a sha256 checksum",
+    async (consumer) => {
+      const metadata = await read(
+        `jvm/release-consumer/${consumer}/gradle/verification-metadata.xml`,
+      );
+      expect(metadata).toContain("<verify-metadata>true</verify-metadata>");
+      expect(metadata).toContain("<verify-signatures>false</verify-signatures>");
+      expect(metadata).not.toMatch(/<trusted-key|<pgp |<ignored-key/);
+      const trusted = /<trusted-artifacts>([\s\S]*?)<\/trusted-artifacts>/.exec(metadata)?.[1];
+      expect(trusted?.trim()).toBe('<trust group="run.workhorse"/>');
+      expect(metadata).not.toContain('<component group="run.workhorse"');
+      const artifacts = metadata.match(/<artifact name="[^"]+">\s*<[a-z0-9]+ /g) ?? [];
+      expect(artifacts.length).toBeGreaterThan(0);
+      for (const artifact of artifacts) expect(artifact).toMatch(/<sha256 $/);
+    },
+  );
+
+  // The scan consumer of `pnpm jvm:vuln` resolves as a caller does, so it has no metadata.
+  it("leaves the dependency scan consumer without verification metadata", async () => {
+    await expect(
+      read("scripts/jvm-dependency-scan/gradle/verification-metadata.xml"),
+    ).rejects.toThrow(/ENOENT/);
   });
 
   // The snapshot lane skips verification for two test class paths. The build that holds the signing

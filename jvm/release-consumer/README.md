@@ -12,5 +12,10 @@ builds the Java and Kotlin consumers that way, for the cold install of ADR 0056 
   the task that the application enqueues. The application asks for no optional feature of the
   starter, and it refuses a class path that holds one of their modules.
 
+Each consumer has `gradle/verification-metadata.xml`. Gradle refuses each plugin and library
+outside `run.workhorse` whose sha256 checksum is not in that file or differs from it.
+`pnpm jvm:verification-metadata` writes the file, and `scripts/jvm-verification-metadata.ts` states
+the procedure.
+
 Each consumer uses the public API as an application does. A change to that API updates these files
 too.
