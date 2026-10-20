@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { retryStep } from "./command-retry.js";
+
 const version = "1.31.1";
 const digests: Record<string, string> = {
   linux_amd64: "497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354",
@@ -80,13 +82,21 @@ async function generate(check: boolean): Promise<void> {
   const archive = await loadVerifiedArchive(
     path.join(tmpdir(), "workhorse-sqlc", digest, filename),
     digest,
-    async () => {
-      const response = await fetch(
-        `https://github.com/sqlc-dev/sqlc/releases/download/v${version}/${filename}`,
-      );
-      if (!response.ok) throw new Error(`sqlc ${version} download failed: HTTP ${response.status}`);
-      return Buffer.from(await response.arrayBuffer());
-    },
+    // The release host can reset a stream for a short time, so the download runs again if it
+    // fails (SM-1557).
+    () =>
+      retryStep(
+        async () => {
+          const response = await fetch(
+            `https://github.com/sqlc-dev/sqlc/releases/download/v${version}/${filename}`,
+          );
+          if (!response.ok) {
+            throw new Error(`sqlc ${version} download failed: HTTP ${response.status}`);
+          }
+          return Buffer.from(await response.arrayBuffer());
+        },
+        { label: `sqlc ${version} download` },
+      ),
   );
   const temporary = await mkdtemp(path.join(tmpdir(), "workhorse-sqlc-generate-"));
   try {
