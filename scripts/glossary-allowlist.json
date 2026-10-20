@@ -25,7 +25,7 @@
     {
       "word": "job",
       "files": "docs/compatibility.md",
-      "context": "(build|publish|CI|crates-io|rubygems|maven-central|jvm|github-release|attestation-rehearsal|attestation rehearsal) jobs?|crates\\.io and RubyGems jobs|its job still succeeds|both of those jobs|Both jobs install|[Tt]he job('s OIDC| exchanges its OIDC| can publish| ends| also writes| stages| waits)|runs the job before|job's action and uv|any job outside that environment|block this job|to a job holding",
+      "context": "(build|publish|CI|crates-io|rubygems|maven-central|jvm|jvm-verification-metadata|github-release|attestation-rehearsal|attestation rehearsal) jobs?|crates\\.io and RubyGems jobs|its job still succeeds|both of those jobs|Both jobs install|[Tt]he job('s OIDC| exchanges its OIDC| can publish| ends| also writes| stages| waits)|runs the job before|job's action and uv|any job outside that environment|block this job|to a job holding",
       "reason": "A GitHub Actions job is one unit of a CI or release workflow, not a Workhorse task."
     },
     {
