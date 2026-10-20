@@ -3,15 +3,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 /**
  * Run a command, return its standard output, and reject if it exits with a status other than 0.
- * Standard error goes to this process, so a failed attempt shows its own message.
+ * Standard error goes to this process, so a failed attempt shows its own message. The command gets
+ * `env` if it is given, else the environment of this process.
  */
 export async function runCommand(
   command: string,
   args: readonly string[],
   cwd: string,
+  env?: NodeJS.ProcessEnv,
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn(command, [...args], { cwd, stdio: ["ignore", "pipe", "inherit"] });
+    const child = spawn(command, [...args], { cwd, env, stdio: ["ignore", "pipe", "inherit"] });
     let output = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
