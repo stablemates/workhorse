@@ -1,9 +1,8 @@
 // The suspend wrappers of `Admin`. Each public Java method family has one wrapper, with a
 // `connection` argument as in `QueueSuspend.kt`. Each wrapper runs in `client`, as the wrappers of
-// `QueueSuspend.kt` do: a call with no `connection` joins the calling thread's Spring transaction,
-// and every other call runs on a virtual thread in `runInterruptible`. An interrupt closes the
-// socket of a JDBC read on a virtual thread, and the caller's connection is not usable after a
-// cancelled call.
+// `QueueSuspend.kt` do. A call with a `connection` runs on the calling thread with no interrupt. A
+// call with no `connection` joins the calling thread's Spring transaction, and outside a scope it
+// runs on a virtual thread in `runInterruptible`.
 @file:JvmName("AdminSuspend")
 
 package run.workhorse.kotlin

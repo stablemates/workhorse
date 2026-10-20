@@ -77,9 +77,26 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
    * Registers [handler] for [taskType]. The worker decodes each payload as [P], with its type
    * arguments, so `handle<List<Order>>` receives a list of `Order`. Registering a task type again
    * replaces its handler.
+   *
+   * A JSON `null` payload reaches [handler] only when [P] is nullable, as in `handle<Order?>`.
+   * Otherwise the attempt fails with `IllegalArgumentException`, and [handler] does not run.
    */
   public inline fun <reified P> handle(taskType: String, handler: SuspendHandler<P>) {
-    register(taskType, javaTypeOf<P>(), handler)
+    register(
+      taskType,
+      javaTypeOf<P>(),
+      if (null is P) handler
+      else
+        SuspendHandler { ctx, payload ->
+          handler.handle(
+            ctx,
+            payload
+              ?: throw IllegalArgumentException(
+                "The payload of task type $taskType is null, and the payload type is not nullable",
+              ),
+          )
+        },
+    )
   }
 
   /**
@@ -163,6 +180,9 @@ internal class SuspendTaskHandler<P>(
  * Runs a [SuspendHandler] for the core. The core calls [handle] on the task's handler thread, which
  * waits for the handler's coroutine.
  *
+ * The coroutine runs in the trace context of the handler thread, so the `workhorse.handler` span is
+ * the current span in the handler and in each call it makes ([HandlerTraceContext]).
+ *
  * A cancellation of the task's token cancels the coroutine `Job`. An interrupt of the handler
  * thread, which the drain sends at its deadline, also cancels the `Job`. In both cases the handler
  * thread waits until the coroutine ends, so the core never settles a task whose coroutine still
@@ -175,7 +195,11 @@ internal class SuspendHandlerAdapter<P>(
 ) : Handler<P> {
   override fun handle(ctx: HandlerContext, payload: P): Any? {
     val deferred =
-      scope.async(CoroutineName("workhorse-task-${ctx.task().id()}")) {
+      // The core makes the handler span current on this thread only. The element carries it to
+      // each thread that runs the coroutine.
+      scope.async(
+        CoroutineName("workhorse-task-${ctx.task().id()}") + HandlerTraceContext.capture(),
+      ) {
         handler.handle(SuspendHandlerContext(ctx), payload)
       }
     val registration =

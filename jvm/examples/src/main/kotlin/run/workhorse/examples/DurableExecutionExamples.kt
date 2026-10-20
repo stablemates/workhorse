@@ -41,7 +41,8 @@ class DurableExecutionKotlinExamples(
 
   /** Registers the `order.review` handler, which waits for a signal and for a person. */
   fun registerExternalWaits(scope: WorkerScope) {
-    scope.handle<Map<String, Any?>>("order.review") { ctx, _ ->
+    // The handler reads no payload, so a `null` payload is valid.
+    scope.handle<Any?>("order.review") { ctx, _ ->
       // docs:start kotlin-durable-execution-external-waits
       val event = ctx.waitForSignal<Map<String, Any?>>("provider-event")
       val review = ctx.waitForHuman<Any?>("operator-review", mapOf("eventId" to event["id"]))

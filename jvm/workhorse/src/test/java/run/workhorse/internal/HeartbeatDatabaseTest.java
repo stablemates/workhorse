@@ -191,12 +191,14 @@ class HeartbeatDatabaseTest {
       long registeredAt = System.nanoTime();
       unregister = heartbeat.register(member);
       waitUntil("a round reported the lease busy", () -> !member.statuses.isEmpty());
+      // SM-1550: the heartbeat thread can still add to a shared list, so each check reads one copy.
+      List<Long> answeredAt = List.copyOf(member.statusAt);
+      List<String> answers = List.copyOf(member.statuses);
       // The first round falls due one interval of 1 s after the registration. Its bound is 750 ms,
       // and a busy answer comes long before it.
-      double answeredMs =
-          (member.statusAt.get(0) - registeredAt - TimeUnit.SECONDS.toNanos(1)) / 1e6;
+      double answeredMs = (answeredAt.get(0) - registeredAt - TimeUnit.SECONDS.toNanos(1)) / 1e6;
       assertTrue(answeredMs < 300, "the busy answer came " + answeredMs + " ms after the slot");
-      assertEquals("busy", member.statuses.get(0));
+      assertEquals("busy", answers.get(0));
       assertEquals(0, member.renewals.get(), "a busy round renews nothing");
       assertEquals(claimed.expiresAt(), lease(taskId).expiresAt(), "the lease did not change");
       blocker.commit();
@@ -205,9 +207,8 @@ class HeartbeatDatabaseTest {
       double renewedMs = (member.renewedAt.get() - registeredAt) / 1e6;
       assertTrue(renewedMs < 1_900, "the lease was renewed " + renewedMs + " ms after the start");
       assertTrue(lease(taskId).expiresAt().isAfter(claimed.expiresAt()), "the lease was renewed");
-      assertTrue(
-          member.statuses.stream().allMatch("busy"::equals),
-          "only busy statuses: " + member.statuses);
+      List<String> statuses = List.copyOf(member.statuses);
+      assertTrue(statuses.stream().allMatch("busy"::equals), "only busy statuses: " + statuses);
       unregister.run();
       release.countDown();
       assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
@@ -383,7 +384,8 @@ class HeartbeatDatabaseTest {
       unregister = heartbeat.register(member);
       waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
       unregister.run();
-      List<String> events = watched.events;
+      // SM-1550: the heartbeat thread can still add an event, so the checks read one copy.
+      List<String> events = List.copyOf(watched.events);
       assertTrue(events.size() >= 4, "events: " + events);
       String pid = events.get(0).substring("settings ".length());
       assertEquals(
@@ -391,7 +393,8 @@ class HeartbeatDatabaseTest {
           events.subList(0, 4),
           "the first round sent no heartbeat and rolled back; the next one used the same backend");
       assertEquals(1, watched.checkouts.get(), "the heartbeat kept its connection");
-      assertTrue(member.statuses.isEmpty(), "statuses: " + member.statuses);
+      List<String> statuses = List.copyOf(member.statuses);
+      assertTrue(statuses.isEmpty(), "statuses: " + statuses);
       assertTrue(
           lease(task.taskId).expiresAt().isAfter(task.claimed.expiresAt()),
           "the lease was renewed");
@@ -418,7 +421,8 @@ class HeartbeatDatabaseTest {
       unregister = heartbeat.register(member);
       waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
       unregister.run();
-      List<String> events = watched.events;
+      // SM-1550: the heartbeat thread can still add an event, so the checks read one copy.
+      List<String> events = List.copyOf(watched.events);
       assertTrue(events.size() >= 3, "events: " + events);
       String pid = events.get(0).substring("settings ".length());
       assertEquals(
@@ -461,14 +465,15 @@ class HeartbeatDatabaseTest {
       // The first round falls due at 1 s, and the next regular round at 2 s.
       double renewedMs = (member.renewedAt.get() - registeredAt) / 1e6;
       assertTrue(renewedMs > 1_900, "the lease was renewed " + renewedMs + " ms after the start");
-      assertEquals(List.of("busy"), member.statuses, "no retry ran");
+      // SM-1550: the heartbeat thread can still add to a shared list, so each check reads one copy.
+      assertEquals(List.of("busy"), List.copyOf(member.statuses), "no retry ran");
+      List<String> events = List.copyOf(watched.events);
       List<String> heartbeats =
-          watched.events.stream().filter(event -> event.startsWith("heartbeat ")).toList();
-      assertEquals(2, heartbeats.size(), "events: " + watched.events);
+          events.stream().filter(event -> event.startsWith("heartbeat ")).toList();
+      assertEquals(2, heartbeats.size(), "events: " + events);
       assertEquals(heartbeats.get(0), heartbeats.get(1), "both rounds used the same backend");
       assertTrue(
-          watched.events.stream().noneMatch(event -> event.startsWith("rollback ")),
-          "events: " + watched.events);
+          events.stream().noneMatch(event -> event.startsWith("rollback ")), "events: " + events);
       assertEquals(1, watched.checkouts.get(), "the heartbeat kept its connection");
       assertTrue(
           lease(task.taskId).expiresAt().isAfter(task.claimed.expiresAt()),

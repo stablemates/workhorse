@@ -88,9 +88,22 @@ val withoutSpring =
     useJUnitPlatform { includeTags("without-spring") }
   }
 
+// `WithoutOpenTelemetryTest`, tagged `without-opentelemetry`, runs on a class path with no
+// OpenTelemetry jar, so it proves that a suspend handler loads no OpenTelemetry class when the API
+// is absent. `test` depends on this task.
+val withoutOpenTelemetry =
+  tasks.register<Test>("testWithoutOpenTelemetry") {
+    description = "Runs the tests tagged without-opentelemetry with no OpenTelemetry jar."
+    group = "verification"
+    testClassesDirs = testSources.output.classesDirs
+    classpath = testSources.runtimeClasspath.filter { !it.name.startsWith("opentelemetry-") }
+    filter { includeTestsMatching("run.workhorse.kotlin.WithoutOpenTelemetryTest") }
+    useJUnitPlatform { includeTags("without-opentelemetry") }
+  }
+
 tasks.test {
-  useJUnitPlatform { excludeTags("without-spring") }
-  dependsOn(withoutSpring)
+  useJUnitPlatform { excludeTags("without-spring", "without-opentelemetry") }
+  dependsOn(withoutSpring, withoutOpenTelemetry)
 }
 
 tasks.jar { manifest { attributes("Automatic-Module-Name" to "run.workhorse.kotlin") } }

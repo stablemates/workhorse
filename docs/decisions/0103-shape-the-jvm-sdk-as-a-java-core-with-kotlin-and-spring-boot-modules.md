@@ -1685,3 +1685,21 @@ So `handleBatch<P>` passes the full type of `P` to the new overload.
 published yet, so this change breaks no user.
 
 The SM-1487 coordinator chose this form during SM-1521.
+
+## Amendment: a Kotlin suspend wrapper does not interrupt a call on the caller's connection (2026-10-20)
+
+The amendment "a Kotlin suspend wrapper joins the caller's Spring transaction" keeps
+`runInterruptible` for every `Queue` or `Admin` wrapper call outside a Spring transaction scope.
+This amendment removes one more kind of call from that rule.
+
+A wrapper call with a non-null `connection` runs on the calling thread with no interrupt. The
+statement ends, and then the caller gets the cancellation. The connection belongs to the caller,
+and often to the caller's transaction. If a cancellation interrupts a virtual thread during a
+statement, the JDK closes the PostgreSQL socket. PostgreSQL then ends the caller's transaction, and
+the caller loses its earlier writes (SM-1526).
+
+Only a source form call, with no `connection`, outside a Spring transaction scope still runs on a
+virtual thread in `runInterruptible`. Its connection belongs to the core, and the core gives it back
+to its source. No public signature changes, and `api/kotlin.txt` does not change.
+
+The SM-1487 coordinator chose this form during SM-1526.

@@ -102,3 +102,14 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   log the release error, so a caller does not retry a committed write. `EnqueueOptions` and
   `ScheduledTask` copy the retry policy. An unknown non-replaceable reason throws
   `UnexpectedStatusException` (SM-1525).
+- In a Kotlin suspend handler, the `workhorse.handler` span is the current span on every thread
+  that runs the handler's coroutine. A task that the handler enqueues joins the handler's trace. The
+  module finds OpenTelemetry by reflection, and loads no OpenTelemetry class when the API is absent.
+- If a JSON value is `null` and the reified type is not nullable, the Kotlin module throws
+  `IllegalArgumentException`. This applies to the payload of `handle<P>`, and to the values of
+  `checkpoint`, `waitForSignal`, `waitForHuman`, and `runChild`. For `handle<P>`, the handler does
+  not run, and the attempt fails. Write a nullable type, such as `handle<Order?>`, to receive
+  `null`.
+- A Kotlin `Queue` or `Admin` suspend wrapper with a `connection` runs on the calling thread with no
+  interrupt. A cancellation reaches the caller after the statement ends, so the caller's
+  transaction stays usable.

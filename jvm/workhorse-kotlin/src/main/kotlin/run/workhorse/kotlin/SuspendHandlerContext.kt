@@ -61,12 +61,23 @@ internal constructor(
    * Returns the value that the checkpoint [name] saved, decoded as [T]. The call runs [operation]
    * only when no such checkpoint exists, and saves its value. With [options], the checkpoint also
    * compares the fingerprint of the input, as the core's `checkpoint` does.
+   *
+   * If the saved value is `null` and [T] is not nullable, the call throws
+   * `IllegalArgumentException`.
    */
   public suspend inline fun <reified T> checkpoint(
     name: String,
     options: CheckpointOptions? = null,
     noinline operation: suspend () -> T,
-  ): T = checkpoint(name, javaTypeOf<T>(), options, operation)
+  ): T {
+    val value: T = checkpoint(name, javaTypeOf<T>(), options, operation)
+    if (value == null && null !is T) {
+      throw IllegalArgumentException(
+        "The checkpoint $name holds null, and its type is not nullable",
+      )
+    }
+    return value
+  }
 
   @PublishedApi
   internal suspend fun <T> checkpoint(
@@ -102,9 +113,18 @@ internal constructor(
   /**
    * Returns the payload of the signal [name], decoded as [T]. The task suspends until a signal
    * arrives, or until [timeout] passes. A `null` timeout waits without a limit.
+   *
+   * If the payload is `null` and [T] is not nullable, the call throws `IllegalArgumentException`.
    */
-  public suspend inline fun <reified T> waitForSignal(name: String, timeout: Duration? = null): T =
-    waitForSignal(name, javaTypeOf<T>(), timeout)
+  public suspend inline fun <reified T> waitForSignal(name: String, timeout: Duration? = null): T {
+    val value: T = waitForSignal(name, javaTypeOf<T>(), timeout)
+    if (value == null && null !is T) {
+      throw IllegalArgumentException(
+        "The signal $name has a null payload, and its type is not nullable",
+      )
+    }
+    return value
+  }
 
   @PublishedApi
   internal suspend fun <T> waitForSignal(name: String, type: Type, timeout: Duration?): T =
@@ -116,12 +136,22 @@ internal constructor(
    * Returns the decision that a person recorded for the wait [name], decoded as [T]. [context] is
    * the JSON value that person sees. The task suspends until a decision arrives, or until [timeout]
    * passes.
+   *
+   * If the decision is `null` and [T] is not nullable, the call throws `IllegalArgumentException`.
    */
   public suspend inline fun <reified T> waitForHuman(
     name: String,
     context: Any? = null,
     timeout: Duration? = null,
-  ): T = waitForHuman(name, context, javaTypeOf<T>(), timeout)
+  ): T {
+    val value: T = waitForHuman(name, context, javaTypeOf<T>(), timeout)
+    if (value == null && null !is T) {
+      throw IllegalArgumentException(
+        "The human wait $name has a null decision, and its type is not nullable",
+      )
+    }
+    return value
+  }
 
   @PublishedApi
   internal suspend fun <T> waitForHuman(
@@ -134,13 +164,23 @@ internal constructor(
   /**
    * Returns the result of the child task [name], decoded as [T]. The call creates the child and
    * suspends the task until the child succeeds.
+   *
+   * If the result is `null` and [T] is not nullable, the call throws `IllegalArgumentException`.
    */
   public suspend inline fun <reified T> runChild(
     name: String,
     taskType: String,
     payload: Any? = null,
     options: EnqueueOptions = EnqueueOptions.defaults(),
-  ): T = runChild(name, taskType, payload, options, javaTypeOf<T>())
+  ): T {
+    val value: T = runChild(name, taskType, payload, options, javaTypeOf<T>())
+    if (value == null && null !is T) {
+      throw IllegalArgumentException(
+        "The child $name has a null result, and its type is not nullable",
+      )
+    }
+    return value
+  }
 
   @PublishedApi
   internal suspend fun <T> runChild(
