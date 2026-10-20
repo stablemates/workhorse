@@ -66,14 +66,14 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@orpc/client": "1.15.5",
+    "@orpc/client": "1.15.7",
     "@stablemates/workhorse": "workspace:*",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
     "vite": "^8.3.4",
