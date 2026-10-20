@@ -233,7 +233,8 @@ the supported minimum.
 The worker also renews the lease while it checks the result of a handler and writes the completion.
 In TypeScript, Python, and Go, a slow final write thus cannot give finished work to recovery. For
 example, the write can wait for a busy connection pool. A Rust task leaves the heartbeat round when
-its handler returns.
+its handler returns. A Ruby or JVM task stays in the heartbeat round while the worker checks the
+result. It leaves the round before the worker writes the final transition.
 
 The Rust worker matches each heartbeat response to the fence token that sent it. Thus, a delayed
 response from before a durable suspension cannot renew or cancel the resumed handler.
@@ -308,12 +309,14 @@ leaves. Every `accepted` heartbeat restarts it from the moment that the request 
 Both moments come before the database renews, so the local countdown never ends after the stored
 `expires_at`.
 
-| SDK        | Watchdog                                                             |
-| ---------- | -------------------------------------------------------------------- |
-| TypeScript | `TaskAttempt`                                                        |
-| Python     | The expiration thread of the attempt                                 |
-| Go         | The watchdog timer of the attempt                                    |
-| Rust       | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`) |
+| SDK          | Watchdog                                                                              |
+| ------------ | ------------------------------------------------------------------------------------- |
+| TypeScript   | `TaskAttempt`                                                                         |
+| Python       | The expiration thread of the attempt                                                  |
+| Go           | The watchdog timer of the attempt                                                     |
+| Rust         | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`)                  |
+| Ruby         | The `workhorse-expiration-<task ID>` thread of the attempt (`:lease_lost`)            |
+| Java, Kotlin | The `workhorse-expiration-<task ID>` virtual thread (`CancellationReason.LEASE_LOST`) |
 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round returns, that round cannot renew or cancel the resumed handler.
@@ -401,9 +404,10 @@ It stops claiming when its slots are full or its queues are empty. PostgreSQL ch
 claim separately, so ordering and admission policies apply to each task.
 
 In TypeScript, Python, and Go, a task stays in the heartbeat batch after its handler returns, until
-its final write is done. In Rust, a task leaves the batch when its handler returns. Each task has
-its own abort signal and its own final write. Thus, the cancellation and the result of one task do
-not depend on another task.
+its final write is done. In Rust, a task leaves the batch when its handler returns. In Ruby and the
+JVM, a task leaves the batch after the result checks, before its final write. Each task has its own
+abort signal and its own final write. Thus, the cancellation and the result of one task do not
+depend on another task.
 
 `concurrency` applies to one worker. Each added worker adds slots. If the fleet must share one budget
 of running tasks, use a [concurrency policy](/docs/concurrency-policies). If the fleet must share

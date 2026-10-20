@@ -329,14 +329,14 @@ page, because the compilation of its programs is a stronger check.
 <details>
 <summary>Reference: example checks</summary>
 
-| Language     | Check                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------- |
-| TypeScript   | `tsc` type-checks the `ts verify` fence.                                                                            |
-| Python       | `ruff format --check` and `mypy` check the `python verify` fence.                                                   |
-| Go           | `gofmt` and the Go compiler check the `go verify` fence.                                                            |
-| Rust         | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.        |
-| Ruby         | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL. |
-| Java, Kotlin | No check yet. The page has no Java or Kotlin program.                                                               |
+| Language     | Check                                                                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript   | `tsc` type-checks the `ts verify` fence.                                                                                                             |
+| Python       | `ruff format --check` and `mypy` check the `python verify` fence.                                                                                    |
+| Go           | `gofmt` and the Go compiler check the `go verify` fence.                                                                                             |
+| Rust         | The fence must equal a `docs:start` region in `rust/examples/`, which `cargo clippy --all-targets` compiles.                                         |
+| Ruby         | The fence must equal a `docs:start` region in `ruby/examples/`, which a documentation spec runs against PostgreSQL.                                  |
+| Java, Kotlin | The fence must equal a `docs:start` region in `jvm/examples/src/main/`, which `pnpm jvm:build` compiles and `pnpm jvm:test` runs against PostgreSQL. |
 
 `site/scripts/check-language-examples.ts` runs these checks. Its `crossSdkGuidePaths` list, the
 feature-page name sweep, does not include `for-ai-agents.mdx`.

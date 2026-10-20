@@ -137,7 +137,9 @@ the supported minimum.
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
 the lease until this write is complete. Thus, Workhorse does not give a finished task to another
-worker. A Rust task stops its heartbeats when its handler returns.
+worker. A Rust task stops its heartbeats when its handler returns. A Ruby or JVM task keeps its
+heartbeats while the worker checks the result. It stops them before the worker writes the final
+transition.
 
 ## Keep the lease while another transaction holds the task
 
@@ -235,12 +237,14 @@ does not restart it. Both
 moments come before the database renews, so the local countdown never ends after the stored
 `expires_at`.
 
-| SDK        | Watchdog                                                             |
-| ---------- | -------------------------------------------------------------------- |
-| TypeScript | `TaskAttempt`                                                        |
-| Python     | The expiration thread of the attempt                                 |
-| Go         | The watchdog timer of the attempt                                    |
-| Rust       | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`) |
+| SDK          | Watchdog                                                                              |
+| ------------ | ------------------------------------------------------------------------------------- |
+| TypeScript   | `TaskAttempt`                                                                         |
+| Python       | The expiration thread of the attempt                                                  |
+| Go           | The watchdog timer of the attempt                                                     |
+| Rust         | The `watchdog` timer in `Inner::execute` (`CancelReason::LeaseLost`)                  |
+| Ruby         | The `workhorse-expiration-<task ID>` thread of the attempt (`:lease_lost`)            |
+| Java, Kotlin | The `workhorse-expiration-<task ID>` virtual thread (`CancellationReason.LEASE_LOST`) |
 
 The Rust worker matches each heartbeat result to the fence token of the claim. If a suspended task
 resumes while an old round is returning, that round cannot renew or cancel the resumed handler.

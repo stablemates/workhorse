@@ -1661,10 +1661,12 @@ run.workhorse.spring.WorkerLifecycle.State: public static run.workhorse.spring.W
 run.workhorse.spring.WorkhorseAutoConfiguration: public WorkhorseAutoConfiguration()
 
 @NullMarked public class run.workhorse.spring.WorkhorseProperties
+run.workhorse.spring.WorkhorseProperties: public @Nullable java.lang.String getDataSource()
 run.workhorse.spring.WorkhorseProperties: public WorkhorseProperties()
 run.workhorse.spring.WorkhorseProperties: public run.workhorse.spring.WorkhorseProperties.DashboardProperties getDashboard()
 run.workhorse.spring.WorkhorseProperties: public run.workhorse.spring.WorkhorseProperties.QueueProperties getQueue()
 run.workhorse.spring.WorkhorseProperties: public run.workhorse.spring.WorkhorseProperties.WorkerProperties getWorker()
+run.workhorse.spring.WorkhorseProperties: public void setDataSource(@Nullable java.lang.String)
 
 @NullMarked public static class run.workhorse.spring.WorkhorseProperties.DashboardProperties
 run.workhorse.spring.WorkhorseProperties.DashboardProperties: public DashboardProperties()
@@ -1734,6 +1736,7 @@ property workhorse.dashboard.enabled: java.lang.Boolean = false
 property workhorse.dashboard.environment: java.lang.String = "development"
 property workhorse.dashboard.path: java.lang.String = "/workhorse"
 property workhorse.dashboard.read-only: java.lang.Boolean = false
+property workhorse.data-source: java.lang.String
 property workhorse.queue.default-queue: java.lang.String = "default"
 property workhorse.worker.concurrency: java.lang.Integer = 1
 property workhorse.worker.disable-registry: java.lang.Boolean = false

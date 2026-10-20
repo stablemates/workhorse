@@ -92,9 +92,10 @@ It stops claiming when its slots are full or its queues are empty. PostgreSQL ch
 claim separately, so ordering and admission policies apply to each task.
 
 In TypeScript, Python, and Go, a task stays in the heartbeat batch after its handler returns, until
-its final write is done. In Rust, a task leaves the batch when its handler returns. Each task has
-its own abort signal and its own final write. Thus, the cancellation and the result of one task do
-not depend on another task.
+its final write is done. In Rust, a task leaves the batch when its handler returns. In Ruby and the
+JVM, a task leaves the batch after the result checks, before its final write. Each task has its own
+abort signal and its own final write. Thus, the cancellation and the result of one task do not
+depend on another task.
 
 `concurrency` applies to one worker. Each added worker adds slots. If the fleet must share one budget
 of running tasks, use a [concurrency policy](240-concurrency-policies.md). If the fleet must share

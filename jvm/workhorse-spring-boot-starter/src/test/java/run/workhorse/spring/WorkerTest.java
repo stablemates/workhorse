@@ -15,6 +15,8 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
@@ -22,8 +24,10 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.support.GenericApplicationContext;
 import run.workhorse.Admin;
 import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
@@ -78,6 +82,62 @@ class WorkerTest {
       }
       finished.set(payload);
       return null;
+    }
+  }
+
+  /** A second handler bean for the task type of {@link ShipHandler}. */
+  static final class OtherShipHandler implements TaskHandler<Shipment> {
+    @Override
+    public String taskType() {
+      return "order.ship";
+    }
+
+    @Override
+    public Type payloadType() {
+      return Shipment.class;
+    }
+
+    @Override
+    public @Nullable Object handle(HandlerContext ctx, Shipment payload) {
+      return null;
+    }
+  }
+
+  /**
+   * A lifecycle bean one phase below the worker. It records whether the worker still ran when the
+   * context stopped this bean.
+   */
+  static final class LowerPhase implements SmartLifecycle {
+    final AtomicReference<WorkerLifecycle.@Nullable State> workerAtStop = new AtomicReference<>();
+    private @Nullable WorkerLifecycle worker;
+    private volatile boolean running;
+
+    void watch(WorkerLifecycle worker) {
+      this.worker = worker;
+    }
+
+    @Override
+    public void start() {
+      running = true;
+    }
+
+    @Override
+    public void stop() {
+      WorkerLifecycle current = worker;
+      if (current != null) {
+        workerAtStop.set(current.state());
+      }
+      running = false;
+    }
+
+    @Override
+    public boolean isRunning() {
+      return running;
+    }
+
+    @Override
+    public int getPhase() {
+      return SmartLifecycle.DEFAULT_PHASE - 1;
     }
   }
 
@@ -410,5 +470,91 @@ class WorkerTest {
               }
               assertThat(handler.finished.get()).isNotNull();
             });
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"on", "yes", "1", "no"})
+  void theWorkerOffWarningAppearsWheneverNoWorkerBeanExists(String value, CapturedOutput output) {
+    Contexts.runner()
+        .withBean(DataSource.class, () -> mock(DataSource.class))
+        .withBean(ShipHandler.class, ShipHandler::new)
+        .withPropertyValues("workhorse.worker.enabled=" + value)
+        .run(context -> assertThat(context).hasNotFailed().doesNotHaveBean(Worker.class));
+    assertThat(output).contains("1 TaskHandler bean(s)").contains("workhorse.worker.enabled=true");
+  }
+
+  @Test
+  void aRunningWorkerLogsNoWorkerOffWarning(CapturedOutput output) {
+    enabled(Contexts.unique("no-warning"), new ShipHandler())
+        .run(context -> assertThat(context).hasSingleBean(Worker.class));
+    assertThat(output).doesNotContain("no Workhorse worker runs");
+  }
+
+  @Test
+  void twoHandlerBeansForOneTaskTypeFailTheStartup() {
+    enabled(Contexts.unique("duplicate"), new ShipHandler())
+        .withBean("otherShipHandler", OtherShipHandler.class, OtherShipHandler::new)
+        .run(
+            context ->
+                assertThat(context)
+                    .getFailure()
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("order.ship")
+                    .hasMessageContaining("otherShipHandler"));
+  }
+
+  @Test
+  void theWorkerUsesTheDataSourceThatThePropertyNames() throws Exception {
+    String queueName = Contexts.unique("named");
+    ShipHandler handler = new ShipHandler();
+    handler.release.countDown();
+    Contexts.runner()
+        .withBean("jobsDataSource", DataSource.class, () -> new ScratchDataSource(true))
+        .withBean("ordersDataSource", DataSource.class, () -> mock(DataSource.class))
+        .withBean(ShipHandler.class, () -> handler)
+        .withPropertyValues(
+            "workhorse.data-source=jobsDataSource",
+            "workhorse.worker.enabled=true",
+            "workhorse.worker.queues=" + queueName,
+            "workhorse.worker.poll-interval=50ms",
+            "workhorse.worker.disable-registry=true")
+        .run(
+            context -> {
+              UUID taskId = enqueue(context, queueName);
+              Admin admin = context.getBean(Admin.class);
+              long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+              while (state(admin, taskId) != TaskState.SUCCEEDED && System.nanoTime() < end) {
+                Thread.sleep(20);
+              }
+              assertThat(state(admin, taskId)).isEqualTo(TaskState.SUCCEEDED);
+            });
+  }
+
+  @Test
+  void theWorkerStopsBeforeALifecycleBeanOfALowerPhase() {
+    LowerPhase lower = new LowerPhase();
+    enabled(Contexts.unique("phase"), new ShipHandler())
+        .withBean(LowerPhase.class, () -> lower)
+        .run(
+            context -> {
+              WorkerLifecycle lifecycle = context.getBean(WorkerLifecycle.class);
+              assertThat(lifecycle.getPhase()).isEqualTo(SmartLifecycle.DEFAULT_PHASE);
+              lower.watch(lifecycle);
+            });
+    assertThat(lower.workerAtStop.get()).isEqualTo(WorkerLifecycle.State.STOPPED);
+  }
+
+  @Test
+  void theWorkerOffWarningCountsHandlerBeansOfAParentContext(CapturedOutput output) {
+    try (GenericApplicationContext parent = new GenericApplicationContext()) {
+      parent.registerBean(ShipHandler.class, ShipHandler::new);
+      parent.refresh();
+      Contexts.runner()
+          .withParent(parent)
+          .withBean(DataSource.class, () -> mock(DataSource.class))
+          .run(context -> assertThat(context).hasNotFailed().doesNotHaveBean(Worker.class));
+    }
+    assertThat(output).contains("1 TaskHandler bean(s)");
   }
 }

@@ -163,7 +163,9 @@ servletContext
 
 A Kotlin application uses the same Java API. A Spring Boot application sets
 `workhorse.dashboard.enabled=true` and defines one `DashboardAuthorizer` bean. The starter then
-registers the filter, and the `workhorse.dashboard.*` properties set its options.
+registers the filter, and the `workhorse.dashboard.*` properties set its options. If the context has
+no `DashboardAuthorizer` bean, the starter stops the application at startup. It also stops it for
+several such beans, unless one of them is `@Primary`.
 
 All six hosts serve the same browser bundle and the same `dashboard/v1` procedures. Only the HTTP
 adapter changes with the language. PostgreSQL keeps the operator behavior the same in each host.
