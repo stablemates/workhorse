@@ -991,7 +991,12 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
 
 ### Go module
 
-1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
+1. Add the intended version to `go/CHANGELOG.md`. Then re-pin the Go API baseline:
+   1. Fetch the tags with `git fetch origin --tags`.
+   2. Run `pnpm go-api:generate`. It pins `api/go.txt` to the newest `go/v*` tag and lists only
+      the breaks since that tag. Without this step, `pnpm go-api:check` compares the module with an
+      older release, and a new break is hard to see in review.
+   3. Commit `go/CHANGELOG.md` and `api/go.txt` with the release candidate.
 2. Fetch origin. Then check out the candidate commit in a clean worktree with
    `git switch --detach <sha>`. Do not use the current tip of `main`, because other commits can
    land on `main` during the release.
@@ -1130,10 +1135,14 @@ for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
    Do not create another tag. The build job of `.github/workflows/release.yml` runs
    `pnpm jvm:release-check`. It runs the JVM gates, then `pnpm jvm:package-check`, the dry run:
    1. Gradle writes the three artifacts, with `-sources.jar`, `-javadoc.jar`, and checksums, to
-      `jvm/build/staging-deploy`. A throwaway key that the check generates signs every file.
+      `jvm/build/staging-deploy`. A throwaway key that the check generates signs every file. The
+      throwaway key has the shape of the release key: an ed25519 primary key that signs, with no
+      subkey. Thus each dry run tests the signature path of the release.
    2. The check refuses a module other than the three artifacts, a version other than
       `jvm/gradle.properties`, a missing file, signature, or checksum, and a POM without the
-      metadata that Central requires.
+      metadata that Central requires. It also refuses a `-javadoc.jar` without an `index.html`.
+      The `workhorse-kotlin` module has no Java sources, so its `-javadoc.jar` holds the Dokka HTML
+      of its KDoc.
    3. It builds a Java, a Kotlin, and a Spring Boot consumer from the staging directory. With
       PostgreSQL available, each consumer enqueues one task and runs it. It then runs
       `pnpm release:verify maven` against the staging directory.
@@ -1145,19 +1154,28 @@ for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
    The [release check](#release-train) in the build job refuses a mismatched tag before npm
    publishes.
 4. On a match, the job stages and signs the artifacts with the release key, and runs the same
-   checks. It refuses a version that differs from the tag. It then zips the staging directory
-   without `maven-metadata.xml` files, and `scripts/upload-maven-central.ts` uploads the bundle to
-   the Central Publisher Portal with `publishingType=USER_MANAGED`. The job waits until the Portal
-   reports the deployment as `VALIDATED`.
-5. Open the deployment at <https://central.sonatype.com/publishing/deployments>, check it, and
+   checks. It refuses a version that differs from the tag, and a signing key whose fingerprint is
+   not the one that [Publication credentials](#publication-credentials) states. It then zips the
+   staging directory without `maven-metadata.xml` files.
+5. A second step gets no secret. It runs the Java, Kotlin, and Spring Boot consumers and
+   `pnpm release:verify maven` from the same staging directory, with
+   `pnpm jvm:package-check --consumers-only`. Thus the stage uploads the jars that its consumers
+   ran, not a second build.
+6. `scripts/upload-maven-central.ts` uploads the bundle to the Central Publisher Portal with
+   `publishingType=USER_MANAGED`. The job waits until the Portal reports the deployment as
+   `VALIDATED`. The script retries a status request that fails with a network error, HTTP 429, or
+   HTTP 5xx, and fails after five such failures in a row.
+7. Open the deployment at <https://central.sonatype.com/publishing/deployments>, check it, and
    select Publish. Maven Central never deletes a published version, so this step keeps a person
    between the upload and a permanent version. After two clean releases, a maintainer can change
    the stage to `publishingType=AUTOMATIC`.
-6. Verify the public version with `pnpm release:verify maven X.Y.Z`. Set
+8. Verify the public version with `pnpm release:verify maven X.Y.Z`. Set
    `WORKHORSE_VERIFY_DATABASE_URL` to a database with the Workhorse schema first.
 
 The `github-release` job waits for the `maven-central` job. A failed upload or a failed validation
 therefore ends the run before the GitHub release exists.
+[Recover from a failed Maven Central upload](#recover-from-a-failed-maven-central-upload) states
+what to do then.
 
 A maintainer must do these steps before the first publish. SM-1384 records them. Nothing in this
 repository performs them.
@@ -1251,6 +1269,14 @@ step that uploads receives the token. The token and the key do not expire by the
 maintainer rotates them: generate a new token in the Portal, or a new key, and replace the secret.
 A new signing key must be on a public key server before the next release.
 
+The release key is an ed25519 primary key that signs, with no subkey. Its fingerprint is
+`B933E2F16C3FA58E5414849A024210DB67A17773`. Use this fingerprint to check a `.asc` file of a
+`run.workhorse` artifact on Maven Central. `releaseKeyFingerprint` in
+`scripts/check-jvm-release.ts` pins the same value, and the `maven-central` job refuses a signing
+key with another fingerprint. To rotate the key, change both values in the change that the new
+key signs. The check imports only the public part of the key to verify the signatures, so no
+GnuPG home on the runner holds the secret key.
+
 ### Recovering a partially published release
 
 npm publishes one package at a time. Ten packages cannot be published atomically, so a failure in
@@ -1288,6 +1314,30 @@ therefore end up complete on PyPI, partial on npm, and absent from the module pr
 The half-published version is never completed and never reused. Its number is spent. Record what
 happened in [`CHANGELOG.md`](../CHANGELOG.md) under the version that replaces it, so a reader who
 finds the orphaned packages on npm can tell why they exist.
+
+#### Recover from a failed Maven Central upload
+
+The `maven-central` job runs after npm publishes. If it fails after the Central Portal accepted the
+bundle, the Portal keeps that deployment. The deployment can still reach `VALIDATED`, but nothing
+publishes it. The log of the failed run names the deployment in the line "The Portal accepted
+deployment".
+
+If the `maven-central` job failed for a transient reason, for example a Portal outage or a
+validation that took more than 15 minutes, do these steps:
+
+1. Re-run the failed `maven-central` job. The `maven-central` environment asks for a review first.
+   The job stages, signs, and tests the artifacts again, and uploads a second deployment of the
+   same version.
+2. When the job ends, open <https://central.sonatype.com/publishing/deployments>.
+3. Drop the deployment of the failed run. Find it by the ID in the log of the failed run.
+4. Publish the deployment of the re-run, as step 7 of [JVM artifacts](#jvm-artifacts) describes.
+   Publish only one deployment of a version.
+
+The `github-release` job runs after the re-run succeeds.
+
+If the Portal reports the deployment as `FAILED`, a re-run cannot fix it. Drop the deployment. The
+failure is a defect of the candidate, and [Release train](#release-train) states what to do with a
+defect.
 
 ## Benchmark validation is not the support boundary
 

@@ -20,6 +20,7 @@ plugins {
   alias(libs.plugins.kotlin.jvm) apply false
   alias(libs.plugins.errorprone) apply false
   alias(libs.plugins.spotless) apply false
+  alias(libs.plugins.dokka) apply false
 }
 
 val javaFloor = 21

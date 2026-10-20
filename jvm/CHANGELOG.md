@@ -72,3 +72,8 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   BatchHandler)` is the new Java overload that `handleBatch<P>` uses.
 - The internal Kotlin helper `blocking` is no longer `@PublishedApi`, so it is not part of the
   published API.
+- The `workhorse-kotlin` `-javadoc.jar` holds the Dokka HTML of the module's KDoc, so javadoc.io
+  and an IDE show the Kotlin API documentation.
+- The release key signs every file of the three artifacts. It is an ed25519 key with the
+  fingerprint `B933E2F16C3FA58E5414849A024210DB67A17773`. Use it to check a `.asc` file from Maven
+  Central. [Publication credentials](../docs/compatibility.md#publication-credentials) states it.

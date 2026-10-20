@@ -4,7 +4,10 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 // `workhorse-kotlin`: suspend handlers, suspend client wrappers, and a DSL over the Java core
 // (ADR 0103, "Kotlin module").
 
-plugins { alias(libs.plugins.kotlin.jvm) }
+plugins {
+  alias(libs.plugins.kotlin.jvm)
+  alias(libs.plugins.dokka)
+}
 
 description = "Workhorse for Kotlin: suspend handlers, suspend wrappers, and a DSL"
 
@@ -91,6 +94,13 @@ tasks.test {
 }
 
 tasks.jar { manifest { attributes("Automatic-Module-Name" to "run.workhorse.kotlin") } }
+
+// The module has no Java sources, so the javadoc tool writes nothing. The `-javadoc.jar` holds the
+// Dokka HTML of the KDoc instead, which javadoc.io and an IDE show (SM-1507).
+// `scripts/check-jvm-release.ts` refuses a `-javadoc.jar` without an `index.html`.
+dokka { moduleName = project.name }
+
+tasks.named<Jar>("javadocJar") { from(tasks.dokkaGeneratePublicationHtml) }
 
 // A Kotlin 2.2 caller must resolve no newer standard library through this module (ADR 0103,
 // "Floors"). The check fails if the runtime class path, which holds the module's own dependencies,
