@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicTest;
@@ -18,6 +19,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 class ContractSchemaTest {
+  /**
+   * The kinds of number a JVM value cannot hold. An exact tree holds a {@code BigDecimal} and a
+   * {@code BigInteger}, so the JVM runs every instance of the shared table.
+   */
+  private static final Set<String> UNHELD_NUMBERS = Set.of();
+
   /** Every case of {@code protocol/v1/contracts.json}, run against the contract validator. */
   @TestFactory
   Stream<DynamicTest> matchesEveryProtocolContractCase() throws IOException {
@@ -38,10 +45,14 @@ class ContractSchemaTest {
                 Object instances = fixture.get("instances");
                 for (Object instance : instances == null ? List.of() : (List<?>) instances) {
                   Map<String, @Nullable Object> example = Json.object(instance);
-                  assertEquals(
-                      example.get("valid"),
-                      schema.valid(example.get("value")),
-                      instance.toString());
+                  Object needs = example.get("needs");
+                  if (needs != null && UNHELD_NUMBERS.contains(needs)) {
+                    continue;
+                  }
+                  Object text = example.get("json");
+                  Object value =
+                      text == null ? example.get("value") : Json.parseExact((String) text);
+                  assertEquals(example.get("valid"), schema.valid(value), instance.toString());
                 }
               }));
     }

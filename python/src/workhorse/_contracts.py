@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any, cast
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError, validators
+from jsonschema.protocols import Validator
 
 from .errors import TaskContractValidationError
 from .types import Json, TaskTypeContracts
@@ -117,10 +121,118 @@ def _check_profile(schema: Json, path: str, references: list[tuple[str, str]]) -
             raise TypeError(f"{keyword_path} is outside the Workhorse contract profile")
 
 
-def compile_contract_schema(schema: Json) -> Draft202012Validator:
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _decimal(value: int | float) -> Decimal | float:
+    """The decimal that json.dumps writes to PostgreSQL for a number.
+
+    repr gives the shortest decimal that reads back as the same float. A non-finite float stays a
+    float, so it compares as before.
+    """
+    if isinstance(value, int):
+        return Decimal(value)
+    return Decimal(repr(value)) if math.isfinite(value) else value
+
+
+def _canonical(value: object) -> object:
+    """A hashable key that is equal for two JSON values when the contract treats them as equal."""
+    if isinstance(value, bool) or value is None:
+        return ("literal", value)
+    if _is_number(value):
+        return ("number", _decimal(cast(int | float, value)))
+    if isinstance(value, list):
+        return ("array", tuple(_canonical(item) for item in value))
+    if isinstance(value, dict):
+        return ("object", frozenset((key, _canonical(item)) for key, item in value.items()))
+    return ("string", value)
+
+
+# jsonschema calls each keyword function with the validator, the keyword value, the instance, and
+# the schema, in that order.
+_Keyword = Callable[[Validator, Any, Any, Any], Iterator[ValidationError]]
+
+
+def _bound(holds: Callable[[Decimal | float, Decimal | float], bool], message: str) -> _Keyword:
+    def keyword(
+        validator: Validator, bound: Any, instance: Any, _schema: Any
+    ) -> Iterator[ValidationError]:
+        if not validator.is_type(instance, "number"):
+            return
+        value, limit = _decimal(instance), _decimal(bound)
+        if isinstance(value, float) or isinstance(limit, float):
+            value, limit = instance, bound
+        if not holds(value, limit):
+            yield ValidationError(f"{instance!r} {message} {bound!r}")
+
+    return keyword
+
+
+def _multiple_of(
+    validator: Validator, divisor: Any, instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    if not validator.is_type(instance, "number"):
+        return
+    value, unit = _decimal(instance), _decimal(divisor)
+    # Fraction divides exactly. Decimal % would round to the context precision and raise
+    # DivisionImpossible for an integer of more than 28 digits.
+    if (
+        isinstance(value, float)
+        or isinstance(unit, float)
+        or (Fraction(value) / Fraction(unit)).denominator != 1
+    ):
+        yield ValidationError(f"{instance!r} is not a multiple of {divisor!r}")
+
+
+def _const(
+    _validator: Validator, const: Any, instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    if _canonical(instance) != _canonical(const):
+        yield ValidationError(f"{const!r} was expected")
+
+
+def _enum(
+    _validator: Validator, enums: Any, instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    key = _canonical(instance)
+    if all(_canonical(each) != key for each in enums):
+        yield ValidationError(f"{instance!r} is not one of {enums!r}")
+
+
+def _unique_items(
+    validator: Validator, unique: Any, instance: Any, _schema: Any
+) -> Iterator[ValidationError]:
+    if (
+        unique
+        and validator.is_type(instance, "array")
+        and len({_canonical(item) for item in instance}) != len(instance)
+    ):
+        yield ValidationError(f"{instance!r} has non-unique elements")
+
+
+# A contract compares the decimal of each number that json.dumps writes to PostgreSQL. The
+# library compares an int with the binary value of a float and divides floats in multipleOf, so
+# these keywords compare decimals instead.
+_ContractValidator = cast(Any, validators.extend)(
+    Draft202012Validator,
+    {
+        "const": _const,
+        "enum": _enum,
+        "exclusiveMaximum": _bound(lambda value, bound: value < bound, "is not less than"),
+        "exclusiveMinimum": _bound(lambda value, bound: value > bound, "is not greater than"),
+        "maximum": _bound(lambda value, bound: value <= bound, "is greater than the maximum of"),
+        "minimum": _bound(lambda value, bound: value >= bound, "is less than the minimum of"),
+        "multipleOf": _multiple_of,
+        "uniqueItems": _unique_items,
+    },
+)
+
+
+def compile_contract_schema(schema: Json) -> Validator:
     check_contract_schema(schema)
     Draft202012Validator.check_schema(cast(Any, schema))
-    return Draft202012Validator(cast(Any, schema))
+    return cast(Validator, _ContractValidator(cast(Any, schema)))
 
 
 def apply_contract(

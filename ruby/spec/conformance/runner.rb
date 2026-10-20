@@ -123,6 +123,10 @@ module Conformance
 
     # ----- contracts ---------------------------------------------------------------------------
 
+    # The kinds of number a Ruby value cannot hold. JSON.parse reads a fraction as a Float, but an
+    # Integer is exact.
+    UNHELD_CONTRACT_NUMBERS = %w[exactFraction].freeze
+
     # A contract fixture compiles its schema the way `Queue#sync_contracts` does, then checks each
     # instance's verdict.
     def self.run_contract(fixture)
@@ -141,7 +145,10 @@ module Conformance
       instances.each_with_index do |instance, index|
         expected = instance["valid"]
         raise Failure, "instance states no verdict" unless [true, false].include?(expected)
-        raise Failure, "instance #{index}: expected valid = #{expected}" unless schema.valid?(instance["value"]) == expected
+        next if UNHELD_CONTRACT_NUMBERS.include?(instance["needs"])
+
+        value = instance.key?("json") ? JSON.parse(instance["json"]) : instance["value"]
+        raise Failure, "instance #{index}: expected valid = #{expected}" unless schema.valid?(value) == expected
       end
     end
 

@@ -299,5 +299,52 @@
       { "value": { "$anchor": "a", "self": {} }, "valid": false },
       { "value": {}, "valid": false }
     ]
+  },
+  {
+    "id": "multiple-of-compares-decimals",
+    "schema": {
+      "type": "object",
+      "properties": { "cents": { "multipleOf": 0.01 }, "tenths": { "multipleOf": 0.1 } }
+    },
+    "instances": [
+      { "value": { "cents": 1.15 }, "valid": true },
+      { "value": { "cents": 19.99 }, "valid": true },
+      { "value": { "cents": 1.155 }, "valid": false },
+      { "value": { "tenths": 0.3 }, "valid": true },
+      { "value": { "tenths": 0.35 }, "valid": false },
+      { "value": { "tenths": 7 }, "valid": true }
+    ]
+  },
+  {
+    "id": "numbers-compare-exact-decimals",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "limit": { "maximum": 9007199254740992 },
+        "id": { "const": 9007199254740992 },
+        "ids": { "uniqueItems": true },
+        "floor": { "minimum": 0.1 },
+        "ratio": { "enum": [0.1] },
+        "large": { "maximum": 1.152921504606847e18 }
+      }
+    },
+    "instances": [
+      { "json": "{\"count\": 1.0}", "valid": true },
+      { "json": "{\"count\": 12345678901234567.01}", "needs": "exactFraction", "valid": false },
+      { "json": "{\"limit\": 9007199254740992}", "valid": true },
+      { "json": "{\"limit\": 9007199254740993}", "needs": "exactInteger", "valid": false },
+      { "json": "{\"id\": 9007199254740993}", "needs": "exactInteger", "valid": false },
+      {
+        "json": "{\"ids\": [9007199254740992, 9007199254740993]}",
+        "needs": "exactInteger",
+        "valid": true
+      },
+      { "json": "{\"floor\": 0.09999999999999999999}", "needs": "exactFraction", "valid": false },
+      { "json": "{\"ratio\": 0.10}", "valid": true },
+      { "json": "{\"ratio\": 0.10000000000000000001}", "needs": "exactFraction", "valid": false },
+      { "json": "{\"large\": 1152921504606846980}", "needs": "exactInteger", "valid": true },
+      { "json": "{\"large\": 1152921504606847001}", "needs": "exactInteger", "valid": false }
+    ]
   }
 ]

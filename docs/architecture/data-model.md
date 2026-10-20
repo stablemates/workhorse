@@ -218,6 +218,35 @@ TypeScript compiles with Ajv, Python with `Draft202012Validator`, and Go with
 
 Every language runs the same fixture table.
 
+#### Contract number comparison
+
+A contract compares the decimal of each number, not its binary double. The decimal is the text
+that the SDK writes to PostgreSQL. For a double, it is the shortest decimal that reads back as the
+same double, which `JSON.stringify`, Python `repr`, Ruby `Float#to_s`, and Java `Double.toString`
+give. `type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`,
+`multipleOf`, `const`, `enum`, and `uniqueItems` compare these decimals exactly (ADR 0039).
+
+| SDK        | Exact integer      | Exact fraction | Decimal comparison                                                                               |
+| ---------- | ------------------ | -------------- | ------------------------------------------------------------------------------------------------ |
+| TypeScript | up to 2^53         | no             | `compileContractSchema` replaces Ajv's `multipleOf` with a division of the decimals.             |
+| Python     | yes                | no             | `compile_contract_schema` replaces the bounds, `multipleOf`, `const`, `enum`, and `uniqueItems`. |
+| Go         | yes, `json.Number` | yes            | `decodeContractJSON` decodes with `UseNumber`; the library compares exact rationals.             |
+| Rust       | `i64` and `u64`    | no             | jsonschema-rs divides the decimals in `multipleOf`.                                              |
+| Ruby       | yes                | no             | `ContractSchema` compares a Float through `Rational(Float#to_s)`.                                |
+| JVM        | yes                | `BigDecimal`   | `ContractSchema` compares a `BigDecimal` of each number.                                         |
+
+A value that an SDK cannot hold never reaches its validator. Two limits stay until SM-1541:
+
+1. TypeScript, Python, Ruby, and Rust read a stored schema constant that a double cannot hold as a
+   double.
+2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in the
+   bound keywords, `const`, `enum`, and `uniqueItems`.
+
+`protocol/v1/contracts.json` gives such instances as JSON text in `json`. An instance marks the
+kind of number it needs in `needs`, `exactFraction` or `exactInteger`, and each runner skips the
+kinds its SDK cannot hold. `rust/tests/conformance/expected-unsupported.json` lists
+`contracts/numbers-compare-exact-decimals` for the second limit.
+
 #### Contract validation at enqueue and completion
 
 Enqueue validates with the policy's current version after explicit contract sync.

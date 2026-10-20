@@ -7,8 +7,14 @@ interface Fixture {
   id: string;
   schema: Json;
   schemaError?: boolean;
-  instances?: { value: Json; valid: boolean }[];
+  instances?: { value?: Json; json?: string; needs?: NumberNeed; valid: boolean }[];
 }
+
+type NumberNeed = "exactFraction" | "exactInteger";
+
+// A TypeScript value holds every number as a double, so it cannot hold a fraction or an integer
+// that a double cannot hold. The shared table marks those instances.
+const UNHELD_NUMBERS = new Set<NumberNeed>(["exactFraction", "exactInteger"]);
 
 const fixtures = JSON.parse(
   await readFile(new URL("../../../protocol/v1/contracts.json", import.meta.url), "utf8"),
@@ -78,6 +84,15 @@ describe("contract schema profile", () => {
     },
   );
 
+  it("divides the decimals of numbers that JSON writes with an exponent", () => {
+    const tiny = compileContractSchema({ multipleOf: 1e-8 });
+    expect(tiny(3e-7)).toBe(true);
+    expect(tiny(3.5e-8)).toBe(false);
+    expect(compileContractSchema({ multipleOf: 0.1 })(1e21)).toBe(true);
+    expect(compileContractSchema({ multipleOf: 3 })(-2.5)).toBe(false);
+    expect(compileContractSchema({ multipleOf: 0.5 })(-2.5)).toBe(true);
+  });
+
   it.each(fixtures)("matches the shared table for $id", (fixture) => {
     let validator: ReturnType<typeof compileContractSchema> | undefined;
     let schemaError: unknown;
@@ -89,7 +104,13 @@ describe("contract schema profile", () => {
     expect(schemaError === undefined).toBe(!fixture.schemaError);
     if (validator === undefined) return;
     for (const instance of fixture.instances ?? []) {
-      expect(validator(instance.value)).toBe(instance.valid);
+      if (instance.needs !== undefined && UNHELD_NUMBERS.has(instance.needs)) continue;
+      const value =
+        instance.json === undefined ? instance.value : (JSON.parse(instance.json) as Json);
+      expect({ instance, valid: validator(value as Json) }).toEqual({
+        instance,
+        valid: instance.valid,
+      });
     }
   });
 });

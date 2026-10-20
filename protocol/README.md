@@ -73,7 +73,10 @@ writes, so a worker that redacts locally cannot produce a different shape from P
 
 `v1/contracts.json` makes the restricted JSON Schema profile executable. TypeScript, Python, and
 Go compile every accepted document and reject the same remote references, dynamic applicators,
-unevaluated applicators, and custom keywords before validating the shared instances.
+unevaluated applicators, and custom keywords before validating the shared instances. An instance
+can give its value as JSON text in `json`, so each runner reads it through its own value path. An
+instance with `needs` set to `exactFraction` or `exactInteger` runs only in the SDKs that can hold
+that kind of number exactly (ADR 0039).
 
 The TypeScript verifier lives in `scripts/verify-sql-protocol.ts`. It checks compatibility before
 calling versioned PostgreSQL functions, so another language can implement the same small

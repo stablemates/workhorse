@@ -4,6 +4,9 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
   def schema(document) = described_class.new(document)
 
   fixtures = JSON.parse(File.read(File.expand_path("../../../protocol/v1/contracts.json", __dir__)))
+  # A Ruby value holds an exact Integer, but JSON.parse reads a fraction as a Float, so Ruby cannot
+  # hold a fraction that a double cannot hold. The shared table marks those instances.
+  unheld_numbers = %w[exactFraction].freeze
   fixtures.each do |fixture|
     it "matches the protocol contract fixture #{fixture.fetch("id")}" do
       if fixture["schemaError"]
@@ -12,9 +15,18 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
       end
       validator = schema(fixture.fetch("schema"))
       fixture.fetch("instances", []).each do |instance|
-        expect(validator.valid?(instance.fetch("value"))).to be(instance.fetch("valid")), instance.inspect
+        next if unheld_numbers.include?(instance["needs"])
+
+        value = instance.key?("json") ? JSON.parse(instance.fetch("json")) : instance.fetch("value")
+        expect(validator.valid?(value)).to be(instance.fetch("valid")), instance.inspect
       end
     end
+  end
+
+  it "refuses a non-finite Float under multipleOf" do
+    expect(schema("multipleOf" => 0.1).valid?(Float::INFINITY)).to be(false)
+    expect(schema("multipleOf" => 0.1).valid?(Float::NAN)).to be(false)
+    expect(schema("multipleOf" => 0.1).valid?(0.3)).to be(true)
   end
 
   it "validates draft 2020-12 keywords" do

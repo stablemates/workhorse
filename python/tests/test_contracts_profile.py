@@ -19,6 +19,10 @@ FIXTURES: list[dict[str, Any]] = json.loads(
 # passes fails the run, so an entry cannot outlive its gap.
 UNSUPPORTED: dict[str, str] = {}
 
+# A Python value holds an exact int, but json.loads reads a fraction as a float, so Python cannot
+# hold a fraction that a double cannot hold. The shared table marks those instances.
+UNHELD_NUMBERS = frozenset({"exactFraction"})
+
 
 @pytest.mark.parametrize(
     "fixture",
@@ -40,7 +44,10 @@ def test_contract_schema_profile(fixture: dict[str, Any]) -> None:
         return
     validator = compile_contract_schema(fixture["schema"])
     for instance in fixture.get("instances", []):
-        assert validator.is_valid(instance["value"]) is instance["valid"]
+        if instance.get("needs") in UNHELD_NUMBERS:
+            continue
+        value = json.loads(instance["json"]) if "json" in instance else instance["value"]
+        assert validator.is_valid(value) is instance["valid"], instance
 
 
 @pytest.mark.parametrize(
@@ -81,3 +88,9 @@ def test_contract_schema_names_the_anchor_and_definition_forms_it_refuses(
 ) -> None:
     with pytest.raises(TypeError, match=re.escape(message)):
         compile_contract_schema(schema)
+
+
+def test_multiple_of_divides_exactly_beyond_the_decimal_context_precision() -> None:
+    assert compile_contract_schema({"multipleOf": 3}).is_valid(123456789012345678901234567890)
+    assert not compile_contract_schema({"multipleOf": 11}).is_valid(123456789012345678901234567890)
+    assert compile_contract_schema({"multipleOf": 0.01}).is_valid(10**40 + 0.0)

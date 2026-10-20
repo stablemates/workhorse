@@ -144,6 +144,12 @@ final class Runner {
   // ----- contracts ---------------------------------------------------------------------------
 
   /**
+   * The kinds of number a JVM value cannot hold. An exact tree holds a {@code BigDecimal} and a
+   * {@code BigInteger}, so the JVM runs every instance.
+   */
+  private static final Set<String> UNHELD_CONTRACT_NUMBERS = Set.of();
+
+  /**
    * A contract fixture compiles its schema the way {@code Queue.syncContracts} does, then checks
    * each instance's verdict.
    */
@@ -167,9 +173,16 @@ final class Runner {
       if (!(instance.get("valid") instanceof Boolean expected)) {
         throw new Failure("instance states no verdict");
       }
+      if (instance.get("needs") instanceof String needs
+          && UNHELD_CONTRACT_NUMBERS.contains(needs)) {
+        continue;
+      }
+      Object value =
+          instance.get("json") instanceof String text
+              ? Json.parseExact(text)
+              : instance.get("value");
       check(
-          schema.valid(instance.get("value")) == expected,
-          "instance " + index + ": expected valid = " + expected);
+          schema.valid(value) == expected, "instance " + index + ": expected valid = " + expected);
     }
   }
 
