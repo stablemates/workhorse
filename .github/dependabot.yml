@@ -62,8 +62,13 @@ updates:
     # named separately because they arrive as separate pull requests, and each fails against the
     # other's major: #164 moved the CLI alone, #153 moved the client alone.
     #
-    # Only the major is ignored, so a 6.x Prisma or a 5.x TypeScript still opens. `ignore` never
-    # applies to security updates.
+    # Objection 4 is a choice, not a blocker. Since October 2026 the `objection` package is
+    # published from the ditojs/objection fork, while Vincit keeps the original repository and npm
+    # access. The Objection recipe certifies one exact 3.x version (SM-1483). A move to 4.x changes
+    # that certification, so a maintainer plans it instead of a weekly pull request.
+    #
+    # Only the major is ignored, so a 6.x Prisma, a 5.x TypeScript, or a 3.x Objection still opens.
+    # `ignore` never applies to security updates.
     ignore:
       - dependency-name: typescript
         update-types:
@@ -72,6 +77,9 @@ updates:
         update-types:
           - version-update:semver-major
       - dependency-name: "@prisma/client"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: objection
         update-types:
           - version-update:semver-major
 
