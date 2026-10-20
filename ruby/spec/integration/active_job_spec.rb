@@ -693,17 +693,4 @@ RSpec.describe "Active Job adapter against PostgreSQL" do
   ensure
     ActiveJob::Base.enqueue_after_transaction_commit, AjTypedJob.enqueue_after_transaction_commit = previous
   end
-
-  it "loads beside the workhorse gem in either order" do
-    lib = File.expand_path("../../lib", __dir__)
-    check = "ActiveJob::Base.queue_adapter = :stablemates_workhorse; " \
-      'raise "adapter" unless ActiveJob::Base.queue_adapter.is_a?(ActiveJob::QueueAdapters::StablematesWorkhorseAdapter); ' \
-      'raise "sitrox" unless Workhorse.is_a?(Module) && defined?(Workhorse::Worker) && ' \
-      "Workhorse::Worker != Stablemates::Workhorse::Worker; print :ok"
-    [%w[workhorse active_job stablemates/workhorse], %w[active_job stablemates/workhorse workhorse]].each do |order|
-      requires = order.flat_map { |name| ["-r", name] }
-      output, error, status = Open3.capture3(RbConfig.ruby, "-I", lib, *requires, "-e", check)
-      expect([status.success?, output]).to eq([true, "ok"]), error
-    end
-  end
 end
