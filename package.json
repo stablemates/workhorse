@@ -124,7 +124,7 @@
     "tooling:vuln": "tsx scripts/with-env.ts tsx scripts/audit-tooling-dependencies.ts",
     "tooling:vuln:npm": "tsx scripts/with-env.ts tsx scripts/audit-tooling-dependencies.ts --npm-only",
     "python:typecheck": "uv run --project python mypy --config-file=python/pyproject.toml python/src/workhorse python/tests/typecheck_usage.py python/examples python/tools",
-    "python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests",
+    "python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests --numprocesses 2 --dist loadgroup",
     "python:test:django": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_enqueue.py",
     "python:test:django-tasks": "tsx scripts/with-env.ts uv run --project python pytest python/tests/test_django_tasks.py",
     "example:pydanticai-approval": "tsx scripts/with-env.ts uv run --project python python python/examples/pydanticai_approval.py",
