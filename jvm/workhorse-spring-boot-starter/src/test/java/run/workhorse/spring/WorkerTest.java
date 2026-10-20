@@ -4,13 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -19,6 +22,8 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import run.workhorse.Admin;
 import run.workhorse.ConnectionSource;
 import run.workhorse.EnqueueOptions;
@@ -74,6 +79,67 @@ class WorkerTest {
       finished.set(payload);
       return null;
     }
+  }
+
+  /** The {@code Error} that {@link FatalHandler} throws. An {@code Error} ends the worker run. */
+  static final class FatalError extends Error {
+    private static final long serialVersionUID = 1L;
+
+    FatalError() {
+      super("fatal handler error");
+    }
+  }
+
+  /** A handler bean whose {@code Error} ends the run without a stop. */
+  static final class FatalHandler implements TaskHandler<Shipment> {
+    @Override
+    public String taskType() {
+      return "order.fatal";
+    }
+
+    @Override
+    public Type payloadType() {
+      return Shipment.class;
+    }
+
+    @Override
+    public @Nullable Object handle(HandlerContext ctx, Shipment payload) {
+      throw new FatalError();
+    }
+  }
+
+  /**
+   * The lifecycle with the exit action of a process, which records the status instead of ending the
+   * test JVM.
+   */
+  @Configuration(proxyBeanMethods = false)
+  static class RecordedExit {
+    static final AtomicReference<CompletableFuture<Integer>> STATUS =
+        new AtomicReference<>(new CompletableFuture<>());
+
+    @Bean
+    WorkerLifecycle workhorseWorkerLifecycle(
+        Worker worker, ConfigurableApplicationContext context) {
+      CompletableFuture<Integer> status = STATUS.get();
+      return new WorkerLifecycle(worker, failure -> ProcessExit.exit(context, status::complete));
+    }
+  }
+
+  private static final String[] FATAL_PROPERTIES = {
+    "workhorse.worker.enabled=true",
+    "workhorse.worker.poll-interval=50ms",
+    "workhorse.worker.disable-registry=true"
+  };
+
+  private static void enqueueFatal(ConfigurableApplicationContext context, String queueName) {
+    context
+        .getBean(Queue.class)
+        .enqueue(
+            "order.fatal", new Shipment("F-1"), EnqueueOptions.builder().queue(queueName).build());
+  }
+
+  private static void awaitEnd(Thread thread) throws InterruptedException {
+    assertThat(thread.join(Duration.ofSeconds(10))).as("the watcher thread ends").isTrue();
   }
 
   private static ApplicationContextRunner enabled(String queueName, ShipHandler handler) {
@@ -200,6 +266,97 @@ class WorkerTest {
               assertThat(lifecycle.worker().isRunning()).isFalse();
               assertThat(lifecycle.isRunning()).isFalse();
             });
+  }
+
+  // SM-1517: an application that serves no web requests exits with a non-zero status.
+  @Test
+  @Timeout(value = 60, unit = TimeUnit.SECONDS)
+  void aRunThatEndsWithoutAStopExitsANonWebProcessWithStatusOne() throws Exception {
+    String queueName = Contexts.unique("exit");
+    CompletableFuture<Integer> status = new CompletableFuture<>();
+    RecordedExit.STATUS.set(status);
+    Contexts.database()
+        .withBean(FatalHandler.class, FatalHandler::new)
+        .withUserConfiguration(RecordedExit.class)
+        .withPropertyValues(FATAL_PROPERTIES)
+        .withPropertyValues("workhorse.worker.queues=" + queueName)
+        .run(
+            context -> {
+              WorkerLifecycle lifecycle = context.getBean(WorkerLifecycle.class);
+              Thread watcher = lifecycle.watcher();
+              assertThat(watcher).isNotNull();
+              assertThat(watcher.isDaemon()).as("the watcher keeps the JVM alive").isFalse();
+              enqueueFatal(context, queueName);
+
+              // The exit closes the context from the watcher thread, and then exits. A wait on
+              // the watcher from its own stop would never end.
+              assertThat(status.get(30, TimeUnit.SECONDS)).isEqualTo(1);
+              awaitEnd(watcher);
+              assertThat(context.getSourceApplicationContext().isActive())
+                  .as("the exit closed the context")
+                  .isFalse();
+              assertThat(lifecycle.state()).isEqualTo(WorkerLifecycle.State.FAILED);
+              assertThat(lifecycle.failure()).isInstanceOf(FatalError.class);
+            });
+  }
+
+  @Test
+  void onlyANonWebApplicationExitsOnAFailedRun() {
+    Contexts.database()
+        .withPropertyValues(FATAL_PROPERTIES)
+        .run(
+            context ->
+                assertThat(context.getBean(WorkerLifecycle.class).exitsOnFailure()).isTrue());
+    Contexts.webDatabase()
+        .withPropertyValues(FATAL_PROPERTIES)
+        .run(
+            context ->
+                assertThat(context.getBean(WorkerLifecycle.class).exitsOnFailure()).isFalse());
+  }
+
+  @Test
+  void aWebApplicationKeepsRunningAndReportsAFailedRunAsDown(CapturedOutput output)
+      throws Exception {
+    String queueName = Contexts.unique("web-failed");
+    Contexts.webDatabase()
+        .withBean(FatalHandler.class, FatalHandler::new)
+        .withPropertyValues(FATAL_PROPERTIES)
+        .withPropertyValues("workhorse.worker.queues=" + queueName)
+        .run(
+            context -> {
+              WorkerLifecycle lifecycle = context.getBean(WorkerLifecycle.class);
+              Thread watcher = lifecycle.watcher();
+              assertThat(watcher).isNotNull();
+              enqueueFatal(context, queueName);
+              awaitEnd(watcher);
+
+              assertThat(lifecycle.state()).isEqualTo(WorkerLifecycle.State.FAILED);
+              assertThat(lifecycle.failure())
+                  .as("known before any stop")
+                  .isInstanceOf(FatalError.class);
+              assertThat(lifecycle.isRunning()).isFalse();
+              Health down =
+                  context.getBean("workhorseHealthIndicator", HealthIndicator.class).health();
+              assertThat(down.getStatus()).isEqualTo(Status.DOWN);
+              assertThat(down.getDetails()).containsEntry("state", "failed");
+              assertThat(context.getSourceApplicationContext().isActive()).isTrue();
+            });
+    assertThat(output).contains("stopped with an error").contains("fatal handler error");
+  }
+
+  @Test
+  void aLifecycleStopEndsTheWatcherWithoutAnExit() throws Exception {
+    String queueName = Contexts.unique("watch");
+    AtomicReference<@Nullable WorkerLifecycle> lifecycle = new AtomicReference<>();
+    enabled(queueName, new ShipHandler())
+        .run(context -> lifecycle.set(context.getBean(WorkerLifecycle.class)));
+    WorkerLifecycle stopped = lifecycle.get();
+    assertThat(stopped).isNotNull();
+    Thread watcher = stopped.watcher();
+    assertThat(watcher).isNotNull();
+    awaitEnd(watcher);
+    assertThat(stopped.state()).isEqualTo(WorkerLifecycle.State.STOPPED);
+    assertThat(stopped.failure()).isNull();
   }
 
   @Test

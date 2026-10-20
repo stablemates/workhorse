@@ -5,6 +5,7 @@ import javax.sql.DataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import run.workhorse.testing.ScratchDataSource;
@@ -19,6 +20,19 @@ final class Contexts {
         .withConfiguration(
             AutoConfigurations.of(
                 JacksonAutoConfiguration.class, WorkhorseAutoConfiguration.class));
+  }
+
+  /** A web context with the starter and Jackson, and no DataSource. */
+  static WebApplicationContextRunner webRunner() {
+    return new WebApplicationContextRunner()
+        .withConfiguration(
+            AutoConfigurations.of(
+                JacksonAutoConfiguration.class, WorkhorseAutoConfiguration.class));
+  }
+
+  /** A web context on the scratch database. The test class extends {@code ScratchDatabase}. */
+  static WebApplicationContextRunner webDatabase() {
+    return webRunner().withUserConfiguration(ScratchDataSourceConfiguration.class);
   }
 
   /** A context on the scratch database. The test class extends {@code ScratchDatabase}. */

@@ -77,8 +77,10 @@ internal constructor(
   ): T {
     // The operation runs inside the core's call, on its thread. It keeps the caller's context
     // elements but not its Job: a cancellation interrupts the thread while the operation runs, and
-    // `runBlocking` then cancels the operation. The core's write after the operation is not
-    // interrupted.
+    // `runBlocking` then cancels the operation. `runBlocking` returns only after the operation
+    // ends, so work that the operation runs on another dispatcher, for example in `withContext`,
+    // also ends first. kotlinx-coroutines 1.10.2, the floor of this module, behaves so. The core's
+    // write after the operation is not interrupted.
     val context = currentCoroutineContext().minusKey(ContinuationInterceptor).minusKey(Job)
     return durable { call ->
       val callable = Callable { call.interruptible { runBlocking(context) { operation() } } }

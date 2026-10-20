@@ -2557,7 +2557,10 @@ run continues.
 - `runOnce()` claims until a claim returns no task with a handler, and then drains. It opens no
   listener. It returns `true` only when it claimed a task whose type has a handler.
 - `start()` runs the loop on its own thread and returns at once. `close()` calls `stop()`, waits for
-  the drain, and throws a failure of the `start` loop.
+  the drain, and throws a failure of the `start` loop. If that loop ends with an error and no
+  `stop()` came first, the worker logs the error at once at `ERROR`, as
+  `workhorse.worker.run_failed` with its `error.type` and stack trace. `close()` does not log it
+  again.
 - `isRunning()` returns `true` from `start` until its thread ends, and while `run` or `runOnce`
   runs, including the drain.
 - `pause()` and `resume()` change a local pause. `isPaused()` is also true while an operator pause
@@ -2617,6 +2620,10 @@ The worker installs no JVM shutdown hook and traps no signal.
 ### JVM batch handlers
 
 `handleBatch(taskType, payloadClass, BatchOptions, BatchHandler)` registers a batch handler.
+`handleBatch(taskType, payloadType, BatchOptions, BatchHandler)` takes a `java.lang.reflect.Type`
+instead, so the codec decodes each payload with its type arguments, such as `List<Order>`. A
+`Class` argument selects the first form, with the same result. Each form refuses a `null` payload
+type.
 
 - `BatchOptions(maxSize, linger)` takes a `maxSize` of 1 through 100 and at most `concurrency`.
 - `linger` is a `Duration` of 0 through 60 seconds in whole milliseconds.
@@ -2824,10 +2831,35 @@ application adds each module that it uses.
 | `HealthIndicator`           | The worker is on, Actuator is present, and `management.health.workhorse.enabled` is not false. |
 | Dashboard filter            | `workhorse.dashboard.enabled=true`, a servlet application, and one `DashboardAuthorizer` bean. |
 
-`TransactionAwareConnectionSource` acquires through `DataSourceUtils.getConnection`. Inside an
-active Spring transaction, it returns the connection that holds the transaction, and the SDK does
-not commit it. Thus an enqueue inside `@Transactional` commits and rolls back with that transaction.
-Outside a transaction, it runs the call in autocommit.
+`TransactionAwareConnectionSource` acquires through `DataSourceUtils.getConnection`. Inside a
+Spring transaction of this `DataSource`, it returns the connection that holds the transaction, and
+the SDK does not commit it. Thus an enqueue inside `@Transactional` commits and rolls back with that
+transaction. Outside such a transaction, it runs the call in autocommit. If the pool gives a
+connection with autocommit off, the source turns autocommit on for the call, and restores the
+earlier value before it releases the connection.
+
+The source reads the `ConnectionHolder` that Spring binds for the `DataSource`:
+
+| Holder for the `DataSource`                                                            | Bound by                                                                                                                          | The call runs               |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `isTransactionActive()` true                                                           | `DataSourceTransactionManager`, `JdbcTransactionManager`                                                                          | In the caller's transaction |
+| `isSynchronizedWithTransaction()` false                                                | `JpaTransactionManager`, `HibernateTransactionManager`                                                                            | In the caller's transaction |
+| `isSynchronizedWithTransaction()` true, `isTransactionActive()` false, in JTA mode     | `DataSourceUtils.getConnection` under a `JtaTransactionManager` transaction                                                       | In the caller's transaction |
+| `isSynchronizedWithTransaction()` true, `isTransactionActive()` false, not in JTA mode | `DataSourceUtils.getConnection` under `SUPPORTS`, `NOT_SUPPORTED`, or another manager, such as a manager of a second `DataSource` | In autocommit               |
+| None, or no actual transaction                                                         | Nothing                                                                                                                           | In autocommit               |
+
+The source is in JTA mode when the context has a `PlatformTransactionManager` bean that is an
+`org.springframework.transaction.jta.JtaTransactionManager`, or that extends it. A JTA transaction
+binds no holder of its own, and the container enlists the connection that `DataSourceUtils` binds.
+So in JTA mode, a synchronization-only holder under an actual transaction counts as owned. The
+starter compares type names, so it loads no JTA type. Only the starter's `ConnectionSource` bean
+sets JTA mode. A source that the public constructor `TransactionAwareConnectionSource(DataSource)`
+builds does not join a JTA transaction, so a JTA application uses the starter's bean.
+
+`isTransactionActive()` is protected, so the source reads it through a private method lookup. If
+that lookup fails, the starter logs one warning. Each source then treats every connection that an
+actual transaction holds as owned, so an enqueue under a manager of another `DataSource` does not
+commit on its own.
 
 The worker bean uses `Worker.builder(dataSource)` and the `workhorse.worker.*` properties. It
 registers every `TaskHandler` bean, and then applies each `WorkerCustomizer`. If the context holds
@@ -2847,7 +2879,25 @@ the grace takes up to about 2 seconds, as the JVM running and stopping section s
 | `STOPPING`, `STOPPED` | `DOWN`    |
 | `FAILED`              | `DOWN`    |
 
-The lifecycle reports `FAILED` when the worker stops without a lifecycle stop.
+The lifecycle reports `FAILED` in two cases. The worker run ends without a lifecycle stop, or the
+drain of a lifecycle stop throws, for example `ShutdownIncompleteException` for an abandoned handler.
+In each case `failure()` returns the error. `start()` also
+starts a watcher thread, `workhorse-worker-watch-<worker ID>`. It is a platform thread that is not a
+daemon, so it keeps the JVM alive while it watches. It checks `worker.isRunning()` at least every
+100 milliseconds, and a lifecycle stop ends it at once. It never joins another thread, and a stop
+never waits for it.
+
+When the run ends without a lifecycle stop, the watcher acts in this order:
+
+1. It calls `worker.close()`, which throws the error of the run.
+2. It records the error in `failure()`, sets `FAILED`, and logs the error.
+3. In an application that is not a web application, it calls `SpringApplication.exit` with an exit
+   code generator that returns 1. That call closes the context.
+4. It then calls `System.exit` with the exit code, or with 1 when the exit code is 0.
+
+A web application does not exit. It keeps running, and the health indicator reports `DOWN` with
+the error. The starter selects the exit with `@ConditionalOnNotWebApplication`. A `WorkerLifecycle`
+bean of the application replaces the starter's bean, and its public constructor does not exit.
 
 `JacksonJsonCodec` copies the application's `JsonMapper` with `WRITE_NAN_AS_STRINGS` and
 `ALLOW_NON_NUMERIC_NUMBERS` off. When it encodes, it throws `IllegalArgumentException` for a
@@ -2878,10 +2928,14 @@ example with `runBlocking`.
 `workhorseWorker(dataSource) { … }` builds a `Worker` with a `WorkerScope`. Each scope property sets
 the `Worker.Builder` option of the same name, and `null` keeps the default.
 `handle<P>(taskType, SuspendHandler<P>)` registers a suspend handler with a reified payload type.
+It registers through `Worker.Builder.handle(TaskHandler)`, whose `payloadType()` is the full type
+of `P`. Thus `handle<List<Order>>` receives a list of `Order` from a codec that reads type
+arguments, such as the Jackson codec.
 
 The scope has one property for each `Worker.Builder` option, including `cohorts` and `telemetry`.
 `handleBatch<P>(taskType, BatchOptions, BatchHandler<P>)` registers the Java blocking batch handler
-with a reified payload type. The module has no suspend batch handler. `java { … }` configures the
+with a reified payload type. It passes the full type of `P` to the `Type` form of
+`Worker.Builder.handleBatch`. The module has no suspend batch handler. `java { … }` configures the
 `Worker.Builder` directly. A scope property overrides the same option that `java { … }` sets.
 
 A suspend handler runs in a coroutine on a dispatcher over a virtual-thread executor. A token

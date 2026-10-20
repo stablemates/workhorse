@@ -447,9 +447,11 @@ the rest of the function runs outside the transaction.
 
 - The starter's `ConnectionSource` bean is a `TransactionAwareConnectionSource`. It acquires
   through `DataSourceUtils.getConnection`.
-- Inside an active Spring transaction, it returns the connection that holds the transaction. The
-  SDK does not commit it.
-- Outside a transaction, it runs the call in autocommit.
+- Inside a Spring transaction of this `DataSource`, it returns the connection that holds the
+  transaction. The SDK does not commit it. `DataSourceTransactionManager`, `JpaTransactionManager`,
+  and `HibernateTransactionManager` begin such a transaction.
+- Outside such a transaction, it runs the call in autocommit. This includes a transaction of
+  another transaction manager, such as one of a second `DataSource`.
 - The starter applies only when the context has one `DataSource` candidate.
 - Spring takes its coroutine transaction path only for a `ReactiveTransactionManager`.
 - With a `DataSourceTransactionManager`, a `suspend` `@Transactional` method commits at its first

@@ -1,8 +1,11 @@
 package run.workhorse.spring;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.jspecify.annotations.Nullable;
@@ -18,6 +21,12 @@ import run.workhorse.Worker;
  * Worker#stop}, and then {@link Worker#close} on a separate thread, which waits while the worker
  * drains its handlers within {@code shutdownGrace} and the unwind window. Keep {@code
  * spring.lifecycle.timeout-per-shutdown-phase} above that time.
+ *
+ * <p>While the worker runs, a watcher thread of this bean waits for the run to end. If the run ends
+ * without a stop, the watcher collects its error at once, logs it, and sets the state to {@link
+ * State#FAILED}. In an application that serves no web requests, the starter then exits the process
+ * with a non-zero status, as {@code WorkerProcess} does. A web application keeps running, and its
+ * health indicator reports the worker as down.
  */
 public final class WorkerLifecycle implements SmartLifecycle {
   private static final Log LOG = LogFactory.getLog(WorkerLifecycle.class);
@@ -39,15 +48,34 @@ public final class WorkerLifecycle implements SmartLifecycle {
     FAILED
   }
 
+  /** The longest time the watcher waits before it checks the worker again. */
+  private static final Duration WATCH_INTERVAL = Duration.ofMillis(100);
+
   private final Worker worker;
+  private final @Nullable Consumer<Throwable> onFailure;
   private final ReentrantLock lock = new ReentrantLock();
   private volatile State state = State.NEW;
   private volatile @Nullable Throwable failure;
   private @Nullable CountDownLatch drained;
 
-  /** A lifecycle for {@code worker}. */
+  /** Released when a stop begins, so the watcher of the current run ends at once. */
+  private @Nullable CountDownLatch watching;
+
+  private @Nullable Thread watcher;
+
+  /** A lifecycle for {@code worker}. A run that ends without a stop does not end the process. */
   public WorkerLifecycle(Worker worker) {
+    this(worker, null);
+  }
+
+  /**
+   * A lifecycle that calls {@code onFailure} on the watcher thread after a run ended without a
+   * stop, and after the error is logged. The auto-configuration passes the process exit of an
+   * application that serves no web requests.
+   */
+  WorkerLifecycle(Worker worker, @Nullable Consumer<Throwable> onFailure) {
     this.worker = Objects.requireNonNull(worker, "worker");
+    this.onFailure = onFailure;
   }
 
   /** The worker this bean runs. */
@@ -57,7 +85,7 @@ public final class WorkerLifecycle implements SmartLifecycle {
 
   /**
    * The state of the current or the last run. A run that ended without a stop reports {@link
-   * State#FAILED}. Its error is known only after the stop, through {@link #failure}.
+   * State#FAILED}. Its error is known through {@link #failure} once the watcher collected it.
    */
   public State state() {
     State current = state;
@@ -84,6 +112,15 @@ public final class WorkerLifecycle implements SmartLifecycle {
       // lost.
       worker.start();
       state = State.RUNNING;
+      CountDownLatch wake = new CountDownLatch(1);
+      watching = wake;
+      // A platform thread that is not a daemon: in an application with no other such thread, it
+      // keeps the JVM alive until it has reported a failed run and exited the process.
+      watcher =
+          Thread.ofPlatform()
+              .daemon(false)
+              .name("workhorse-worker-watch-" + worker.workerId())
+              .start(() -> watch(wake));
     } finally {
       lock.unlock();
     }
@@ -129,6 +166,7 @@ public final class WorkerLifecycle implements SmartLifecycle {
         return null;
       }
       state = State.STOPPING;
+      wakeWatcher();
       worker.stop();
       CountDownLatch latch = new CountDownLatch(1);
       drained = latch;
@@ -139,6 +177,64 @@ public final class WorkerLifecycle implements SmartLifecycle {
     } finally {
       lock.unlock();
     }
+  }
+
+  /** Releases the watcher of the current run. It never waits for the watcher thread. */
+  private void wakeWatcher() {
+    CountDownLatch wake = watching;
+    if (wake != null) {
+      wake.countDown();
+    }
+  }
+
+  /**
+   * Waits until the run ends or a stop releases {@code wake}. A run that ended without a stop is
+   * drained, logged, and reported to {@link #onFailure}.
+   */
+  private void watch(CountDownLatch wake) {
+    try {
+      while (worker.isRunning()) {
+        if (wake.await(WATCH_INTERVAL.toMillis(), TimeUnit.MILLISECONDS)) {
+          return;
+        }
+      }
+    } catch (InterruptedException error) {
+      return;
+    }
+    CountDownLatch latch;
+    lock.lock();
+    try {
+      if (state != State.RUNNING || !Objects.equals(watching, wake)) {
+        // A stop began, and it reports the outcome of the run.
+        return;
+      }
+      state = State.STOPPING;
+      latch = new CountDownLatch(1);
+      drained = latch;
+    } finally {
+      lock.unlock();
+    }
+    drain(latch);
+    if (state == State.STOPPED) {
+      // The run ended without a stop and without an error.
+      state = State.FAILED;
+      LOG.error("Workhorse worker " + worker.workerId() + " stopped without a stop request");
+    }
+    Throwable error = failure;
+    if (onFailure != null) {
+      onFailure.accept(
+          error != null ? error : new IllegalStateException("the worker run ended without a stop"));
+    }
+  }
+
+  /** The watcher thread of the last start, or {@code null} before the first start. */
+  @Nullable Thread watcher() {
+    return watcher;
+  }
+
+  /** Whether a run that ends without a stop calls an exit action. */
+  boolean exitsOnFailure() {
+    return onFailure != null;
   }
 
   private void drain(CountDownLatch latch) {
@@ -156,9 +252,8 @@ public final class WorkerLifecycle implements SmartLifecycle {
   }
 
   /**
-   * Whether the context started the worker and has not stopped it. It stays {@code true} after a
-   * run that ended without a stop, so that the context still calls {@link #stop}, which reports the
-   * error of that run.
+   * Whether the context started the worker and has not stopped it. A run that ends without a stop
+   * stays {@code true} only until the watcher has drained it and set {@link State#FAILED}.
    */
   @Override
   public boolean isRunning() {
