@@ -104,6 +104,5 @@ export const releaseLines: readonly ReleaseLine[] = [
     registry: "Maven Central",
     registryUrl: "https://central.sonatype.com/artifact/run.workhorse/workhorse",
     changelog: "jvm/CHANGELOG.md",
-    unpublished: true,
   },
 ];

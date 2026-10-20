@@ -297,14 +297,35 @@ describe("0.8.0 release notes", () => {
   });
 });
 
-/**
- * The next release. The release candidate renames each `## Unreleased` heading to the release
- * heading, and then changes this constant to match.
- */
-const upcoming = "## Unreleased";
+/** The 0.9.0 release: the first entry whose notes cover migration 0073 and the JVM SDK. */
+const heartbeats = "## 0.9.0 — 2026-10-20";
 
-describe("upcoming release notes", () => {
+describe("0.9.0 release notes", () => {
   const withJvm = [...changelogs, "jvm/CHANGELOG.md"];
+
+  describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, heartbeats);
+
+    it("states the current schema, compatibility floor, and migration before rollout", () => {
+      expect(section).toMatch(/^Requires \*\*schema v72\*\*/m);
+      expect(section).toMatch(phrase("Migration 0073 moves the schema to version **72**"));
+      expect(section).toMatch(phrase("compatibility floor rises from 69 to **72**"));
+      expect(section).toMatch(phrase("Migrate the schema before starting updated processes"));
+    });
+  });
+
+  it("names every migration added after 0.8.0 in the root notes", () => {
+    // 0.8.0 shipped schema version 71, and 0.9.0 ships 72, so migration 0073 is new in 0.9.0.
+    const section = entry("CHANGELOG.md", heartbeats);
+    const added = readdirSync(join(root, "sql/migrations"))
+      .map((name) => /^(\d{4})-/.exec(name)?.[1])
+      .filter(
+        (number): number is string =>
+          number !== undefined && Number(number) > 72 && Number(number) <= 73,
+      );
+    expect(added).toEqual(["0073"]);
+    for (const number of added) expect(section, `migration ${number}`).toContain(number);
+  });
 
   it("name the JVM changelog in the header of the root changelog", () => {
     const header = read("CHANGELOG.md").split(/^## /m)[0]!;
@@ -313,7 +334,7 @@ describe("upcoming release notes", () => {
   });
 
   it("state the three JVM artifacts, the schema, and the Java and PostgreSQL floors", () => {
-    const section = entry("jvm/CHANGELOG.md", upcoming);
+    const section = entry("jvm/CHANGELOG.md", heartbeats);
     expect(section).toMatch(
       /^Requires \*\*schema v72\*\*, Java \*\*21\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m,
     );
@@ -325,7 +346,7 @@ describe("upcoming release notes", () => {
   });
 
   describe.each(changelogs)("%s", (path) => {
-    const section = entry(path, upcoming);
+    const section = entry(path, heartbeats);
 
     it("states the heartbeat changes since 0.8.0 with the values of the lifecycle page", () => {
       expect(section).toMatch(phrase("Rounds start on a fixed schedule"));
@@ -346,20 +367,20 @@ describe("upcoming release notes", () => {
   });
 
   it("state that a Rust lease leaves the heartbeat set when its watchdog expires", () => {
-    const section = entry("rust/CHANGELOG.md", upcoming);
+    const section = entry("rust/CHANGELOG.md", heartbeats);
     expect(section).toMatch(phrase("leaves the heartbeat set when the watchdog expires"));
     expect(section).toContain("`CancelReason::LeaseLost`");
   });
 
   it("state that a Python round prepares its statements before the server timeouts", () => {
-    const section = entry("python/CHANGELOG.md", upcoming);
+    const section = entry("python/CHANGELOG.md", heartbeats);
     expect(section).toMatch(phrase("prepares the settings statement and the heartbeat statement"));
     expect(section).toContain("`prepare=False`");
   });
 
   describe.each(withJvm)("%s", (path) => {
     it("links only to files and headings that exist", () => {
-      const broken = links(path, entry(path, upcoming))
+      const broken = links(path, entry(path, heartbeats))
         .filter(({ file, anchor }) => {
           if (file === undefined) return false;
           if (!existsSync(join(root, file))) return true;

@@ -3,7 +3,9 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
-## Unreleased
+## 0.9.0 — 2026-10-20
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
 
 Requires **schema v72**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
 

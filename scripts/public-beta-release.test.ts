@@ -10,9 +10,9 @@ import {
 } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on every registry from one commit. */
-const releaseVersion = "0.8.0";
-const releaseDate = "2026-10-13";
-const corePeerRange = ">=0.8.0 <0.9.0";
+const releaseVersion = "0.9.0";
+const releaseDate = "2026-10-20";
+const corePeerRange = ">=0.9.0 <0.10.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -46,7 +46,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.8.0 release", () => {
+describe("the 0.9.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -130,10 +130,10 @@ describe("the 0.8.0 release", () => {
       // both were 1 then; 0.3.0 and 0.4.0 state v18, the floor SM-812 derived from the newest
       // statement the SDKs call. 0.5.0 states v43, the floor SM-932 raised it to, and 0.6.0 and
       // 0.6.1 keep it. 0.7.0 states v54, the floor migration 0055 reaches, and 0.7.1 keeps it. 0.8.0
-      // states v69, the floor migration 0070 reaches. The number is written here rather than read
-      // from the manifest, because a published entry is immutable and a later release moving the
-      // floor must not rewrite it.
-      expect(entry).toContain("**schema v69**");
+      // states v69, the floor migration 0070 reaches. 0.9.0 states v72, the floor migration 0073
+      // reaches. The number is written here rather than read from the manifest, because a published
+      // entry is immutable and a later release moving the floor must not rewrite it.
+      expect(entry).toContain("**schema v72**");
       expect(entry).toContain("from one source commit");
       for (const requirement of requirements) {
         expect(entry).toContain(requirement);
