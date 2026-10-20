@@ -1,8 +1,8 @@
 /**
- * The five release lines and what a published version of one looks like.
+ * The six release lines and what a published version of one looks like.
  *
- * Workhorse publishes to npm, PyPI, the Go module proxy, crates.io, and RubyGems
- * from one source commit, and each line keeps its own changelog because each line
+ * Workhorse publishes to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
+ * Maven Central from one source commit, and each line keeps its own changelog because each line
  * carries its own version. A line may exist before its first release; the table
  * then says so rather than printing a version nobody can install. This file names the lines; it states no version, because the
  * versions are read from the changelogs at build time by
@@ -50,10 +50,11 @@ export interface ResolvedReleaseLine extends ReleaseLine {
 
 /**
  * The lines, in the order the site names them everywhere else: TypeScript,
- * Python, Go, Rust, Ruby.
+ * Python, Go, Rust, Ruby, JVM.
  *
- * The npm line is nine packages released in lockstep from one changelog, so it
- * appears once and names the package a reader installs first.
+ * The npm line is ten packages released in lockstep from one changelog, so it
+ * appears once and names the package a reader installs first. The JVM line is
+ * three artifacts with one version and one changelog, so it names the core.
  */
 export const releaseLines: readonly ReleaseLine[] = [
   {
@@ -95,5 +96,14 @@ export const releaseLines: readonly ReleaseLine[] = [
     registry: "RubyGems",
     registryUrl: "https://rubygems.org/gems/stablemates-workhorse",
     changelog: "ruby/CHANGELOG.md",
+  },
+  {
+    id: "jvm",
+    name: "JVM",
+    artifact: "run.workhorse:workhorse",
+    registry: "Maven Central",
+    registryUrl: "https://central.sonatype.com/artifact/run.workhorse/workhorse",
+    changelog: "jvm/CHANGELOG.md",
+    unpublished: true,
   },
 ];

@@ -4,10 +4,11 @@ This changelog covers 10 published packages on npm. They are versioned in lockst
 from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-knex`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
-`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, Rust crate, and Ruby
-gem release from that same commit, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md),
-[`go/CHANGELOG.md`](go/CHANGELOG.md), [`rust/CHANGELOG.md`](rust/CHANGELOG.md), and
-[`ruby/CHANGELOG.md`](ruby/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
+`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution, Go module, Rust crate, Ruby
+gem, and three JVM artifacts release from that same commit, so their notes live in
+[`python/CHANGELOG.md`](python/CHANGELOG.md), [`go/CHANGELOG.md`](go/CHANGELOG.md),
+[`rust/CHANGELOG.md`](rust/CHANGELOG.md), [`ruby/CHANGELOG.md`](ruby/CHANGELOG.md), and
+[`jvm/CHANGELOG.md`](jvm/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -48,6 +49,47 @@ status must handle `busy` as "not renewed, no verdict". The scalar `HeartbeatSta
 `Queue.heartbeat()`, and `Queue.heartbeatStatus()` do not change, and they still wait for a row lock.
 A `Worker` with a custom `WorkerQueueApi` that has no `heartbeatMany` renews through
 `heartbeatStatus`, so it never sees `busy`.
+
+### Heartbeat rounds keep a renewal margin and end on the server
+
+Before this release, the reserved heartbeat connection bounded each heartbeat round by one full
+interval. After a failed round, the next round fell due one interval after that round ended. With
+the defaults, one timed-out round thus left about 0 s before the lease watchdog expired (SM-1444).
+Also, when the worker stopped waiting for a round, PostgreSQL continued to run the heartbeat
+statement, and that statement kept its row locks (SM-1442). These changes apply to each round on the
+reserved heartbeat connection:
+
+- **Rounds start on a fixed schedule.** A round falls due one interval after the previous round
+  started, not after it ended. The schedule uses a monotonic clock. If a round ends after its next
+  slot, the worker starts one overdue round at once and sends no round for the other missed slots.
+- **The round bound is shorter.** A round ends by
+  `max(1 ms, interval × 3 / 4, min(50 ms, interval))`. For an interval of 200 ms or more, this is
+  three quarters of the interval. With the defaults (lease 30 s, interval 10 s), the bound is 7.5 s,
+  so one timed-out round leaves a margin of 2.5 s. An attempt keeps its lease after one timed-out
+  round if `2 × interval + round bound < lease`. The worker does not reject an interval that breaks
+  this rule.
+- **Each round sets server timeouts.** The round sends `BEGIN`, then one `set_config` statement for
+  `statement_timeout` and `idle_in_transaction_session_timeout`, then `heartbeat_many_v2`, then
+  `COMMIT`. Both settings are transaction-local. The heartbeat statement gets one half of the time
+  that remains, and each idle gap one eighth. If less than 8 ms remains at the settings statement,
+  the round fails before the heartbeat. The worker counts a renewal only after a `COMMIT` that ends
+  before the deadline. No setting bounds `COMMIT` on PostgreSQL 15 and later.
+- **A failed round discards its connection.** Under load, PostgreSQL can log
+  `canceling statement due to statement timeout` for a heartbeat statement. It can also end the
+  session with `terminating connection due to idle-in-transaction timeout`. Each message means that
+  one round failed. Every task continues, and the next round tries again. A deadlock (`40P01`) is
+  sent again in a new transaction with the time that remains.
+- **Replacement connections.** A failed round now asks the pool for its replacement connection when
+  the round ends, so the connect starts before the next round.
+- **100 ms is the smallest supported heartbeat interval** (SM-1471). This applies to
+  `WorkerOptions.heartbeatMs`: the smallest supported value is 100. At 100 ms, the round bound is 75
+  ms. The worker still accepts a shorter interval, and it does not warn. On a loaded host, a shorter
+  interval can make each round miss its deadline, and attempts can then lose their leases.
+
+Rounds under `WorkerOptions.sharedHeartbeats` have no client deadline and set no server timeouts, as
+before. They follow the new schedule. The [heartbeat round
+deadline](docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
+schedule](docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
 
 ## 0.8.0 — 2026-10-13
 

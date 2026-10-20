@@ -32,6 +32,60 @@ with jitter, and does not move the regular heartbeat schedule. A busy answer nev
 lease watchdog, so a lease that stays busy until the watchdog ends is lost, as before. Old and new
 workers can run together: an old worker keeps calling `heartbeat_many_v1`, which does not change.
 
+### Heartbeat rounds keep a renewal margin and end on the server
+
+Before this release, the reserved heartbeat connection bounded the heartbeat statement by one full
+interval. A replacement connection after a failed round had no bound. After a failed round, the next
+round fell due one interval after that round ended. With the defaults, one timed-out round thus left
+about 0 s before the lease watchdog expired (SM-1444). Also, when the worker stopped waiting for a
+statement, PostgreSQL continued to run it, and that statement kept its row locks (SM-1442). These
+changes apply to each round on the reserved heartbeat connection:
+
+- **Rounds start on a fixed schedule.** A round falls due one interval after the previous round
+  started, not after it ended. The schedule uses a monotonic clock. If a round ends after its next
+  slot, the worker starts one overdue round at once and sends no round for the other missed slots.
+- **The round bound is shorter.** A round ends by
+  `max(1 ms, interval × 3 / 4, min(50 ms, interval))`. For an interval of 200 ms or more, this is
+  three quarters of the interval. With the defaults (lease 30 s, interval 10 s), the bound is 7.5 s,
+  so one timed-out round leaves a margin of 2.5 s. An attempt keeps its lease after one timed-out
+  round if `2 × interval + round bound < lease`. The worker does not reject an interval that breaks
+  this rule.
+- **Each round sets server timeouts.** The round sends `BEGIN`, then one `set_config` statement for
+  `statement_timeout` and `idle_in_transaction_session_timeout`, then `heartbeat_many_v2`, then
+  `COMMIT`. Both settings are transaction-local. The heartbeat statement gets one half of the time
+  that remains, and each idle gap one eighth. If less than 8 ms remains at the settings statement,
+  the round fails before the heartbeat. The worker counts a renewal only after a `COMMIT` that ends
+  before the deadline. No setting bounds `COMMIT` on PostgreSQL 15 and later.
+- **A failed round discards its connection.** Under load, PostgreSQL can log
+  `canceling statement due to statement timeout` for a heartbeat statement. It can also end the
+  session with `terminating connection due to idle-in-transaction timeout`. Each message means that
+  one round failed. Every task continues, and the next round tries again. A deadlock (`40P01`) now
+  fails the round, and the next round sends the heartbeat again. Before this release, the round sent
+  a deadlocked heartbeat again, up to three attempts in total. A round under
+  `WorkerOptions::shared_heartbeats` still does.
+- **Replacement connections.** The next round opens a replacement connection inside its own
+  deadline. A connect that is not ready by the deadline continues, and each later round waits for it
+  until its own deadline.
+- **100 ms is the smallest supported heartbeat interval** (SM-1471). This applies to
+  `WorkerOptions::heartbeat_interval`: the smallest supported value is 100 ms. At 100 ms, the round
+  bound is 75 ms. The worker still accepts a shorter interval, and it does not warn. On a loaded
+  host, a shorter interval can make each round miss its deadline, and attempts can then lose their
+  leases.
+
+Rounds under `WorkerOptions::shared_heartbeats` have no client deadline and set no server timeouts,
+as before. They follow the new schedule. The [heartbeat round
+deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
+schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
+
+### A lease leaves the heartbeat set when its watchdog expires
+
+Before this release, the lease watchdog cancelled the handler with `CancelReason::LeaseLost` when no
+renewal was accepted within one lease. But the attempt stayed in the heartbeat set until the handler
+returned. Thus a handler that ignored its cancellation kept its lease alive (SM-1445). Now the
+attempt leaves the heartbeat set when the watchdog expires, as in the other SDKs. A round that the
+worker sent before can still commit one renewal, but no later round includes the lease. A late
+handler return still settles as `lease_lost`.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
