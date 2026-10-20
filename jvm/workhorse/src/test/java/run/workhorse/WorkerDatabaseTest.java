@@ -687,18 +687,37 @@ class WorkerDatabaseTest {
 
   // Heartbeats, lease recovery, fenced ownership.
 
+  /**
+   * A handler that runs longer than the lease keeps its task, because each accepted heartbeat round
+   * renews the lease. The handler runs until it outlives the lease of its claim and a round has
+   * renewed the stored lease, and not for a fixed time.
+   *
+   * <p>An earlier version used a lease of 300 ms and a round every 50 ms. On a loaded host, the
+   * rounds failed or found the row busy for longer than the lease, so each attempt lost its lease,
+   * and {@code runOnce} claimed the task again 20 times (SM-1554). A lease of 3 s and a round every
+   * 500 ms give the rounds the margin of the SM-1479 tests. The test checks that one attempt did
+   * all the work.
+   */
   @Test
   void renewsTheLeaseOfAHandlerThatRunsLongerThanTheLease() throws SQLException {
+    Duration lease = Duration.ofSeconds(3);
     UUID taskId = enqueue("long", Map.of());
     Worker worker =
         worker()
-            .lease(Duration.ofMillis(300))
-            .heartbeat(Duration.ofMillis(50))
+            .lease(lease)
+            .heartbeat(Duration.ofMillis(500))
             .handle(
                 "long",
                 Object.class,
                 (ctx, payload) -> {
-                  Thread.sleep(1_000);
+                  long outlived = System.nanoTime() + lease.toNanos();
+                  Instant claimed = expiresAt(taskId);
+                  waitUntil(
+                      "the handler outlived the lease of its claim",
+                      () -> System.nanoTime() - outlived > 0 || ctx.isCancelled());
+                  waitUntil(
+                      "a round renewed the stored lease",
+                      () -> expiresAt(taskId).isAfter(claimed) || ctx.isCancelled());
                   return Map.of("cancelled", ctx.isCancelled());
                 })
             .build();
@@ -706,6 +725,7 @@ class WorkerDatabaseTest {
     assertTrue(worker.runOnce());
     Status status = status(taskId);
     assertEquals("succeeded", status.state());
+    assertEquals(1, status.attempt(), "one attempt kept its lease to the end");
     assertEquals(Map.of("cancelled", false), json(status.result()));
   }
 
@@ -1490,10 +1510,14 @@ class WorkerDatabaseTest {
     assertEquals("failed", status(taskId).state());
   }
 
+  /**
+   * The deadline passes while the handler runs, so the worker cancels the attempt. A claim skips a
+   * task whose deadline has passed. On a loaded host, the claim came more than 400 ms after the
+   * enqueue, and {@code runOnce} found no task (SM-1554). So if no task ran and the deadline has
+   * passed, the test enqueues a new task with a deadline four times as far away.
+   */
   @Test
   void cancelsAnAttemptThatPassesItsDeadline() throws Exception {
-    UUID taskId =
-        enqueue("late", Map.of(), EnqueueOptions.builder().deadline(Instant.now().plusMillis(400)));
     AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
     Worker worker =
         worker()
@@ -1507,10 +1531,19 @@ class WorkerDatabaseTest {
                 })
             .build();
 
-    assertTrue(worker.runOnce());
-
-    assertEquals(CancellationReason.DEADLINE_EXCEEDED, reason.get());
-    assertFalse(List.of("active", "succeeded").contains(status(taskId).state()));
+    for (long windowMs = 400; ; windowMs *= 4) {
+      Instant deadline = Instant.now().plusMillis(windowMs);
+      UUID taskId = enqueue("late", Map.of(), EnqueueOptions.builder().deadline(deadline));
+      if (worker.runOnce()) {
+        assertEquals(CancellationReason.DEADLINE_EXCEEDED, reason.get());
+        assertFalse(List.of("active", "succeeded").contains(status(taskId).state()));
+        return;
+      }
+      assertTrue(
+          Instant.now().isAfter(deadline),
+          "the worker claimed no task before its deadline of " + windowMs + " ms");
+      assertTrue(windowMs < 6_400, "precondition not met: each claim came after the deadline");
+    }
   }
 
   // Notification-assisted dispatch with polling.
