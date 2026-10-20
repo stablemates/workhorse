@@ -516,7 +516,9 @@ public final class ContractSchema {
               || instance instanceof BigInteger
               || (instance instanceof Double number
                   && Double.isFinite(number)
-                  && number == Math.rint(number));
+                  && number == Math.rint(number))
+              || (instance instanceof BigDecimal number
+                  && number.remainder(BigDecimal.ONE).signum() == 0);
       default -> false;
     };
   }
@@ -524,7 +526,8 @@ public final class ContractSchema {
   private static boolean isNumber(@Nullable Object value) {
     return value instanceof Long
         || value instanceof BigInteger
-        || (value instanceof Double number && Double.isFinite(number));
+        || (value instanceof Double number && Double.isFinite(number))
+        || value instanceof BigDecimal;
   }
 
   private static BigDecimal decimal(@Nullable Object value) {
@@ -532,6 +535,7 @@ public final class ContractSchema {
       case Long number -> BigDecimal.valueOf(number);
       case BigInteger number -> new BigDecimal(number);
       case Double number -> new BigDecimal(Double.toString(number));
+      case BigDecimal number -> number;
       case null, default -> throw new IllegalArgumentException("not a JSON number");
     };
   }

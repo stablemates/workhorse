@@ -242,31 +242,32 @@ public suspend fun Queue.syncBudgetsSuspend(
     else syncBudgets(connection, namespace, definitions, prune)
   }
 
-/** The concurrency policies of [queues], or of every queue when [queues] is `null`. */
+/** The concurrency policies of [queues], or of every queue when [queues] is `null` or empty. */
 public suspend fun Queue.listConcurrencyPoliciesSuspend(
   queues: List<String>? = null,
   connection: Connection? = null,
 ): List<ConcurrencyPolicy> =
   client(connection) {
-    if (connection == null) listConcurrencyPolicies(queues)
-    else listConcurrencyPolicies(connection, queues)
+    if (connection == null) listConcurrencyPolicies(queues.orEmpty())
+    else listConcurrencyPolicies(connection, queues.orEmpty())
   }
 
-/** The rate limit policies of [queues], or of every queue when [queues] is `null`. */
+/** The rate limit policies of [queues], or of every queue when [queues] is `null` or empty. */
 public suspend fun Queue.listRateLimitPoliciesSuspend(
   queues: List<String>? = null,
   connection: Connection? = null,
 ): List<RateLimitPolicy> =
   client(connection) {
-    if (connection == null) listRateLimitPolicies(queues)
-    else listRateLimitPolicies(connection, queues)
+    if (connection == null) listRateLimitPolicies(queues.orEmpty())
+    else listRateLimitPolicies(connection, queues.orEmpty())
   }
 
-/** The budgets named in [names], or every budget when [names] is `null`. */
+/** The budgets named in [names], or every budget when [names] is `null` or empty. */
 public suspend fun Queue.listBudgetsSuspend(
   names: List<String>? = null,
   connection: Connection? = null,
 ): List<Budget> =
   client(connection) {
-    if (connection == null) listBudgets(names) else listBudgets(connection, names)
+    if (connection == null) listBudgets(names.orEmpty())
+    else listBudgets(connection, names.orEmpty())
   }

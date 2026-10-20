@@ -133,4 +133,39 @@ class JsonTest {
     assertNull(nothing);
     assertThrows(IllegalArgumentException.class, () -> codec.decode("1", String.class));
   }
+
+  @Test
+  void anExactParseKeepsADecimalThatADoubleCannotHold() {
+    String text = "[12345678901234567.89,1E+400,1e-400,0.1,-0.0,1.10,100000.0,1e2]";
+    List<?> tree = (List<?>) Json.parseExact(text);
+    assertEquals(new BigDecimal("12345678901234567.89"), tree.get(0));
+    assertEquals(new BigDecimal("1E+400"), tree.get(1));
+    assertEquals(new BigDecimal("1e-400"), tree.get(2));
+    assertEquals(Arrays.asList(0.1, -0.0, 1.1, 100000.0, 100.0), tree.subList(3, 8));
+    assertEquals(
+        "[12345678901234567.89,1E+400,1E-400,0.1,0.0,1.1,100000.0,100.0]", Json.write(tree));
+  }
+
+  @Test
+  void anExactParseWritesEveryValueThatADoubleHoldsAsBefore() {
+    String text = "{\"a\":[1.5,-2.25e-3,6.02214076e23,1e15,123456789.125]}";
+    assertEquals(Json.write(Json.parse(text)), Json.write(Json.parseExact(text)));
+  }
+
+  @Test
+  void anExactParseRefusesADecimalOutsideTheNumericRange() {
+    for (String text : List.of("1e131072", "1e-16384", "1e2147483648", "0.5e-99999")) {
+      IllegalArgumentException error =
+          assertThrows(IllegalArgumentException.class, () -> Json.parseExact(text), text);
+      assertTrue(error.getMessage().endsWith("a number outside the numeric range"), text);
+    }
+    assertEquals(new BigDecimal("1e131071"), Json.parseExact("1e131071"));
+    assertEquals(new BigDecimal("1e-16383"), Json.parseExact("1e-16383"));
+  }
+
+  @Test
+  void theDefaultParseStillGivesADouble() {
+    assertEquals(1.2345678901234568E16, Json.parse("12345678901234567.89"));
+    assertThrows(IllegalArgumentException.class, () -> Json.parse("1E+400"));
+  }
 }

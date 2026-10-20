@@ -79,3 +79,80 @@ describe.each(cases)("$contract.path", ({ contract, member, narrow }) => {
     expect(snapshotDrift(contract, current, fresh)).toContain(`arrived (1):\n  ${line}2`);
   });
 });
+
+// ADR 0103 lets a public record gain a last component (SM-1516). The record keeps its earlier
+// canonical constructor, so the header line changes and every other line stays. These cases grow
+// `EnqueueResult` and its canonical constructor the way the SDK would.
+describe("the record growth rule of api/java.txt", () => {
+  const current = committed(javaContract);
+  const header =
+    "@NullMarked public record run.workhorse.EnqueueResult(java.util.UUID taskId, run.workhorse.EnqueueOutcome outcome, @Nullable run.workhorse.EnqueueNonReplaceableReason reason)";
+  const constructor =
+    "run.workhorse.EnqueueResult: public EnqueueResult(java.util.UUID, run.workhorse.EnqueueOutcome, @Nullable run.workhorse.EnqueueNonReplaceableReason)";
+  const grownConstructor =
+    "run.workhorse.EnqueueResult: public EnqueueResult(java.util.UUID, run.workhorse.EnqueueOutcome, @Nullable run.workhorse.EnqueueNonReplaceableReason, @Nullable java.lang.String)";
+
+  /** The committed file with `header` replaced, and the grown constructor added. */
+  function grow(replacement: string, keepConstructor = true): string {
+    const lines = current.replace(header, replacement).split("\n");
+    const at = lines.indexOf(constructor);
+    if (keepConstructor) lines.splice(at + 1, 0, grownConstructor);
+    else lines.splice(at, 1, grownConstructor);
+    return lines.join("\n");
+  }
+
+  it("finds the record header and its constructor in the committed file", () => {
+    expect(current.split("\n")).toContain(header);
+    expect(current.split("\n")).toContain(constructor);
+  });
+
+  it("reports a new last component with the kept constructor as additive, not gone", () => {
+    const fresh = grow(header.replace(/\)$/, ", @Nullable java.lang.String detail)"));
+
+    const drift = snapshotDrift(javaContract, current, fresh);
+
+    expect(drift).toContain(`grown record, additive under ADR 0103 (1):\n  ${header}`);
+    expect(drift).not.toContain("gone (");
+    expect(drift).toContain(`arrived (2):`);
+  });
+
+  it("reports the header as gone when the earlier constructor is gone", () => {
+    const fresh = grow(header.replace(/\)$/, ", @Nullable java.lang.String detail)"), false);
+
+    const drift = snapshotDrift(javaContract, current, fresh);
+
+    expect(drift).toContain(`gone (2):\n  ${header}\n  ${constructor}`);
+    expect(drift).not.toContain("grown record");
+  });
+
+  it("reports the header as gone when a component goes in the middle", () => {
+    const fresh = grow(
+      header.replace(
+        "run.workhorse.EnqueueOutcome outcome,",
+        "run.workhorse.EnqueueOutcome outcome, @Nullable java.lang.String detail,",
+      ),
+    );
+
+    const drift = snapshotDrift(javaContract, current, fresh);
+
+    expect(drift).toContain(`gone (1):\n  ${header}`);
+    expect(drift).not.toContain("grown record");
+  });
+
+  it.each([
+    ["renamed", "@Nullable run.workhorse.EnqueueNonReplaceableReason because"],
+    ["retyped", "@Nullable java.lang.String reason"],
+  ])("reports the header as gone when a component is %s", (_, last) => {
+    const fresh = grow(
+      header.replace(
+        "@Nullable run.workhorse.EnqueueNonReplaceableReason reason)",
+        `${last}, @Nullable java.lang.String detail)`,
+      ),
+    );
+
+    const drift = snapshotDrift(javaContract, current, fresh);
+
+    expect(drift).toContain(`gone (1):\n  ${header}`);
+    expect(drift).not.toContain("grown record");
+  });
+});

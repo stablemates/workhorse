@@ -45,3 +45,12 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   smallest supported value. The [heartbeat round
   deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
   schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
+- The Java API is ready for the Gate 2 freeze of [ADR
+  0056](../docs/decisions/0056-set-the-1-0-0-exit-criteria.md). A public record can get a new
+  component only at the end, and it keeps each earlier canonical constructor; a record pattern that
+  names all components is outside the compatibility promise. The name filter of
+  `Queue.listBudgets`, `listConcurrencyPolicies`, and `listRateLimitPolicies` is non-null: an empty
+  list or the overload without a filter reads every row. A `BigDecimal` payload value reaches
+  PostgreSQL with all its digits, and the enqueue refuses a decimal that `numeric` cannot store.
+  `Queue` and `Admin` check compatibility once for each physical connection behind a pool, and the
+  check does not hold the queue lock. The ADR 0103 amendments of 2026-10-20 state each rule.
