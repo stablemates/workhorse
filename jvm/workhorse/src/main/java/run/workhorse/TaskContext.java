@@ -959,7 +959,7 @@ final class TaskContext implements HandlerContext {
   private @Nullable Object tree(@Nullable Object value, String label) {
     Object tree;
     try {
-      tree = Json.parse(worker.codec().encode(value));
+      tree = Json.parseExact(worker.codec().encode(value));
     } catch (IllegalArgumentException error) {
       throw new IllegalArgumentException(
           label + " is not a JSON value: " + error.getMessage(), error);

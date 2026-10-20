@@ -54,6 +54,10 @@ Requires **schema v72**, Java **21** or newer, and PostgreSQL **15** or newer.
   PostgreSQL with all its digits, and the enqueue refuses a decimal that `numeric` cannot store.
   `Queue` and `Admin` check compatibility once for each physical connection behind a pool, and the
   check does not hold the queue lock. The ADR 0103 amendments of 2026-10-20 state each rule.
+- A `BigDecimal` in a handler result, a checkpoint value, progress, or a human wait context keeps
+  all its digits, and a result contract checks the exact value. The enqueue and the worker refuse a
+  decimal with fraction digits outside the `double` range, because the SDK cannot read the stored
+  value back.
 - If a run that `Worker.start()` began ends without a `stop()`, the worker logs the error at once
   at `ERROR`, as `workhorse.worker.run_failed`. In a Spring application that serves no web requests,
   the starter then exits the process with a non-zero status, so a supervisor can restart it. A web

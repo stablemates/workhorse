@@ -2029,7 +2029,7 @@ public final class Worker implements AutoCloseable {
         task.leaveHandler();
       }
       encoded = codec.encode(result);
-      Object tree = Json.parse(encoded);
+      Object tree = Json.parseExact(encoded);
       checkStorable(claimed, tree);
       validateResult(claimed, tree);
       checkResultSize(claimed, encoded);

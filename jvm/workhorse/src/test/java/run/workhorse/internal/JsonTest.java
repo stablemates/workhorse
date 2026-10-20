@@ -164,6 +164,19 @@ class JsonTest {
   }
 
   @Test
+  void anExactParseRefusesAFractionThatTheDefaultParseCannotReadBack() {
+    String integer = "1" + "0".repeat(400);
+    for (String text : List.of(integer + ".00", "-" + integer + ".5")) {
+      IllegalArgumentException error =
+          assertThrows(IllegalArgumentException.class, () -> Json.parseExact(text), text);
+      assertTrue(error.getMessage().endsWith("a fraction outside the double range"), text);
+    }
+    // PostgreSQL writes a decimal without fraction digits back as an integer, which parse() reads.
+    assertEquals(new BigDecimal("1.5E+400"), Json.parseExact("1.5e400"));
+    assertEquals(new BigInteger(integer), Json.parse(integer));
+  }
+
+  @Test
   void theDefaultParseStillGivesADouble() {
     assertEquals(1.2345678901234568E16, Json.parse("12345678901234567.89"));
     assertThrows(IllegalArgumentException.class, () -> Json.parse("1E+400"));
