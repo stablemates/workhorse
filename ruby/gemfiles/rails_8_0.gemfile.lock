@@ -63,6 +63,11 @@ GEM
     drb (2.2.3)
     erb (6.0.7)
     erubi (1.13.1)
+    et-orbi (1.4.2)
+      tzinfo
+    fugit (1.14.0)
+      et-orbi (~> 1.4)
+      raabro (~> 1.4)
     globalid (1.4.0)
       activesupport (>= 6.1)
     i18n (1.15.2)
@@ -118,6 +123,7 @@ GEM
       prettyprint
     prettyprint (0.2.0)
     prism (1.9.0)
+    raabro (1.5.0)
     racc (1.8.1)
     rack (3.2.7)
     rack-session (2.1.2)
@@ -214,10 +220,11 @@ GEM
     unicode-emoji (4.3.0)
     uri (1.1.1)
     useragent (0.16.11)
-    workhorse (1.5.2)
+    workhorse (2.0.0)
       activerecord (>= 7.0.0)
       activesupport (>= 7.0.0)
       concurrent-ruby
+      fugit
     zeitwerk (2.8.3)
 
 PLATFORMS
@@ -246,7 +253,7 @@ DEPENDENCIES
   sequel (= 5.109.0)
   stablemates-workhorse!
   standard (~> 1.56)
-  workhorse (~> 1.5)
+  workhorse (~> 2.0)
 
 CHECKSUMS
   actionpack (8.0.5.1) sha256=a5595c9d824d68884ddc4d3965ab78c897760d3752e190df7efe897371caa1eb
@@ -268,6 +275,8 @@ CHECKSUMS
   drb (2.2.3) sha256=0b00d6fdb50995fe4a45dea13663493c841112e4068656854646f418fda13373
   erb (6.0.7) sha256=c5ca6dc25b0ef974a44dc8f59fe847577122483b1968a38dec305c60bf91ee92
   erubi (1.13.1) sha256=a082103b0885dbc5ecf1172fede897f9ebdb745a4b97a5e8dc63953db1ee4ad9
+  et-orbi (1.4.2) sha256=bb555dae668419cb24caa2a293a170e58be6d4df1e017c51f5030bdc133cd20c
+  fugit (1.14.0) sha256=e311a9cc85a54bb67649df45060e721282a1e2c8ebad40e41874a3a7d576f37e
   globalid (1.4.0) sha256=037f12fbf1d9d7a014d501c2d5c77356fd4ddd96d7a7991d6700bba96706f427
   i18n (1.15.2) sha256=00f9eb62412fe593b2a65a97daa75300d37abb8f7202ec748e94b6d46a9dd1b5
   io-console (0.9.4) sha256=a403304f32928ee85e56d457b4612ca43f2703b561a3258844992bd24085fbb1
@@ -300,6 +309,7 @@ CHECKSUMS
   pp (0.6.4) sha256=dfcb0fce700c41456265922884f9fe195d7fbb0674a3578e6c0f69588e82b570
   prettyprint (0.2.0) sha256=2bc9e15581a94742064a3cc8b0fb9d45aae3d03a1baa6ef80922627a0766f193
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
+  raabro (1.5.0) sha256=3f998a7bc84f9c84df3ab580634d2e0a5bda4f0841168d56035f529c9877440a
   racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f
   rack (3.2.7) sha256=93e13e1c24f93556671d85d2d79fa228c3485815c50d7e2f265b5330c6528fb7
   rack-session (2.1.2) sha256=595434f8c0c3473ae7d7ac56ecda6cc6dfd9d37c0b2b5255330aa1576967ffe8
@@ -337,7 +347,7 @@ CHECKSUMS
   unicode-emoji (4.3.0) sha256=11c02fa73290378c066bb0562cd4c87d8e1b706fbbe0059ca12746a4244de8ce
   uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
   useragent (0.16.11) sha256=700e6413ad4bb954bb63547fa098dddf7b0ebe75b40cc6f93b8d54255b173844
-  workhorse (1.5.2) sha256=6da5757626ce9a1c132de2d45cb30bb6141cc19c0e8b87db31a88ba787c0ba85
+  workhorse (2.0.0) sha256=bb14d2c2ca98d23d9f9b87cb7fe132b3853845e06e5b94c705d1e64b56c822c5
   zeitwerk (2.8.3) sha256=2c85125a8467ce069e20123d1e709a08955c9d29c118c25b46b7b7fafdbb92e5
 
 BUNDLED WITH
