@@ -13,10 +13,10 @@ This is an application recipe, not a Workhorse checkpointer or an SDK adapter.
 
 [`python/examples/langgraph_approval.py`](langgraph_approval.py) uses these released development dependencies:
 
-- `langgraph==1.2.12`, upstream tag `1.2.12` at `49cce0ca852be4cfb567a1cbe0e511ff325a1682`.
-- `langgraph-checkpoint-postgres==3.1.2`, tag `checkpointpostgres==3.1.2` at
-  `fde3068970679184b68d3d068a92c83c966a4888`.
-- `langgraph-checkpoint==4.2.0`, resolved in `python/uv.lock`.
+- `langgraph==1.2.15`, upstream tag `1.2.15` at `08a345637fb2bd499f69c90056a22c478a468817`.
+- `langgraph-checkpoint-postgres==3.2.0`, tag `checkpointpostgres==3.2.0` at
+  `d4149cc1f5384364d1a21092b4c2f582a6e7af8f`.
+- `langgraph-checkpoint==4.3.0`, resolved in `python/uv.lock`.
 
 The recipe uses `StateGraph.compile(checkpointer=...)`, `PostgresSaver.setup()`, `interrupt`,
 `StateSnapshot.interrupts`, `Interrupt.id`, and `Command(resume={interrupt_id: decision})`.
@@ -176,4 +176,4 @@ The catalog tier is `documented`: this is a tested recipe, not a published adapt
 Official interface references:
 [persistence](https://docs.langchain.com/oss/python/langgraph/persistence),
 [interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts), and
-[PostgreSQL checkpointer](https://pypi.org/project/langgraph-checkpoint-postgres/3.1.2/).
+[PostgreSQL checkpointer](https://pypi.org/project/langgraph-checkpoint-postgres/3.2.0/).
