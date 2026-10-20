@@ -11,6 +11,9 @@ import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 //   the pinned JDK. The checkers are build-only: they live in the `errorprone` configuration, so
 //   no published POM and no runtime class path names them.
 // - Spotless checks the Java sources with google-java-format, and the Kotlin sources with ktfmt.
+// - Gradle verifies each plugin and library against its sha256 checksum in
+//   `gradle/verification-metadata.xml`. After a dependency change, `pnpm jvm:verification-metadata`
+//   writes that file again (SM-1489).
 
 plugins {
   base
@@ -209,6 +212,11 @@ tasks.register("stageRelease") {
 }
 
 gradle.taskGraph.whenReady {
+  // The snapshot lane skips dependency verification for two test class paths. The build that
+  // holds the signing key must verify every artifact (SM-1489).
+  if (hasTask(":stageRelease") && providers.gradleProperty("workhorse.springBoot").orNull == "snapshot") {
+    throw GradleException("stageRelease refuses -Pworkhorse.springBoot=snapshot")
+  }
   if (hasTask(":stageRelease") && !signingKey.isPresent) {
     throw GradleException("stageRelease needs MAVEN_SIGNING_KEY, so that every file is signed")
   }

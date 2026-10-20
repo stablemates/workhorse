@@ -58,6 +58,18 @@ CI and again before each release is built for publication, and its acceptances c
 advisory in a published tree.
 [`docs/compatibility.md`](docs/compatibility.md) states that policy.
 
+The JVM build checks each artifact that it downloads, because the release stage signs the JVM
+artifacts in that build. [`jvm/gradle/verification-metadata.xml`](jvm/gradle/verification-metadata.xml)
+holds the sha256 checksum of each Gradle plugin and library that the build resolves. If an artifact
+has no entry or differs from its checksum, Gradle stops the build. To change a Gradle dependency or
+plugin, do these steps:
+
+1. Change the version in `jvm/gradle/libs.versions.toml`.
+2. Run `pnpm jvm:verification-metadata`.
+3. Read the changed entries, and commit them with the version change.
+
+CI runs `pnpm jvm:verification-metadata:check`. It fails if the file is not current.
+
 ## Supported versions
 
 **A fix ships on the highest published minor of the current major of each affected line, and
