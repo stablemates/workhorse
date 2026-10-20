@@ -14,7 +14,7 @@ This is the authoritative implementation snapshot for schema version 72 and SQL 
 | Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC | Online production migration guarantees |
 | Four ORM providers and framework-neutral dashboard host    |                                          | Public HTTP ingress API (planned)      |
 | Fast tier with fused completion and refill claim           |                                          |                                        |
-| Python, Go, Rust, Ruby, and JVM SDKs at TypeScript parity  |                                          |                                        |
+| Python, Go, Rust, Ruby, and JVM SDKs                       | Some operator methods only in TypeScript |                                        |
 | Live runtime plus immutable outcomes                       |                                          |                                        |
 | Append-only events and attempt history                     |                                          |                                        |
 | Immutable named checkpoint replay                          |                                          |                                        |
