@@ -401,6 +401,58 @@ More detail: [Data model: Contract schema profile](https://github.com/stablemate
 
 </details>
 
+## Check a number with a decimal rule
+
+A rule such as `minimum` or `multipleOf` compares numbers. Your language keeps most fractions as
+binary doubles, and a double cannot hold 1.15 exactly. If Workhorse compared the doubles, two SDKs
+could give different answers for the same payload.
+
+**Example.** The payload of `mail.send` has the field `cost`, in dollars. The rules say
+`"multipleOf": 0.01`, so a cost has at most two decimal places.
+
+1. Your application enqueues `mail.send` with the payload `{ "cost": 1.15 }`.
+2. The SDK writes the number as the decimal `1.15`.
+3. Workhorse divides the decimal 1.15 by the decimal 0.01. The result is 115, an integer.
+4. Workhorse accepts the task. Every SDK gives this answer.
+
+Workhorse compares the decimal of each number, as PostgreSQL stores it. It does not compare the
+binary value in memory.
+
+If your language holds a number exactly, Workhorse compares all of its digits. Go and Java can hold
+`12345678901234567.01`, so that value fails `"type": "integer"`. A TypeScript number is a double, so
+TypeScript cannot hold that value. Python, Ruby, and Rust hold large integers exactly, but they
+keep a fraction as a double.
+
+<details>
+<summary>Reference: number comparison</summary>
+
+**Rule.** A number is the decimal that the SDK writes to PostgreSQL. For a double, it is the
+shortest decimal that reads back as the same double. These keywords compare the decimals exactly:
+`type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`,
+`const`, `enum`, and `uniqueItems`.
+
+**Numbers each SDK holds.**
+
+| SDK        | Exact integer      | Exact fraction |
+| ---------- | ------------------ | -------------- |
+| TypeScript | up to 2^53         | no             |
+| Python     | yes                | no             |
+| Go         | yes, `json.Number` | yes            |
+| Rust       | `i64` and `u64`    | no             |
+| Ruby       | yes                | no             |
+| JVM        | yes                | `BigDecimal`   |
+
+**Limits until SM-1541.**
+
+1. TypeScript, Python, Ruby, and Rust read a stored schema constant that a double cannot hold as a
+   double.
+2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in the
+   bound keywords, `const`, `enum`, and `uniqueItems`.
+
+More detail: [Data model: Contract number comparison](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#contract-number-comparison).
+
+</details>
+
 ## Next
 
 - [Enqueue and transactions](/docs/enqueue) — create tasks atomically

@@ -77,6 +77,15 @@ before. They follow the new schedule. The [heartbeat round
 deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
 schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
 
+### A payload contract compares the decimals of numbers
+
+Before this release, `ContractSchema` compared an Integer with the binary value of a Float in the
+bound keywords, `const`, `enum`, and `uniqueItems` (SM-1539). Thus `1152921504606846980` failed
+`{"maximum": 1.152921504606847e18}`, although PostgreSQL stores the constant as
+`1152921504606847000`. A contract now compares each Float through the decimal of `Float#to_s`
+(ADR 0039). Ruby still reads a stored schema constant that a double cannot hold as a Float
+(SM-1541).
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

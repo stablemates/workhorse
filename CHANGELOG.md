@@ -98,6 +98,14 @@ before. They follow the new schedule. The [heartbeat round
 deadline](docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
 schedule](docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
 
+### A payload contract divides the decimals in `multipleOf`
+
+Before this release, `compileContractSchema` divided doubles in `multipleOf`, so
+`{"multipleOf": 0.01}` refused `1.15` (SM-1539). Go, Rust, Ruby, and the JVM accepted it. A contract
+now compares the decimal that `JSON.stringify` writes to PostgreSQL, and `multipleOf` divides those
+decimals (ADR 0039). A result that `multipleOf` refused for a fraction can now pass. TypeScript
+still reads a stored schema constant that a double cannot hold as a double (SM-1541).
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

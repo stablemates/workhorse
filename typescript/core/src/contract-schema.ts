@@ -55,8 +55,43 @@ const VALIDATION_KEYWORDS = new Set([
 const DEFINITION_NAME = /^[A-Za-z_][-A-Za-z0-9._]*$/;
 const DEFINITION_REFERENCE_PREFIX = "#/$defs/";
 const ajv = new Ajv2020({ strict: false, strictNumbers: true, validateFormats: false });
+// A contract compares the decimal that JSON.stringify writes to PostgreSQL, not the binary double.
+// Ajv divides doubles, so `multipleOf: 0.01` refuses 1.15. The replacement divides the decimals.
+ajv.removeKeyword("multipleOf");
+ajv.addKeyword({
+  keyword: "multipleOf",
+  type: "number",
+  schemaType: "number",
+  errors: false,
+  validate: (divisor: number, value: number) => isDecimalMultiple(value, divisor),
+});
 const objectValidators = new WeakMap<object, ValidateFunction<Json>>();
 const booleanValidators = new Map<boolean, ValidateFunction<Json>>();
+
+interface Decimal {
+  readonly digits: bigint;
+  readonly exponent: number;
+}
+
+// The shortest decimal that reads back as the double, as digits times a power of ten.
+function decimal(value: number): Decimal {
+  const [mantissa = "", exponentText = "0"] = String(value).split("e");
+  const [whole = "", fraction = ""] = mantissa.split(".");
+  return {
+    digits: BigInt(whole + fraction),
+    exponent: Number(exponentText) - fraction.length,
+  };
+}
+
+function isDecimalMultiple(value: number, divisor: number): boolean {
+  if (!Number.isFinite(value) || !Number.isFinite(divisor) || divisor <= 0) return false;
+  const dividend = decimal(value);
+  const unit = decimal(divisor);
+  const shift = dividend.exponent - unit.exponent;
+  return shift >= 0
+    ? (dividend.digits * 10n ** BigInt(shift)) % unit.digits === 0n
+    : dividend.digits % (unit.digits * 10n ** BigInt(-shift)) === 0n;
+}
 
 interface SchemaReference {
   readonly path: string;

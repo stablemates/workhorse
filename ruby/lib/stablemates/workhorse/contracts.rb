@@ -213,11 +213,11 @@ module Stablemates
 
       def number_valid?(keyword, value, instance)
         case keyword
-        when "minimum" then instance >= value
-        when "maximum" then instance <= value
-        when "exclusiveMinimum" then instance > value
-        when "exclusiveMaximum" then instance < value
-        when "multipleOf" then (Rational(instance.to_s) / Rational(value.to_s)).denominator == 1
+        when "minimum" then exact(instance) >= exact(value)
+        when "maximum" then exact(instance) <= exact(value)
+        when "exclusiveMinimum" then exact(instance) > exact(value)
+        when "exclusiveMaximum" then exact(instance) < exact(value)
+        when "multipleOf" then finite?(instance) && (exact(instance) / exact(value)).denominator == 1
         else true
         end
       end
@@ -287,6 +287,13 @@ module Stablemates
 
       def number?(instance) = instance.is_a?(Integer) || instance.is_a?(Float)
 
+      # The decimal that JSON writes to PostgreSQL for a number. Float#to_s gives the shortest
+      # decimal that reads back as the same Float, so 2**60 as a Float compares as
+      # 1152921504606847000, not as its binary value. A non-finite Float stays a Float.
+      def exact(number) = (number.is_a?(Float) && number.finite?) ? Rational(number.to_s) : number
+
+      def finite?(number) = !number.is_a?(Float) || number.finite?
+
       # JSON equality: 1 equals 1.0, and true equals neither 1 nor 1.0.
       def equal?(left, right)
         case left
@@ -295,7 +302,7 @@ module Stablemates
         end
         when Array then right.is_a?(Array) && left.size == right.size && left.zip(right).all? { |l, r| equal?(l, r) }
         when true, false, nil then left.equal?(right)
-        when Integer, Float then number?(right) && left == right
+        when Integer, Float then number?(right) && exact(left) == exact(right)
         else left == right
         end
       end

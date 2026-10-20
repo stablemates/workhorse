@@ -120,6 +120,46 @@ references, of `$anchor` at the root and below it, of a definition name outside 
 `$defs` below the root. It also pins references to `#` and to definitions whose names use `_` and
 `.`, beside a property named `$anchor`.
 
+## Amendment: a contract compares the decimal of each number (2026-10-20)
+
+A number is the decimal that the SDK writes to PostgreSQL. For a double, that is the shortest
+decimal that reads back as the same double. Every keyword compares these decimals exactly: `type`
+with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `const`,
+`enum`, and `uniqueItems`.
+
+PostgreSQL `jsonb` keeps the exact decimal of each number, so a check on the decimal is a check on
+the stored value. The JVM already kept a `BigDecimal` exact on every value path. Before this
+amendment, the SDKs gave different answers. The TypeScript and Python libraries divide doubles in
+`multipleOf`, so `{"multipleOf": 0.01}` refused `1.15`. Go, Rust, Ruby, and the JVM accepted it.
+Python and Ruby compared an integer with the binary value of a double. Thus
+`1152921504606846980` failed `{"maximum": 1.152921504606847e18}`, although PostgreSQL stores the
+constant as `1152921504606847000`.
+
+Each SDK compares the numbers that its values can hold. A TypeScript number is a double. Python,
+Ruby, and Rust hold an exact integer, but a fraction is a double. Go holds every number exactly as a
+`json.Number`, and the JVM holds a `BigDecimal` and a `BigInteger`. A value that an SDK cannot
+hold never reaches its validator, so no SDK changes a value to make it fit. TypeScript and Python
+replace the library's `multipleOf`. Python also replaces the bound, `const`, `enum`, and
+`uniqueItems` keywords. Ruby compares each Float through the decimal of `Float#to_s`.
+
+Two limits stay until SM-1541 removes them:
+
+1. TypeScript, Python, Ruby, and Rust read a schema constant that a double cannot hold as a double.
+   Such a constant comes only from an SDK that holds it exactly, and PostgreSQL keeps all its digits.
+2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in
+   `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `const`, `enum`, and
+   `uniqueItems`.
+
+`protocol/v1/contracts.json` pins the rule. An instance can give its value as JSON text in `json`,
+so each runner reads it through its own value path. An instance whose number only some SDKs can
+hold names the kind in `needs`: `exactFraction` or `exactInteger`. Each runner lists the kinds its
+SDK cannot hold and skips only those instances. The Rust runner lists the second limit in
+`rust/tests/conformance/expected-unsupported.json`.
+
+A contract that relied on the old answers changes its results. A result that `multipleOf` refused
+for a fraction can now pass. In Python and Ruby, an integer above 2^53 can now get the other answer
+against a fraction-typed bound or constant. The task keeps its contract version. A worker checks a result against that version with the new rule.
+
 ## Consequences
 
 One contract document now produces the same validity decision in every shipped SDK. Applications

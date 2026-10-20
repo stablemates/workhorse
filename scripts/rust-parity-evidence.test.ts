@@ -26,10 +26,12 @@ describe("Rust parity evidence", () => {
     expect(rustEvidenceProblems(PARITY_TABLES.flat(), state)).toEqual([]);
   });
 
-  it("reads the declared fixtures and an empty expected-unsupported list", () => {
+  it("reads the declared fixtures and the expected-unsupported list with its Issues", () => {
     expect(state.declared.has("interpreter/matcher-semantics")).toBe(true);
     expect(state.declared.has("failures/undeclared-name")).toBe(true);
-    expect(state.unsupported.size).toBe(0);
+    expect([...state.unsupported]).toEqual([
+      ["contracts/numbers-compare-exact-decimals", "SM-1541"],
+    ]);
   });
 
   it("rejects a Rust Supported cell that cites a pattern instead of executed evidence", () => {

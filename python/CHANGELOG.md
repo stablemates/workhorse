@@ -103,6 +103,17 @@ prepares a round statement in a cycle of its own after the settings statement:
 
 If a preparation uses the time that remains, the round fails before it sends `BEGIN`.
 
+### A payload contract compares the decimals of numbers
+
+Before this release, the contract validator divided floats in `multipleOf`, so
+`{"multipleOf": 0.01}` refused `1.15` (SM-1539). It also compared an int with the binary value of a
+float. Thus `1152921504606846980` failed `{"maximum": 1.152921504606847e18}`, although PostgreSQL
+stores the constant as `1152921504606847000`. A contract now compares the decimal that `json.dumps`
+writes to PostgreSQL (ADR 0039). The validator replaces `minimum`, `maximum`, `exclusiveMinimum`,
+`exclusiveMaximum`, `multipleOf`, `const`, `enum`, and `uniqueItems` of `Draft202012Validator`. The
+public API does not change. Python still reads a stored schema constant that a double cannot hold as
+a float (SM-1541).
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

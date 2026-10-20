@@ -11,18 +11,26 @@ type contractFixture struct {
 	Schema      any    `json:"schema"`
 	SchemaError bool   `json:"schemaError"`
 	Instances   []struct {
-		Value any  `json:"value"`
-		Valid bool `json:"valid"`
+		Value any    `json:"value"`
+		JSON  string `json:"json"`
+		Needs string `json:"needs"`
+		Valid bool   `json:"valid"`
 	} `json:"instances"`
 }
+
+// unheldContractNumbers lists the kinds of number a Go value cannot hold. A json.Number holds every
+// fraction and every integer exactly, so Go runs every instance of the shared table.
+var unheldContractNumbers = map[string]bool{}
 
 func TestContractSchemaProfile(t *testing.T) {
 	contents, err := os.ReadFile("../protocol/v1/contracts.json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Queue and Worker decode a payload, a result, and a stored schema with UseNumber, so the
+	// table decodes the same way.
 	var fixtures []contractFixture
-	if err := json.Unmarshal(contents, &fixtures); err != nil {
+	if err := decodeContractJSON(contents, &fixtures); err != nil {
 		t.Fatal(err)
 	}
 	for _, fixture := range fixtures {
@@ -37,10 +45,19 @@ func TestContractSchemaProfile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, instance := range fixture.Instances {
-				actual := validator.Validate(instance.Value) == nil
+			for index, instance := range fixture.Instances {
+				if unheldContractNumbers[instance.Needs] {
+					continue
+				}
+				value := instance.Value
+				if instance.JSON != "" {
+					if err := decodeContractJSON([]byte(instance.JSON), &value); err != nil {
+						t.Fatal(err)
+					}
+				}
+				actual := validator.Validate(value) == nil
 				if actual != instance.Valid {
-					t.Fatalf("expected valid=%t", instance.Valid)
+					t.Fatalf("instance %d: expected valid=%t", index, instance.Valid)
 				}
 			}
 		})

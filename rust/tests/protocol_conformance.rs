@@ -226,6 +226,10 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
 
 // ----- contracts -----------------------------------------------------------------------------
 
+/// The kinds of number a `serde_json::Value` cannot hold. It holds an `i64` or a `u64` exactly, but
+/// it reads a fraction as an `f64`.
+const UNHELD_CONTRACT_NUMBERS: &[&str] = &["exactFraction"];
+
 /// A contract fixture compiles its schema the way `Queue::sync_contracts` does, then checks each
 /// instance's verdict.
 fn run_contract(fixture: &Value) -> Result<(), String> {
@@ -241,7 +245,16 @@ fn run_contract(fixture: &Value) -> Result<(), String> {
         fixture["instances"].as_array().ok_or("fixture lists no instances")?.iter().enumerate()
     {
         let expected = instance["valid"].as_bool().ok_or("instance states no verdict")?;
-        if schema.is_valid(&instance["value"]) != expected {
+        if instance["needs"].as_str().is_some_and(|needs| UNHELD_CONTRACT_NUMBERS.contains(&needs))
+        {
+            continue;
+        }
+        let value = match instance["json"].as_str() {
+            Some(text) => serde_json::from_str(text)
+                .map_err(|error| format!("instance {index}: unreadable JSON: {error}"))?,
+            None => instance["value"].clone(),
+        };
+        if schema.is_valid(&value) != expected {
             return Err(format!("instance {index}: expected valid = {expected}"));
         }
     }
