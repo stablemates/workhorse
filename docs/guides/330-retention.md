@@ -55,11 +55,14 @@ that the loop runs.
 PostgreSQL performs the due check and the advisory-lock coordination. A worker only bounds how often
 it offers the pass:
 
-| SDK        | Option                                     | Default   |
-| ---------- | ------------------------------------------ | --------- |
-| TypeScript | `WorkerOptions.maintenanceRoutinePollMs`   | 60,000 ms |
-| Python     | `maintenance_routine_poll_ms`              | 60,000 ms |
-| Go         | `WorkerOptions.MaintenanceRoutineInterval` | 60,000 ms |
+| SDK        | Option                                       | Default   |
+| ---------- | -------------------------------------------- | --------- |
+| TypeScript | `WorkerOptions.maintenanceRoutinePollMs`     | 60,000 ms |
+| Python     | `maintenance_routine_poll_ms`                | 60,000 ms |
+| Go         | `WorkerOptions.MaintenanceRoutineInterval`   | 60,000 ms |
+| Rust       | `WorkerOptions.maintenance_routine_interval` | 60,000 ms |
+| Ruby       | `Worker.new(maintenance_routine_interval:)`  | 60,000 ms |
+| JVM        | `Worker.Builder.maintenanceRoutineInterval`  | 60,000 ms |
 
 **Run history.** `maintenance_run` keeps the newest 50 recorded executions per routine. Each row
 stores a `run_id`, start and completion instants, a `succeeded`, `failed`, or `incomplete` outcome,

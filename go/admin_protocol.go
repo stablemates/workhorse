@@ -721,6 +721,10 @@ func stringValue(value any) string {
 		return v
 	case []byte:
 		return string(v)
+	case [16]byte:
+		// The pgx executor decodes a uuid value as [16]byte.
+		text, _ := uuidString(v)
+		return text
 	default:
 		return fmt.Sprint(v)
 	}

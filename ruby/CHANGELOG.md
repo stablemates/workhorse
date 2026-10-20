@@ -86,6 +86,13 @@ bound keywords, `const`, `enum`, and `uniqueItems` (SM-1539). Thus `115292150460
 (ADR 0039). Ruby still reads a stored schema constant that a double cannot hold as a Float
 (SM-1541).
 
+### A bad worker interval raises ArgumentError
+
+Before this release, a bad value for `heartbeat`, `poll_interval`, `maintenance_interval`,
+`maintenance_routine_interval`, or `registry_interval` raised `NoMethodError`, because these options
+have no upper limit (SM-1511). For example, `heartbeat: 0` did this. Now `Worker.new` raises
+`ArgumentError`, and the message names the option and its lower limit.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

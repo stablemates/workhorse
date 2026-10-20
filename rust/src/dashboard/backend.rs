@@ -311,9 +311,11 @@ impl<E: Executor> Backend<E> {
         let rows = self.rows(sql::GET_RETENTION_POLICY_V1, &[]).await?;
         let current = exactly_one(&rows, "get_retention_policy_v1")?;
         let mut days = Vec::with_capacity(RETENTION_SETTINGS.len());
+        // An absent setting keeps its current value. An explicit null disables the category, so the
+        // statement counts no rows for it.
         for name in RETENTION_SETTINGS {
-            days.push(match definition.get(name).and_then(Value::as_i64) {
-                Some(value) => Some(integer(value, name)?),
+            days.push(match definition.get(name) {
+                Some(value) => value.as_i64().map(|value| integer(value, name)).transpose()?,
                 None => {
                     current.try_get::<_, Option<i32>>(snake(name).as_str()).map_err(Error::from)?
                 }

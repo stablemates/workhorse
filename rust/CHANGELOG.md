@@ -93,6 +93,13 @@ attempt leaves the heartbeat set when the watchdog expires, as in the other SDKs
 worker sent before can still commit one renewal, but no later round includes the lease. A late
 handler return still settles as `lease_lost`.
 
+### The retention preview disables a category for an explicit null
+
+Before this release, the dashboard `previewRetentionPolicy` procedure used the current policy value
+when the request set a retention setting to `null` (SM-1509). A `null` setting disables its
+category, so the preview counted rows that the other SDK hosts do not count. The Rust host now uses
+the current value only when the request does not have the setting.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

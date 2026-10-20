@@ -94,6 +94,15 @@ before its heartbeat statement returns the connection to the pool open. The [hea
 deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
 schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
 
+### The Admin returns UUID text for linked task IDs
+
+Before this release, an `Admin` that used `NewPGXExecutor` returned byte lists such as
+`[45 151 121 ...]` for some IDs (SM-1542). The pgx executor decodes a `uuid` column as `[16]byte`,
+and the `Admin` formatted that value with `fmt.Sprint`. This applied to `PrerequisiteTaskID`,
+`PrerequisiteTaskIDs`, `ParentTaskID`, and `ChildTaskIDs` from `GetTask` and `ListTasks`, and to
+`WorkerRegistryEntry.InstanceID` from `ListWorkers`. The `Admin` now returns canonical UUID text
+for each of these fields.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.
