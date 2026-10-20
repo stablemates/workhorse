@@ -296,3 +296,77 @@ describe("0.8.0 release notes", () => {
     expect(section).toMatch(phrase("no compatible constructor"));
   });
 });
+
+/**
+ * The next release. The release candidate renames each `## Unreleased` heading to the release
+ * heading, and then changes this constant to match.
+ */
+const upcoming = "## Unreleased";
+
+describe("upcoming release notes", () => {
+  const withJvm = [...changelogs, "jvm/CHANGELOG.md"];
+
+  it("name the JVM changelog in the header of the root changelog", () => {
+    const header = read("CHANGELOG.md").split(/^## /m)[0]!;
+    expect(header).toContain("[`jvm/CHANGELOG.md`](jvm/CHANGELOG.md)");
+    expect(header).toMatch(phrase("JVM artifacts"));
+  });
+
+  it("state the three JVM artifacts, the schema, and the Java and PostgreSQL floors", () => {
+    const section = entry("jvm/CHANGELOG.md", upcoming);
+    expect(section).toMatch(
+      /^Requires \*\*schema v72\*\*, Java \*\*21\*\* or newer, and PostgreSQL \*\*15\*\* or newer\.$/m,
+    );
+    expect(section).toMatch(phrase("compatibility floor is schema version **72**"));
+    for (const artifact of ["workhorse", "workhorse-kotlin", "workhorse-spring-boot-starter"]) {
+      expect(section).toContain(`\`${artifact}\``);
+    }
+    expect(section).toContain("`run.workhorse`");
+  });
+
+  describe.each(changelogs)("%s", (path) => {
+    const section = entry(path, upcoming);
+
+    it("states the heartbeat changes since 0.8.0 with the values of the lifecycle page", () => {
+      expect(section).toMatch(phrase("Rounds start on a fixed schedule"));
+      expect(section).toContain("`max(1 ms, interval × 3 / 4, min(50 ms, interval))`");
+      expect(section).toMatch(phrase("For an interval of 200 ms or more, this is three quarters"));
+      expect(section).toMatch(phrase("the bound is 7.5 s, so one timed-out round leaves a margin"));
+      expect(section).toContain("`2 × interval + round bound < lease`");
+      for (const setting of ["statement_timeout", "idle_in_transaction_session_timeout"]) {
+        expect(section).toContain(`\`${setting}\``);
+      }
+      expect(section).toMatch(
+        phrase("one half of the time that remains, and each idle gap one eighth"),
+      );
+      expect(section).toMatch(phrase("less than 8 ms remains"));
+      expect(section).toMatch(phrase("100 ms is the smallest supported heartbeat interval"));
+      expect(section).toMatch(phrase("the round bound is 75 ms"));
+    });
+  });
+
+  it("state that a Rust lease leaves the heartbeat set when its watchdog expires", () => {
+    const section = entry("rust/CHANGELOG.md", upcoming);
+    expect(section).toMatch(phrase("leaves the heartbeat set when the watchdog expires"));
+    expect(section).toContain("`CancelReason::LeaseLost`");
+  });
+
+  it("state that a Python round prepares its statements before the server timeouts", () => {
+    const section = entry("python/CHANGELOG.md", upcoming);
+    expect(section).toMatch(phrase("prepares the settings statement and the heartbeat statement"));
+    expect(section).toContain("`prepare=False`");
+  });
+
+  describe.each(withJvm)("%s", (path) => {
+    it("links only to files and headings that exist", () => {
+      const broken = links(path, entry(path, upcoming))
+        .filter(({ file, anchor }) => {
+          if (file === undefined) return false;
+          if (!existsSync(join(root, file))) return true;
+          return anchor !== undefined && file.endsWith(".md") && !anchors(file).has(anchor);
+        })
+        .map(({ target }) => target);
+      expect(broken).toEqual([]);
+    });
+  });
+});

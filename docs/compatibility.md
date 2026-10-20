@@ -190,9 +190,10 @@ names, so no equivalent exists on the TypeScript or Python lines.
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
 covers npm, `pnpm python:vuln` covers PyPI, `pnpm go:vuln` covers the Go module, and
-`pnpm rust:vuln` covers the Rust crate, and `pnpm ruby:vuln` covers the Ruby gem. `pnpm check` runs
-all five, and so does the `static` task in `.github/workflows/ci.yml`. The release workflow runs
-`pnpm ruby:vuln` again inside `pnpm ruby:release-check`.
+`pnpm rust:vuln` covers the Rust crate, `pnpm ruby:vuln` covers the Ruby gem, and `pnpm jvm:vuln`
+covers the three JVM artifacts. `pnpm check` runs all six, and so does the `static` task in
+`.github/workflows/ci.yml`. The release workflow runs `pnpm ruby:vuln` again inside
+`pnpm ruby:release-check`.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -242,7 +243,35 @@ advisories, or when it is not a git checkout that a refresh can move. bundler-au
 a directory it cannot list, so the script also reads every advisory directory and file itself. An
 unreadable one refuses the run. Each refusal names the database and no acceptance entry as stale.
 
-`pnpm tooling:vuln` audits the build and publication tooling, in a lane separate from the five
+`pnpm jvm:vuln` runs `scripts/audit-jvm-dependencies.ts`. The JVM build has no lockfile.
+`jvm/gradle/verification-metadata.xml` holds the sha256 checksum of each artifact that the `jvm/`
+build resolves, and Gradle refuses an artifact that differs from it.
+`pnpm jvm:verification-metadata:check` fails if that file is not current. `pnpm check` runs it, and
+the CI `jvm` job runs it on the Java floor. That file does not decide what a caller resolves, because
+the caller's own conflict resolution selects the versions from the POM and the Gradle module
+metadata of each artifact.
+
+Thus the scan reads the runtime classpaths that a caller resolves, and its consumer build has no
+verification metadata. The script publishes `workhorse`, `workhorse-kotlin`, and
+`workhorse-spring-boot-starter` to a scratch Maven repository. Then the consumer build in
+`scripts/jvm-dependency-scan/` resolves each artifact for Java 21, with no optional feature, with
+each optional feature, and with all features together. The scan reads the union of these
+classpaths and asks the OSV database about each module on them. It does not read the modules of
+`run.workhorse`.
+
+The JVM scan fails on every advisory that reaches a classpath, whatever its severity. It skips an
+advisory that OSV marks as withdrawn. A reported advisory passes only when
+`scripts/jvm-advisory-acceptances.json` has an entry for that advisory and module, with a reason and
+a review date. The check fails when that date has passed, and when an entry matches nothing on any
+classpath. An entry without an advisory, a module, or a reason, or whose review date is not a real
+calendar date, fails the check before any advisory is judged.
+
+OSV answers an unknown module with no advisory, so an empty answer cannot show a clean classpath.
+Each query batch therefore also asks about a canary module with a known advisory. If OSV does not
+report that advisory, or if OSV does not answer, the script refuses the run. The refusal names the
+database and no acceptance entry as stale.
+
+`pnpm tooling:vuln` audits the build and publication tooling, in a lane separate from the six
 production gates. [ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)
 records why. The lane runs `pnpm audit` over the whole workspace, development dependencies included.
 It runs `pip-audit` over the uv export with every dependency group, and separately over
@@ -404,9 +433,9 @@ rest are optional TypeScript packages.
 
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
-The Python package, the Go module, the Rust crate, and the Ruby gem declare no TypeScript peer range; SQL protocol
-5 and schema version 69 are their compatibility boundary instead. Their version numbers still match the npm
-packages, because every line releases from one commit.
+The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK declare no TypeScript peer
+range. SQL protocol 5 and schema version 72 are their compatibility boundary instead. Their version numbers
+still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
 one source commit. The current release is `0.8.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
@@ -790,6 +819,23 @@ ride the same tag. Their stage is ready, and their first publish waits for the m
    packaged-gem consumer, and the JVM consumers of the staged artifacts are built from the same
    commit.
    Test registries are not part of the rehearsal.
+
+   Each dry run must test the candidate SHA. A dispatched run builds the head of the branch that it
+   starts on, not a SHA, and other commits can land on `main` after the candidate. A dry run on a
+   later commit proves nothing about the candidate. Python publishes first, so a candidate that
+   fails the `release.yml` build job after the tag stops the train partly published. Do these
+   steps:
+   1. Before you dispatch, compare the tip of `main` with the candidate SHA. If they are equal,
+      dispatch both dry runs on `main`.
+   2. If the tip of `main` moved after the candidate, push a branch that points at the candidate
+      SHA, for example `git push origin <sha>:refs/heads/release-candidate-X.Y.Z`. Then dispatch
+      both dry runs on that branch. A push to this branch starts no CI run.
+   3. When each dry run ends, run `gh run view <run-id> --json headSha`. The `headSha` must equal
+      the candidate SHA. If it does not, the dry run does not count. Dispatch it again on a branch
+      that points at the candidate SHA.
+   4. After the train, delete the candidate branch with
+      `git push origin --delete release-candidate-X.Y.Z`.
+
 2. Publish Python first. One distribution is the smallest production test of trusted publishing.
    `pnpm release:verify python` checks its PEP 740 attestations on PyPI before the train continues.
 3. Publish npm second. Each package goes after the published packages it requires, so
@@ -822,8 +868,8 @@ check must refuse the candidate before the first registry receives it. `pnpm rel
    check reads every published `package.json` and `dashboard/app/package.json`.
 3. An `install` command in `support.json` names another version.
 4. A changelog has no `## X.Y.Z` entry for the release. The changelogs are `CHANGELOG.md`,
-   `python/CHANGELOG.md`, `go/CHANGELOG.md`, `rust/CHANGELOG.md`, `ruby/CHANGELOG.md`, and the
-   changelog of each published npm package that has one.
+   `python/CHANGELOG.md`, `go/CHANGELOG.md`, `rust/CHANGELOG.md`, `ruby/CHANGELOG.md`,
+   `jvm/CHANGELOG.md`, and the changelog of each published npm package that has one.
 5. The release is a minor or major release, and `sql/releases/<NNNN>.sql` does not exist for
    `WORKHORSE_SCHEMA_VERSION`. The first major release adds no migration, so the last `0.x` minor
    already froze its artifact.
@@ -884,7 +930,9 @@ The dated entries in [`CHANGELOG.md`](../CHANGELOG.md),
 [`python/CHANGELOG.md`](../python/CHANGELOG.md), and [`go/CHANGELOG.md`](../go/CHANGELOG.md) name
 those commits.
 The Ruby gem keeps its own [`ruby/CHANGELOG.md`](../ruby/CHANGELOG.md), which the
-[Ruby gem](#ruby-gem) checklist bumps with every release.
+[Ruby gem](#ruby-gem) checklist bumps with every release. The three JVM artifacts keep one
+[`jvm/CHANGELOG.md`](../jvm/CHANGELOG.md), which the [JVM artifacts](#jvm-artifacts) checklist bumps
+with every release.
 
 ### npm packages
 
@@ -1074,8 +1122,10 @@ marks each one `<optional>true</optional>`, so Maven does not add it. Its Gradle
 puts each one in a feature variant, so Gradle adds it only when the build asks for the feature,
 for example `requireFeature("opentelemetry")` or `requireFeature("servlet")`.
 
-1. Set `version` in `jvm/gradle.properties` to the release version and commit it with the
-   candidate.
+1. Set `version` in `jvm/gradle.properties` to the release version. Move the `## Unreleased`
+   entries of `jvm/CHANGELOG.md` under a `## X.Y.Z` heading, and commit both with the candidate.
+   For the first release, also remove `unpublished` from the JVM line in `site/lib/releases.ts`,
+   because the site build refuses an unpublished line whose changelog records a release.
 2. Use the `vX.Y.Z` tag that the [npm packages](#npm-packages) step creates on the candidate SHA.
    Do not create another tag. The build job of `.github/workflows/release.yml` runs
    `pnpm jvm:release-check`. It runs the JVM gates, then `pnpm jvm:package-check`, the dry run:

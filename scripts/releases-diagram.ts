@@ -16,26 +16,26 @@ type Kind = "focal" | "backend" | "store" | "external";
 const title = "The location of the defect decides which lines get a new release";
 const description =
   "If the defect is in the SQL schema or in the protocol that the SDKs share, the npm packages, " +
-  "Python, Go, Rust, and Ruby lines each get the fix in one release train. If the defect is in one " +
-  "SDK, for example Python, only that line gets a new release. Each fix ships only on the highest " +
+  "Python, Go, Rust, Ruby, and JVM lines each get the fix in one release train. If the defect is in " +
+  "one SDK, for example Python, only that line gets a new release. Each fix ships only on the highest " +
   "published minor release of the current major.";
 
-const lines = ["npm packages", "Python", "Go", "Rust", "Ruby"] as const;
+const lines = ["npm packages", "Python", "Go", "Rust", "Ruby", "JVM"] as const;
 
 const rows: readonly (readonly [label: readonly [string, string], released: readonly boolean[]])[] =
   [
     [
       ["schema or protocol", "shared by the SDKs"],
-      [true, true, true, true, true],
+      [true, true, true, true, true, true],
     ],
     [
       ["one SDK", "for example Python"],
-      [false, true, false, false, false],
+      [false, true, false, false, false, false],
     ],
   ];
 
 const LEFT = 256;
-const WIDTH = 124;
+const WIDTH = 104;
 const GAP = 12;
 const x = (index: number): number => LEFT + index * (WIDTH + GAP);
 
@@ -48,8 +48,9 @@ export const releaseLines = {
     lines.forEach((line, index) => {
       d.rows(x(index) + WIDTH / 2, 44, [[line, 8, "soft", MONO, 400]]);
     });
-    d.divider(LEFT, x(4) + WIDTH, 52);
-    d.zone(LEFT - 8, 64, x(4) + WIDTH - LEFT + 16, 80, "ONE RELEASE TRAIN · ONE COMMIT");
+    const right = x(lines.length - 1) + WIDTH;
+    d.divider(LEFT, right, 52);
+    d.zone(LEFT - 8, 64, right - LEFT + 16, 80, "ONE RELEASE TRAIN · ONE COMMIT");
     rows.forEach(([label, released], row) => {
       const y = 88 + row * 88;
       d.rows(

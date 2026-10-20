@@ -42,6 +42,60 @@ Workhorse keeps the outcome of a fast-tier task in `workhorse.fast_task_outcome`
 sends the shared `retention_policy_preview` statement, which reads both tables, as the TypeScript,
 Rust, Ruby, and JVM dashboards do (SM-1477).
 
+### Heartbeat rounds get a deadline and end on the server
+
+Before this release, a round on the dedicated heartbeat connection had no client deadline. A stalled
+heartbeat statement held the heartbeat thread until the statement ended, and the next round fell due
+one interval after that round ended (SM-1442, SM-1444). These changes apply to each round on the
+dedicated heartbeat connection:
+
+- **Rounds start on a fixed schedule.** A round falls due one interval after the previous round
+  started, not after it ended. The schedule uses a monotonic clock. If a round ends after its next
+  slot, the worker starts one overdue round at once and sends no round for the other missed slots.
+- **Each round has a deadline.** A round ends by
+  `max(1 ms, interval × 3 / 4, min(50 ms, interval))`. For an interval of 200 ms or more, this is
+  three quarters of the interval. With the defaults (lease 30 s, interval 10 s), the bound is 7.5 s,
+  so one timed-out round leaves a margin of 2.5 s. An attempt keeps its lease after one timed-out
+  round if `2 × interval + round bound < lease`. The worker does not reject an interval that breaks
+  this rule.
+- **Each round sets server timeouts.** The round sends `BEGIN`, then one `set_config` statement for
+  `statement_timeout` and `idle_in_transaction_session_timeout`, then `heartbeat_many_v2`, then
+  `COMMIT`. Both settings are transaction-local. The heartbeat statement gets one half of the time
+  that remains, and each idle gap one eighth. If less than 8 ms remains at the settings statement,
+  the round fails before the heartbeat. The worker counts a renewal only after a `COMMIT` that ends
+  before the deadline. No setting bounds `COMMIT` on PostgreSQL 15 and later.
+- **A failed round discards its connection.** Under load, PostgreSQL can log
+  `canceling statement due to statement timeout` for a heartbeat statement. It can also end the
+  session with `terminating connection due to idle-in-transaction timeout`. Each message means that
+  one round failed. Every task continues, and the next round tries again. A deadlock (`40P01`) is
+  sent again in a new transaction with the time that remains.
+- **Replacement connections.** A failed round now opens its replacement connection when the round
+  ends, so the connect starts before the next round. A bounded round runs on a thread of its own, so
+  the heartbeat thread stops at the deadline.
+- **100 ms is the smallest supported heartbeat interval** (SM-1471). This applies to `heartbeat_ms`
+  of `Worker` and `AsyncWorker`: the smallest supported value is 100. At 100 ms, the round bound is
+  75 ms. The worker still accepts a shorter interval, and it does not warn. On a loaded host, a
+  shorter interval can make each round miss its deadline, and attempts can then lose their leases.
+
+Rounds under `shared_heartbeats=True` have no client deadline and set no server timeouts, as before.
+They follow the new schedule. The [heartbeat round
+deadline](../docs/architecture/lifecycle.md#heartbeat-round-deadline) and the [heartbeat
+schedule](../docs/architecture/lifecycle.md#heartbeat-schedule) state each rule.
+
+### A heartbeat round prepares its statements before its server timeouts start
+
+Some drivers prepare a statement in a cycle of its own, and PostgreSQL then restarts the statement
+timer. A preparation after the settings statement would thus give the heartbeat statement a full
+budget after it, so the round could end on the server after its deadline (SM-1449). Thus no driver
+prepares a round statement in a cycle of its own after the settings statement:
+
+- With asyncpg, a bounded round prepares the settings statement and the heartbeat statement before
+  `BEGIN`, once on each connection. It sends `BEGIN`, `COMMIT`, and `ROLLBACK` as simple queries.
+- With psycopg, the synchronous and asynchronous heartbeat connections send each round statement
+  with `prepare=False`. PostgreSQL then parses each statement inside its own budget.
+
+If a preparation uses the time that remains, the round fails before it sends `BEGIN`.
+
 ## 0.8.0 — 2026-10-13
 
 The npm packages, Python distribution, Go module, Rust crate, and Ruby gem release from one source commit.

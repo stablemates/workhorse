@@ -263,7 +263,7 @@ async function checkOtherLines(files: ReleaseFiles, version: TrainVersion): Prom
 async function checkChangelogs(files: ReleaseFiles, version: TrainVersion): Promise<void> {
   await files.requireChangelogEntry("CHANGELOG.md", version.semver);
   await files.requireChangelogEntry("python/CHANGELOG.md", version.pep440);
-  for (const line of ["go", "rust", "ruby"]) {
+  for (const line of ["go", "rust", "ruby", "jvm"]) {
     await files.requireChangelogEntry(`${line}/CHANGELOG.md`, version.semver);
   }
   for (const entry of await publishedPackages(files.root)) {

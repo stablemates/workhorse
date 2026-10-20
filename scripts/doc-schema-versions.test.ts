@@ -91,6 +91,26 @@ describe("schema numbers in the documentation", () => {
     }
   });
 
+  it("states the SDK compatibility boundary in docs/compatibility.md", () => {
+    const file = "docs/compatibility.md";
+    const heading = "## Packages and versioning";
+    const where = `${file}, "${heading.slice(3)}"`;
+    // The sentence names every SDK without a TypeScript peer range, the JVM SDK too, and states the
+    // floor that each of them refuses to run below.
+    const [protocol, schema] = stated(
+      where,
+      section(file, read(file), heading),
+      /the Ruby gem, and the JVM SDK declare no TypeScript peer\s+range\. SQL protocol (\d+) and schema\s+version (\d+) are their compatibility boundary instead\./,
+      "the compatibility boundary of the SDKs",
+    );
+    expect(protocol, `${where}: the boundary must be SQL protocol ${PROTOCOL_VERSION}`).toBe(
+      PROTOCOL_VERSION,
+    );
+    expect(schema, `${where}: the boundary must be schema version ${MINIMUM_SCHEMA_VERSION}`).toBe(
+      MINIMUM_SCHEMA_VERSION,
+    );
+  });
+
   it("states the target schema, the last migration, and the floor in the upgrade section", () => {
     const file = "docs/compatibility.md";
     const text = section(file, read(file), upgradeHeading);
