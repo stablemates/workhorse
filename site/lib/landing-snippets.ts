@@ -13,6 +13,8 @@
  *
  * Every Rust snippet is a copy of one `landing-*` region in
  * rust/examples/landing.rs, which `pnpm rust:clippy` compiles.
+ * rust/tests/landing_postgres.rs runs the `landing-retries` region against
+ * PostgreSQL.
  * Every Ruby snippet is a copy of one `landing-*` region in
  * ruby/examples/landing.rb, which a documentation spec runs against PostgreSQL.
  * Every Java snippet is a copy of one `landing-*-java` region in
@@ -23,6 +25,9 @@
  * `LandingProcessExamplesTest` in jvm/examples/src/test run each region against
  * PostgreSQL.
  * `scripts/check-language-examples.ts` fails when a copy and its region differ.
+ * `scripts/landing-retry-policies-integration.test.ts` gives the retry policy
+ * of every snippet to PostgreSQL, so a key that the database refuses fails in
+ * each language.
  */
 export const landingSnippets = {
   hero: `import { installSchema, Pool, Queue, Worker } from "@stablemates/workhorse";
@@ -678,7 +683,7 @@ pub async fn remind(
         execution_timeout_ms: Some(30_000),
         max_attempts: 5,
         retry_policy: json!({
-            "kind": "exponential",
+            "type": "exponential",
             "initialDelayMs": 1_000,
             "multiplier": 2,
             "maxDelayMs": 60_000,

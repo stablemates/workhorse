@@ -355,7 +355,8 @@ for (const pattern of examplePatterns) {
 
 // Rust, Ruby, Java, and Kotlin examples live as `docs:start <name>` regions in `rust/examples/`,
 // `ruby/examples/`, and `jvm/examples/src/main/`. `cargo clippy --all-targets` compiles the Rust
-// regions in CI, and a documentation spec runs the Ruby regions against PostgreSQL. `pnpm jvm:build`
+// regions in CI, `rust/tests/landing_postgres.rs` runs the Rust `landing-retries` region, and a
+// documentation spec runs the Ruby regions against PostgreSQL. `pnpm jvm:build`
 // compiles the Java and Kotlin regions, and `pnpm jvm:test` runs them against PostgreSQL. Every
 // fence in one of these languages and every landing snippet in Rust or Ruby must equal one region
 // after both lose their common indentation, and every region must appear somewhere, so a page
