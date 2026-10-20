@@ -21,6 +21,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
@@ -156,14 +157,49 @@ class WorkerDrainInterruptDatabaseTest {
         .taskId();
   }
 
-  /** Starts the worker, waits until it holds the write, and stops it while the write is held. */
+  /**
+   * Starts the worker, waits until it holds the write, and stops it while the write is held.
+   *
+   * <p>With no shutdown grace, the attempt has one unwind window after the interrupt to end its
+   * held write, its handler, and its settlement. Under load, that can take longer, and {@code
+   * close} throws {@link ShutdownIncompleteException} while the attempt still ends (SM-1534). The
+   * duration of the drain is not what these tests check, so each test waits for its own effects.
+   */
   private static void drainDuringWrite(Worker worker, HeldWrite held) throws InterruptedException {
     worker.start();
     try {
       assertTrue(held.holding.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the write started");
     } finally {
-      worker.close();
+      try {
+        worker.close();
+      } catch (ShutdownIncompleteException slow) {
+        // The abandoned attempt keeps running on its own thread; the effects below are bounded.
+      }
     }
+  }
+
+  private static void waitFor(String what, BooleanSupplier condition) {
+    long limit = System.nanoTime() + WAIT.toNanos();
+    while (!condition.getAsBoolean()) {
+      assertTrue(System.nanoTime() < limit, "timed out waiting until " + what);
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5));
+    }
+  }
+
+  private static void waitForCount(String what, long expected, SqlCount count) {
+    waitFor(
+        what,
+        () -> {
+          try {
+            return count.get() == expected;
+          } catch (SQLException error) {
+            throw new AssertionError(error);
+          }
+        });
+  }
+
+  private interface SqlCount {
+    long get() throws SQLException;
   }
 
   private static long count(String sql, List<UUID> taskIds) throws SQLException {
@@ -209,6 +245,7 @@ class WorkerDrainInterruptDatabaseTest {
             .build();
 
     drainDuringWrite(worker, held);
+    waitFor("the handler ran", () -> !handlerInterrupted.isEmpty());
 
     assertEquals(List.of(false), held.interruptedDuringWrite, "the write ran without an interrupt");
     assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the write");
@@ -233,10 +270,11 @@ class WorkerDrainInterruptDatabaseTest {
             .build();
 
     drainDuringWrite(worker, held);
+    waitForCount(
+        "each member has its failure evidence row", 2, () -> events("batch_failed", taskIds));
 
     assertEquals(List.of(false), held.interruptedDuringWrite, "the write ran without an interrupt");
     assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the write");
-    assertEquals(2, events("batch_failed", taskIds), "each member has its failure evidence row");
   }
 
   @Test
@@ -257,6 +295,7 @@ class WorkerDrainInterruptDatabaseTest {
             .build();
 
     drainDuringWrite(worker, held);
+    waitFor("the handler ran", () -> !handlerInterrupted.isEmpty());
 
     assertEquals(List.of(false), held.interruptedDuringWrite, "the write ran without an interrupt");
     assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the write");
@@ -287,6 +326,7 @@ class WorkerDrainInterruptDatabaseTest {
             .build();
 
     drainDuringWrite(worker, held);
+    waitFor("the handler ran", () -> !handlerInterrupted.isEmpty());
 
     assertEquals(List.of(false), held.interruptedDuringWrite, "the write ran without an interrupt");
     assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the write");
@@ -381,5 +421,43 @@ class WorkerDrainInterruptDatabaseTest {
             List.of(taskId)),
         "the checkpoint row is written");
     assertFalse(Thread.currentThread().isInterrupted());
+  }
+
+  // SM-1525 (m2): a child request reads its payload contract through the drain's interrupt. Without
+  // the deferral, the interrupt closes the socket of the read, and the worker fails the parent
+  // instead of giving it back to its queue.
+  @Test
+  void readsAChildContractThroughTheDrainInterruptAndThenDeliversIt() throws Exception {
+    UUID parentId = enqueue("contracted-parent");
+    HeldWrite held = new HeldWrite(scratch, "get_contract_definition_v1");
+    Worker worker =
+        worker(held)
+            .handle(
+                "contracted-parent",
+                Object.class,
+                (context, payload) ->
+                    context.runChild(
+                        "child",
+                        "contracted-child",
+                        Map.of(),
+                        EnqueueOptions.defaults(),
+                        Object.class))
+            .build();
+
+    drainDuringWrite(worker, held);
+    // The read ends, and the child request then stops for the shutdown, so the parent goes back
+    // to its queue without an attempt.
+    waitForCount(
+        "the parent goes back to its queue", 1, () -> events("released", List.of(parentId)));
+
+    assertEquals(List.of(false), held.interruptedDuringWrite, "the read ran without an interrupt");
+    assertEquals(List.of(true), held.deferredDuringWrite, "the drain interrupted during the read");
+    assertEquals(
+        1,
+        count(
+            "SELECT count(*) FROM workhorse.task_runtime WHERE state = 'ready'"
+                + " AND task_id = ANY(?::uuid[])",
+            List.of(parentId)),
+        "the parent waits in its queue and did not fail");
   }
 }

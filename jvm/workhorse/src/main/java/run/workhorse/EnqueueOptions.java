@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
+import run.workhorse.internal.Values;
 
 /**
  * The options of one enqueue request. Each field is a keyword of Ruby's {@code Queue#enqueue}, and
@@ -47,8 +48,9 @@ public record EnqueueOptions(
     @Nullable Dependencies dependencies) {
   private static final EnqueueOptions DEFAULTS = builder().build();
 
-  /** Copies the tags. */
+  /** Copies the tags, and copies the retry policy into an unmodifiable map. */
   public EnqueueOptions {
+    retryPolicy = Values.deepCopy(retryPolicy);
     tags = List.copyOf(tags);
   }
 

@@ -844,4 +844,124 @@ class QueueDatabaseTest {
   private static EnqueueOptions.Builder queueOptions(String name) {
     return EnqueueOptions.builder().queue(name);
   }
+
+  // SM-1525 (m5): a release error after a committed call must not make the caller retry.
+  @Test
+  void returnsTheResultWhenTheReleaseFailsAfterACommittedEnqueue() throws SQLException {
+    String name = unique("release");
+    ConnectionSource source = ConnectionSource.of(dataSource);
+    Queue failing =
+        new Queue(
+            new ConnectionSource() {
+              @Override
+              public Connection acquire() throws SQLException {
+                return source.acquire();
+              }
+
+              @Override
+              public void release(Connection connection, boolean transactional)
+                  throws SQLException {
+                source.release(connection, transactional);
+                throw new SQLException("the pool refused the connection", "08006");
+              }
+            });
+
+    EnqueueResult result = failing.enqueue("email.send", Map.of(), queueOptions(name).build());
+
+    assertEquals(EnqueueOutcome.ACCEPTED, result.outcome());
+    assertEquals(1, tasksIn(name), "PostgreSQL has the one committed task");
+  }
+
+  // SM-1525 (m7): an unknown non-replaceable reason is an unexpected status (ADR 0103).
+  @Test
+  void refusesAnUnknownNonReplaceableReasonAsAnUnexpectedStatus() throws SQLException {
+    String name = unique("reason");
+    EnqueueOptions options =
+        queueOptions(name).debounce(new Debounce(unique("key"), Duration.ofMinutes(1))).build();
+    EnqueueResult first = queue.enqueue("index", Map.of("v", 1), options);
+    queue.cancel(first.taskId(), "ops", null);
+    Queue rewriting = new Queue(ConnectionSource.of(new ReasonRewrite(dataSource, "superseded")));
+
+    UnexpectedStatusException error =
+        assertThrows(
+            UnexpectedStatusException.class,
+            () -> rewriting.enqueue("index", Map.of("v", 2), options));
+
+    assertTrue(error.getMessage().contains("superseded"), error.getMessage());
+  }
+
+  /** A source whose result sets give {@code reason} for each non-null {@code reason} column. */
+  private record ReasonRewrite(javax.sql.DataSource source, String reason)
+      implements javax.sql.DataSource {
+    @Override
+    public Connection getConnection() throws SQLException {
+      return wrap(Connection.class, source.getConnection());
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T wrap(Class<T> type, T target) {
+      return (T)
+          java.lang.reflect.Proxy.newProxyInstance(
+              type.getClassLoader(),
+              new Class<?>[] {type},
+              (proxy, method, arguments) -> {
+                Object value;
+                try {
+                  value = method.invoke(target, arguments);
+                } catch (java.lang.reflect.InvocationTargetException error) {
+                  throw error.getCause();
+                }
+                if (value instanceof PreparedStatement statement) {
+                  return wrap(PreparedStatement.class, statement);
+                }
+                if (value instanceof ResultSet result && !(target instanceof ResultSet)) {
+                  return wrap(ResultSet.class, result);
+                }
+                if (target instanceof ResultSet result
+                    && method.getName().equals("getString")
+                    && arguments[0] instanceof Integer column
+                    && value != null
+                    && result.getMetaData().getColumnLabel(column).equals("reason")) {
+                  return reason;
+                }
+                return value;
+              });
+    }
+
+    @Override
+    public Connection getConnection(String username, String password) throws SQLException {
+      return getConnection();
+    }
+
+    @Override
+    public java.io.@Nullable PrintWriter getLogWriter() {
+      return null;
+    }
+
+    @Override
+    public void setLogWriter(java.io.@Nullable PrintWriter out) {}
+
+    @Override
+    public void setLoginTimeout(int seconds) {}
+
+    @Override
+    public int getLoginTimeout() {
+      return 0;
+    }
+
+    @Override
+    public java.util.logging.Logger getParentLogger() {
+      return java.util.logging.Logger.getGlobal();
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> type) throws SQLException {
+      throw new SQLException("not a wrapper");
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> type) {
+      return false;
+    }
+  }
 }

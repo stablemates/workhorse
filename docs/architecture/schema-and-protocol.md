@@ -2397,7 +2397,13 @@ task group calls, the `sync` calls, and the `list` calls for policies and budget
 and `telemetry`, default `WorkhorseTelemetry.global()`.
 
 `EnqueueOptions.builder()` builds the options of one enqueue. `EnqueueOptions.defaults()` has none
-set.
+set. `EnqueueOptions` and `ScheduledTask` copy `retryPolicy`, with each nested map and list, into an
+unmodifiable map. Thus a later change to the caller's map changes no later enqueue.
+
+If the `ConnectionSource` throws from `release` after a call succeeded, the call still returns its
+result. The queue and `Admin` log the error at `WARNING` as `workhorse.connection.release_failed`.
+A release error after a failed call is a suppressed exception of that failure. An unknown
+non-replaceable reason in an enqueue answer throws `UnexpectedStatusException`.
 
 | Option                     | Accepts                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------- |
@@ -2578,9 +2584,13 @@ After `stop()`, the worker shuts down in this order:
 1. It claims nothing new. It runs the tasks of claims already in flight.
 2. It waits up to `shutdownGrace` for running handlers.
 3. It cancels the rest with `SHUTDOWN` and calls `Thread.interrupt()` on their threads. The
-   interrupt waits while the worker's own statement runs on that thread.
+   interrupt waits while the worker's own statement runs on that thread. A child request also
+   defers it while it gets a connection, reads a payload contract, and gives the connection back.
 4. It waits a 250 millisecond unwind window.
-5. It abandons a handler that still runs after that window, and stops renewing its lease.
+5. It abandons a handler that still runs after that window, and stops renewing its lease. A task
+   that the caller's `executor` never started goes back to its queue through `release_owned_v1`,
+   which charges no attempt. That task does not count as an abandoned handler. If the release
+   fails, the worker logs `workhorse.task.release_failed`, and the lease expires.
 6. It deregisters the worker. This step waits up to 1 second.
 7. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
 
@@ -2601,7 +2611,11 @@ The worker installs no JVM shutdown hook and traps no signal.
 
 - An `Exception` from a handler fails the attempt through `fail_v1`. The failure name is the simple
   type name of the exception. The stack is its stack trace followed by each `cause`.
-- A `ConflictException` fails the task with no further attempt.
+- A `ConflictException` fails the task with no further attempt. The worker also finds a
+  `ConflictException` in the `cause` chain, such as inside the `CompletionException` of a `join()`.
+  The walk examines at most 16 errors, including the outer error, as the Rust walk does. The failure
+  name is then the name of the conflict class. The envelope fields `message` and `stack` stay those
+  of the outer error.
 - During a shutdown, a `CancelledException` with `SHUTDOWN` or an `InterruptedException` in the
   cause chain releases the task through `release_owned_v1`, which charges no attempt.
 - A `LeaseLostException` settles nothing, because the fence already refuses the write.
@@ -2640,6 +2654,8 @@ item, in the same order: `new BatchSucceeded(result)` or `new BatchFailed(except
 - A thrown `Exception`, a `null` list, a list of the wrong size, or a `null` element fails every
   task in the batch.
 - A thrown `Error` fails every task with a `WorkhorseException` that names it.
+- If the worker's telemetry or the caller's logger throws before the handler runs, every task in the
+  batch fails with that error in the same way.
 - Every task in the batch still settles under its own lease and fence.
 
 The worker records `record_batch_dispatch_v1` before the call, and `record_batch_failure_v1` after

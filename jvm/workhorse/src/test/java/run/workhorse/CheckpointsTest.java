@@ -145,4 +145,12 @@ class CheckpointsTest {
           "checkpoint input numbers must be at most 2^53 - 1 in magnitude", error.getMessage());
     }
   }
+
+  // SM-1528: a Float input has the fingerprint of its shortest float digits.
+  @Test
+  void givesAFloatTheFingerprintOfItsShortestDigits() {
+    assertEquals(
+        Checkpoints.inputFingerprint(Map.of("rate", 0.1)),
+        Checkpoints.inputFingerprint(Map.of("rate", 0.1f)));
+  }
 }

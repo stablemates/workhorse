@@ -2,6 +2,7 @@ package run.workhorse;
 
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
+import run.workhorse.internal.Values;
 
 /**
  * The task a schedule enqueues at each occurrence.
@@ -22,6 +23,11 @@ public record ScheduledTask(
     @Nullable String concurrencyKey,
     @Nullable Integer maxAttempts,
     @Nullable Map<String, ?> retryPolicy) {
+  /** Copies the retry policy into an unmodifiable map. */
+  public ScheduledTask {
+    retryPolicy = Values.deepCopy(retryPolicy);
+  }
+
   /** A task with priority 0 on the default queue. */
   public static ScheduledTask of(String taskType, @Nullable Object payload) {
     return new ScheduledTask(taskType, payload, null, 0, null, null, null);

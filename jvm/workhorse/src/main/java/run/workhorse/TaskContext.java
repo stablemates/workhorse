@@ -417,7 +417,7 @@ final class TaskContext implements HandlerContext {
     Function<Map<String, Queue.ChildVersion>, String> build =
         versions ->
             sortedJson(
-                worker.withConnection(
+                worker.withCallerConnection(
                     connection ->
                         worker
                             .queue()
@@ -502,7 +502,7 @@ final class TaskContext implements HandlerContext {
     durable("child tasks");
     Function<Map<String, Queue.ChildVersion>, String> build =
         versions ->
-            worker.withConnection(
+            worker.withCallerConnection(
                 connection -> {
                   Map<String, @Nullable PayloadContract> contracts = new HashMap<>();
                   List<Object> document = new ArrayList<>();

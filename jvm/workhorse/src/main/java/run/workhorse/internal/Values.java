@@ -5,6 +5,12 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /** Encodes the times and durations that cross the protocol. Internal to the SDK. */
 public final class Values {
@@ -12,6 +18,34 @@ public final class Values {
       DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
 
   private Values() {}
+
+  /**
+   * An unmodifiable copy of {@code map}, in its iteration order. A nested map or list is copied the
+   * same way, so a later change to the caller's value changes no copy. A {@code null} value stays.
+   */
+  public static <K, V> @Nullable Map<K, V> deepCopy(@Nullable Map<K, V> map) {
+    @SuppressWarnings("unchecked")
+    Map<K, V> copy = map == null ? null : (Map<K, V>) copyValue(map);
+    return copy;
+  }
+
+  private static @Nullable Object copyValue(@Nullable Object value) {
+    if (value instanceof Map<?, ?> map) {
+      Map<Object, @Nullable Object> copy = new LinkedHashMap<>();
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        copy.put(entry.getKey(), copyValue(entry.getValue()));
+      }
+      return Collections.unmodifiableMap(copy);
+    }
+    if (value instanceof List<?> list) {
+      List<@Nullable Object> copy = new ArrayList<>(list.size());
+      for (Object item : list) {
+        copy.add(copyValue(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    return value;
+  }
 
   /** The protocol's timestamp text for an instant, in UTC with milliseconds. */
   public static String timestamp(Instant instant) {

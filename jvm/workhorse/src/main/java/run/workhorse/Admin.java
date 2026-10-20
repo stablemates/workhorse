@@ -39,6 +39,8 @@ import run.workhorse.internal.Values;
  * as {@link Queue} does. For the queue health snapshot, use {@link Queue#health()}.
  */
 public final class Admin {
+  private static final System.Logger LOGGER = System.getLogger(Admin.class.getName());
+
   private static final int MAX_PAGE_SIZE = 1000;
   private static final int MAX_REDRIVE_BATCH_SIZE = 1000;
   private static final int MAX_PAYLOAD_BYTES = 1_048_576;
@@ -1278,10 +1280,16 @@ public final class Admin {
       releaseAfter(connection, transactional, error);
       throw error;
     }
+    // The call succeeded: it committed in autocommit, or the source owns its transaction. A throw
+    // here would make a caller retry a write that PostgreSQL already has (SM-1525).
     try {
       connections.release(connection, transactional);
-    } catch (SQLException error) {
-      throw Sql.translate(error);
+    } catch (SQLException | RuntimeException error) {
+      LOGGER.log(
+          System.Logger.Level.WARNING,
+          "Connection release failed after a successful call {event.name="
+              + "workhorse.connection.release_failed}",
+          error);
     }
     return result;
   }
@@ -1292,6 +1300,8 @@ public final class Admin {
       connections.release(connection, transactional);
     } catch (SQLException error) {
       failure.addSuppressed(Sql.translate(error));
+    } catch (RuntimeException error) {
+      failure.addSuppressed(error);
     }
   }
 }

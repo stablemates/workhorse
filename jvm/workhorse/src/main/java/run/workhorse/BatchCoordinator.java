@@ -209,6 +209,22 @@ final class BatchCoordinator {
     if (batch.isEmpty()) {
       return false;
     }
+    try {
+      return dispatchBatch(batch, interrupted);
+    } catch (RuntimeException | Error error) {
+      // Telemetry or the caller's logger threw outside the handler. A member
+      // on another thread waits for its result, so each member that has none fails with the error,
+      // as it fails for an error of the handler (SM-1525).
+      Exception failure = settleable(error);
+      for (Member member : batch) {
+        member.result.completeExceptionally(failure);
+      }
+      signal();
+      return Thread.interrupted();
+    }
+  }
+
+  private boolean dispatchBatch(List<Member> batch, boolean interrupted) {
     UUID batchId = UUID.randomUUID();
     boolean full = batch.size() == maxSize;
     long firstArrivedAt = Long.MAX_VALUE;
