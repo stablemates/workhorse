@@ -1876,7 +1876,9 @@ Ruby `Stablemates::Workhorse::Worker.new(pool, ...)` takes a `ConnectionPool`, o
 
 Without `shared_heartbeats: true`, it requires an Integer pool `size` of at least 3. Thus it also
 refuses a missing or non-integer `size`. Every worker built on one pool shares one
-`Worker::Heartbeat`. That heartbeat holds one pool connection while it has members.
+`Worker::Heartbeat`. That heartbeat holds one pool connection while a worker on the pool runs or a
+member remains. Each run reserves it before the worker registers, as
+[Heartbeat connection](lifecycle.md#heartbeat-connection) describes.
 
 | Option           | Default                                                 | Accepts                       |
 | ---------------- | ------------------------------------------------------- | ----------------------------- |
@@ -1919,6 +1921,29 @@ After `stop`, the worker shuts down in this order:
 3. It cancels the rest with `:shutdown` and waits a 250 millisecond unwind window.
 4. It abandons a handler that still runs after that window, with its lease. `run` raises
    `ShutdownIncompleteError`.
+
+The `shutdown_grace` starts when dispatch ends, and sets the stop deadline. The final deadline is one
+unwind window later. Every wait of the stop path ends by one of these two deadlines, and no step
+starts a budget of its own:
+
+- The waits for the in-flight claims, for the startup maintenance thread, for the listener thread,
+  and for running handlers end by the stop deadline. A claim that returns after it starts no task,
+  and its leases expire. The heartbeat reservation of the run stays until that claim statement
+  settles, because the statement holds a claim permit.
+- The draining registration statement ends by the stop deadline. The unwind window, the
+  deregistration statement, and the wait of the last worker for the heartbeat connection end by the
+  final deadline.
+- A statement of the stop path runs on its own thread (`Worker#within`). If it does not end in time,
+  the stop goes on, and that thread keeps its connection until the statement ends.
+
+Thus the stop path takes at most `shutdown_grace` plus the unwind window.
+
+`deregister_worker_v1` deletes the registry row by worker ID only. A late deregistration could thus
+delete the row of a later run of the same worker, and its operator pause state with it. So the next
+`run` or `run_once` of that worker first waits for every stop statement of the previous run
+(`Worker#await_previous_stop`). The wait uses the startup budget of the new run. If a statement still
+runs when the budget ends, the run raises `WorkerStartupError` before it changes any state. A stop
+during this wait ends the run at once, without an error, and the old statement keeps running.
 
 If a handler raises the `CancelledError` of its `:shutdown` cancellation, it charges no attempt. The
 error can arrive directly, as `check!` raises it, or as the cause of another error. The worker also

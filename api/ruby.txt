@@ -566,6 +566,9 @@ class Stablemates::Workhorse::WorkerRegistryEntry
   superclass Data
   members worker_id, paused, paused_by, reason, paused_at, last_heartbeat_at, instance_id, hostname, pid, queues, queue, concurrency, active_slots, draining, started_at
 
+class Stablemates::Workhorse::WorkerStartupError
+  superclass Stablemates::Workhorse::Error
+
 module Stablemates::Workhorse
   VERSION: String
   def self.checkpoint_input_fingerprint(input)

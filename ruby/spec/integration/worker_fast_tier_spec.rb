@@ -44,10 +44,12 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     executor = subject.instance_variable_get(:@executor)
     original = executor.method(:rows)
     executor.define_singleton_method(:rows) do |sql, params = []|
-      rows = original.call(sql, params)
+      # A claim passes its parameters as a callable, which the executor runs after the checkout.
+      sent = params
+      rows = original.call(sql, params.respond_to?(:call) ? -> { sent = params.call } : params)
       if sql == W::SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1
-        completions = params[1].delete("{}").split(",").size
-        calls << [completions, Integer(params[5], 10), rows.count { |row| row["task_id"] }]
+        completions = sent[1].delete("{}").split(",").size
+        calls << [completions, Integer(sent[5], 10), rows.count { |row| row["task_id"] }]
       end
       rows
     end

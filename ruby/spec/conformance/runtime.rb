@@ -482,6 +482,8 @@ module Conformance
         wrap_rows(subject) do |original, sql, params|
           next original.call(sql, params) unless sql == W::SqlCatalogue::CLAIM_MANY_V1
 
+          # A claim passes its parameters as a callable. The gate is open here.
+          params = params.call if params.respond_to?(:call)
           release = Concurrent::Event.new
           lock.synchronize do
             claims.fetch(:limits) << Integer(params[2], 10)

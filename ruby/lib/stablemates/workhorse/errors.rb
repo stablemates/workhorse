@@ -298,6 +298,11 @@ module Stablemates
       end
     end
 
+    # A worker with the dedicated heartbeat connection could not reserve that connection, or could
+    # not borrow a connection for its readiness check, within its startup budget. The message
+    # names the pool, the budget, and the +shared_heartbeats+ opt-out. A pool error is the +cause+.
+    class WorkerStartupError < Error; end
+
     # Any other PG::Error. The original is the +cause+, and +sqlstate+ is its SQLSTATE or nil.
     class DatabaseError < Error
       attr_reader :sqlstate

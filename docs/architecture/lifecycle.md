@@ -1501,6 +1501,72 @@ SM-1576). `SharedHeartbeats` turns off all of them.
 The Go driver reports a lost connection only on the next statement. So a heartbeat connection that
 PostgreSQL closed while no round ran keeps the gate open until the next round fails.
 
+A Ruby worker reserves the heartbeat connection of its pool when `run` or `run_once` starts, unless
+`shared_heartbeats` is set. The startup budget is the larger of `heartbeat` and 5 seconds
+(`STARTUP_BUDGET_FLOOR`). One deadline at the end of the budget bounds both steps, in this order:
+
+1. `Worker::Heartbeat#reserve` adds the worker, and the heartbeat thread starts a checkout. The
+   worker waits for a usable connection.
+2. A probe thread (`Heartbeat#readiness`) borrows one other pool connection and runs the
+   compatibility query on it. The worker waits for the probe until the deadline. Thus the deadline
+   bounds the borrow, a connect that the borrow needs, and the query, for every kind of pool.
+
+If step 1 does not end by the deadline, `run` and `run_once` raise `WorkerStartupError`. If the
+probe cannot borrow its connection, or does not end by the deadline, they also raise
+`WorkerStartupError`. Its message names the pool, the budget, and `shared_heartbeats`. A
+compatibility query that fails keeps its own error, and an incompatible schema raises
+`CompatibilityError`. A stop during step 1 ends the run without an error. The worker registers and
+subscribes to the shared listener only after both steps. Thus a stalled `LISTEN` cannot use the
+startup budget.
+
+A checkout thread (`Heartbeat::Acquisition`) owns one cycle of the heartbeat connection. It does the
+checkout, the hand-over or the disposal, and the return to the pool, in this order. Only after the
+pool has the connection back does it clear the cycle, under the heartbeat lock. The heartbeat thread
+waits for a checkout at most one round bound. A connection that arrives after that stays with the
+checkout thread. That thread hands the connection over if a worker or a member still needs it, and
+gives it back to the pool otherwise.
+
+At most one cycle exists for each pool, from its checkout until its return settles. Thus repeated
+timeouts start no second borrow, and the pool never holds two heartbeat checkouts. A heartbeat
+thread that finds a cycle still on its way back waits for the return, one round bound at a time. A
+new reservation thus waits for that return within its startup budget. One readiness probe at a time
+runs for each pool in the same way. A `ConnectionPool` also ends the queue wait of a heartbeat
+checkout at the round bound.
+
+The heartbeat thread holds the connection while any worker on the pool runs, also with no attempt,
+and while a member remains. Between rounds, it checks the socket at least every 100 milliseconds
+(`PROBE_INTERVAL`). If PostgreSQL ended the session, or a round failed, the thread discards the
+connection and asks the pool for a new one at once. After a refused or late attempt, the thread
+waits `Heartbeat.reacquire_delay` before the next attempt. That delay is 100 milliseconds, doubled
+for each failure in a row, with ±10% jitter, and at most the interval. A connection that arrives
+ends that wait. When the
+heartbeat ends a checkout, it waits until the pool has the connection back. Only then does the
+thread unregister, if no worker and no member arrived meanwhile.
+
+The claim gate of each run is its `Heartbeat::Reservation`. The gate is open while the run holds that
+reservation and a live heartbeat thread holds a usable connection. It opens when a checkout passes
+the socket check. It closes before the heartbeat thread ends a checkout, for example to discard the
+connection after a failed round. It also closes when a checkout fails and when the thread ends. A
+closed reservation never opens again, so a claim of an ended run cannot use the reservation of a
+later run. A heartbeat that returns `busy` or rejects a lease does not close the gate. While the gate
+is closed, the run claims nothing:
+
+- Dispatch waits. `run_once` ends its pass.
+- A claim reads the gate of its own run after it has its connection (`Worker#permitted`). It
+  reads the gate immediately before each attempt, and before a deadlock retry too. A closed gate
+  withdraws the claim, which sends nothing and does not count as empty.
+- At its first attempt, a claim takes a permit from the gate (`Heartbeat::Reservation#enter`). It
+  gives the permit back when its statement settles. A closed reservation goes back to the heartbeat
+  only when no permit is active. Thus a stop that stopped waiting for a claim does not release the
+  heartbeat connection under that claim's statement.
+- A fast-tier completion reads the gate of its run in the same way, also when it waited behind
+  another statement of its batch. A closed gate makes it send `complete_many_and_claim_v1` with a
+  claim limit of 0. A completion that can claim also holds a permit until its statement settles.
+
+When the connection is ready again, the thread wakes the dispatch of each worker on the pool. Thus a
+claim does not wait for the next poll. The last worker that stops wakes the thread, which returns
+the connection.
+
 #### Heartbeat round deadline
 
 A worker stops waiting for a bounded heartbeat round at its deadline. Closing the connection does
