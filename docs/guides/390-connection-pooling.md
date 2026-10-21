@@ -214,7 +214,7 @@ from the pool. Handlers cannot use these reserved connections.
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | TypeScript | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped when `options.max` is 1 or less.                                           | One shared heartbeat connection per pool.                                    |
 | Go         | One `taskNotificationHub` per `*pgxpool.Pool`. Polls instead when `MaxConns` is below 2.                                                              | One shared heartbeat connection per pool, held by `holdHeartbeatConnection`. |
-| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool object.                     |
+| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs.  |
 | Python     | One per pool object, holding one pool connection. The psycopg sync pool, the psycopg async pool, and the asyncpg pool never share.                    | One per pool object, held while any worker on the pool runs.                 |
 | Rust       | One per worker, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per worker, from the pool.                                               |
 | JVM        | One `Listener.shared(dataSource)` per `DataSource` object, holding one connection while any worker runs.                                              | One per `DataSource` object, held while any worker or attempt runs.          |
@@ -312,6 +312,19 @@ once.
 **No claim without the connection (Python).** While the pool holds no usable heartbeat connection,
 a Python worker claims no task. It retries the connection with a backoff of at most `heartbeat_ms`,
 and it claims again as soon as the connection is ready.
+
+**Ruby startup.** A Ruby run reserves the heartbeat connection before the worker registers. Then it
+borrows one more connection for the compatibility query, and returns it at once. Both steps must
+end within the larger of the heartbeat interval and 5 s. If a step does not end in time, `run` and
+`run_once` raise `WorkerStartupError`. Its message names the pool, the budget, and
+`shared_heartbeats`. The heartbeat keeps the connection while any Ruby worker on the pool runs, also
+when no task runs.
+
+**Ruby claim gate.** If the pool has no usable heartbeat connection, a Ruby worker claims no task.
+A fast-tier completion then settles its task and claims nothing. The worker reads this when the claim
+has its connection, so a connection lost meanwhile also stops the claim. The heartbeat asks the pool
+for a new connection at once, and waits at most one interval between failed attempts. When the new
+connection is ready, the worker claims at once. A rejected or busy lease does not stop claims.
 
 | Language   | Opt-out             |
 | ---------- | ------------------- |

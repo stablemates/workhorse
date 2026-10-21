@@ -8,7 +8,9 @@ RSpec.describe W::Worker do
 
     def size = capacity || 3
 
-    def with = raise("unit specs never check out a connection")
+    # Lends the heartbeat reservation and the readiness query a fake connection. Statements run
+    # through FakeExecutor#rows, without a checkout.
+    def with(&) = FakeHeartbeatConnection.lend(&)
   end
 
   let(:pool) { pool_class.new }

@@ -18,7 +18,9 @@ RSpec.describe W::Worker do
 
     def size = 3
 
-    def with = raise("unit specs never check out a connection")
+    # Lends the heartbeat reservation and the readiness query a fake connection. Statements run
+    # through FakeExecutor#rows, without a checkout.
+    def with(&) = FakeHeartbeatConnection.lend(&)
 
     def rows(sql, params = [])
       if sql == W::SqlCatalogue::GET_CONTRACT_DEFINITION_V1 && schemas

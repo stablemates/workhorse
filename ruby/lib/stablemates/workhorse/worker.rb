@@ -13,6 +13,11 @@ module Stablemates
     # smallest supported +heartbeat+ is 0.1. The worker accepts a shorter value, but on a loaded
     # host it can renew no lease.
     #
+    # Unless +shared_heartbeats+ is set, each run first reserves the heartbeat connection that the
+    # workers on the pool share, and then borrows one other connection for the compatibility query.
+    # Both steps must end within max(+heartbeat+, 5 s), or the run raises WorkerStartupError. The
+    # worker claims nothing while the pool has no usable heartbeat connection.
+    #
     # +run+ blocks until +stop+; +run_once+ claims and runs one batch. A stopping worker claims
     # nothing new, waits up to +shutdown_grace+ for running handlers, cancels the rest with
     # +:shutdown+, and raises ShutdownIncompleteError when any handler still runs after one short
@@ -30,6 +35,12 @@ module Stablemates
       PROTOCOL = "5"
       LANGUAGE = "ruby"
       MIN_POOL_SIZE = 3
+      # The shortest startup budget in seconds. The budget is the heartbeat interval, and at least
+      # this. A startup owns no lease, so a short interval alone would refuse a slow pool.
+      STARTUP_BUDGET_FLOOR = 5
+      # The longest wait, in seconds, before a startup that waits for its heartbeat connection, or for
+      # a stop statement of the previous run, checks for a stop again.
+      STARTUP_STOP_CHECK = 0.05
       COMPLETION_BATCH_LIMIT = 100
       TIER_PROBE_INTERVAL = 30
       STATUS_OUTCOMES = {
@@ -55,7 +66,7 @@ module Stablemates
       JSON_ESCAPE = /\\(?:u(\h{4})|.)/m
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
         :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
-        :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
+        :STARTUP_BUDGET_FLOOR, :STARTUP_STOP_CHECK, :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
         :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER,
         :UNSTORABLE_ESCAPE_START, :JSON_ESCAPE
 
@@ -127,12 +138,14 @@ module Stablemates
       # while a claim for it is in flight, and handed over once a completion claimed a task into
       # it. Handed-over slots count as free, because the task that fills them is already admitted.
       class DispatchSlots # :nodoc:
-        attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers,
+        attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers, :gate,
           :cohort_active, :cohort_handed_over, :cohort_reserved, :cohort_claims, :handed_over, :thread_cohorts
         attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open
 
-        def initialize(concurrency, cohorts, listener, version, run_errors, handlers)
+        def initialize(concurrency, cohorts, listener, version, run_errors, handlers, gate)
           @concurrency = concurrency
+          # The claim gate of this run. Every claim and fused completion of the run reads it.
+          @gate = gate
           # A claim waits for a quarter of the slots, so at most four claims are in flight.
           @refill_batch = (concurrency / 4.0).ceil
           # Spreads the remainder over the first cohorts, so sizes differ by at most one slot.
@@ -172,16 +185,43 @@ module Stablemates
       end
       private_constant :DispatchSlots
 
-      # The fused claim one fast-tier completion reserved: its limit, its cohort, and the wake
-      # version when it reserved. A zero limit reserves nothing.
-      CompletionClaim = Struct.new(:limit, :cohort, :wake_version) # :nodoc:
+      # The fused claim one fast-tier completion reserved: its limit, its cohort, the wake version
+      # when it reserved, and the claim gate of its run. A zero limit reserves nothing.
+      CompletionClaim = Struct.new(:limit, :cohort, :wake_version, :gate) # :nodoc:
       private_constant :CompletionClaim
 
       # One completion waiting for a batched complete_many_and_claim_v1 statement. The statement's
       # sender fills +accepted+, +claimed+, +full_tier+, or +error+ and sets +done+. +lead+ makes a
       # waiting completion the sender of the next statement.
-      PendingCompletion = Struct.new(:task, :encoded, :limit, :done, :accepted, :claimed, :full_tier, :error, :lead) # :nodoc:
+      PendingCompletion = Struct.new(:task, :encoded, :limit, :done, :accepted, :claimed, :full_tier, :error, :lead,
+        :gate) # :nodoc:
       private_constant :PendingCompletion
+
+      # The claim gate of a run under shared_heartbeats, which never closes. A run with the
+      # dedicated heartbeat connection uses its Heartbeat::Reservation as its gate.
+      OPEN_GATE = Object.new.tap do |gate|
+        gate.define_singleton_method(:ready?) { true }
+        gate.define_singleton_method(:enter) { true }
+        gate.define_singleton_method(:leave) { nil }
+      end.freeze
+      # The gate of a fused completion that no running dispatch admitted.
+      CLOSED_GATE = Object.new.tap do |gate|
+        gate.define_singleton_method(:ready?) { false }
+        gate.define_singleton_method(:enter) { false }
+        gate.define_singleton_method(:leave) { nil }
+      end.freeze
+      private_constant :OPEN_GATE, :CLOSED_GATE
+
+      # Raised before a claim statement when the claim gate is closed at send time. The claim sends
+      # nothing.
+      class ClaimWithdrawn < StandardError; end
+      private_constant :ClaimWithdrawn
+
+      # The one connection the readiness check borrowed, as an executor source.
+      Borrowed = Struct.new(:connection) do # :nodoc:
+        def with = yield(connection)
+      end
+      private_constant :Borrowed
 
       attr_reader :worker_id, :queues, :concurrency, :cohorts
 
@@ -228,6 +268,7 @@ module Stablemates
         @logger = logger
         @queue = Queue.new(@executor, default_queue: @queues.first)
         @heartbeat = shared_heartbeats ? Heartbeat.new(@executor, dedicated: false) : Heartbeat.dedicated(pool)
+        @shared_heartbeats = shared_heartbeats ? true : false
         @handlers = Concurrent::Map.new
         @batch_coordinators = Concurrent::Map.new
         @contracts = Concurrent::Map.new
@@ -260,6 +301,8 @@ module Stablemates
         @dispatch_seq = 0
         @completion_lock = Mutex.new
         @pending_completions = {}
+        # The stop statement threads of the latest run (+within+). Only the run loop uses it.
+        @stop_statements = []
       end
 
       # Registers the block that runs tasks of +task_type+. The block receives the payload and a
@@ -377,8 +420,74 @@ module Stablemates
       # --- Run loop ---------------------------------------------------------------------------
 
       def run_loop(continuous, version)
+        # One startup budget bounds the wait for the previous run and the startup reservation.
+        budget = [@heartbeat_ms / 1000.0, STARTUP_BUDGET_FLOOR].max
+        deadline = monotonic + budget
+        # A stop during that wait ends the run before it changes any state.
+        return false if await_previous_stop(deadline, budget, version) == :stopped
+
         @run_version = version
-        @queue.assert_compatible
+        reservation = start_heartbeat(version, deadline, budget)
+        # A stop during the startup wait ends the run before it registers.
+        return false if reservation == :stopped
+
+        begin
+          run_reserved(continuous, version, reservation || OPEN_GATE)
+        ensure
+          # The run's members renew until the drain ends, so the reservation outlives it. Its
+          # release waits only within the stop deadline of the run.
+          final = @final_deadline || monotonic
+          @final_deadline = nil
+          reservation&.close([final - monotonic, 0].max)
+        end
+      end
+
+      # The waits of the stop path. Each one ends by +deadline+, a monotonic time, so the stop takes
+      # at most the shutdown grace plus the unwind window in total.
+      def remaining(deadline) = [deadline - monotonic, 0].max
+
+      # Runs +block+ on its own thread named +name+ and waits for it until +deadline+. A block that
+      # is still running then finishes on its own thread, which keeps its connection until its
+      # statement ends. The stop path sends its registration statements this way. The next run of
+      # this worker waits for these threads (+await_previous_stop+).
+      def within(deadline, name, &block)
+        thread = Thread.new do
+          Thread.current.name = name
+          block.call
+        rescue
+          nil
+        end
+        @stop_statements << thread
+        thread.join(remaining(deadline))
+        nil
+      end
+
+      # Waits until every stop statement of the previous run of this worker has ended, at most
+      # until +deadline+. deregister_worker_v1 deletes by worker ID, so a late deregistration would
+      # delete the registry row of this run, and its operator pause state with it. If a statement
+      # still runs at +deadline+, the start raises WorkerStartupError before this run changes any
+      # state. Thus a statement of an ended run never overlaps a later run. A stop issued after
+      # +version+ ends this wait within STARTUP_STOP_CHECK and returns :stopped. The old threads
+      # stay listed, so the next run waits for them again.
+      def await_previous_stop(deadline, budget, version)
+        loop do
+          # The stop check comes first, so a stop during the last join counts also when the old
+          # statement ended in that join.
+          return :stopped if stop_requested?(version)
+
+          @stop_statements.select!(&:alive?)
+          break if @stop_statements.empty?
+          break unless deadline > monotonic
+
+          @stop_statements.first.join(remaining(deadline).clamp(0, STARTUP_STOP_CHECK))
+        end
+        return if @stop_statements.empty?
+
+        raise WorkerStartupError, "Worker could not start: a stop statement of its previous run did not end " \
+          "within the startup budget of #{budget.round(3)} s"
+      end
+
+      def run_reserved(continuous, version, gate)
         @instance_id = SecureRandom.uuid
         @registered.make_false
         @draining = false
@@ -406,16 +515,24 @@ module Stablemates
             end
             startup.name = "workhorse-startup-maintenance"
           end
-          claimed_any = dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors)
+          claimed_any = dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors,
+            gate)
         ensure
-          startup&.join
-          listener&.close
+          # Every wait from here ends by the stop deadline, which the shutdown grace sets when
+          # dispatch ends, or by the final deadline one unwind window later. No step starts a budget
+          # of its own.
+          stop_deadline = @stop_deadline || (monotonic + @shutdown_grace)
+          @stop_deadline = nil
+          final_deadline = stop_deadline + UNWIND_WINDOW
+          @final_deadline = final_deadline
+          startup&.join(remaining(stop_deadline))
+          listener&.close(remaining(stop_deadline))
           @draining = true
-          refresh_registration(force: true)
-          abandoned = drain(handlers)
+          within(stop_deadline, "workhorse-stop-registration") { refresh_registration(force: true) }
+          abandoned = drain(handlers, stop_deadline, final_deadline)
           # A handler's completion may admit tasks until the drain ends, so the slots outlive it.
           @state_lock.synchronize { @dispatch_slots = nil }
-          deregister
+          within(final_deadline, "workhorse-deregistration") { deregister }
           log(:info, "workhorse.worker.stopped", "Worker stopped",
             "workhorse.worker.active_slots" => abandoned, "workhorse.worker.queues" => @queues)
         end
@@ -426,14 +543,79 @@ module Stablemates
         claimed_any
       end
 
+      # Reserves the heartbeat connection of the pool, then borrows one other connection for the
+      # compatibility query and returns it at once, both within the startup budget. Returns the
+      # Heartbeat::Reservation, or nil under shared_heartbeats. A failure releases the reservation
+      # and raises WorkerStartupError, or CompatibilityError for an incompatible schema. A stop
+      # issued after +version+ ends the wait for the reservation, closes it, and returns :stopped.
+      def start_heartbeat(version, deadline, budget)
+        if @shared_heartbeats
+          @queue.assert_compatible
+          return nil
+        end
+
+        reservation = @heartbeat.reserve(@heartbeat_ms / 1000.0, method(:wake_dispatcher))
+        begin
+          loop do
+            break if reservation.wait((deadline - monotonic).clamp(0, STARTUP_STOP_CHECK))
+
+            if stop_requested?(version)
+              reservation.close
+              return :stopped
+            end
+            raise startup_error("could not reserve its heartbeat connection", budget) unless deadline > monotonic
+          end
+
+          code = check_readiness(deadline, budget)
+          raise CompatibilityError, code if code
+        rescue Exception # rubocop:disable Lint/RescueException
+          reservation.close
+          raise
+        end
+        reservation
+      end
+
+      # Borrows one connection that is not the heartbeat connection, runs the compatibility query
+      # on it, and returns the connection at once. Returns the refusal code of
+      # Compatibility.evaluate, or nil. The borrow, a connect that it needs, and the query all end
+      # by +deadline+, the end of the startup budget, for every kind of pool: a probe thread does
+      # them (Heartbeat#readiness), and the start waits for it only until +deadline+. A borrow that
+      # fails or does not end in time, and a query that does not end in time, raise
+      # WorkerStartupError. A query that fails keeps its own error.
+      def check_readiness(deadline, budget)
+        probe = @heartbeat.readiness(deadline) do |connection|
+          Compatibility.evaluate(Executor.for(Borrowed.new(connection)))
+        end
+        unless probe.done.set?
+          raise startup_error(probe.lent ? "could not finish its readiness query" :
+            "could not borrow a connection for its readiness check", budget)
+        end
+        return probe.result if probe.error.nil?
+        raise probe.error if probe.lent
+
+        raise startup_error("could not borrow a connection for its readiness check", budget), cause: probe.error
+      end
+
+      def startup_error(failure, budget)
+        name = @pool.name if @pool.respond_to?(:name)
+        size = @pool.respond_to?(:size) ? @pool.size : "unknown"
+        pool = "#{@pool.class.name}#{" #{name.inspect}" if name} (size #{size})"
+        WorkerStartupError.new("Worker #{failure} from pool #{pool} within the startup budget of " \
+          "#{budget.round(3)} s; set shared_heartbeats: true to opt out")
+      end
+
       # Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
       # reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no claim
       # in flight, any free slot starts one. While one is in flight, another starts only once the
       # unreserved free slots reach the refill batch, so a busy worker claims in batches. A
       # fast-tier completion claims too, from the same accounting. On the fast tier the slots split
       # into cohorts, and plain claims leave one at a time, each for the roomiest cohort.
-      def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors)
-        slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers)
+      #
+      # +gate+ is the claim gate of this run. Under shared_heartbeats it is always open. Otherwise it
+      # is the run's Heartbeat::Reservation: open while the run holds it and the pool holds a
+      # usable heartbeat connection. A busy or rejected lease does not close it.
+      def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors, gate)
+        slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers, gate)
         @state_lock.synchronize { @dispatch_slots = slots }
         # Each claim in flight, with its limit, its cohort (nil for the whole worker), and the
         # slots it reserved in that cohort.
@@ -442,7 +624,7 @@ module Stablemates
         next_claim_id = 0
 
         settle = lambda do |outcome|
-          id, claimed_version, claimed, error = outcome
+          id, claimed_version, claimed, error, gated = outcome
           limit, cohort, cohort_limit = claims.delete(id)
           @state_lock.synchronize do
             slots.reserved -= limit
@@ -454,7 +636,8 @@ module Stablemates
             end
             # A claimed task holds a lease, so it runs even when the loop is stopping or failed.
             claimed.each { |task, started_at| admit(slots, task, started_at, cohort) }
-            settle_claim_progress(slots, claimed, claimed_version, error)
+            # A claim the closed gate withdrew learned nothing, so it starts no empty-poll backoff.
+            settle_claim_progress(slots, claimed, claimed_version, error) unless gated && claimed.empty? && error.nil?
           end
         end
 
@@ -478,6 +661,13 @@ module Stablemates
               @wake.wait(dispatch_wait(empty, listener))
               next
             end
+            unless gate.ready?
+              break unless continuous
+
+              # The heartbeat wakes dispatch when its replacement connection is ready.
+              @wake.wait(dispatch_wait(empty, listener))
+              next
+            end
             if empty_wait
               deadline, seen_version = empty_wait
               remaining = deadline - monotonic
@@ -494,7 +684,7 @@ module Stablemates
               while (plan, claim_version = reserve_claim(slots, claims))
                 next_claim_id += 1
                 claims[next_claim_id] = plan
-                start_claim(next_claim_id, plan, claim_version, empty.positive?, version, results)
+                start_claim(next_claim_id, plan, claim_version, empty.positive?, version, results, gate)
               end
             end
             next if claims.empty? && plan_claim(slots, claims)
@@ -506,9 +696,17 @@ module Stablemates
           end
         ensure
           # Completions stop claiming with the loop. Tasks an in-flight claim returns hold leases,
-          # so they run before the drain.
+          # so they run before the drain. The wait for them ends with the shutdown grace, which the
+          # rest of the stop path shares (+run_reserved+). A claim that returns later admits nothing,
+          # and its leases expire.
           @state_lock.synchronize { slots.open = false }
-          settle.call(results.pop) until claims.empty?
+          @stop_deadline = monotonic + @shutdown_grace
+          until claims.empty?
+            outcome = results.pop(timeout: [@stop_deadline - monotonic, 0].max)
+            break if outcome.nil?
+
+            settle.call(outcome)
+          end
         end
         raise slots.claim_error if slots.claim_error
 
@@ -596,7 +794,7 @@ module Stablemates
       end
 
       # Runs a claim reserve_claim already reserved slots for.
-      def start_claim(id, plan, wake_version, backing_off, version, results)
+      def start_claim(id, plan, wake_version, backing_off, version, results, gate)
         limit, cohort, cohort_limit = plan
         # The notification delay spreads idle workers one notification woke together. A worker
         # whose last claim found work would claim now anyway, so it skips the delay.
@@ -604,15 +802,22 @@ module Stablemates
         thread = Thread.new do
           claimed = []
           error = nil
+          gated = false
           begin
             sleep(rand(0.0..NOTIFICATION_CLAIM_DELAY)) if delayed
             # A worker paused or stopped during the delay sends no claim; settling frees the slots.
+            # So does a worker that lost its heartbeat connection after the plan.
             withdrawn = delayed && (stop_requested?(version) || paused?)
-            claim_across_queues(limit, claimed, cohort.nil? ? limit : cohort_limit) unless withdrawn
+            gated = !gate.ready?
+            claim_across_queues(limit, claimed, cohort.nil? ? limit : cohort_limit, gate) unless withdrawn || gated
+          rescue ClaimWithdrawn
+            # The gate closed while the claim waited for its connection. The tasks of the earlier
+            # queues hold leases, so they still run.
+            gated = true
           rescue => e
             error = e
           ensure
-            results << [id, wake_version, claimed, error]
+            results << [id, wake_version, claimed, error, gated]
             @wake.set
           end
         end
@@ -622,23 +827,25 @@ module Stablemates
       # Claims from each queue at most once, starting one queue further on each call. Appends to
       # +claimed+ as each queue answers, so a later queue's error keeps the leases already taken.
       # Fast-tier queues together give at most +fast_limit+ tasks, the free slots of one cohort.
-      def claim_across_queues(limit, claimed, fast_limit = limit)
+      def claim_across_queues(limit, claimed, fast_limit, gate)
         start = (@next_queue_index.increment - 1) % @queues.size
         @queues.size.times do |offset|
-          break if claimed.size >= limit
+          break if claimed.size >= limit || !gate.ready?
 
           queue = @queues[(start + offset) % @queues.size]
-          claimed.concat(claim(queue, limit - claimed.size, fast_limit - claimed.size))
+          claimed.concat(claim(queue, limit - claimed.size, fast_limit - claimed.size, gate))
         end
       end
 
-      def claim(queue, limit, fast_limit)
+      def claim(queue, limit, fast_limit, gate)
         started_at = monotonic
         Telemetry.span("workhorse.claim", {"workhorse.queue.name" => queue}) do |span|
-          rows = claim_queue(queue, limit, started_at, fast_limit)
+          rows = claim_queue(queue, limit, started_at, fast_limit, gate)
           if rows.nil?
             Telemetry.set_attribute(span, "workhorse.queue.tier", "full")
-            rows = @executor.rows(SqlCatalogue::CLAIM_MANY_V1, [queue, @worker_id, limit.to_s, @lease_ms.to_s])
+            rows = permitted(gate) do |build|
+              @executor.rows(SqlCatalogue::CLAIM_MANY_V1, build.call { [queue, @worker_id, limit.to_s, @lease_ms.to_s] })
+            end
             track_full_tier_claim(queue, rows) if rows.any?
           end
           tasks = rows.map { |row| ClaimedTask.from_row(row, queue) }
@@ -646,6 +853,28 @@ module Stablemates
           Telemetry.task_span_attributes(tasks.first).each { |key, value| Telemetry.set_attribute(span, key, value) } if tasks.any?
           tasks.map { |task| [task, started_at] }
         end
+      end
+
+      # Yields a builder of the parameters of one claim statement, and gives back its claim permit
+      # when the statement settles. Each parameters callable runs in Executor#rows, after the claim
+      # has its connection and before each attempt, also before a deadlock retry. The first attempt
+      # takes a permit from +gate+ (Heartbeat::Reservation#enter). A closed gate then raises
+      # ClaimWithdrawn, so a heartbeat connection lost while the claim waited for the pool cannot
+      # leave leases that nothing renews. +gate+ is the gate of the claim's own run, so a later run
+      # cannot reopen it. The permit keeps the run's reservation until the statement settles, also
+      # when the stop stopped waiting for the claim.
+      def permitted(gate)
+        held = false
+        builder = lambda do |&params|
+          lambda do
+            raise ClaimWithdrawn unless held ? gate.ready? : (held = gate.enter)
+
+            params.call
+          end
+        end
+        yield builder
+      ensure
+        gate.leave if held
       end
 
       # Records a claim's duration and logs each task it returned.
@@ -661,15 +890,17 @@ module Stablemates
       # Claims through the fast tier, or returns nil when the queue is on the full tier. The fast
       # claim is complete_many_and_claim_v1 with no completions. A full-tier queue rejects it, and
       # the worker then claims that queue through claim_many_v1 until the next probe.
-      def claim_queue(queue, limit, sent_at, fast_limit)
+      def claim_queue(queue, limit, sent_at, fast_limit, gate)
         return nil if @state_lock.synchronize { @full_tier_until.fetch(queue, -Float::INFINITY) > sent_at }
 
         fast_limit = [limit, fast_limit].min
         return [] if fast_limit <= 0
 
         begin
-          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1,
-            [@worker_id, "{}", "{}", "{}", queue, fast_limit.to_s, @lease_ms.to_s])
+          rows = permitted(gate) do |build|
+            @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1,
+              build.call { [@worker_id, "{}", "{}", "{}", queue, fast_limit.to_s, @lease_ms.to_s] })
+          end
         rescue FastTierUnsupportedError
           mark_full_tier(queue, sent_at)
           return nil
@@ -745,7 +976,8 @@ module Stablemates
       # through complete_v1 instead.
       def complete_fast_task(task, encoded)
         reservation = reserve_completion_claim(task)
-        pending = PendingCompletion.new(task, encoded, reservation.limit, Concurrent::Event.new, false, [], false, nil, false)
+        pending = PendingCompletion.new(task, encoded, reservation.limit, Concurrent::Event.new, false, [], false, nil, false,
+          reservation.gate)
         begin
           send_batched_completion(pending, [task.queue, reservation.cohort])
         ensure
@@ -759,17 +991,18 @@ module Stablemates
 
       # Sets aside the slots a completion's fused claim may fill (ADR 0076, rules 12 and 13). The
       # claim asks for the free slots of the task's cohort plus the slot the task leaves. It claims
-      # nothing while the worker stops, pauses, or waits after an empty claim, and it waits for the
-      # cohort's refill batch while another claim for the cohort is in flight.
+      # nothing while the worker stops, pauses, waits after an empty claim, or has no usable
+      # heartbeat connection, and it waits for the cohort's refill batch while another claim for the
+      # cohort is in flight.
       def reserve_completion_claim(task)
         @state_lock.synchronize do
           slots = @dispatch_slots
-          next CompletionClaim.new(0, 0, @wake_version) if slots.nil?
+          next CompletionClaim.new(0, 0, @wake_version, CLOSED_GATE) if slots.nil?
 
           cohort = slots.thread_cohorts.fetch(task.id, 0)
-          idle = CompletionClaim.new(0, cohort, @wake_version)
+          idle = CompletionClaim.new(0, cohort, @wake_version, slots.gate)
           next idle if !slots.open || stop_requested?(slots.version) || !slots.run_errors.empty? || paused? ||
-            slots.claim_error || slots.empty_wait
+            slots.claim_error || slots.empty_wait || !slots.gate.ready?
 
           # The slot this task leaves is free, but its thread is not until the handler returns.
           limit = [[slots.free_slots, slots.cohort_free(cohort)].min + 1, slots.thread_room].min
@@ -780,7 +1013,7 @@ module Stablemates
           slots.cohort_reserved[cohort] += limit
           slots.handed_over[task.id] = cohort
           slots.cohort_handed_over[cohort] += 1
-          CompletionClaim.new(limit, cohort, @wake_version)
+          CompletionClaim.new(limit, cohort, @wake_version, slots.gate)
         end
       end
 
@@ -882,22 +1115,39 @@ module Stablemates
       # chunk names its tasks in task ID order, as a heartbeat names its leases, so the two
       # statements lock shared runtime rows in the same order. A deadlock between the fused claim
       # and another worker's lease rolls the statement back with 40P01, and fenced_rows sends it
-      # again.
+      # again. The statement reads the claim gate after it has its connection, and again before
+      # each retry. A closed gate sends a claim limit of zero, also for completions that reserved
+      # slots or waited behind another statement. Each completion then gets nil as its claimed
+      # tasks, so the empty answer proves no queue empty.
       def send_completion_chunk(queue, chunk, claim_limit)
         chunk.sort_by! { |member| member.task.id }
         sent_at = monotonic
-        begin
-          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1, [
+        gated = false
+        # A statement that can claim takes a permit from each gate of its chunk at its first
+        # attempt, and gives them back when it settles (+permitted+).
+        gates = chunk.map(&:gate).uniq
+        held = []
+        params = lambda do
+          if claim_limit.positive?
+            held = gates.select(&:enter) if held.empty? && !gated
+            gated = held.size < gates.size || !gates.all?(&:ready?)
+          end
+          [
             @worker_id,
             Values.text_array(chunk.map { |member| member.task.id }, "task ids"),
             Values.text_array(chunk.map { |member| member.task.fence_token.to_s }, "fence tokens"),
             Values.text_array(chunk.map(&:encoded), "results"),
-            queue, claim_limit.to_s, @lease_ms.to_s
-          ])
+            queue, (gated ? 0 : claim_limit).to_s, @lease_ms.to_s
+          ]
+        end
+        begin
+          rows = @executor.fenced_rows(SqlCatalogue::COMPLETE_MANY_AND_CLAIM_V1, params)
         rescue FastTierUnsupportedError
           mark_full_tier(queue, sent_at)
           chunk.each { |member| member.full_tier = true }
           return
+        ensure
+          held.each(&:leave)
         end
         # Only the first row carries the accepted completions. A statement that claims nothing
         # still returns that row, with every claim column null.
@@ -908,11 +1158,15 @@ module Stablemates
           @fast_tier_queues.add(queue)
           claimed.each { |next_task| @fast_task_ids.add(next_task.id) }
         end
-        record_claimed(queue, sent_at, claimed) if claim_limit.positive?
+        record_claimed(queue, sent_at, claimed) if claim_limit.positive? && !gated
         # Claimed tasks go to the completions in order, each up to the slots it reserved.
         offset = 0
         chunk.each do |member|
           member.accepted = accepted.include?(member.task.id)
+          if gated
+            member.claimed = nil
+            next
+          end
           member.claimed = (claimed[offset, member.limit] || []).map { |next_task| [next_task, sent_at] }
           offset += member.claimed.size
         end
@@ -987,17 +1241,17 @@ module Stablemates
         milliseconds / 1000.0
       end
 
-      # Waits up to the shutdown grace, cancels what still runs, and gives it one unwind window.
-      # Returns the number of handlers abandoned after that window.
-      def drain(handlers)
+      # Waits until +deadline+, the end of the shutdown grace, cancels what still runs, and gives it
+      # one unwind window, which ends by +final_deadline+. Returns the number of handlers abandoned
+      # after that window.
+      def drain(handlers, deadline, final_deadline)
         # A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
         @batch_coordinators.each_value(&:flush!)
-        deadline = monotonic + @shutdown_grace
         wait_until_idle(deadline)
         remaining = @active.values
         unless remaining.empty?
           remaining.each { |active| active.cancellation.cancel(:shutdown) }
-          wait_until_idle(monotonic + UNWIND_WINDOW)
+          wait_until_idle([monotonic + UNWIND_WINDOW, final_deadline].min)
         end
         abandoned = @active.values
         abandoned.each { |active| active.ownership.get&.abandon }

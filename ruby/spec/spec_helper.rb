@@ -23,6 +23,7 @@ class FakeExecutor < W::Executor
   end
 
   def rows(sql, params = [])
+    params = params.call if params.respond_to?(:call)
     return COMPATIBLE if sql == W::SqlCatalogue::COMPATIBILITY_STATE
     return [] if sql == W::SqlCatalogue::GET_CONTRACT_DEFINITION_V1
 
@@ -30,6 +31,8 @@ class FakeExecutor < W::Executor
     @answer ? @answer.call(sql, params) : []
   end
 end
+
+require_relative "support/fake_connections"
 
 # An example that runs against the process's scratch database. Each example uses its own queue, so
 # examples share one schema without observing each other's tasks.
@@ -61,5 +64,6 @@ RSpec.configure do |config|
   config.order = :random
   Kernel.srand config.seed
   config.expect_with(:rspec) { |expectations| expectations.max_formatted_output_length = nil }
+  config.after { FakeHeartbeatConnection.close_all }
   config.after(:suite) { ScratchDatabase.drop }
 end

@@ -42,9 +42,12 @@ module Stablemates
       end
 
       # The rows +sql+ returns, each a Hash of column name to text or nil. Every parameter is a
-      # String or nil the caller already encoded.
+      # String or nil the caller already encoded. +params+ can also be a callable that returns
+      # them. It runs after the checkout, immediately before the statement, so it sees the state
+      # at send time. It can raise to send nothing.
       def rows(sql, params = [])
         @source.with do |connection|
+          params = params.call if params.respond_to?(:call)
           result = begin
             connection.exec_params(sql, params, 0, STRINGS)
           rescue PG::Error => e
@@ -77,7 +80,8 @@ module Stablemates
       end
       private :discard
 
-      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim.
+      # Sends a fenced write, and sends it again when PostgreSQL chose it as a deadlock victim. A
+      # callable +params+ runs again before each attempt (+rows+).
       #
       # PostgreSQL rolls back the whole statement, and a resend writes the same complete desired
       # set. A deadlock aborts a caller-owned transaction, so a resend there fails with 25P02, and

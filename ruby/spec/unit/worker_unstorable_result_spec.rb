@@ -15,7 +15,9 @@ RSpec.describe W::Worker do
 
     def size = 3
 
-    def with = raise("unit specs never check out a connection")
+    # Lends the heartbeat reservation and the readiness query a fake connection. Statements run
+    # through FakeExecutor#rows, without a checkout.
+    def with(&) = FakeHeartbeatConnection.lend(&)
   end
 
   # JSON.generate writes NUL as \u0000 and raises for a lone surrogate, so only a custom to_json

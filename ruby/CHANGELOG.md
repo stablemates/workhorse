@@ -3,6 +3,47 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### A worker reserves its heartbeat connection at startup, and refuses to start without it
+
+Before this change, a worker took the heartbeat connection of its pool only when a task arrived,
+and returned it when no task remained. If the pool had no free connection then, the worker still
+claimed tasks. The heartbeat waited for a connection, and the leases of those tasks could expire
+(SM-1577). These changes apply to a worker without `shared_heartbeats: true`:
+
+- **A startup reservation failure now ends the run.** This changes behavior. `run` and `run_once`
+  first reserve the heartbeat connection, then borrow one other connection for the compatibility
+  query and return it at once. Both steps must end within the larger of `heartbeat` and 5 s. This
+  bound includes a connect and the query itself, for every kind of pool. If a step does not end in
+  time, the run raises the new `Stablemates::Workhorse::WorkerStartupError` before the worker
+  registers. Its message names the pool, the budget, and the `shared_heartbeats: true` opt-out. A
+  compatibility query that fails keeps its own error type. Before this change, the same worker started and claimed tasks. A
+  supervisor that restarts a failed process, such as `run_worker_processes`, starts the worker
+  again.
+- **The reservation lasts while a worker runs.** The heartbeat keeps its connection while any worker
+  on the pool runs, also when no task runs. The last worker that stops returns it. Thus a pool keeps
+  one heartbeat connection for its running workers, apart from the short replacement after a lost
+  connection.
+- **No claim without a heartbeat connection.** While the pool has no usable heartbeat connection,
+  the worker claims no task. A claim checks this after it has its connection, immediately before
+  each attempt, and only for its own run. A fast-tier completion then settles its task with a claim
+  limit of 0. A rejected or busy lease does not stop claims. The heartbeat checks its connection
+  between rounds, also when no task runs. If the connection is lost, or a round fails, the heartbeat
+  asks for a new one at once. It waits for a checkout at most one round bound, and at most one
+  heartbeat interval between failed attempts. When the new connection is ready, the worker claims at
+  once.
+- **One shutdown deadline.** `shutdown_grace` now starts when dispatch ends. Every wait of the stop
+  path ends by that deadline or one unwind window later. This includes the registration statements
+  and the release of the listener and the heartbeat connection. Thus a stop takes at most
+  `shutdown_grace` plus the unwind window. A claim that returns after the deadline starts no task,
+  and its leases expire. The heartbeat connection stays reserved until that claim statement
+  settles. A stop during the startup reservation ends the run without an error.
+- **A new run waits for the stop statements of the previous run.** The next `run` or `run_once` of
+  the same worker waits for them within its startup budget. Then a late deregistration cannot
+  delete the registry row of the new run. If a statement still runs when the budget ends, the run
+  raises `WorkerStartupError`. A stop during this wait ends the run without an error.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

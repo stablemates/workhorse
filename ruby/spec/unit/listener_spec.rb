@@ -26,7 +26,15 @@ RSpec.describe W::Worker::Listener do
 
     def status = PG::CONNECTION_OK
 
-    def close = self.closed = true
+    # The heartbeat probes its held connection between rounds. This socket never has input.
+    def socket_io = (@pipe ||= IO.pipe).first
+
+    def consume_input = nil
+
+    def close
+      self.closed = true
+      @pipe&.each { |io| io.close unless io.closed? }
+    end
   end
 
   rows_class = Struct.new(:rows) do
@@ -93,21 +101,10 @@ RSpec.describe W::Worker::Listener do
     # Each worker's default cohorts count the pool's one listener and one heartbeat connection.
     expect([first.cohorts, second.cohorts]).to eq([1, 1])
 
-    # The heartbeat holds one connection while attempts run.
-    heartbeat_holds = Concurrent::Event.new
-    release = Concurrent::Event.new
-    heartbeat = Thread.new do
-      pool.with do
-        heartbeat_holds.set
-        release.wait(5)
-      end
-    end
-    heartbeat_holds.wait(5)
-
+    # The heartbeat holds one connection while the workers run, also with no attempt.
     expect(pool.with(timeout: 0.5) { :lent }).to eq(:lent)
+    expect(pool.available).to eq(1)
   ensure
-    release&.set
-    heartbeat&.join
     stop(first, runners[0]) if runners&.at(0)
     stop(second, runners[1]) if runners&.at(1)
   end

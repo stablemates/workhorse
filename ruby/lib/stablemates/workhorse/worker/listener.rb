@@ -21,7 +21,8 @@ module Stablemates
         Subscriber = Data.define(:queues, :on_wake, :on_error)
         private_constant :Subscriber
 
-        # One worker's registration. +close+ removes it, and closing twice is harmless.
+        # One worker's registration. +close+ removes it, and closing twice is harmless. +close+ waits
+        # at most +timeout+ seconds for the listener thread of the last subscriber.
         class Subscription
           def initialize(listener, subscriber)
             @listener = listener
@@ -30,7 +31,7 @@ module Stablemates
 
           def listening? = @listener.listening?
 
-          def close = @listener.unsubscribe(@subscriber)
+          def close(timeout = nil) = @listener.unsubscribe(@subscriber, timeout)
         end
 
         @shared = {}.compare_by_identity
@@ -67,15 +68,18 @@ module Stablemates
         end
 
         # Removes +subscriber+. The last subscriber stops the listener, which returns its
-        # connection to the pool.
-        def unsubscribe(subscriber)
+        # connection to the pool. That subscriber waits for the thread at most two read timeouts, and
+        # at most +timeout+ seconds when given.
+        def unsubscribe(subscriber, timeout = nil)
           thread = @lock.synchronize do
             next unless @subscribers.delete(subscriber) && @subscribers.empty?
 
             @stop.set
             @thread
           end
-          thread&.join(READ_TIMEOUT * 2)
+          wait = READ_TIMEOUT * 2
+          wait = timeout.clamp(0, wait) unless timeout.nil?
+          thread&.join(wait) if wait.positive?
         end
 
         private
