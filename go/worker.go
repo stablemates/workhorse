@@ -54,6 +54,10 @@ const (
 	// honours its context returns well inside this window, so abandonment reports a handler that
 	// ignored cancellation rather than one that was about to finish.
 	handlerUnwindPeriod = 250 * time.Millisecond
+	// minimumStartupBudget is the least time a worker with a dedicated heartbeat connection gives its
+	// startup: the reservation and the compatibility check together. Startup owns no lease, so the
+	// heartbeat interval alone is too short. The floor is a design choice (ADR 0071).
+	minimumStartupBudget = 5 * time.Second
 	// deregistrationTimeout bounds the last statement a stopping worker issues.
 	deregistrationTimeout = time.Second
 	// A worker that subscribes to task notifications polls only as a fallback, so it waits the
@@ -228,7 +232,10 @@ type WorkerOptions struct {
 	ScheduleCatchupLimit int
 	ShutdownGracePeriod  time.Duration
 	PollingOnly          bool
-	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation.
+	// SharedHeartbeats opts out of the dedicated heartbeat connection reservation. Without it, Run
+	// and RunOnce refuse to start unless the pool lends the heartbeat connection and then one more
+	// connection for the compatibility check within the larger of HeartbeatInterval and 5 s, and
+	// the worker claims no task while the pool holds no heartbeat connection.
 	SharedHeartbeats bool
 	// Cohorts splits the slots into fixed shares for fast-tier dispatch (ADR 0076). It takes 1
 	// through Concurrency. Zero selects the default: one cohort below concurrency 8, otherwise one
@@ -263,6 +270,9 @@ type Worker struct {
 	// start on a fixed schedule, so after one timed-out round the next round still ends before the
 	// lease when 2 × heartbeatInterval + heartbeatRoundBound < leaseDuration, as with the defaults.
 	heartbeatRoundBound time.Duration
+	// startupBudget is max(heartbeatInterval, minimumStartupBudget). Run and RunOnce reserve the
+	// heartbeat connection and run the compatibility check inside it.
+	startupBudget       time.Duration
 	pollInterval        time.Duration
 	maintenanceInterval time.Duration
 	// maintenanceRoutineInterval and lastRoutineOffer gate the slow routines. RunOnce and the
@@ -303,6 +313,9 @@ type Worker struct {
 	// nil outside Run, so a completion from RunOnce claims nothing.
 	completionClaims atomic.Pointer[completionClaimer]
 	completions      completionBatcher
+	// claimConnection is holdClaimConnection outside tests. A claim and a fused completion take
+	// their connection through it before they read the claim gate.
+	claimConnection func(ctx context.Context, executor Executor) (Executor, func(), error)
 }
 
 type heartbeatMember struct {
@@ -502,6 +515,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		leaseDuration:              leaseDuration,
 		heartbeatInterval:          heartbeatInterval,
 		heartbeatRoundBound:        heartbeatRoundBoundFor(heartbeatInterval),
+		startupBudget:              max(heartbeatInterval, minimumStartupBudget),
 		pollInterval:               pollInterval,
 		maintenanceInterval:        maintenanceInterval,
 		maintenanceRoutineInterval: maintenanceRoutineInterval,
@@ -526,6 +540,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		sharedHeartbeats:           options.SharedHeartbeats,
 	}
 	worker.heartbeatRound = worker.queryHeartbeatRound
+	worker.claimConnection = holdClaimConnection
 	return worker, nil
 }
 
@@ -542,6 +557,8 @@ func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
 }
 
 // Run listens and polls until the context is cancelled or an operational lifecycle error occurs, then drains.
+// Without SharedHeartbeats, Run first reserves the heartbeat connection and runs the compatibility
+// check inside the startup budget, and it returns an error if either step fails.
 func (worker *Worker) Run(ctx context.Context) error {
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
@@ -551,11 +568,13 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	defer releaseRun()
-	worker.holdHeartbeats(ctx)
+	worker.holdHeartbeats()
 	defer worker.releaseHeartbeatConnection()
-	if err := worker.compatibility.Assert(ctx); err != nil {
+	if err := worker.prepareStart(ctx); err != nil {
 		return err
 	}
+	heartbeatWake := make(chan struct{}, 1)
+	worker.watchHeartbeats(func() { wakeWorker(heartbeatWake) })
 	instanceID, ok := newUUID()
 	if !ok {
 		return errors.New(workerInstanceIDMessage)
@@ -579,9 +598,24 @@ func (worker *Worker) Run(ctx context.Context) error {
 		ctx, worker.pool, worker.queues, worker.pollingOnly, worker.logger, notificationWake,
 	)
 	stopNotificationsAtCancel := context.AfterFunc(ctx, notifications.close)
+	// stopDeadline is the grace period plus the handler unwind window, from the start of the grace.
+	// No step of the stop path waits past it. startGrace sets it before Run returns.
+	var stopDeadline time.Time
 	defer func() {
 		stopNotificationsAtCancel()
-		notifications.close()
+		// The last subscriber stops the listener, which can wait for its UNLISTEN. That wait ends
+		// at the stop deadline; the listener then returns its connection on its own.
+		closed := make(chan struct{})
+		go func() {
+			notifications.close()
+			close(closed)
+		}()
+		deadline := time.NewTimer(max(0, time.Until(stopDeadline)))
+		defer deadline.Stop()
+		select {
+		case <-closed:
+		case <-deadline.C:
+		}
 	}()
 	maintenanceContext, stopMaintenance := context.WithCancel(ctx)
 	maintenanceErrors := make(chan error, 1)
@@ -605,6 +639,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	var graceTimer *time.Timer
 	startGrace := func() {
 		graceStart.Do(func() {
+			stopDeadline = time.Now().Add(worker.shutdownGracePeriod + handlerUnwindPeriod)
 			graceTimer = time.AfterFunc(worker.shutdownGracePeriod, expireDrain)
 		})
 	}
@@ -650,6 +685,8 @@ func (worker *Worker) Run(ctx context.Context) error {
 		registryWake:      registryWake,
 		maintenanceErrors: maintenanceErrors,
 		listening:         notifications.isListening,
+		claimable:         worker.heartbeatReady,
+		heartbeatWake:     heartbeatWake,
 		// A maintenance, claim, or execution error stops the run while the caller's context is
 		// still live. The grace period starts then, so a stalled claim cannot hold the settlement.
 		stopped: startGrace,
@@ -664,7 +701,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 	)
 	stopRegistry()
 	<-registryDone
-	worker.deregister(context.WithoutCancel(ctx), executor)
+	deregisterContext, cancelDeregister := context.WithDeadline(context.WithoutCancel(ctx), stopDeadline)
+	worker.deregister(deregisterContext, executor)
+	cancelDeregister()
 	if abandoned > 0 {
 		incomplete := fmt.Errorf(workerShutdownIncompleteFormat, ErrShutdownIncomplete, abandoned)
 		if firstError == nil {
@@ -750,6 +789,14 @@ type dispatchEnvironment struct {
 	registryWake      <-chan struct{}
 	maintenanceErrors <-chan error
 	listening         func() bool
+	// claimable reports whether the worker may claim now: a worker with a dedicated heartbeat
+	// connection claims only while it holds that connection (ADR 0071). Nil always allows claims.
+	claimable func() bool
+	// heartbeatWake fires when the heartbeat connection arrives again, so a closed gate opens at once.
+	heartbeatWake <-chan struct{}
+	// claimSettled runs in the loop for each claim it settles, with whether the claim was skipped.
+	// A test waits on it to order its events. Nil runs nothing.
+	claimSettled func(skipped bool)
 	// notificationDelay draws the delay before a claim that a notification woke from idle. Nil
 	// draws a random delay up to notificationClaimDelay.
 	notificationDelay func() time.Duration
@@ -915,13 +962,17 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	// Set by a claim that found nothing to run. No claim starts until its deadline or a wake that
 	// arrived after that claim started. A release wait follows a claim that released every task it
 	// claimed. Each release notifies the queue, so a wake does not end that wait: only its
-	// deadline, a stop, or a pause does.
+	// deadline, a stop, a pause, or the return of the heartbeat connection does.
 	var emptyWait *struct {
 		deadline    time.Time
 		wakeVersion int
 		release     bool
 	}
 	maintenanceErrors := environment.maintenanceErrors
+	claimable := environment.claimable
+	if claimable == nil {
+		claimable = func() bool { return true }
+	}
 	waitTimer := time.NewTimer(time.Hour)
 	stopTimer := func() {
 		if !waitTimer.Stop() {
@@ -1044,7 +1095,20 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 					return
 				}
 			}
+			// The gate can close between the start of the claim and its statement. A claim that
+			// finds it closed is skipped, so it does not count as an empty claim.
+			if !claimable() {
+				settlement.skipped = true
+				claimResults <- settlement
+				return
+			}
 			settlement.tasks, settlement.err = environment.claim(limit, fastLimit)
+			// The gate closed while the claim waited for its connection. Every task it already
+			// claimed still runs, and the claim does not count as empty or failed.
+			if errors.Is(settlement.err, errHeartbeatClaimGateClosed) {
+				settlement.err = nil
+				settlement.skipped = len(settlement.tasks) == 0
+			}
 			claimResults <- settlement
 		}()
 	}
@@ -1056,6 +1120,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		} else {
 			cohortClaims[settlement.cohort]--
 			cohortReserved[settlement.cohort] -= settlement.cohortLimit
+		}
+		if environment.claimSettled != nil {
+			environment.claimSettled(settlement.skipped)
 		}
 		if settlement.skipped {
 			return
@@ -1089,7 +1156,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	// completing task's cohort is in flight, a completion claims only when that would fill at least
 	// a refill batch of slots. A claim for another cohort does not hold a completion back.
 	reserveCompletionClaim := func(slot *dispatchSlot) *completionReservation {
-		if stopping || firstError != nil || emptyWait != nil || worker.remotelyPaused.Load() {
+		if stopping || firstError != nil || emptyWait != nil || worker.remotelyPaused.Load() || !claimable() {
 			return nil
 		}
 		cohort := slot.cohort
@@ -1152,7 +1219,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			emptyWait = nil
 			resetTimer(waitTimer, pollDelay())
 			wakeAfter = waitTimer.C
-		} else {
+		} else if claimable() {
+			// Without the heartbeat connection, the loop starts no claim and waits for
+			// heartbeatWake, an execution, or a claim in flight.
 			if emptyWait != nil {
 				remaining := time.Until(emptyWait.deadline)
 				if remaining <= 0 || (!emptyWait.release && wakeVersion != emptyWait.wakeVersion) {
@@ -1213,6 +1282,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		case <-environment.notificationWake:
 			wakeVersion++
 			notificationDelayPending = true
+		case <-environment.heartbeatWake:
+			// The heartbeat connection is back. Claims start now, not at the next poll.
+			emptyWait = nil
 		case <-environment.registryWake:
 		}
 	}
@@ -1237,7 +1309,8 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	return active, firstError
 }
 
-// RunOnce claims and processes at most one task.
+// RunOnce claims and processes at most one task. It starts as Run does, and it claims nothing while
+// the pool holds no heartbeat connection.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 	// The reservation is shared by the worker's invocations, so only the permit holder may take or
 	// release it.
@@ -1246,9 +1319,9 @@ func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer releaseRun()
-	worker.holdHeartbeats(ctx)
+	worker.holdHeartbeats()
 	defer worker.releaseHeartbeatConnection()
-	if err := worker.compatibility.Assert(ctx); err != nil {
+	if err := worker.prepareStart(ctx); err != nil {
 		return false, err
 	}
 	instanceID, ok := newUUID()
@@ -1503,7 +1576,13 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor) e
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
+	if !worker.heartbeatReady() {
+		return false, nil
+	}
 	task, claimErr := worker.claimNext(context.WithoutCancel(ctx), executor)
+	if errors.Is(claimErr, errHeartbeatClaimGateClosed) {
+		claimErr = nil
+	}
 	if task == nil {
 		return false, claimErr
 	}
@@ -1552,8 +1631,18 @@ func (worker *Worker) claimNextMany(
 	limit int,
 	fastLimit int,
 ) ([]ClaimedTask, error) {
+	executor, release, err := worker.claimConnection(ctx, executor)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	tasks := make([]ClaimedTask, 0, limit)
 	for range worker.queues {
+		// The gate is read on the held connection, right before each claim statement, so a claim
+		// that waited for the pool does not claim after the heartbeat connection went away.
+		if !worker.heartbeatReady() {
+			return tasks, errHeartbeatClaimGateClosed
+		}
 		queue := worker.nextClaimQueue()
 		startedAt := time.Now()
 		rows, fast, err := worker.claimQueue(ctx, executor, queue, limit-len(tasks), fastLimit-len(tasks))
@@ -1679,8 +1768,9 @@ func (worker *Worker) writeFastCompletion(
 		return false, answer.err
 	}
 	tasks, err := worker.appendClaimedTasks(ctx, nil, answer.rows, task.Queue, answer.sentAt, true)
-	// Every decoded task holds a lease, so it runs even when a later row failed to decode.
-	reservation.settle(tasks, true)
+	// Every decoded task holds a lease, so it runs even when a later row failed to decode. A
+	// statement that the closed gate held to a claim limit of 0 says nothing about the backlog.
+	reservation.settle(tasks, entry.limit > 0)
 	if err != nil {
 		return false, err
 	}
@@ -1795,24 +1885,48 @@ func (worker *Worker) completeChunk(queue string, chunk []*completionEntry) {
 	fences := make([]int64, len(chunk))
 	results := make([]json.RawMessage, len(chunk))
 	limit := 0
+	for _, entry := range chunk {
+		limit += entry.limit
+	}
+	executor := chunk[0].executor
+	if limit > 0 {
+		// A chunk that claims holds its connection first, so the gate is read after the wait for
+		// the pool and right before each attempt of the statement.
+		held, release, err := worker.claimConnection(chunk[0].ctx, executor)
+		if err != nil {
+			for _, entry := range chunk {
+				entry.answer <- completionAnswer{err: err}
+			}
+			return
+		}
+		defer release()
+		executor = held
+	}
 	for index, entry := range chunk {
 		ids[index] = entry.task.ID
 		fences[index] = entry.task.FenceToken
 		results[index] = entry.encoded
-		limit += entry.limit
 	}
-	sentAt := time.Now()
-	rows, err := queryFencedWrite(
+	var sentAt time.Time
+	rows, err := queryFencedWriteEach(
 		chunk[0].ctx,
-		chunk[0].executor,
+		executor,
 		protocolStatementRegistry[completeManyAndClaimStatementName],
-		worker.workerID,
-		ids,
-		fences,
-		results,
-		queue,
-		limit,
-		int(worker.leaseDuration/time.Millisecond),
+		func() ([]any, error) {
+			// Without the heartbeat connection, this attempt and every later one settle the
+			// chunk and claim nothing. The entries keep a limit of 0, so the dispatch loop
+			// returns their reservations.
+			if limit > 0 && !worker.heartbeatReady() {
+				for _, entry := range chunk {
+					entry.limit = 0
+				}
+				limit = 0
+			}
+			sentAt = time.Now()
+			return []any{
+				worker.workerID, ids, fences, results, queue, limit, int(worker.leaseDuration / time.Millisecond),
+			}, nil
+		},
 	)
 	var accepted []any
 	if err == nil {
@@ -1864,17 +1978,18 @@ func (worker *Worker) claimQueue(
 		if fastLimit <= 0 {
 			return nil, false, nil
 		}
-		rows, err := queryFencedWrite(
+		rows, err := queryFencedWriteEach(
 			ctx,
 			executor,
 			protocolStatementRegistry[completeManyAndClaimStatementName],
-			worker.workerID,
-			[]string{},
-			[]int64{},
-			[]json.RawMessage{},
-			queue,
-			min(limit, fastLimit),
-			leaseMS,
+			func() ([]any, error) {
+				if !worker.heartbeatReady() {
+					return nil, errHeartbeatClaimGateClosed
+				}
+				return []any{
+					worker.workerID, []string{}, []int64{}, []json.RawMessage{}, queue, min(limit, fastLimit), leaseMS,
+				}, nil
+			},
 		)
 		if err == nil {
 			worker.markFastTier(queue)
@@ -1884,6 +1999,10 @@ func (worker *Worker) claimQueue(
 			return nil, false, err
 		}
 		worker.markFullTier(queue)
+	}
+	// The fallback after a refused fast claim is a new statement, so it reads the gate again.
+	if !worker.heartbeatReady() {
+		return nil, false, errHeartbeatClaimGateClosed
 	}
 	rows, err := executor.Query(
 		ctx,
@@ -2291,21 +2410,105 @@ func (worker *Worker) recordLeaseWatchdog(ctx context.Context, task ClaimedTask)
 	)
 }
 
-// holdHeartbeats takes this worker's share of the heartbeat connection its pool lends, ahead of any
-// handler that could exhaust the pool. A worker that opted out of the reservation heartbeats
-// through the shared pool and holds nothing.
-func (worker *Worker) holdHeartbeats(ctx context.Context) {
+// holdHeartbeats takes this worker's share of the heartbeat connection its pool lends. A worker
+// that opted out of the reservation heartbeats through the shared pool and holds nothing.
+func (worker *Worker) holdHeartbeats() {
 	if worker.sharedHeartbeats {
 		return
 	}
 	worker.heartbeatMu.Lock()
-	lease := worker.heartbeatLease
-	if lease == nil {
-		lease = holdHeartbeatConnection(worker.pool)
-		worker.heartbeatLease = lease
+	defer worker.heartbeatMu.Unlock()
+	if worker.heartbeatLease == nil {
+		worker.heartbeatLease = holdHeartbeatConnection(worker.pool, worker.heartbeatInterval)
 	}
+}
+
+// prepareStart is the readiness check of Run and RunOnce (ADR 0071). Inside startupBudget, in order,
+// it reserves the heartbeat connection ahead of any handler that could exhaust the pool, then
+// borrows one ordinary connection, runs the compatibility check on it, and returns it at once. If
+// either step fails, the worker does not start. The borrow proves that the pool has a connection
+// to spare now. It does not prove that the pool keeps one free.
+//
+// A worker with SharedHeartbeats reserves nothing, and it runs the compatibility check without the
+// budget.
+func (worker *Worker) prepareStart(ctx context.Context) error {
+	if worker.sharedHeartbeats {
+		return worker.compatibility.Assert(ctx)
+	}
+	worker.heartbeatMu.Lock()
+	lease := worker.heartbeatLease
 	worker.heartbeatMu.Unlock()
-	lease.reserve(ctx, worker.heartbeatInterval)
+	startupContext, cancel := context.WithTimeout(ctx, worker.startupBudget)
+	defer cancel()
+	if err := lease.reserve(startupContext); err != nil {
+		return worker.startupError(ctx, startupHeartbeatConnectionStep, err)
+	}
+	borrowed, err := worker.pool.Acquire(startupContext)
+	if err != nil {
+		return worker.startupError(ctx, startupCompatibilityConnectionStep, err)
+	}
+	err = worker.compatibility.assertOn(startupContext, NewPGXExecutor(borrowed))
+	borrowed.Release()
+	// A schema refusal keeps its own error. Any other failure of the check is a startup failure.
+	var refusal *CompatibilityError
+	if err != nil && !errors.As(err, &refusal) {
+		return worker.startupError(ctx, startupCompatibilityCheckStep, err)
+	}
+	return err
+}
+
+// startupError names the pool, the budget, and the opt-out. A run that its caller stopped returns
+// the error unchanged, because the budget did not end it.
+func (worker *Worker) startupError(ctx context.Context, step string, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	config := worker.pool.Config()
+	pool := fmt.Sprintf(workerStartupPoolFormat, config.ConnConfig.Host, config.ConnConfig.Port, config.ConnConfig.Database)
+	return fmt.Errorf(workerStartupConnectionErrorFormat, pool, config.MaxConns, step, worker.startupBudget, err)
+}
+
+// heartbeatReady reports whether the worker may claim. A worker with a dedicated heartbeat connection
+// claims no task, ordinary or fused, while its pool holds no such connection (ADR 0071). A round that
+// fails and keeps its connection, or a round that holds the connection, does not close this gate.
+func (worker *Worker) heartbeatReady() bool {
+	if worker.sharedHeartbeats {
+		return true
+	}
+	worker.heartbeatMu.Lock()
+	lease := worker.heartbeatLease
+	worker.heartbeatMu.Unlock()
+	return lease != nil && lease.ready()
+}
+
+// errHeartbeatClaimGateClosed ends a claim that found the claim gate closed on its held connection.
+var errHeartbeatClaimGateClosed = errors.New(heartbeatClaimGateClosedMessage)
+
+// holdClaimConnection returns an executor on one connection of the pool behind executor, and its
+// release. A claim reads the claim gate after this wait, so the wait for the pool cannot carry a
+// claim past a lost heartbeat connection. Any other executor is returned unchanged.
+func holdClaimConnection(ctx context.Context, executor Executor) (Executor, func(), error) {
+	if pgx, ok := executor.(*pgxExecutor); ok {
+		if pool, ok := pgx.queryer.(*pgxpool.Pool); ok {
+			held, err := pool.Acquire(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			return NewPGXExecutor(held), held.Release, nil
+		}
+	}
+	return executor, func() {}, nil
+}
+
+// watchHeartbeats calls onReady each time the shared heartbeat connection arrives again, until the
+// run releases its hold.
+func (worker *Worker) watchHeartbeats(onReady func()) {
+	worker.heartbeatMu.Lock()
+	lease := worker.heartbeatLease
+	worker.heartbeatMu.Unlock()
+	if lease != nil {
+		lease.watch(onReady)
+	}
 }
 
 func (worker *Worker) releaseHeartbeatConnection() {

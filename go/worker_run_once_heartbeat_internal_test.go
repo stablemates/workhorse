@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"testing"
+	"time"
 )
 
 // These tests check that RunOnce reserves the heartbeat connection only while it holds the run
@@ -15,6 +16,8 @@ func newReservingWorker(t *testing.T) *Worker {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The pool cannot connect, so a shorter budget ends the failed startup sooner.
+	worker.startupBudget = 100 * time.Millisecond
 	return worker
 }
 
@@ -42,7 +45,7 @@ func TestCanceledRunOnceKeepsTheActiveInvocationsHeartbeatReservation(t *testing
 		t.Fatal(err)
 	}
 	defer releaseRun()
-	worker.holdHeartbeats(context.Background())
+	worker.holdHeartbeats()
 	defer worker.releaseHeartbeatConnection()
 	active := reservedHeartbeatLease(worker)
 

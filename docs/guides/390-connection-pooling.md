@@ -270,6 +270,15 @@ below 3. Go's `NewWorker` and Rust's worker constructor return an error when the
 below 3. Ruby raises unless the pool size is an integer of at least 3. The Java worker makes no
 check, because a `DataSource` reports no pool size.
 
+**Go startup.** Go's `Run` and `RunOnce` return an error when the startup does not complete in its
+budget. The startup first reserves the heartbeat connection, unless another worker on the pool holds
+it already. Then it borrows one connection for the compatibility check. The budget is the larger of
+the heartbeat interval and 5 s. The error names the pool, the budget, and `SharedHeartbeats`.
+
+**Go claim gate.** While the pool holds no heartbeat connection, a Go worker claims no task. A
+fast-tier completion then claims no replacement. When the connection returns, the worker claims at
+once.
+
 | Language   | Opt-out             |
 | ---------- | ------------------- |
 | TypeScript | `sharedHeartbeats`  |

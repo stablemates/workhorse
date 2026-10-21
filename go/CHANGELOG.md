@@ -10,6 +10,33 @@ adds.
 
 ## Unreleased
 
+### A worker refuses to start without its heartbeat connection
+
+**Behavior change.** Before this release, `Worker.Run` and `Worker.RunOnce` tried to reserve the
+dedicated heartbeat connection for one heartbeat interval and ignored a failure. The worker then
+claimed tasks that it could renew only after a later round got a connection. Now a startup
+reservation failure ends a run that previously continued (ADR 0071, SM-1576).
+
+The startup budget is the larger of `HeartbeatInterval` and 5 s. In the budget, the worker first
+reserves the heartbeat connection. Then it borrows one more connection from the pool, runs the
+compatibility check on it, and returns the connection at once. If either step fails, `Run` and
+`RunOnce` return an error. The error names the pool, its `MaxConns`, the step, the budget, the
+`SharedHeartbeats` opt-out, and the error of the last failed connection attempt. If the database
+accepts connections, give the pool more connections or set `SharedHeartbeats`.
+
+While the pool holds no heartbeat connection, the worker claims no task. The worker checks for the
+connection before each claim statement, and also before a deadlock resend. A fast-tier completion
+settles its task and claims no replacement. The worker asks the pool for a replacement at once. It
+retries after each failure, and it waits at most one heartbeat interval between two attempts. When
+the replacement arrives, the worker claims at once and does not wait for the next poll. A heartbeat
+round that fails and keeps its connection does not stop claims.
+
+One loop for each pool acquires the heartbeat connection, with one acquisition in flight. A round or
+a startup that stops waiting does not end that acquisition and starts no other one. At stop, the
+deregistration and the wait for the listener end by the grace period plus the 250 ms unwind window.
+A worker with `SharedHeartbeats` keeps the earlier behavior: it reserves nothing and has no claim
+gate.
+
 ### Dependencies
 
 - The repository now builds and checks the module with go1.26.10, because advisory GO-2026-6809 in

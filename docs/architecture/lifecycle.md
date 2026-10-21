@@ -1360,12 +1360,56 @@ fails the round and discards the connection. Their heartbeat connections work as
   opts out. The invocations of a Go worker share one hold. `Worker.Run` and `Worker.RunOnce` take it
   after they get the execution permit. They release it before they return the permit. Thus a
   `RunOnce` that waits for the permit cannot release the hold of the invocation that it waits
-  behind.
+  behind. The Go startup and claim gate below apply to this connection.
 - A Python worker takes its dedicated heartbeat connection from the supplied pool.
 - A Rust worker reserves one pooled heartbeat connection unless `WorkerOptions::shared_heartbeats`
   is set. It bounds a round on that connection by `heartbeat_round_bound`. It discards the connection
   if the round fails. A round under `shared_heartbeats` borrows a connection like any other
   statement. That round has no bound.
+
+A Go worker with the dedicated heartbeat connection starts and claims under these rules (ADR 0071,
+SM-1576). `SharedHeartbeats` turns off all of them.
+
+1. The startup budget is the larger of `HeartbeatInterval` and 5 s (`minimumStartupBudget`). In it,
+   `prepareStart` waits for the shared heartbeat connection. Then it borrows one more pooled
+   connection, runs the compatibility check on it, and releases that connection at once.
+2. If either step fails or does not complete in the budget, `Run` and `RunOnce` return an error,
+   unless the compatibility check refuses the schema, which returns its own error. The error
+   names the pool as host, port, and database, its `MaxConns`, the step, the budget, and
+   `SharedHeartbeats`. It also gives the error of the last failed acquisition, for example a refused
+   connection. Before SM-1576, the worker ignored a failed reservation and continued.
+3. One acquisition loop for each pool (`acquireUntilHeld`) asks the pool for the connection. It
+   starts at the first reservation and again when a round discards the connection. It runs also
+   when no task is active, until a connection arrives or the last holder releases.
+4. The loop has one `Acquire` call in flight. A waiter's deadline does not end that call. It ends
+   when the pool lends a connection, when the connect fails, or when the last holder releases.
+   After a failed attempt, the loop waits 10 ms (`heartbeatReacquireInitialDelay`). The wait
+   doubles after each failure, up to the heartbeat interval. The loop uses the shortest interval of
+   any worker that held the connection since the connection was created.
+5. A round waits for the connection at most until its round bound, and a startup at most until the
+   end of its budget. A waiter that stops waiting starts no acquisition, so repeated timeouts start
+   no second `Acquire` and no second connect. The loop keeps the connection that its `Acquire`
+   returns, or it releases it to the pool if the last holder released first. If the last holder
+   releases while a connect still runs, pgxpool finishes the connect and adopts the connection as
+   idle.
+6. While the pool holds no heartbeat connection, `heartbeatReady` is false, and the worker claims
+   no task. The dispatch loop starts no claim. A claim first takes its pooled connection
+   (`holdClaimConnection`). Then it reads the gate before each statement attempt: each queue, each
+   deadlock resend (`queryFencedWriteEach`), and the `claim_many_v1` fallback after a refused fast
+   claim. If the gate is closed, it sends no more claim statements. The closed gate does not make
+   the claim count as empty or failed, and the tasks that it already claimed run. A fused
+   completion gets no reservation. If the gate closes after the reservation, `completeChunk` reads
+   it on its held connection before each attempt. From the first attempt that finds it closed, the
+   statement has a claim limit of 0, so it settles its tasks and claims nothing. That completion
+   also does not count as an empty claim. `RunOnce` claims nothing and reports no progress.
+7. A round that holds the connection does not close the gate. A failed round that keeps its
+   connection also does not close it. A round that discards its connection closes the gate until
+   the replacement arrives.
+8. When the replacement arrives, the loop wakes the dispatch loop of each worker on the pool. The
+   wake ends a poll wait, so the first claim starts at once, not at the next poll.
+
+The Go driver reports a lost connection only on the next statement. So a heartbeat connection that
+PostgreSQL closed while no round ran keeps the gate open until the next round fails.
 
 #### Heartbeat round deadline
 
@@ -1381,10 +1425,11 @@ Each bounded round does these steps, all before one deadline:
 1. Builds the lease payload. The deadline starts before this step, so serialization counts
    against it.
 2. Waits for its turn on the connection (TypeScript and Go, where workers share the connection), and
-   takes the connection, or a new one after a failed round. In TypeScript, Go, and Python, a failed
-   round starts the replacement when it ends, so the connect starts before the next round. If the
-   replacement is not ready, a TypeScript round waits for it until its own deadline, and a Go or
-   Python round starts its own checkout. A Rust round starts the replacement inside its own
+   takes the connection, or a new one after a failed round. In TypeScript and Python, a failed
+   round starts the replacement when it ends, so the connect starts before the next round. A Go
+   round that discards its connection starts the acquisition loop at once. If the replacement is
+   not ready, a TypeScript or Go round waits for it until its own deadline, and a Python round
+   starts its own checkout. A Rust round starts the replacement inside its own
    deadline. If the connect is not ready by the deadline, it continues, and each later round waits
    for the same connect until its own deadline. A pool without a wait timeout can keep that connect
    pending for several rounds. Ruby and JVM hold their connection between rounds, and take a new one
@@ -1580,15 +1625,15 @@ time:
 | SDK        | Where the replacement opens                                                     | Bound on the open                                                   |
 | ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | TypeScript | when the failed round ends, in `ReservedConnection.reserve`, asynchronously     | the `connectionTimeoutMillis` of the pool (none by default)         |
-| Go         | when the failed round ends, in `heartbeatConnection.replace`, a goroutine       | one round bound                                                     |
+| Go         | when the failed round discards it, in `acquireUntilHeld`, a goroutine           | none; each round waits for it at most one round bound               |
 | Python     | when the failed round ends, in `_replace_heartbeat_connection`, on its thread   | the `timeout` of a psycopg pool (30 s by default); none for asyncpg |
 | Rust       | in the next round, inside its deadline (`replacement_connection`), a Tokio task | the wait timeout of the deadpool pool (none by default)             |
 | Ruby       | in the loop of the heartbeat thread, before the next round waits for its slot   | the checkout timeout of the connection pool                         |
 | JVM        | in the loop of the heartbeat thread, before the next round waits for its slot   | the `getConnection` timeout of the `DataSource`                     |
 
 In TypeScript, Go, and Python, the open does not hold the scheduler. The next round starts at its
-slot. If the replacement is not ready, the round waits for it (TypeScript) or starts its own
-checkout (Go and Python), in both cases only until its own deadline. A Rust connect that is not
+slot. If the replacement is not ready, the round waits for it (TypeScript and Go) or starts its own
+checkout (Python), in both cases only until its own deadline. A Rust connect that is not
 ready by the deadline continues, and each later round waits for it until its own deadline. A pool
 without a wait timeout can keep it pending for several rounds. In Ruby and JVM, the heartbeat thread
 opens the connection itself. If the open ends after the next slot, the next round is overdue, and it
