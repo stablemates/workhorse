@@ -467,8 +467,8 @@ async def test_async_worker_run_starts_only_its_own_notification_listener(
     core_listeners: list[object] = []
     start_core_listener = worker._inner._start_notification_listener
 
-    def record_core_listener() -> Any:
-        listener = start_core_listener()
+    def record_core_listener(hub: Any) -> Any:
+        listener = start_core_listener(hub)
         core_listeners.append(listener)
         return listener
 
@@ -513,7 +513,8 @@ class RecordingPool:
         self.released: list[object] = []
         self.max_size = 10
 
-    async def acquire(self) -> RefusingListenerConnection:
+    async def acquire(self, *, timeout: float | None = None) -> RefusingListenerConnection:
+        assert timeout is not None
         return self.connection
 
     async def release(self, connection: object) -> None:
@@ -535,13 +536,20 @@ async def test_a_failed_listener_removal_still_releases_the_connection(
         queue="sm-1071-refusal",
         on_notification_error=reported.append,
     )
-    stop = asyncio.Event()
-    listener = asyncio.create_task(worker._listen(stop))
+    worker._start_run()
+    hub = worker._attach_hub()
+    subscription = hub.listener.subscribe(
+        worker.queues,
+        worker._inner._wake_from_notification,
+        reported.append,
+        worker._inner._set_notification_listening,
+    )
     await eventually_async(lambda: notification_listening(worker), "the listener never started")
-    stop.set()
-    listener.cancel()
+    listener = subscription.close()
+    assert listener is not None
     with suppress(asyncio.CancelledError):
         await asyncio.wait_for(listener, timeout=2)
+    worker._detach_hub()
 
     assert pool.released == [connection]
     assert not await notification_listening(worker)
@@ -550,7 +558,7 @@ async def test_a_failed_listener_removal_still_releases_the_connection(
 
 
 # SM-1074: the core falls back to a Psycopg pool heartbeat factory, which cannot open a sync
-# connection from an async pool. Dedicated heartbeats must use the async worker's own factory.
+# connection from an async pool. Dedicated heartbeats must use the hub of the async pool.
 @pytest.mark.parametrize("driver", ["psycopg", "asyncpg"])
 @pytest.mark.parametrize("shared_heartbeats", [False, True])
 async def test_async_worker_heartbeats_never_use_the_core_pool_factory(
@@ -566,5 +574,6 @@ async def test_async_worker_heartbeats_never_use_the_core_pool_factory(
         )
     )
 
-    expected = None if shared_heartbeats else worker._open_heartbeat_executor
-    assert worker._inner._heartbeat_executor_factory == expected
+    assert worker._inner._heartbeat_executor_factory is None
+    assert worker._inner._dedicated_heartbeats is not shared_heartbeats
+    assert worker._inner._hub_source == worker._core_hub

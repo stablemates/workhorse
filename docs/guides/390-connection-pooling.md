@@ -169,7 +169,8 @@ The source of the listener connection depends on the language:
 
 - TypeScript, Go, and Ruby workers on one pool share one listener. The listener holds one pooled
   connection for all the workers.
-- A Python worker takes its own listener connection from the pool.
+- Python workers on one pool object share one listener. The listener holds one pool connection for
+  all the workers.
 - A Rust worker opens its own listener connection outside the pool, from its `listen_config`.
 - Java and Kotlin workers on one `DataSource` object share one listener. The listener holds one
   connection from the `DataSource` for all the workers.
@@ -178,9 +179,9 @@ If a TypeScript or Go pool is too small to give a connection to the listener, th
 does not listen.
 
 The heartbeat connection follows the same rule. TypeScript, Go, and Ruby workers on one pool share
-one heartbeat connection. Each Python worker and each Rust worker takes its own heartbeat
-connection from the pool. Java and Kotlin workers on one `DataSource` object share one heartbeat
-connection.
+one heartbeat connection. Python workers on one pool object share one heartbeat connection too.
+Each Rust worker takes its own heartbeat connection from the pool. Java and Kotlin workers on one
+`DataSource` object share one heartbeat connection.
 
 Behind a pooler that cannot deliver notifications, the listener connection delivers nothing. But
 the connection still counts against the client limit of the pooler. In each language except Rust,
@@ -192,8 +193,7 @@ from the pool. Handlers cannot use these reserved connections.
 
 - **TypeScript, Go, or Ruby.** The workers hold one listener and one heartbeat connection. 18
   connections remain for claims and handlers.
-- **Python.** The workers hold four listeners and four heartbeat connections. 12 connections
-  remain.
+- **Python.** The workers hold one listener and one heartbeat connection. 18 connections remain.
 - **Rust.** The workers hold four heartbeat connections in the pool. 16 connections remain. The
   four listener connections are outside the pool, so the server or the pooler must accept four
   more clients.
@@ -215,7 +215,7 @@ from the pool. Handlers cannot use these reserved connections.
 | TypeScript | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped when `options.max` is 1 or less.                                           | One shared heartbeat connection per pool.                                    |
 | Go         | One `taskNotificationHub` per `*pgxpool.Pool`. Polls instead when `MaxConns` is below 2.                                                              | One shared heartbeat connection per pool, held by `holdHeartbeatConnection`. |
 | Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool object.                     |
-| Python     | One per `Worker` or `AsyncWorker`, from the supplied Psycopg or asyncpg pool.                                                                         | One per `Worker` or `AsyncWorker`, from the same pool.                       |
+| Python     | One per pool object, holding one pool connection. The psycopg sync pool, the psycopg async pool, and the asyncpg pool never share.                    | One per pool object, held while any worker on the pool runs.                 |
 | Rust       | One per worker, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per worker, from the pool.                                               |
 | JVM        | One `Listener.shared(dataSource)` per `DataSource` object, holding one connection while any worker runs.                                              | One per `DataSource` object, held while any worker or attempt runs.          |
 
@@ -230,7 +230,8 @@ More detail: [Overview: Connection budgets per language](../architecture/overvie
 
 A heartbeat renews the lease of a running task. A worker sends its heartbeats on a dedicated
 connection, so busy handlers cannot delay them. TypeScript, Go, and Ruby workers on one pool share
-this connection. Java and Kotlin workers on one `DataSource` object share it.
+this connection. Python workers on one pool object share it too. Java and Kotlin workers on one
+`DataSource` object share it.
 
 **Example.** A worker with concurrency 8 shares a pool with its handlers. Each handler holds a
 pooled connection for a slow report query. Suppose that the heartbeat uses the same pool.
@@ -288,14 +289,16 @@ connect is tried again after `100 × 2^n` ms, capped at `heartbeatMs`. When the 
 the worker claims at once.
 
 **Refusal in other languages.** Python raises `ValueError` when the pool capacity is unknown or
-below 3. Go's `NewWorker` and Rust's worker constructor return an error when the pool maximum is
-below 3. Ruby raises unless the pool size is an integer of at least 3. A `DataSource` reports no
-pool size, so the Java worker checks the pool when it starts. Within the larger of `heartbeat` and 5
-seconds, it reserves the heartbeat connection and borrows one ordinary connection for the
-compatibility query. Between the two steps, it waits until the listener holds its connection, and
-that wait does not count against the budget. The timeout of the pool does not extend these waits. If
-the two steps do not end within the budget, the run throws `WorkhorseException`, which names the
-budget and the opt-out. The check proves only the headroom at that moment.
+below 3. Python also raises `TimeoutError` when the worker cannot reserve the heartbeat connection,
+and then borrow one more connection, within max(`heartbeat_ms`, 5 s). Go's `NewWorker` and Rust's
+worker constructor return an error when the pool maximum is below 3. Ruby raises unless the pool
+size is an integer of at least 3. A `DataSource` reports no pool size, so the Java worker checks the
+pool when it starts. Within the larger of `heartbeat` and 5 seconds, it reserves the heartbeat
+connection and borrows one ordinary connection for the compatibility query. Between the two steps,
+it waits until the listener holds its connection, and that wait does not count against the budget.
+The timeout of the pool does not extend these waits. If the two steps do not end within the budget,
+the run throws `WorkhorseException`, which names the budget and the opt-out. The check proves only
+the headroom at that moment.
 
 **Go startup.** Go's `Run` and `RunOnce` return an error when the startup does not complete in its
 budget. The startup first reserves the heartbeat connection, unless another worker on the pool holds
@@ -305,6 +308,10 @@ the heartbeat interval and 5 s. The error names the pool, the budget, and `Share
 **Go claim gate.** While the pool holds no heartbeat connection, a Go worker claims no task. A
 fast-tier completion then claims no replacement. When the connection returns, the worker claims at
 once.
+
+**No claim without the connection (Python).** While the pool holds no usable heartbeat connection,
+a Python worker claims no task. It retries the connection with a backoff of at most `heartbeat_ms`,
+and it claims again as soon as the connection is ready.
 
 | Language   | Opt-out             |
 | ---------- | ------------------- |
@@ -322,7 +329,7 @@ deadline. A round that fails destroys the connection, and asks the pool for a ne
 The connect thus starts before the next round. If it is still pending when the next round starts,
 that round waits for it, and the rest of the wait counts against the deadline of that round.
 
-More detail: [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
+More detail: [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), [Schema and SQL protocol: Shared pool connections](../architecture/schema-and-protocol.md#shared-pool-connections), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
 
 </details>
 

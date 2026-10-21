@@ -232,8 +232,8 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(
         def get_max_size(self) -> int:
             return asyncpg_pool.get_max_size()
 
-        async def acquire(self) -> LoggedConnection:
-            return LoggedConnection(await asyncpg_pool.acquire())
+        async def acquire(self, *, timeout: float | None = None) -> LoggedConnection:
+            return LoggedConnection(await asyncpg_pool.acquire(timeout=timeout))
 
         async def release(self, connection: LoggedConnection) -> None:
             await asyncpg_pool.release(connection._connection)

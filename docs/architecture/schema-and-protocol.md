@@ -725,16 +725,157 @@ One worker heartbeat timer sends every active lease through `heartbeat_many_v2`.
 next batch only after the prior call returns. A `busy` lease keeps running, and a busy retry sends
 it again before the next regular round ([Busy retry](lifecycle.md#busy-retry)).
 
-Unless `shared_heartbeats` is set, the worker reserves one pool connection for heartbeat rounds when
-it first needs one. Thus a saturated pool cannot delay lease renewal.
+Unless `shared_heartbeats` is set, every worker on one pool object sends its rounds on the heartbeat
+connection that the pool's `HeartbeatReservation` holds
+([Shared pool connections](#shared-pool-connections)). Thus a saturated pool cannot delay lease
+renewal.
 
-- A Psycopg heartbeat connection must use `autocommit=True`.
-- After a failed round, the worker returns that connection to the pool and reserves a new one.
-- The worker releases the connection when the run returns.
+- A Psycopg heartbeat connection must use `autocommit=True`. Otherwise the worker refuses to start.
+- A round takes the connection for itself, so the rounds of the workers on one pool run one after
+  another, in the order in which they ask for it. The wait for the connection counts against the
+  round deadline.
+- A round whose turn comes with less than a quarter of its time left skips without a statement. It
+  renews nothing, and the connection stays usable for the next round.
+- A round holds the connection until its deadline plus 1,000 ms. After that, the reservation stops
+  waiting for it and opens a replacement, and the round closes the connection when it returns.
+- A round that fails on the connection discards it, and the reservation starts the replacement at
+  once.
+- The reservation closes the connection when the last worker on the pool stops.
 - With `shared_heartbeats`, each round borrows a pool connection, as any other statement does.
 
-`AsyncWorker` reserves its heartbeat connection from its async pool through
-`_open_heartbeat_executor`, with the same lifecycle.
+`AsyncWorker` uses the reservation of its async pool, with the same lifecycle.
+
+#### Shared pool connections
+
+Every Python worker on one pool object shares one listener connection and one heartbeat connection
+(ADR 0071). `python/src/workhorse/_pool_hub.py` holds them in one `PoolHub` for each pool.
+
+| Domain        | Pool                               | Registry             | Listener                                          |
+| ------------- | ---------------------------------- | -------------------- | ------------------------------------------------- |
+| psycopg sync  | `psycopg_pool.ConnectionPool`      | `SYNC_HUBS`          | `SharedTaskNotificationListener`, one thread      |
+| psycopg async | `psycopg_pool.AsyncConnectionPool` | `ASYNC_PSYCOPG_HUBS` | `AsyncTaskNotificationListener`, one asyncio task |
+| asyncpg       | `asyncpg.Pool`                     | `ASYNCPG_HUBS`       | `AsyncTaskNotificationListener`, one asyncio task |
+
+- `PoolRegistry` keys a hub by the identity of the pool object. It holds a weak reference to the
+  pool, so it never keeps the pool alive.
+- A worker attaches to the hub for one run. The registry keeps the hub while a worker is attached,
+  and also while the hub's listener or reservation still stops. A worker that starts meanwhile
+  gets the same hub, so the pool never holds two listener connections.
+- The three domains never share, also when two pools reach one database.
+- An async pool belongs to one event loop. An asyncpg pool keeps its loop, and an open psycopg
+  `AsyncConnectionPool` runs its scheduler task on its loop. The registry also remembers the loop
+  of the first worker of each async pool, for the life of the pool. A worker on another event loop
+  raises `RuntimeError` and does not start, also before the first worker of the pool and after
+  its last worker stopped.
+- The listener holds its connection while it has subscribers. A notification wakes each subscriber
+  whose queues contain its payload, and `*` wakes every subscriber. The last subscriber stops the
+  listener, which gives its connection back to the pool. Errors of that stop go to the
+  `on_notification_error` of the last subscriber.
+- An async listener task waits at most 1,000 ms for the release of its connection. A cancellation
+  during that wait does not cut it short, and the task raises the cancellation after it. A
+  listener task reconnects only while it still has subscribers.
+- The `HeartbeatReservation` holds its connection while a worker uses it. It closes the connection
+  when the last worker leaves. One lock guards its whole connection lifecycle: acquisition,
+  lending, and disposal. While a disposal runs, the reservation is busy and starts no acquisition.
+
+**One owner for the connections of an async hub.** An async hub has one `AsyncConnectionOwner`.
+One task on the event loop of the pool does every acquisition, every release, and every late
+disposal of the hub's listener and heartbeat connections, one command at a time. Heartbeat
+commands go before listener commands when both wait.
+
+- A caller sends a command and waits for its reply until its own deadline. The owner delivers a
+  connection only while the caller still waits. A caller that stops waiting abandons the request,
+  and the owner then gives the connection back to the pool as its next step. Both sides decide
+  under one lock, so a connection reaches exactly one of them.
+- The owner holds at most one connection of each kind. An acquisition of a kind waits until the
+  release of the earlier connection of that kind has ended, also a release that outlived its
+  caller's wait. So a restart never holds two listener or two heartbeat connections.
+- A request whose caller left before the owner reached it opens no connection.
+- An acquisition that ends with an error, its own timeout too, answers its caller with that error,
+  and the next request starts a new acquisition.
+- The owner is busy while a command waits or runs, or it holds a connection. The registry keeps a
+  hub whose owner is busy. The owner task runs only while a command waits, so a run that returned
+  leaves no owner task running.
+- The owner does not cancel a pool release. While a release hangs, the owner waits for it, so the
+  next acquisition of the hub waits too, and the claim gate stays closed until the reservation
+  holds a connection again.
+
+**Startup.** The startup budget is max(`heartbeat_ms`, 5 s). Within it, the worker does these steps
+in order:
+
+1. It subscribes to the reservation and waits until the reservation holds its connection.
+2. It borrows one ordinary connection, runs the compatibility query, and returns the connection.
+
+One absolute deadline bounds both steps, and also the query itself and the return of its
+connection. If a step does not finish by that deadline, the worker raises `TimeoutError`. The error
+text names the pool, the budget, and `shared_heartbeats=True`. A `ValueError` of the heartbeat
+connection, such as a pool without `autocommit=True`, raises at once. Every startup runs step 2,
+also a later run of the same worker, so it proves the headroom of the pool at that start. The
+listener subscribes only after both steps, and it stays best effort. Its failures go to `on_notification_error`, and the worker polls while the
+listener reconnects. With `shared_heartbeats`, only the compatibility query runs, under the pool's
+own timeout.
+
+**Claim gate.** The reservation is ready while it holds its connection or lends it to a round
+within that round's time. While it is not ready, the worker starts no claim. Each run has a
+generation, and each claim keeps the generation of the run that started it. When the run releases
+its reservation, the gate stays closed for every claim of that run. A failed round that
+keeps the connection, or a `busy` lease, does not make the reservation not ready. A lost connection
+does.
+
+The worker reads the gate again after a statement borrows its connection, and before each attempt
+of the statement, also before a deadlock resend. The heartbeat connection can be lost while a claim
+waits for a pool connection.
+
+- A `claim_many_v1` or a fast-tier claim that finds the gate closed sends nothing. It does not
+  count as an empty claim, and the reservation wakes dispatch when the connection is ready.
+- A fused completion that finds the gate closed sends `complete_many_and_claim_v1` with a claim
+  limit of 0. It settles its tasks and claims nothing. This also applies to a completion that
+  waited behind another batch.
+
+**Replacement.** One acquirer thread at most runs for a reservation. It starts when a worker
+subscribes and when a round loses the connection. It also runs when no task is active.
+
+- Each attempt waits at most the round bound of the shortest `heartbeat_ms` of the subscribed
+  workers. While a worker waits at startup, the attempt can use the rest of that startup budget.
+- A failed attempt retries after a jittered backoff. The backoff starts at 100 ms, doubles, and is
+  capped at the shortest `heartbeat_ms`.
+- When the connection arrives, the reservation wakes the dispatcher of every subscribed worker.
+- A connection that arrives after every worker left, or after a round gave one back, belongs to the
+  acquirer, which closes it.
+- On an async pool, each attempt is a request to the hub's `AsyncConnectionOwner`, which holds at
+  most one heartbeat connection. A replacement thus starts only after the earlier heartbeat
+  connection is back in the pool.
+
+**Acquisition bounds.**
+
+| Wait for a pool connection                                   | Bound                                             |
+| ------------------------------------------------------------ | ------------------------------------------------- |
+| Listener                                                     | 7,500 ms, the round bound at the default interval |
+| Heartbeat replacement attempt                                | The round bound of the shortest `heartbeat_ms`    |
+| Heartbeat reservation and compatibility query at startup     | max(`heartbeat_ms`, 5 s), together                |
+| Registration refresh, with its statement                     | max(`heartbeat_ms`, 5 s), and the stop deadline   |
+| Bridge call of an async worker with a bound                  | The bound itself, with no extra wait              |
+| Ordinary asyncpg statement                                   | 30 s                                              |
+| Claims in flight, maintenance, draining refresh after a stop | The stop deadline                                 |
+| `deregister_worker_v1` after the drain                       | 1,000 ms                                          |
+
+A registration statement runs on its own thread, and the worker waits for it until its bound. One
+statement at most is in flight. A refresh that finds the previous statement still running skips,
+so a stalled statement holds neither the dispatch loop nor a stop.
+
+**Stop.** The first `stop()` of a run fixes the stop deadline at max(`heartbeat_ms`, 5 s) after that
+call. A loop that ends without a stop fixes it when it ends. These waits end at the deadline:
+
+- The wait for claims in flight. A claim that has not returned is left behind. A task that it
+  claims later stays leased until recovery takes it.
+- The join of the maintenance thread. Its current pass can continue, but no other pass starts.
+- The draining `register_worker_v1` refresh, also its statement. With no time left, the worker skips
+  it.
+
+The handler drain has no bound in the worker. `run_worker_process` bounds it with
+`shutdown_timeout_ms`. After the drain, one cleanup window of 1,000 ms starts.
+`deregister_worker_v1` spends from it, and an `AsyncWorker` run spends the rest on the release of
+the shared listener. A wait on the stop path does not start a new budget.
 
 #### Ownership statuses and expiration
 
@@ -1090,8 +1231,9 @@ re-raises `CancelledError` only after the shared core drains. A later cancellati
 that drain. Thus the bridge threads stay open, and a concurrent run call still fails until the core
 returns.
 
-`run()` also waits through later cancellations until its notification listener releases its
-connection. Only then does it close the bridge threads and clear `_running`.
+When `run()` is the last run on its pool, it also waits through later cancellations until the shared
+listener gives its connection back. The wait ends at the stop deadline, max(`heartbeat_ms`, 5 s).
+Only then does `run()` close the bridge threads and clear `_running`.
 
 #### Async batch handlers
 
@@ -1106,9 +1248,10 @@ and persistence.
 
 #### Async notifications
 
-`AsyncWorker.run()` listens through `AsyncWorker._listen`, which borrows one connection from the
-async pool. The method holds that connection in an asyncio task. `AsyncWorker` disables the Psycopg listener thread
-of the core worker.
+`AsyncWorker.run()` subscribes to the `AsyncTaskNotificationListener` of its pool's hub
+([Shared pool connections](#shared-pool-connections)). That listener borrows one connection from the
+async pool for every worker on the pool, and holds it in one asyncio task. `AsyncWorker` disables
+the Psycopg listener thread of the core worker.
 
 - A Psycopg listener connection must use `autocommit=True`. It reads the asynchronous `notifies`
   iterator.
@@ -1118,8 +1261,8 @@ Both filter `workhorse_tasks` payloads to the configured queues or `*`, and wake
 dispatcher. Both report listener errors to `on_notification_error`. Both reconnect with the same
 jittered backoff.
 
-When `run()` returns, it cancels the listener task. asyncpg calls `remove_listener` on every exit,
-which includes that cancellation. Thus the pool never receives a connection with a callback.
+When the last `run()` on the pool returns, it cancels the listener task. asyncpg calls
+`remove_listener` on every exit, which includes that cancellation. Thus the pool never receives a connection with a callback.
 `on_notification_error` receives a failed `remove_listener`. The connection still returns to the
 pool, and the pool reset discards the `LISTEN`.
 

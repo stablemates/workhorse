@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import random
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from concurrent.futures import Future
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from functools import partial
 from itertools import count
 from queue import Empty, SimpleQueue
 from threading import Lock, Thread
+from time import monotonic
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 from ._compatibility import AsyncRowExecutor as _AsyncRowExecutor
@@ -20,6 +20,22 @@ from ._drivers import (
     AsyncPsycopgPool as _AsyncPsycopgPool,
     PooledAsyncpgExecutor as _PooledAsyncpgExecutor,
     PooledAsyncPsycopgExecutor as _PooledAsyncPsycopgExecutor,
+    StatementCheck as _StatementCheck,
+    pool_connection as _pool_connection,
+)
+from ._pool_hub import (
+    ASYNC_PSYCOPG_HUBS as _ASYNC_PSYCOPG_HUBS,
+    ASYNCPG_HUBS as _ASYNCPG_HUBS,
+    CLEANUP_SECONDS as _CLEANUP_SECONDS,
+    HEARTBEAT as _HEARTBEAT,
+    AsyncConnectionOwner as _AsyncConnectionOwner,
+    AsyncNotificationSubscription as _AsyncNotificationSubscription,
+    AsyncTaskNotificationListener as _AsyncTaskNotificationListener,
+    HeartbeatReservation as _HeartbeatReservation,
+    PoolHub as _PoolHub,
+    PoolRegistry as _PoolRegistry,
+    pool_label as _pool_label,
+    require_pool as _require_pool,
 )
 from ._statements import DriverStatement as _DriverStatement
 from .types import (
@@ -43,17 +59,13 @@ from .types import (
     TaskWait,
     _NoInput,
 )
-from .worker import Worker
+from .worker import Worker, _CheckedExecutor
 
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[
     [Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]
 ]
-_AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
 
-_CHANNEL = "workhorse_tasks"
-_RECONNECT_INITIAL_SECONDS = 0.1
-_RECONNECT_MAX_SECONDS = 5.0
 _BRIDGE_IDLE_SECONDS = 5.0
 _T = TypeVar("_T")
 
@@ -161,9 +173,32 @@ class _BridgeThreads:
 class _AsyncExecutorBridge:
     """Expose an async driver to the shared synchronous lifecycle core."""
 
-    def __init__(self, executor: _AsyncRowExecutor) -> None:
+    def __init__(self, executor: _AsyncRowExecutor, *, wait: float | None = None) -> None:
         self._executor = executor
         self._loop: asyncio.AbstractEventLoop | None = None
+        # The longest wait for one call, in seconds. None waits for the driver.
+        self._wait = wait
+
+    def checked(self, check: _StatementCheck) -> _AsyncExecutorBridge:
+        """This bridge, whose executor runs `check` after each borrow and before each statement.
+
+        The check runs on the event loop.
+        """
+        checked = getattr(self._executor, "checked", None)
+        if not callable(checked):
+            return cast(_AsyncExecutorBridge, _CheckedExecutor(self, check))
+        bridge = _AsyncExecutorBridge(cast(_AsyncRowExecutor, checked(check)), wait=self._wait)
+        bridge._loop = self._loop
+        return bridge
+
+    def within(self, timeout: float) -> _AsyncExecutorBridge:
+        """This bridge, with each wait for a pool connection bounded by ``timeout`` seconds."""
+        within = getattr(self._executor, "within", None)
+        if not callable(within):
+            return self
+        bridge = _AsyncExecutorBridge(cast(_AsyncRowExecutor, within(timeout)), wait=timeout)
+        bridge._loop = self._loop
+        return bridge
 
     @property
     def dialect(self) -> str:
@@ -179,7 +214,13 @@ class _AsyncExecutorBridge:
         if loop is None:
             raise RuntimeError("AsyncWorker database access requires an active run call")
         future = asyncio.run_coroutine_threadsafe(self._rows(statement, parameters), loop)
-        return future.result()
+        if self._wait is None:
+            return future.result()
+        try:
+            return future.result(self._wait)
+        except FutureTimeoutError:
+            future.cancel()
+            raise TimeoutError("the event loop did not answer in time") from None
 
     def discard(self) -> None:
         """Close the driver connection, so its pool can only discard it."""
@@ -195,7 +236,9 @@ class _AsyncExecutorBridge:
             else:
                 await connection.close()
 
-        asyncio.run_coroutine_threadsafe(close(), loop).result()
+        # A stalled event loop must not hold a heartbeat round or a stop.
+        with suppress(FutureTimeoutError):
+            asyncio.run_coroutine_threadsafe(close(), loop).result(_CLEANUP_SECONDS)
 
     def command(self, statement: _DriverStatement, parameters: Sequence[object] = ()) -> None:
         """Send a statement that returns no rows, such as BEGIN."""
@@ -431,19 +474,24 @@ class AsyncWorker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
         self._threads = _BridgeThreads()
+        # The hub of the pool while a run is active: the listener and heartbeat connection that
+        # every AsyncWorker on the pool shares.
+        self._hub: _PoolHub | None = None
+        # The listener subscription of the active run, made once the core started.
+        self._subscription: _AsyncNotificationSubscription | None = None
+        self._wants_listener = False
         self._inner = Worker(
             cast(Any, pool),
             on_notification_error=on_notification_error,
             on_registration_error=on_registration_error,
             _executor=self._bridge,
             shared_heartbeats=shared_heartbeats,
-            _heartbeat_executor_factory=(
-                None if shared_heartbeats else self._open_heartbeat_executor
-            ),
             **worker_options,
         )
-        # The async run listens through its own driver, so the core opens no Psycopg listener.
-        self._inner._notification_connection_factory = None
+        # The async run attaches to the hub and listens on the event loop, so the core only
+        # takes the hub's heartbeat reservation.
+        self._inner._listens = False
+        self._inner._hub_source = self._core_hub
 
     @classmethod
     def from_psycopg(
@@ -583,34 +631,52 @@ class AsyncWorker:
     async def run_once(self) -> bool:
         self._start_run()
         try:
+            self._attach_hub()
             return await self._run_inner(self._inner.run_once)
         finally:
+            self._detach_hub()
             self._threads.close()
             self._running = False
 
     async def run(self) -> None:
         self._start_run()
-        stop_notifications = asyncio.Event()
-        listener = asyncio.create_task(self._listen(stop_notifications))
         completed = False
+        interrupted = False
         try:
+            self._attach_hub()
+            # The listener is best effort, so it subscribes only after the core reserved the
+            # heartbeat connection and ran the compatibility query (ADR 0071, rule 3).
+            self._wants_listener = True
+            self._inner._on_connections_ready = self._subscribe_listener
             await self._run_inner(self._inner.run)
             completed = True
         finally:
-            stop_notifications.set()
-            listener.cancel()
-            # A later cancellation must not cut the listener's connection release short.
-            # The run waits for it without forwarding that cancellation into the listener.
-            interrupted = False
-            while not listener.done():
-                try:
-                    await asyncio.wait((listener,))
-                except asyncio.CancelledError:
-                    interrupted = True
+            self._wants_listener = False
+            self._inner._on_connections_ready = None
+            subscription, self._subscription = self._subscription, None
+            stopping = subscription.close() if subscription is not None else None
+            if stopping is not None:
+                # The last worker on the pool stops the listener. A later cancellation must not
+                # cut its connection release short, so the run waits for it without forwarding
+                # that cancellation. The wait spends the rest of the core's cleanup window, so
+                # the stop takes no new budget (ADR 0071, rule 8).
+                deadline = getattr(self._inner, "_cleanup_deadline", None) or (
+                    monotonic() + _CLEANUP_SECONDS
+                )
+                while not stopping.done():
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        await asyncio.wait((stopping,), timeout=remaining)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                if stopping.done() and not stopping.cancelled():
+                    stopping.exception()
+            self._inner._set_notification_listening(False)
+            self._detach_hub()
             self._threads.close()
             self._running = False
-            if not listener.cancelled():
-                listener.result()
         if interrupted and completed:
             raise asyncio.CancelledError
 
@@ -650,34 +716,160 @@ class AsyncWorker:
             run.result()
             raise
 
-    def _open_heartbeat_executor(self) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:
-        """Reserve one pool connection for heartbeat rounds."""
+    def _subscribe_listener(self) -> None:
+        """Subscribe this run to the shared listener. The core calls this from its thread."""
         loop = self._require_loop()
 
-        async def acquire() -> tuple[Any, Callable[[], Coroutine[Any, Any, None]]]:
-            if self._driver == "psycopg":
-                psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
-                context = psycopg_pool.connection()
+        async def subscribe() -> None:
+            if not self._wants_listener or self._hub is None or self._subscription is not None:
+                return
+            listener = cast(_AsyncTaskNotificationListener, self._hub.listener)
+            self._subscription = listener.subscribe(
+                self.queues,
+                self._inner._wake_from_notification,
+                self._on_notification_error,
+                self._inner._set_notification_listening,
+            )
+
+        with suppress(FutureTimeoutError):
+            asyncio.run_coroutine_threadsafe(subscribe(), loop).result(_CLEANUP_SECONDS)
+
+    def _registry(self) -> _PoolRegistry:
+        return _ASYNC_PSYCOPG_HUBS if self._driver == "psycopg" else _ASYNCPG_HUBS
+
+    def _attach_hub(self) -> _PoolHub:
+        """Attach to the hub of the pool on the running event loop.
+
+        A worker refuses to start on another event loop than the pool's (ADR 0071, rule 9).
+        """
+        loop = self._require_loop()
+        pool_loop = _pool_event_loop(self._pool)
+        if pool_loop is not None and pool_loop is not loop:
+            raise RuntimeError(
+                f"AsyncWorker cannot start: the {self._driver} pool {_pool_label(self._pool)} "
+                "belongs to another event loop. Run the worker on the event loop of its pool."
+            )
+        # The registry remembers the loop of the pool, also before the first worker of a pool
+        # that does not tell its loop, and after its last worker stopped.
+        self._hub = self._registry().attach(self._pool, self._create_hub, loop)
+        return self._hub
+
+    def _detach_hub(self) -> None:
+        hub, self._hub = self._hub, None
+        if hub is not None:
+            self._registry().detach(hub)
+
+    def _core_hub(self) -> tuple[_PoolHub | None, Callable[[], None]]:
+        """The hub that the active run attached. The run, not the core, detaches it."""
+        return self._hub, lambda: None
+
+    def _create_hub(self, pool_ref: Callable[[], Any]) -> _PoolHub:
+        """The hub of an async pool. Its one `AsyncConnectionOwner` opens and releases every
+        connection that the hub reserves, the listener's and the heartbeat connection."""
+        loop = self._require_loop()
+        driver = self._driver
+
+        # The timeout is the pool's own wait, as asyncpg and psycopg name it.
+        async def open_connection(timeout: float) -> tuple[Any, Callable[[], Awaitable[None]]]:  # noqa: ASYNC109
+            pool = _require_pool(pool_ref)
+            if driver == "psycopg":
+                context = _pool_connection(cast(_AsyncPsycopgPool, pool), timeout)
                 connection = await context.__aenter__()
 
-                async def close_psycopg() -> None:
+                async def release_psycopg() -> None:
                     await context.__aexit__(None, None, None)
 
-                return connection, close_psycopg
-            asyncpg_pool = cast(_AsyncpgPool, self._pool)
-            connection = await asyncpg_pool.acquire()
+                return connection, release_psycopg
+            asyncpg_pool = cast(_AsyncpgPool, pool)
+            connection = await asyncpg_pool.acquire(timeout=timeout)
 
-            async def close_asyncpg() -> None:
+            async def release_asyncpg() -> None:
                 await asyncpg_pool.release(connection)
 
-            return connection, close_asyncpg
+            return connection, release_asyncpg
 
-        connection, close_async = asyncio.run_coroutine_threadsafe(acquire(), loop).result()
+        owner = _AsyncConnectionOwner(loop, open_connection, _terminate_connection)
+        return _PoolHub(
+            _pool_label(pool_ref()),
+            _AsyncTaskNotificationListener(driver, owner),
+            _HeartbeatReservation(_async_heartbeat_acquire(loop, owner, driver)),
+            loop,
+            owner,
+        )
+
+    def _require_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None:
+            raise RuntimeError("AsyncWorker handler ran outside an active run call")
+        return self._loop
+
+
+def _pool_event_loop(pool: object) -> asyncio.AbstractEventLoop | None:
+    """The event loop that an async pool belongs to, where the pool tells it.
+
+    An asyncpg pool keeps its loop. An open psycopg ``AsyncConnectionPool`` runs its scheduler
+    task on its loop.
+    """
+    loop = getattr(pool, "_loop", None)
+    if isinstance(loop, asyncio.AbstractEventLoop):
+        return loop
+    scheduler = getattr(pool, "_sched_runner", None)
+    if isinstance(scheduler, asyncio.Task):
+        return scheduler.get_loop()
+    return None
+
+
+async def _terminate_connection(connection: Any) -> None:
+    """Close a driver connection in an unknown state, so its pool can only discard it."""
+    terminate = getattr(connection, "terminate", None)
+    if callable(terminate):
+        terminate()
+    else:
+        await connection.close()
+
+
+class _OwnedHeartbeatBridge(_AsyncExecutorBridge):
+    """A heartbeat bridge whose connection the hub's owner gives back, also a broken one."""
+
+    def __init__(self, executor: _AsyncRowExecutor, give_back: Callable[[bool], None]) -> None:
+        super().__init__(executor)
+        self._give_back = give_back
+
+    def discard(self) -> None:
+        """Let the owner close the driver connection, then give it back to the pool."""
+        self._give_back(True)
+
+
+def _async_heartbeat_acquire(
+    loop: asyncio.AbstractEventLoop, owner: _AsyncConnectionOwner, driver: str
+) -> Callable[[float], tuple[_AsyncExecutorBridge, Callable[[], None]]]:
+    """Reserve the shared heartbeat connection of an async pool through the hub's owner.
+
+    The owner holds at most one heartbeat connection, so a replacement waits until the earlier
+    one is back in the pool. A connection that arrives after the wait ended goes back through
+    the owner.
+    """
+
+    def acquire(timeout: float) -> tuple[_AsyncExecutorBridge, Callable[[], None]]:
+        connection = owner.acquire(_HEARTBEAT, monotonic() + timeout)
+        given_back = Lock()
+        returned = False
+
+        def give_back(broken: bool) -> None:
+            nonlocal returned
+            with given_back:
+                if returned:
+                    return
+                returned = True
+            # A stalled event loop must not hold a heartbeat round or a stop. The owner gives the
+            # connection back also after this wait ends.
+            owner.release(
+                _HEARTBEAT, connection, broken=broken, deadline=monotonic() + _CLEANUP_SECONDS
+            )
 
         def close() -> None:
-            asyncio.run_coroutine_threadsafe(close_async(), loop).result()
+            give_back(False)
 
-        if self._driver == "psycopg":
+        if driver == "psycopg":
             if getattr(connection, "autocommit", False) is not True:
                 close()
                 raise ValueError("Heartbeat connection must be in autocommit mode")
@@ -686,89 +878,11 @@ class AsyncWorker:
             executor: _AsyncRowExecutor = _AsyncPsycopgExecutor(connection, prepare=False)
         else:
             executor = _AsyncpgExecutor(connection)
-        bridge = _AsyncExecutorBridge(executor)
+        bridge = _OwnedHeartbeatBridge(executor, give_back)
         bridge.bind(loop)
         return bridge, close
 
-    def _require_loop(self) -> asyncio.AbstractEventLoop:
-        if self._loop is None:
-            raise RuntimeError("AsyncWorker handler ran outside an active run call")
-        return self._loop
-
-    async def _listen(self, stop: asyncio.Event) -> None:
-        reconnect_seconds = _RECONNECT_INITIAL_SECONDS
-        while not stop.is_set():
-            connection: Any | None = None
-            context: Any | None = None
-            try:
-                if self._driver == "psycopg":
-                    psycopg_pool = cast(_AsyncPsycopgPool, self._pool)
-                    context = psycopg_pool.connection()
-                    connection = await context.__aenter__()
-                else:
-                    asyncpg_pool = cast(_AsyncpgPool, self._pool)
-                    connection = await asyncpg_pool.acquire()
-                if self._driver == "psycopg":
-                    await self._listen_psycopg(connection, stop)
-                else:
-                    await self._listen_asyncpg(connection, stop)
-                reconnect_seconds = _RECONNECT_INITIAL_SECONDS
-            except asyncio.CancelledError:
-                raise
-            except BaseException as error:
-                if self._on_notification_error is not None:
-                    self._on_notification_error(error)
-                self._inner._wake_dispatcher()
-            finally:
-                self._inner._set_notification_listening(False)
-                if connection is not None:
-                    try:
-                        if self._driver == "psycopg":
-                            await cast(Any, context).__aexit__(None, None, None)
-                        else:
-                            await cast(_AsyncpgPool, self._pool).release(connection)
-                    except BaseException as error:
-                        if self._on_notification_error is not None:
-                            self._on_notification_error(error)
-            if stop.is_set():
-                return
-            await asyncio.sleep(reconnect_seconds * random.uniform(0.9, 1.1))
-            reconnect_seconds = min(_RECONNECT_MAX_SECONDS, reconnect_seconds * 2)
-
-    async def _listen_psycopg(self, connection: Any, stop: asyncio.Event) -> None:
-        if getattr(connection, "autocommit", False) is not True:
-            raise ValueError("Notification connection must use autocommit mode")
-        await connection.execute(f"LISTEN {_CHANNEL}")
-        self._inner._set_notification_listening(True)
-        self._inner._wake_from_notification()
-        while not stop.is_set():
-            async for notification in connection.notifies(timeout=0.1, stop_after=1):
-                if notification.payload == "*" or notification.payload in self.queues:
-                    self._inner._wake_from_notification()
-
-    async def _listen_asyncpg(self, connection: Any, stop: asyncio.Event) -> None:
-        if connection.is_in_transaction():
-            raise ValueError("Notification connection must not have an active transaction")
-
-        def wake(_connection: object, _pid: int, _channel: str, payload: str) -> None:
-            if payload == "*" or payload in self.queues:
-                self._inner._wake_from_notification()
-
-        await connection.add_listener(_CHANNEL, wake)
-        try:
-            self._inner._set_notification_listening(True)
-            self._inner._wake_from_notification()
-            while not stop.is_set() and not connection.is_closed():
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(stop.wait(), timeout=0.1)
-        finally:
-            # run() cancels this task, and asyncpg warns when a pooled connection returns with a
-            # callback. A failed UNLISTEN leaves the release to the pool's reset.
-            try:
-                await connection.remove_listener(_CHANNEL, wake)
-            except Exception as error:
-                if self._on_notification_error is not None:
-                    self._on_notification_error(error)
+    return acquire
 
 
 __all__ = ["AsyncBatchHandler", "AsyncHandler", "AsyncWorker"]

@@ -1449,7 +1449,9 @@ fails the round and discards the connection. Their heartbeat connections work as
   after they get the execution permit. They release it before they return the permit. Thus a
   `RunOnce` that waits for the permit cannot release the hold of the invocation that it waits
   behind. The Go startup and claim gate below apply to this connection.
-- A Python worker takes its dedicated heartbeat connection from the supplied pool.
+- Python workers on one pool object share one heartbeat connection from that pool. A failed round
+  discards it, and the reservation of the pool starts the replacement at once. While the pool holds
+  no usable heartbeat connection, the workers claim no task.
 - A Rust worker reserves one pooled heartbeat connection unless `WorkerOptions::shared_heartbeats`
   is set. It bounds a round on that connection by `heartbeat_round_bound`. It discards the connection
   if the round fails. A round under `shared_heartbeats` borrows a connection like any other
@@ -1512,12 +1514,12 @@ Each bounded round does these steps, all before one deadline:
 
 1. Builds the lease payload. The deadline starts before this step, so serialization counts
    against it.
-2. Waits for its turn on the connection (TypeScript and Go, where workers share the connection), and
-   takes the connection, or a new one after a failed round. In TypeScript and Python, a failed
-   round starts the replacement when it ends, so the connect starts before the next round. A Go
-   round that discards its connection starts the acquisition loop at once. If the replacement is
-   not ready, a TypeScript or Go round waits for it until its own deadline, and a Python round
-   starts its own checkout. A Rust round starts the replacement inside its own
+2. Waits for its turn on the connection (TypeScript, Go, and Python, where workers share the
+   connection), and takes the connection, or a new one after a failed round. In TypeScript and
+   Python, a failed round starts the replacement when it ends, so the connect starts before the next
+   round. A Go round that discards its connection starts the acquisition loop at once. If the
+   replacement is not ready, a TypeScript, Go, or Python round waits for it until its own deadline.
+   A Rust round starts the replacement inside its own
    deadline. If the connect is not ready by the deadline, it continues, and each later round waits
    for the same connect until its own deadline. A pool without a wait timeout can keep that connect
    pending for several rounds. Ruby holds its connection between rounds, and takes a new one in its

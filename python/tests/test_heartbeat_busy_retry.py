@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from eventual_conditions import eventually
+from reservations import reserve
 
 from workhorse import CancellationToken
 from workhorse._heartbeat_round import (
@@ -397,6 +398,7 @@ class BoundedWorker:
             heartbeat_ms=HEARTBEAT_MS,
             _heartbeat_executor_factory=self.open,
         )
+        reserve(self.worker)
 
     def open(self) -> tuple[Any, Callable[[], None]]:
         connection = FakeConnection(self._respond)

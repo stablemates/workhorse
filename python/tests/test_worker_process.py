@@ -235,7 +235,7 @@ def _stalling_worker(database: FailingDatabase, handlers: StalledHandlers) -> Wo
         _executor=database,
     )
     worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
-    worker._notification_connection_factory = None  # type: ignore[assignment]
+    worker._listens = False
     worker._execute_claimed_task = handlers.execute  # type: ignore[method-assign]
     return worker.handle(STALLED_TYPE, lambda _payload, _context: None)
 

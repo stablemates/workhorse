@@ -137,7 +137,7 @@ def scripted_worker(executor: Settlements, results: dict[int, object]) -> Worker
         _executor=executor,
     )
     worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
-    worker._notification_connection_factory = None  # type: ignore[assignment]
+    worker._listens = False
 
     def handle(payload: object, _context: object) -> object:
         assert isinstance(payload, dict)

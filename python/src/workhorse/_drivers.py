@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, cast
 
 from psycopg.rows import tuple_row
@@ -67,22 +67,38 @@ class PsycopgPool(Protocol):
     @property
     def max_size(self) -> int: ...
 
-    def connection(self) -> Any: ...
+    def connection(self, timeout: float | None = None) -> Any: ...
 
 
 class AsyncPsycopgPool(Protocol):
     @property
     def max_size(self) -> int: ...
 
-    def connection(self) -> Any: ...
+    def connection(self, timeout: float | None = None) -> Any: ...
 
 
 class AsyncpgPool(Protocol):
-    async def acquire(self) -> Any: ...
+    # The signature of asyncpg.Pool.acquire.
+    async def acquire(self, *, timeout: float | None = None) -> Any: ...  # noqa: ASYNC109
 
     async def release(self, connection: Any) -> None: ...
 
     def get_max_size(self) -> int: ...
+
+
+# The wait for one asyncpg connection when nothing shorter applies. asyncpg has no default wait,
+# so without a timeout a full pool holds the caller indefinitely. psycopg's default is the same.
+ASYNCPG_ACQUIRE_TIMEOUT_SECONDS = 30.0
+
+
+# Runs after the executor borrowed its connection and before each statement it sends. It returns
+# the parameters to send, or raises to send nothing.
+StatementCheck = Callable[[Sequence[object]], Sequence[object]]
+
+
+def pool_connection(pool: PsycopgPool | AsyncPsycopgPool, timeout: float | None) -> Any:
+    """The connection context of a psycopg pool. ``None`` keeps the pool's own timeout."""
+    return pool.connection() if timeout is None else pool.connection(timeout=timeout)
 
 
 def _execute_options(prepare: bool | None) -> dict[str, bool]:
@@ -192,40 +208,109 @@ class AsyncpgExecutor:
 
 
 class PooledSyncExecutor:
+    """Run each statement on a connection from a psycopg pool.
+
+    ``timeout`` bounds the wait for that connection, in seconds. ``None`` keeps the pool's own
+    timeout.
+    """
+
     dialect: DriverDialect = "psycopg"
 
-    def __init__(self, pool: PsycopgPool) -> None:
+    def __init__(
+        self,
+        pool: PsycopgPool,
+        *,
+        timeout: float | None = None,
+        check: StatementCheck | None = None,
+    ) -> None:
         self.pool = pool
+        self.timeout = timeout
+        self.check = check
+
+    def within(self, timeout: float) -> PooledSyncExecutor:
+        """This executor, with each wait for a connection bounded by ``timeout`` seconds."""
+        return PooledSyncExecutor(self.pool, timeout=timeout, check=self.check)
+
+    def checked(self, check: StatementCheck) -> PooledSyncExecutor:
+        """This executor, which runs `check` after each borrow and before each statement."""
+        return PooledSyncExecutor(self.pool, timeout=self.timeout, check=check)
 
     def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Row]:
-        with self.pool.connection() as connection:
+        with pool_connection(self.pool, self.timeout) as connection:
+            if self.check is not None:
+                parameters = self.check(parameters)
             return SyncExecutor(connection).rows(statement, parameters)
 
 
 class PooledAsyncPsycopgExecutor:
+    """Run each statement on a connection from an async psycopg pool. ``timeout`` is as for
+    `PooledSyncExecutor`."""
+
     dialect: DriverDialect = "psycopg"
 
-    def __init__(self, pool: AsyncPsycopgPool) -> None:
+    def __init__(
+        self,
+        pool: AsyncPsycopgPool,
+        *,
+        timeout: float | None = None,
+        check: StatementCheck | None = None,
+    ) -> None:
         self.pool = pool
+        self.timeout = timeout
+        self.check = check
+
+    def within(self, timeout: float) -> PooledAsyncPsycopgExecutor:
+        """This executor, with each wait for a connection bounded by ``timeout`` seconds."""
+        return PooledAsyncPsycopgExecutor(self.pool, timeout=timeout, check=self.check)
+
+    def checked(self, check: StatementCheck) -> PooledAsyncPsycopgExecutor:
+        """This executor, which runs `check` after each borrow and before each statement."""
+        return PooledAsyncPsycopgExecutor(self.pool, timeout=self.timeout, check=check)
 
     async def rows(
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Row]:
-        async with self.pool.connection() as connection:
+        async with pool_connection(self.pool, self.timeout) as connection:
+            if self.check is not None:
+                parameters = self.check(parameters)
             return await AsyncPsycopgExecutor(connection).rows(statement, parameters)
 
 
 class PooledAsyncpgExecutor:
+    """Run each statement on a connection from an asyncpg pool.
+
+    Every ``acquire()`` gets an explicit timeout, ``ASYNCPG_ACQUIRE_TIMEOUT_SECONDS`` unless
+    ``within`` gives a shorter one.
+    """
+
     dialect: DriverDialect = "asyncpg"
 
-    def __init__(self, pool: AsyncpgPool) -> None:
+    def __init__(
+        self,
+        pool: AsyncpgPool,
+        *,
+        timeout: float = ASYNCPG_ACQUIRE_TIMEOUT_SECONDS,
+        check: StatementCheck | None = None,
+    ) -> None:
         self.pool = pool
+        self.timeout = timeout
+        self.check = check
+
+    def within(self, timeout: float) -> PooledAsyncpgExecutor:
+        """This executor, with each wait for a connection bounded by ``timeout`` seconds."""
+        return PooledAsyncpgExecutor(self.pool, timeout=timeout, check=self.check)
+
+    def checked(self, check: StatementCheck) -> PooledAsyncpgExecutor:
+        """This executor, which runs `check` after each borrow and before each statement."""
+        return PooledAsyncpgExecutor(self.pool, timeout=self.timeout, check=check)
 
     async def rows(
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Row]:
-        connection = await self.pool.acquire()
+        connection = await self.pool.acquire(timeout=self.timeout)
         try:
+            if self.check is not None:
+                parameters = self.check(parameters)
             return await AsyncpgExecutor(connection).rows(statement, parameters)
         finally:
             await self.pool.release(connection)

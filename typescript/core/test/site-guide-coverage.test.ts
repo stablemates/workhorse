@@ -237,8 +237,9 @@ describe("documentation site guide coverage", () => {
     // its own connection, and the reference still described the removed connection factories.
     expect(architecture).toContain("exports `Worker` for a Psycopg `ConnectionPool`");
     expect(architecture).toContain("`_PooledAsyncPsycopgExecutor` or `_PooledAsyncpgExecutor`");
-    expect(architecture).toContain("reserves one pool connection for heartbeat");
-    expect(architecture).toContain("`AsyncWorker._listen`, which borrows one connection");
+    // SM-1571: every worker on one pool shares the listener and the heartbeat connection.
+    expect(architecture).toContain("the pool's `HeartbeatReservation` holds");
+    expect(architecture).toContain("That listener borrows one connection from the");
     for (const contents of [architecture, guide, page]) {
       expect(contents).not.toMatch(/notification_connection_factory|heartbeat_connection_factory/);
       expect(contents).not.toMatch(/dedicated query connection|asyncio\.Lock/);
@@ -271,12 +272,13 @@ describe("documentation site guide coverage", () => {
       expect(contents).toContain(
         "borrows a pool connection for each claim and lifecycle statement and returns it afterwards",
       );
-      expect(contents).toContain("reserves its own heartbeat and listener connections");
+      // SM-1571: every Python worker on one pool shares both reserved connections.
+      expect(contents).toContain("shares one heartbeat connection and one listener connection");
       expect(contents).toMatch(/never closes (it|the pool it was given)/);
     }
     expect(guide).toContain("AsyncWorker.from_asyncpg(worker_pool,");
     expect(guide).not.toContain("Workers that share a database pool also share the listener");
-    expect(guide).toContain("A Python, Rust, Java, or Kotlin worker holds its own.");
+    expect(guide).toContain("A Rust, Java, or Kotlin worker holds its own.");
     expect(readme).toContain("Queue(application_connection).enqueue(");
     expect(readme).toContain("Worker(worker_pool)");
   });

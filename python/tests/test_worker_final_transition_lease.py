@@ -126,7 +126,7 @@ def handler_for(outcome: str) -> Callable[[object, object], object]:
 
 def scripted(worker: Worker) -> Worker:
     worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
-    worker._notification_connection_factory = None  # type: ignore[assignment]
+    worker._listens = False
     return worker
 
 
