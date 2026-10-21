@@ -761,6 +761,12 @@ keeps one `complete_many_and_claim_v1` call in flight for each queue and cohort.
   task's cohort plus one.
 - The call names its tasks in task ID order, and `heartbeat_many_v1` and `heartbeat_many_v2` lock
   their leases in the same order.
+- Each `dispatchSlot` records the `completionClaimer` of the dispatch loop that launched it. A
+  completion asks only that loop for a reservation. The loop refuses a slot of another run. After
+  its run ends, the loop grants none. So a handler that outlives a `Run` that returned
+  `ErrShutdownIncomplete` claims no task for a later `Run` of the same `Worker` (SM-1579).
+- `completionBatchKey` includes that `completionClaimer`, so the completions of two runs never share
+  a statement.
 
 The fused claim releases a lock it would otherwise keep on a candidate another worker leased first
 ([Fast claim](#fast-claim)). When PostgreSQL still rolls a statement back with SQLSTATE `40P01`,

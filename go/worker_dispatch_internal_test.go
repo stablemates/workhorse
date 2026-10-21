@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,6 +84,12 @@ func startDispatchOn(t *testing.T, options WorkerOptions, paused bool, tier disp
 		return nil, nil
 	})
 	worker.remotelyPaused.Store(paused)
+	return startDispatchWith(t, worker, tier)
+}
+
+// startDispatchWith starts one more dispatch run on worker, as a restarted Run does.
+func startDispatchWith(t *testing.T, worker *Worker, tier dispatchTier) *dispatchHarness {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	harness := &dispatchHarness{
 		t:            t,
@@ -361,7 +369,7 @@ func TestDispatchReportsAClaimErrorAfterLaunchingItsTasks(t *testing.T) {
 
 // reserve asks the loop for a fused completion claim the way writeFastCompletion does.
 func (harness *dispatchHarness) reserve(execution fakeExecution) *completionReservation {
-	return harness.worker.completionClaims.Load().reserve(execution.task)
+	return execution.task.slot.claimer.reserve(execution.task)
 }
 
 func expectCohorts(t *testing.T, executions []fakeExecution, want ...int) {
@@ -562,6 +570,117 @@ func TestDispatchWaitsForAFusedCompletionAtStop(t *testing.T) {
 	replacement := harness.expectExecutions(1)
 	if err := harness.stop(nil, append(executions, replacement...)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// claimLimitRecorder answers a batched completion that claims nothing, and records the claim limit
+// the statement sent.
+type claimLimitRecorder struct {
+	limits chan int
+}
+
+func (recorder claimLimitRecorder) Query(_ context.Context, _ string, arguments ...any) ([]Row, error) {
+	recorder.limits <- arguments[5].(int)
+	return []Row{{rowAcceptedField: []any{}}}, nil
+}
+
+// SM-1579: Run returned ErrShutdownIncomplete with a fast-tier handler still running, and the caller
+// started the same Worker again. The old handler's completion belongs to the run that ended. It
+// must not reserve slots of the new run or claim tasks for them.
+func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
+	ended := startDispatchOn(t, WorkerOptions{Concurrency: 2}, false, fastTierQueue)
+	ended.expectClaim(2).respond <- fakeClaimResponse{tasks: ended.tasks(2, dispatchTaskType)}
+	abandoned := ended.expectExecutions(2)
+	ended.cancel()
+	outcome := <-ended.outcome
+	if outcome.active != 2 {
+		t.Fatalf("the ended run left %d executions, want 2", outcome.active)
+	}
+
+	next := startDispatchWith(t, ended.worker, fastTierQueue)
+	pending := next.expectClaim(2)
+	recorder := claimLimitRecorder{limits: make(chan int, 1)}
+	completed := make(chan error, 1)
+	go func() {
+		_, err := ended.worker.writeFastCompletion(
+			context.Background(), recorder, abandoned[0].task, json.RawMessage(`null`),
+		)
+		completed <- err
+	}()
+	if limit := <-recorder.limits; limit != 0 {
+		t.Fatalf("the ended run's completion claimed %d tasks for the next run", limit)
+	}
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+	if err := next.stop([]fakeClaimCall{pending}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, execution := range abandoned {
+		execution.finish <- nil
+		<-ended.results
+	}
+}
+
+// heldBatchExecutor holds every batched completion that names held until release closes, and
+// reports the tasks of each statement.
+type heldBatchExecutor struct {
+	held    string
+	release chan struct{}
+	sent    chan []string
+}
+
+func (executor heldBatchExecutor) Query(_ context.Context, _ string, arguments ...any) ([]Row, error) {
+	ids := arguments[1].([]string)
+	executor.sent <- ids
+	if slices.Contains(ids, executor.held) {
+		<-executor.release
+	}
+	return []Row{{rowAcceptedField: []any{}}}, nil
+}
+
+// SM-1579: a completion of an ended run goes in its own statement. If it joined a batch of the next
+// run, its cancelled context could fail that batch, or it could wait behind it.
+func TestAFastCompletionOfAnEndedRunDoesNotJoinTheNextRunsBatch(t *testing.T) {
+	worker := newDefaultWorker(t, WorkerOptions{})
+	stoppedClaimer := func() *completionClaimer {
+		claimer := &completionClaimer{done: make(chan struct{})}
+		close(claimer.done)
+		return claimer
+	}
+	ended, next := stoppedClaimer(), stoppedClaimer()
+	executor := heldBatchExecutor{held: "b-next", release: make(chan struct{}), sent: make(chan []string, 2)}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(executor.release) }) }
+	t.Cleanup(release)
+	complete := func(id string, claimer *completionClaimer) chan error {
+		completed := make(chan error, 1)
+		task := ClaimedTask{ID: id, Queue: "defaults", slot: &dispatchSlot{claimer: claimer}}
+		go func() {
+			_, err := worker.writeFastCompletion(context.Background(), executor, task, json.RawMessage(`null`))
+			completed <- err
+		}()
+		return completed
+	}
+
+	nextCompleted := complete("b-next", next)
+	if ids := <-executor.sent; fmt.Sprint(ids) != "[b-next]" {
+		t.Fatalf("the next run's statement named %v", ids)
+	}
+	endedCompleted := complete("a-ended", ended)
+	select {
+	case ids := <-executor.sent:
+		if fmt.Sprint(ids) != "[a-ended]" {
+			t.Fatalf("the ended run's statement named %v", ids)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the ended run's completion waited for the next run's batch")
+	}
+	release()
+	for _, completed := range []chan error{nextCompleted, endedCompleted} {
+		if err := <-completed; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
