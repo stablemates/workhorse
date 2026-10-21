@@ -31,7 +31,7 @@ The JVM SDK is the sixth SDK ([ADR
 `JVM` column describes the `workhorse` artifact, which Java, Kotlin, and Spring callers use. Its
 client, `Admin` client, dashboard backend, worker runtime, durable handler context, fast task tier,
 batch delivery, and OpenTelemetry support are tested today. Every JVM cell of the capability tables
-below is Supported. No JVM version is published yet.
+below is Supported. Maven Central serves the JVM artifacts from `0.9.0`.
 
 ## Client (enqueue side)
 

@@ -29,8 +29,8 @@ The JVM SDK has three artifacts. All three use the group `run.workhorse` and one
 | `workhorse-kotlin`              | `run.workhorse.kotlin` | Suspend handlers, suspend wrappers, and a worker DSL             |
 | `workhorse-spring-boot-starter` | `run.workhorse.spring` | Auto-configuration, transactions, lifecycle, and health          |
 
-Maven Central does not serve these artifacts yet. Thus, this page gives no Gradle or Maven
-dependency to copy. [Compatibility](https://workhorse.run/docs/compatibility) states the supported
+Maven Central serves these artifacts from `0.9.0`. This page gives no Gradle or Maven dependency
+to copy. [Compatibility](https://workhorse.run/docs/compatibility) states the supported
 Java, Kotlin, Spring Boot, and PgJDBC versions.
 
 Install the schema once, as a deployment step. The application never installs or migrates it.

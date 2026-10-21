@@ -39,9 +39,9 @@ asks otherwise.
    hidden indefinitely. A reporter who wants to disclose earlier should say so at triage.
 5. **Advisory.** GitHub is the CVE Numbering Authority for this repository, so publishing the
    advisory requests a CVE. One vulnerability gets one CVE and one advisory per affected
-   ecosystem, because a GitHub advisory names a single ecosystem and Workhorse publishes to npm,
-   PyPI, the Go module proxy, crates.io, and RubyGems. Each fix is also recorded in the affected
-   changelog.
+   ecosystem, because a GitHub advisory names a single ecosystem. Workhorse publishes to npm,
+   PyPI, the Go module proxy, crates.io, RubyGems, and Maven Central. Each fix is also recorded in
+   the affected changelog.
 
 No third-party security audit of Workhorse has taken place. Every review referenced by this project
 is a maintainer review. The dashboard server is the one component that serves HTTP to a browser, and
@@ -82,14 +82,19 @@ nowhere else.** There are no maintenance branches, no backports, and no long-ter
 designation. An older minor does not receive a fix; upgrade to the current line to receive one.
 
 The affected lines are the ones that contain the vulnerable code. A problem in the SQL schema or
-the protocol is fixed on all five lines as one release train. A problem in one SDK ships on that
+the protocol is fixed on all six lines as one release train. A problem in one SDK ships on that
 line alone.
 
-The five lines are the nine `@stablemates/workhorse*` npm packages, released in lockstep; the
-`stablemates-workhorse` Python distribution; the `github.com/stablemates/workhorse/go` module; the
-`workhorse` Rust crate; and the `stablemates-workhorse` Ruby gem. The three `run.workhorse` JVM
-artifacts for Java and Kotlin become the sixth line at their first published version. No JVM version
-is published yet.
+The six lines are these:
+
+- The ten `@stablemates/workhorse*` npm packages, released in lockstep.
+- The `stablemates-workhorse` Python distribution.
+- The `github.com/stablemates/workhorse/go` module.
+- The `workhorse` Rust crate.
+- The `stablemates-workhorse` Ruby gem.
+- The three `run.workhorse` JVM artifacts for Java, Kotlin, and Spring Boot. Maven Central serves
+  them with one version.
+
 [`docs/compatibility.md`](docs/compatibility.md) defines the supported runtimes and the release
 process.
 
@@ -118,6 +123,11 @@ release carries a security, secret, privacy, or legal exposure, the maintainers 
 npm release, yank the PyPI release, retract the Go version, yank the crates.io version, or yank the
 RubyGems version, and rotate or revoke any affected credential. Removal does not reverse prior
 access, so treat every published artifact as permanently observable.
+
+Maven Central never deletes a published version, so the maintainers cannot remove a defective JVM
+version. For a defective Maven Central version, the maintainers publish a higher fixed version and
+publish an advisory that names the defective version. They also rotate or revoke any affected
+credential.
 
 ## Safe harbour
 

@@ -235,8 +235,9 @@ dashboard contracts, and exported types describe the same source revision. The
 [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
 changes and the schema version that each release needs.
 
-Each release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems, from
-one source commit. The current release is `0.9.0`. Earlier beta versions stay on the registries.
+Each release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
+Maven Central, from one source commit. The current release is `0.9.0`. Earlier beta versions stay on the
+registries that published them. Maven Central serves the JVM artifacts from `0.9.0`.
 Each changelog gives their dates and their source commits. [Releases](/docs/releases) shows the
 current version of each line, its date, and whether it still gets fixes.
 
@@ -295,8 +296,8 @@ RubyGems trusted publishing uploads the gem if its version matches the tag.
 The repository is public, and these paths run. Pull requests and pushes to `main` run the suite of
 each language one time. The weekly schedule runs the full compatibility matrix, each suite
 variation, and the packed-install and package checks. Branch protection requires the stable
-`CI / required` check. The protected npm, PyPI, crates.io, and RubyGems environments require a
-second person to approve publication.
+`CI / required` check. The protected npm, PyPI, crates.io, RubyGems, and Maven Central environments
+require a second person to approve publication.
 
 Support shows correctness under the tested matrix. It does not promise a throughput level for your
 database, payloads, handlers, or deployment topology.
