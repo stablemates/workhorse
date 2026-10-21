@@ -23,6 +23,10 @@ dependencies {
   // OpenTelemetry is optional (ADR 0103, "Telemetry"): the caller's class path supplies the API.
   "opentelemetryApi"(libs.opentelemetry.api)
   testImplementation(libs.tomcat.embed.core)
+  // A real pool for the tests of the connection budget: its own wait for a connection is 30 s,
+  // longer than a lease (SM-1569).
+  testImplementation(libs.hikaricp) { exclude(group = "org.slf4j") }
+  testRuntimeOnly(libs.slf4j.api)
   testImplementation(libs.opentelemetry.api)
   testImplementation(libs.opentelemetry.sdk.testing)
 }

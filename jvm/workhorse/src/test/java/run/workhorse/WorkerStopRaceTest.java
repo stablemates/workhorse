@@ -128,7 +128,7 @@ class WorkerStopRaceTest {
       resume.countDown();
       assertTrue(
           dataSource.stalled.await(BOUND.toSeconds(), TimeUnit.SECONDS),
-          "the compatibility check stalls on its connection");
+          "the first checkout of the run stalls on its connection");
       long released = System.nanoTime();
 
       run.join(BOUND);
@@ -166,7 +166,8 @@ class WorkerStopRaceTest {
     // of WorkerProcess: read the version, then a signal stops the worker, then the run starts.
     long version = worker.stopVersion();
     worker.stop();
-    // The initial registration of run 2 stalls on its connection. Only the stop deadline ends it.
+    // The first checkout of run 2, for its heartbeat connection, stalls. Only the stop deadline
+    // ends the wait for it.
     dataSource.armed.set(true);
     long started = System.nanoTime();
     Thread run =
@@ -174,7 +175,7 @@ class WorkerStopRaceTest {
     try {
       assertTrue(
           dataSource.stalled.await(BOUND.toSeconds(), TimeUnit.SECONDS),
-          "the initial registration of run 2 stalls on its connection");
+          "the first checkout of run 2 stalls on its connection");
 
       run.join(BOUND);
 

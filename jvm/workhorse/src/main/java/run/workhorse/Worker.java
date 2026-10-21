@@ -87,7 +87,20 @@ public final class Worker implements AutoCloseable {
   private static final long UNWIND_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
   private static final long IDLE_CHECK_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
   private static final long EXPIRATION_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
-  private static final long DEREGISTER_NANOS = TimeUnit.SECONDS.toNanos(1);
+
+  /**
+   * The floor of the startup budget, in milliseconds. The budget is {@code max(heartbeat, 5 s)}:
+   * startup owns no lease, and a pool that opens its connections on demand can need longer than a
+   * short interval (ADR 0071). The floor is a design choice, not a measured value.
+   */
+  private static final long STARTUP_BUDGET_FLOOR_MS = 5_000;
+
+  /**
+   * The wait for the listener thread to give its connection back, inside the total stop time. The
+   * thread ends within one read timeout of 100 ms.
+   */
+  private static final long LISTENER_CLOSE_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
+
   private static final long NEVER = Long.MIN_VALUE;
   private static final long TIER_PROBE_NANOS = TimeUnit.SECONDS.toNanos(30);
   private static final int COMPLETION_BATCH_LIMIT = 100;
@@ -143,6 +156,14 @@ public final class Worker implements AutoCloseable {
   private final Map<String, Registration> handlers;
   private final Map<String, BatchCoordinator> coordinators;
   private final Heartbeat heartbeat;
+  private final boolean sharedHeartbeats;
+
+  /**
+   * The heartbeat reservation of the latest run, or {@code null} before the first run. A worker
+   * claims no new task while its heartbeat holds no connection.
+   */
+  private volatile Heartbeat.@Nullable Reservation heartbeatReservation;
+
   private final @Nullable String sdkVersion;
   private final String hostname;
 
@@ -311,6 +332,7 @@ public final class Worker implements AutoCloseable {
                 .codec(codec)
                 .telemetry(builder.telemetry)
                 .build());
+    this.sharedHeartbeats = builder.sharedHeartbeats;
     this.heartbeat =
         builder.sharedHeartbeats
             ? Heartbeat.borrowing(dataSource)
@@ -323,9 +345,14 @@ public final class Worker implements AutoCloseable {
    * A builder for a worker that claims through {@code dataSource}.
    *
    * <p>Each claim and each other statement borrows a connection for its own duration. Every worker
-   * on one {@code DataSource} shares one dedicated heartbeat connection, and each worker holds one
-   * listener connection while it runs. So the pool needs two held connections plus one for each
-   * claim in flight.
+   * on one {@code DataSource} object shares one dedicated heartbeat connection and one listener
+   * connection while it runs. The object itself is the key, by reference identity, so a wrapper of
+   * a pool has its own two connections. The pool needs those two held connections plus one for each
+   * statement in flight, so at least 3. A starting worker reserves the heartbeat connection, starts
+   * its listener, and borrows one ordinary connection for the compatibility query. The reservation
+   * and the borrow share one budget, the larger of the heartbeat interval and 5 s, and the listener
+   * wait between them does not count against it. If the two steps do not end within the budget, the
+   * worker does not start. A worker claims no new task while the heartbeat holds no connection.
    */
   public static Builder builder(DataSource dataSource) {
     return new Builder(dataSource);
@@ -555,7 +582,7 @@ public final class Worker implements AutoCloseable {
 
     // The dispatch progress of this run. Each field changes under the state lock, because
     // fast-tier completions read and change it too.
-    @Nullable Listener listener;
+    Listener.@Nullable Subscription listener;
     int empty;
     @Nullable EmptyWait emptyWait;
     boolean passEnded;
@@ -722,31 +749,66 @@ public final class Worker implements AutoCloseable {
       stopDeadline.set(NEVER);
     }
     RunState run = new RunState(version, generation.incrementAndGet());
-    // Every step before the claims waits only until the stop deadline, so a stalled statement
-    // cannot keep a stop from its drain.
-    if (!step(queue::assertCompatible, run, "compatibility check")) {
+    // ADR 0071 rule 3: within one startup budget, the worker reserves the heartbeat connection,
+    // and then borrows one ordinary connection for the compatibility check. The heartbeat
+    // connection comes first, so the listener and the claims cannot take the last connections of
+    // the pool from it. The listener starts between the two steps, so the check proves a free
+    // connection beside both reserved ones. The budget is computed once, and its end moves later
+    // by the time of the listener wait, which is best effort and uses none of the budget.
+    boolean listens = continuous && !pollingOnly;
+    long startupDeadline = System.nanoTime() + startupBudgetNanos();
+    Heartbeat.Reservation reservation = reserveHeartbeat(run, startupDeadline, listens);
+    if (reservation == null) {
+      return false;
+    }
+    Listener.Subscription listener = null;
+    boolean ready = false;
+    try {
+      if (listens) {
+        AtomicBoolean listenerFailed = new AtomicBoolean();
+        Consumer<Throwable> errors = onNotificationError;
+        listener =
+            Listener.shared(dataSource)
+                .subscribe(
+                    queueNames,
+                    this::notifyWake,
+                    error -> {
+                      listenerFailed.set(true);
+                      if (errors != null) {
+                        errors.accept(error);
+                      }
+                    });
+        // The listener may wait as long as the budget has left, and the readiness check then
+        // still has that time.
+        long listenerStart = System.nanoTime();
+        long left = Math.max(0, startupDeadline - listenerStart);
+        awaitListener(listener, listenerFailed, run, listenerStart + left);
+        startupDeadline += System.nanoTime() - listenerStart;
+      }
+      // Every step before the claims waits only until the stop deadline, so a stalled statement
+      // cannot keep a stop from its drain. A worker with shared heartbeats reserves nothing, so it
+      // checks compatibility as before, without the startup budget.
+      ready =
+          sharedHeartbeats
+              ? step(queue::assertCompatible, run, "compatibility check")
+              : checkReadiness(run, startupDeadline, listens);
+    } finally {
+      if (!ready) {
+        if (listener != null) {
+          listener.close(System.nanoTime());
+        }
+        reservation.close();
+      }
+    }
+    if (!ready) {
       return false;
     }
     instanceId = UUID.randomUUID();
     registered.set(false);
     draining = false;
-    Listener listener = null;
     boolean claimedAny;
     int abandoned;
     try {
-      if (continuous && !pollingOnly) {
-        Consumer<Throwable> errors = onNotificationError;
-        listener =
-            Listener.start(
-                dataSource,
-                queueNames,
-                this::notifyWake,
-                error -> {
-                  if (errors != null) {
-                    errors.accept(error);
-                  }
-                });
-      }
       step(
           () -> joinQuietly(registryStep(() -> refreshRegistration(true, run.generation))),
           run,
@@ -766,25 +828,31 @@ public final class Worker implements AutoCloseable {
       if (run.deadline == 0) {
         run.deadline = shutdownDeadline(run);
       }
+      // The total stop time is the grace plus one unwind window. Every wait below ends by then.
+      long end = run.deadline + UNWIND_WINDOW_NANOS;
       Thread maintenance = run.maintenance;
       if (maintenance != null) {
         joinUntil(maintenance, run.deadline, "maintenance");
       }
       if (listener != null) {
-        listener.close(run.deadline);
+        listener.close(Math.min(end, System.nanoTime() + LISTENER_CLOSE_NANOS));
       }
-      draining = true;
-      joinUntil(
-          registryStep(() -> refreshRegistration(true, run.generation)),
-          run.deadline,
-          "draining registration");
-      abandoned = drain(run.deadline);
+      try {
+        draining = true;
+        joinUntil(
+            registryStep(() -> refreshRegistration(true, run.generation)),
+            run.deadline,
+            "draining registration");
+        abandoned = drain(run.deadline, end);
+      } finally {
+        // The drain has ended, so no handler of this run renews a lease any more. The heartbeat
+        // gives its connection back to the pool when no other worker on the DataSource runs.
+        reservation.close();
+      }
       // The deregistration waits for the draining registration, so a late registration cannot
-      // recreate the row of a stopped worker.
-      joinUntil(
-          registryStep(() -> deregister(run.generation)),
-          System.nanoTime() + DEREGISTER_NANOS,
-          "deregistration");
+      // recreate the row of a stopped worker. It ends with the total stop time, so a full pool
+      // cannot hold the stop longer. A deregistration that comes later still runs.
+      joinUntil(registryStep(() -> deregister(run.generation)), end, "deregistration");
       log(
           System.Logger.Level.INFO,
           "workhorse.worker.stopped",
@@ -811,7 +879,8 @@ public final class Worker implements AutoCloseable {
    * too, from the same accounting (ADR 0077). On the fast tier the slots split into cohorts, and
    * plain claims leave one at a time, each for the roomiest cohort.
    */
-  private boolean dispatch(boolean continuous, RunState run, @Nullable Listener listener) {
+  private boolean dispatch(
+      boolean continuous, RunState run, Listener.@Nullable Subscription listener) {
     stateLock.lock();
     try {
       run.listener = listener;
@@ -883,7 +952,15 @@ public final class Worker implements AutoCloseable {
           }
           continue;
         }
-        if (planClaim(inFlight) != null) {
+        if (!heartbeatConnected()) {
+          // The claim gate is closed. A pass of runOnce ends here, so it does not wait for the
+          // database. A long run waits for the replacement connection, whose arrival wakes this
+          // loop, and its maintenance still runs.
+          if (!continuous) {
+            break;
+          }
+          startMaintenance(run);
+        } else if (planClaim(inFlight) != null) {
           if (continuous) {
             startMaintenance(run);
           } else {
@@ -913,7 +990,10 @@ public final class Worker implements AutoCloseable {
       // still takes a claim that is about to return. A claim that returns later is not run: its
       // leases expire, and recovery returns its tasks to the queue.
       long now = System.nanoTime();
-      long claimDeadline = now + Math.max(run.deadline - now, UNWIND_WINDOW_NANOS);
+      long claimDeadline =
+          Math.min(
+              now + Math.max(run.deadline - now, UNWIND_WINDOW_NANOS),
+              run.deadline + UNWIND_WINDOW_NANOS);
       while (inFlight > 0) {
         ClaimResult result = run.results.poll();
         if (result == null) {
@@ -947,6 +1027,213 @@ public final class Worker implements AutoCloseable {
     } finally {
       stateLock.unlock();
     }
+  }
+
+  /**
+   * Whether the stop of {@code run} has passed its deadline. Each startup wait ends then, as in
+   * {@link #step}.
+   */
+  private BooleanSupplier stopDeadlinePassed(RunState run) {
+    return () -> {
+      long stop = stopDeadline(run);
+      return stop != NEVER && System.nanoTime() - stop >= 0;
+    };
+  }
+
+  /** Logs a startup wait that a stop ended, as {@link #step} logs a stop step. */
+  private void logStopStep(String name) {
+    log(
+        System.Logger.Level.WARNING,
+        "workhorse.worker.stop_step_abandoned",
+        "A stop step did not finish before the shutdown deadline",
+        Map.of("workhorse.worker.stop_step", name));
+  }
+
+  /**
+   * The budget that a startup refusal names: the reserved connections and one statement. {@code
+   * listens} is whether the worker uses the shared listener.
+   */
+  private static String startupBudget(boolean listens) {
+    return listens
+        ? " All workers on one DataSource object share one heartbeat connection and one listener"
+            + " connection, so the pool needs at least 3 connections: the listener, the heartbeat,"
+            + " and one for each statement in flight."
+        : " All workers on one DataSource object share one heartbeat connection, so the pool needs"
+            + " at least 2 connections: the heartbeat and one for each statement in flight.";
+  }
+
+  private static final String STARTUP_OPT_OUT =
+      " Make the pool larger, or set sharedHeartbeats(true) to borrow a pool connection for each"
+          + " heartbeat round.";
+
+  /**
+   * Reserves the heartbeat connection that the worker shares with every worker on its {@code
+   * DataSource} object, and waits for it until {@code deadline}, the end of the startup budget (ADR
+   * 0071). The wait does not depend on the timeout of the pool. As in {@link #step}, a stop ends
+   * the wait when the stop passes its deadline, and the method then returns {@code null}.
+   *
+   * @throws WorkhorseException if the pool gives no connection within the budget
+   */
+  private Heartbeat.@Nullable Reservation reserveHeartbeat(
+      RunState run, long deadline, boolean listens) {
+    long budgetMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+    Heartbeat.Reservation reservation =
+        heartbeat.reserve(TimeUnit.MILLISECONDS.toNanos(heartbeatMs), this::wakeDispatcher);
+    BooleanSupplier stopped = stopDeadlinePassed(run);
+    if (reservation.await(deadline, stopped)) {
+      heartbeatReservation = reservation;
+      return reservation;
+    }
+    Throwable failure = reservation.lastFailure();
+    reservation.close();
+    // A stopping worker does not report a start failure.
+    if (stopRequested(run.version)) {
+      if (stopped.getAsBoolean()) {
+        logStopStep("heartbeat reservation");
+      }
+      return null;
+    }
+    String message =
+        "The worker got no heartbeat connection from its DataSource ("
+            + dataSource
+            + ") within its startup budget of "
+            + budgetMs
+            + " ms, so it does not start."
+            + startupBudget(listens)
+            + STARTUP_OPT_OUT;
+    throw failure == null
+        ? new WorkhorseException(message)
+        : new WorkhorseException(message, failure);
+  }
+
+  /**
+   * The startup budget, {@code max(heartbeat, 5 s)}. The heartbeat reservation and the readiness
+   * check share it. The listener wait between them uses none of it.
+   */
+  private long startupBudgetNanos() {
+    return TimeUnit.MILLISECONDS.toNanos(Math.max(heartbeatMs, STARTUP_BUDGET_FLOOR_MS));
+  }
+
+  /**
+   * Waits until the shared listener holds its connection or listens, until it reports a failure, or
+   * until {@code deadline}, the end of the time that the startup budget has left. The readiness
+   * check then sees the pool without the listener's connection. A {@code LISTEN} that is still in
+   * flight does not hold the start. The listener is best effort: if it does not listen yet, the
+   * worker logs one warning and polls, and the listener keeps trying in the background.
+   */
+  private void awaitListener(
+      Listener.Subscription listener, AtomicBoolean failed, RunState run, long deadline) {
+    BooleanSupplier stopped = stopDeadlinePassed(run);
+    while (!listener.isListening()
+        && !listener.holdsConnection()
+        && !failed.get()
+        && !stopped.getAsBoolean()
+        && deadline - System.nanoTime() > 0) {
+      try {
+        TimeUnit.NANOSECONDS.sleep(Math.min(deadline - System.nanoTime(), IDLE_CHECK_NANOS));
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
+    if (!listener.isListening() && !stopRequested(run.version)) {
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.worker.polling_only",
+          "Worker has no notification listener and dispatches by polling",
+          Map.of("workhorse.worker.id", workerId, "workhorse.worker.queues", queueNames));
+    }
+  }
+
+  /**
+   * A readiness check and its failure. A check that outlives a refused start, because the pool has
+   * not given it a connection yet, serves the next start of the worker, so restarts do not add
+   * checks that wait in the pool.
+   */
+  private record ReadinessCheck(Thread thread, AtomicReference<@Nullable Throwable> failure) {}
+
+  private volatile @Nullable ReadinessCheck readinessCheck;
+
+  /**
+   * The readiness check of ADR 0071: while the reserved connections are held, it borrows one
+   * ordinary connection, runs the compatibility query, and returns the connection at once. It ends
+   * by {@code deadline}, the end of the startup budget. A borrow that the pool gives later belongs
+   * to the check's own thread, which runs its query and returns the connection. Returns {@code
+   * false} when a stop passed its deadline first.
+   *
+   * @throws CompatibilityException or another error of the check, as before
+   * @throws WorkhorseException if the pool gives no connection within the budget
+   */
+  private boolean checkReadiness(RunState run, long deadline, boolean listens) {
+    long budgetMs = Math.max(heartbeatMs, STARTUP_BUDGET_FLOOR_MS);
+    ReadinessCheck current = readinessCheck;
+    if (current == null || !current.thread.isAlive()) {
+      AtomicReference<@Nullable Throwable> outcome = new AtomicReference<>();
+      current =
+          new ReadinessCheck(
+              Thread.ofVirtual()
+                  .name("workhorse-readiness-check")
+                  .start(
+                      () -> {
+                        try {
+                          queue.assertCompatible();
+                        } catch (Throwable error) {
+                          outcome.set(error);
+                        }
+                      }),
+              outcome);
+      readinessCheck = current;
+    }
+    Thread check = current.thread;
+    AtomicReference<@Nullable Throwable> failure = current.failure;
+    BooleanSupplier stopped = stopDeadlinePassed(run);
+    boolean interrupted = false;
+    try {
+      while (check.isAlive()) {
+        if (stopped.getAsBoolean()) {
+          logStopStep("compatibility check");
+          return false;
+        }
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          if (stopRequested(run.version)) {
+            return false;
+          }
+          throw new WorkhorseException(
+              "The worker got no ordinary connection from its DataSource ("
+                  + dataSource
+                  + ") for its startup check within its startup budget of "
+                  + budgetMs
+                  + " ms, while it held its reserved connections, so it does not start."
+                  + startupBudget(listens)
+                  + STARTUP_OPT_OUT);
+        }
+        try {
+          check.join(Duration.ofNanos(Math.min(remaining, IDLE_CHECK_NANOS)));
+        } catch (InterruptedException error) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    Throwable error = failure.get();
+    if (error != null) {
+      throw unchecked(error);
+    }
+    return true;
+  }
+
+  /**
+   * Whether the heartbeat holds its connection, so it can renew a new lease. While it holds none,
+   * the worker starts no claim, and the installed replacement wakes the dispatch loop. A test reads
+   * it to know that the claim gate is closed.
+   */
+  boolean heartbeatConnected() {
+    Heartbeat.Reservation reservation = heartbeatReservation;
+    return reservation == null || reservation.connected();
   }
 
   private @Nullable ClaimPlan planClaim(int inFlight) {
@@ -999,7 +1286,7 @@ public final class Worker implements AutoCloseable {
    */
   private @Nullable ClaimPlan claimPlan(int inFlight) {
     int free = slots.free();
-    if (free <= 0) {
+    if (free <= 0 || !heartbeatConnected()) {
       return null;
     }
     if (cohorts == 1 || !fullTierUntil.isEmpty()) {
@@ -1136,8 +1423,11 @@ public final class Worker implements AutoCloseable {
                   Thread.sleep(
                       ThreadLocalRandom.current().nextLong(NOTIFICATION_CLAIM_DELAY_MS + 1));
                 }
-                // A worker paused or stopped during the delay sends no claim.
-                boolean withdrawn = delayed && (stopRequested(run.version) || isPaused());
+                // A worker paused or stopped during the delay sends no claim, and nor does a worker
+                // whose heartbeat lost its connection.
+                boolean withdrawn =
+                    (delayed && (stopRequested(run.version) || isPaused()))
+                        || !heartbeatConnected();
                 if (!withdrawn) {
                   claimAcrossQueues(
                       plan.limit, claimed, plan.cohort == WHOLE ? plan.limit : plan.cohortLimit);
@@ -1165,7 +1455,11 @@ public final class Worker implements AutoCloseable {
   private void claimAcrossQueues(int limit, List<Claimed> claimed, int fastLimit) {
     int size = queueNames.size();
     int start = (int) Math.floorMod(nextQueueIndex.getAndIncrement(), (long) size);
-    for (int offset = 0; offset < size && claimed.size() < limit; offset++) {
+    // The claim gate is read again before each queue, so a lost heartbeat connection stops the
+    // claims of the remaining queues.
+    for (int offset = 0;
+        offset < size && claimed.size() < limit && heartbeatConnected();
+        offset++) {
       String name = queueNames.get((start + offset) % size);
       int free = limit - claimed.size();
       telemetry.claim(name, () -> claim(name, free, fastLimit - claimed.size(), claimed));
@@ -1182,16 +1476,20 @@ public final class Worker implements AutoCloseable {
       }
     } else {
       TierRead tier = new TierRead(name);
+      // The claim gate is read again on the borrowed connection, just before the claim goes out,
+      // because the heartbeat can lose its connection while the borrow waits for the pool.
       List<Row> rows =
           withConnection(
               connection ->
-                  Sql.rows(
-                      connection,
-                      SqlCatalogue.CLAIM_MANY_V1,
-                      name,
-                      workerId,
-                      Integer.toString(limit),
-                      Long.toString(leaseMs)));
+                  heartbeatConnected()
+                      ? Sql.rows(
+                          connection,
+                          SqlCatalogue.CLAIM_MANY_V1,
+                          name,
+                          workerId,
+                          Integer.toString(limit),
+                          Long.toString(leaseMs))
+                      : List.of());
       for (Row row : rows) {
         tasks.add(claimed(row, name, startedAt, tier::fast, false));
       }
@@ -1248,6 +1546,9 @@ public final class Worker implements AutoCloseable {
       return List.of();
     }
     List<Row> rows;
+    // The claim gate is read on the borrowed connection before each attempt, a resend after a
+    // deadlock too. A worker whose heartbeat lost its connection in the meantime sends nothing.
+    AtomicBoolean withdrawn = new AtomicBoolean();
     try {
       rows =
           withConnection(
@@ -1255,16 +1556,27 @@ public final class Worker implements AutoCloseable {
                   Sql.fencedRows(
                       connection,
                       SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
-                      workerId,
-                      new String[0],
-                      new String[0],
-                      new String[0],
-                      name,
-                      Integer.toString(claimLimit),
-                      Long.toString(leaseMs)));
+                      () -> {
+                        if (!heartbeatConnected()) {
+                          withdrawn.set(true);
+                          return null;
+                        }
+                        return new @Nullable Object[] {
+                          workerId,
+                          new String[0],
+                          new String[0],
+                          new String[0],
+                          name,
+                          Integer.toString(claimLimit),
+                          Long.toString(leaseMs)
+                        };
+                      }));
     } catch (FastTierUnsupportedException fullTier) {
       markFullTier(name, sentAt);
       return null;
+    }
+    if (withdrawn.get()) {
+      return List.of();
     }
     markFastTier(name);
     // A claim that finds nothing still returns one row, with every claim column null.
@@ -1335,7 +1647,7 @@ public final class Worker implements AutoCloseable {
    * The wait before the next claim, in nanoseconds. A listening worker waits for a notification; a
    * polling worker backs off exponentially while claims come back empty.
    */
-  private long dispatchWait(int empty, @Nullable Listener listener) {
+  private long dispatchWait(int empty, Listener.@Nullable Subscription listener) {
     long milliseconds;
     if (listener != null && listener.isListening()) {
       milliseconds = notificationPollMs;
@@ -1513,34 +1825,45 @@ public final class Worker implements AutoCloseable {
    * Waits until the shutdown deadline, cancels what still runs, interrupts it, and gives it one
    * unwind window. Returns the number of handlers abandoned after that window.
    */
-  private int drain(long deadline) {
+  private int drain(long deadline, long end) {
     // A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
     for (BatchCoordinator coordinator : coordinators.values()) {
       coordinator.flush();
     }
     waitUntilIdle(deadline);
+    // A task that the caller's executor never started has no handler to unwind, so its release
+    // starts before the unwind window, and runs during it.
+    List<Active> unstarted = new ArrayList<>();
+    for (Active task : new ArrayList<>(active)) {
+      if (task.abandonUnstarted()) {
+        // The caller's executor never started this task, and now never runs its handler. The
+        // drain frees its slot here, because an executor can discard a queued runnable. No handler
+        // ran, so the task goes back to its queue without an attempt (SM-1525).
+        active.remove(task);
+        releaseSlot(task);
+        unstarted.add(task);
+      }
+    }
+    // Each release borrows a connection, so the releases run on their own thread, and the drain
+    // waits for them until the total stop time ends. A full pool thus cannot hold the stop for its
+    // own timeout. A release that ends later still hands the task back, and otherwise the lease
+    // expires.
+    Thread releases =
+        unstarted.isEmpty()
+            ? null
+            : Thread.ofVirtual()
+                .name("workhorse-unstarted-release")
+                .start(() -> unstarted.forEach(this::releaseUnstarted));
     List<Active> remaining = new ArrayList<>(active);
     if (!remaining.isEmpty()) {
       for (Active task : remaining) {
         task.cancellation.cancel(CancellationReason.SHUTDOWN);
         task.interrupt();
       }
-      waitUntilIdle(System.nanoTime() + UNWIND_WINDOW_NANOS);
+      waitUntilIdle(Math.min(System.nanoTime() + UNWIND_WINDOW_NANOS, end));
     }
     int abandoned = 0;
     for (Active task : new ArrayList<>(active)) {
-      if (task.abandonUnstarted()) {
-        // The caller's executor never started this task, and now never runs its handler. The
-        // drain frees its slot here, because an executor can discard a queued runnable. No handler
-        // ran, so the task goes back to its queue without an attempt (SM-1525).
-        try {
-          releaseUnstarted(task);
-        } finally {
-          active.remove(task);
-          releaseSlot(task);
-        }
-        continue;
-      }
       abandoned++;
       // The flag goes up before the ownership is read. An attempt that publishes its ownership
       // later reads the flag after that, so one of the two sides always stops the renewal.
@@ -1549,6 +1872,9 @@ public final class Worker implements AutoCloseable {
       if (ownership != null) {
         ownership.abandon();
       }
+    }
+    if (releases != null) {
+      joinUntil(releases, end, "unstarted release");
     }
     return abandoned;
   }
@@ -2354,6 +2680,9 @@ public final class Worker implements AutoCloseable {
     volatile @Nullable Throwable error;
     volatile boolean lead;
 
+    /** True when the claim gate set the claim limit of the statement to 0 before it went out. */
+    volatile boolean withheld;
+
     PendingCompletion(ClaimedTask task, String encoded, int limit) {
       this.task = task;
       this.encoded = encoded;
@@ -2390,7 +2719,10 @@ public final class Worker implements AutoCloseable {
     try {
       sendBatchedCompletion(pending, new CompletionKey(claimed.queue(), reservation.cohort));
     } finally {
-      settleCompletionClaim(task, reservation, pending.error != null ? null : pending.claimed);
+      // A withheld claim settles as a failed one does: the reserved slots go back, and the queue
+      // does not count as empty.
+      settleCompletionClaim(
+          task, reservation, pending.error != null || pending.withheld ? null : pending.claimed);
     }
     Throwable error = pending.error;
     if (error != null) {
@@ -2419,7 +2751,8 @@ public final class Worker implements AutoCloseable {
           || !run.errors.isEmpty()
           || isPaused()
           || run.claimError != null
-          || run.emptyWait != null) {
+          || run.emptyWait != null
+          || !heartbeatConnected()) {
         return idle;
       }
       int limit = Math.min(slots.free(), slots.cohortFree(cohort)) + 1;
@@ -2440,7 +2773,7 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Releases a fused claim's reservation and starts the tasks it claimed in its cohort. {@code
-   * claimed} is {@code null} when the completion failed.
+   * claimed} is {@code null} when the completion failed, or when the claim gate withheld its claim.
    */
   private void settleCompletionClaim(
       Active task, CompletionClaim reservation, @Nullable List<Claimed> claimed) {
@@ -2485,6 +2818,23 @@ public final class Worker implements AutoCloseable {
       stateLock.unlock();
     }
     wake.signal();
+  }
+
+  /**
+   * The completions that wait behind a statement in flight. A test reads it to know that a
+   * completion queued behind another batch.
+   */
+  int completionsWaiting() {
+    completionLock.lock();
+    try {
+      int waiting = 0;
+      for (List<PendingCompletion> batch : pendingCompletions.values()) {
+        waiting += batch.size();
+      }
+      return waiting;
+    } finally {
+      completionLock.unlock();
+    }
   }
 
   /**
@@ -2588,6 +2938,11 @@ public final class Worker implements AutoCloseable {
     }
     long sentAt = System.nanoTime();
     List<Row> rows;
+    // The claim limit is read on the borrowed connection before each attempt, a resend after a
+    // deadlock too. The heartbeat can lose its connection while this chunk waits behind another
+    // batch or for the pool. The statement then still settles the completions, with a claim limit
+    // of 0.
+    AtomicInteger sentLimit = new AtomicInteger(claimLimit);
     try {
       rows =
           withConnection(
@@ -2595,13 +2950,19 @@ public final class Worker implements AutoCloseable {
                   Sql.fencedRows(
                       connection,
                       SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
-                      workerId,
-                      Sql.textArray(ids),
-                      Sql.textArray(fences),
-                      Sql.textArray(results),
-                      queueName,
-                      Integer.toString(claimLimit),
-                      Long.toString(leaseMs)));
+                      () -> {
+                        int limit = heartbeatConnected() ? claimLimit : 0;
+                        sentLimit.set(limit);
+                        return new @Nullable Object[] {
+                          workerId,
+                          Sql.textArray(ids),
+                          Sql.textArray(fences),
+                          Sql.textArray(results),
+                          queueName,
+                          Integer.toString(limit),
+                          Long.toString(leaseMs)
+                        };
+                      }));
     } catch (FastTierUnsupportedException fullTier) {
       markFullTier(queueName, sentAt);
       for (PendingCompletion member : chunk) {
@@ -2623,14 +2984,17 @@ public final class Worker implements AutoCloseable {
       }
     }
     logClaimed(claimed);
-    if (claimLimit > 0) {
+    int limitSent = sentLimit.get();
+    if (limitSent > 0) {
       telemetry.claimed(queueName, sentAt, claimed.stream().map(task -> task.task).toList(), false);
     }
-    reportFused(chunk.size(), claimLimit, claimed.size());
+    reportFused(chunk.size(), limitSent, claimed.size());
     // Claimed tasks go to the completions in order, each up to the slots it reserved.
     int offset = 0;
     for (PendingCompletion member : chunk) {
       member.accepted = accepted.contains(member.task.id());
+      // A claim that the gate withheld proves nothing about the queue.
+      member.withheld = limitSent == 0 && member.limit > 0;
       int end = Math.min(claimed.size(), offset + member.limit);
       member.claimed = List.copyOf(claimed.subList(offset, end));
       offset = end;
@@ -3738,8 +4102,8 @@ public final class Worker implements AutoCloseable {
 
     /**
      * Renews leases with a connection borrowed for each round, instead of the dedicated heartbeat
-     * connection that every worker on the {@code DataSource} shares (ADR 0071). The default is
-     * {@code false}.
+     * connection that every worker on the {@code DataSource} shares (ADR 0071). Such a worker does
+     * not wait for a heartbeat connection when it starts. The default is {@code false}.
      */
     public Builder sharedHeartbeats(boolean shared) {
       this.sharedHeartbeats = shared;

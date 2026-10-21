@@ -1,6 +1,5 @@
 package run.workhorse.internal;
 
-import java.lang.ref.WeakReference;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -11,11 +10,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.WeakHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import run.workhorse.ConnectionSource;
@@ -24,17 +24,32 @@ import run.workhorse.ConnectionSource;
  * Renews the leases of running attempts on a dedicated platform thread. Internal to the SDK; the
  * counterpart of Ruby's {@code Worker::Heartbeat} (ADR 0071).
  *
- * <p>Every worker on one {@link DataSource} shares one dedicated heartbeat, keyed by the {@code
- * DataSource} object. That heartbeat holds one connection while it has members, so handlers that
- * hold every other connection never delay a lease round. A worker with shared heartbeats has its
- * own heartbeat, which borrows a connection for each round instead.
+ * <p>Every worker on one {@link DataSource} object shares one dedicated heartbeat. The key is the
+ * object itself, by reference identity, never by {@code equals}. That heartbeat holds one
+ * connection while a worker holds a {@link Reservation} or an attempt is registered, so handlers
+ * that hold every other connection never delay a lease round. A worker with shared heartbeats has
+ * its own heartbeat, which borrows a connection for each round instead.
+ *
+ * <p>A dedicated heartbeat checks out its connection, and each replacement, on one checkout thread
+ * at a time. A round waits for that checkout only inside its own bound, so the timeout of the pool
+ * never delays a renewal past the bound. A round without a connection fails, the checkout goes on
+ * with a capped backoff, and the lease watchdog bounds the loss.
  */
 public final class Heartbeat {
   /** The most leases one {@code heartbeat_many_v2} call renews. */
   private static final int ROUND_LIMIT = 100;
 
-  /** The wait before a dedicated heartbeat checks out a new connection after a failed round. */
+  /**
+   * The first wait before a failed checkout of the held connection runs again. The wait doubles
+   * after each failure, up to the shortest interval of the reservations and members.
+   */
   private static final long RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
+
+  /** The longest wait between two checkouts when no reservation or member states an interval. */
+  private static final long DEFAULT_RETRY_CAP_NANOS = TimeUnit.SECONDS.toNanos(1);
+
+  /** The longest wait of {@link Reservation#await} before it checks whether its caller stops. */
+  private static final long AWAIT_SLICE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
 
   /**
    * The shortest deadline of a round, when the interval allows it. A short interval thus still
@@ -72,10 +87,8 @@ public final class Heartbeat {
       "SELECT set_config('statement_timeout', ?, true), "
           + "set_config('idle_in_transaction_session_timeout', ?, true)";
 
-  private static final ReentrantLock DEDICATED_LOCK = new ReentrantLock();
-  // Weak values: a heartbeat holds its DataSource, so a strong value would keep the weak key
-  // alive forever. The workers that use a heartbeat, and its own thread, keep it alive.
-  private static final Map<DataSource, WeakReference<Heartbeat>> DEDICATED = new WeakHashMap<>();
+  // The workers that use a heartbeat, and its own thread, keep it alive.
+  private static final IdentityRegistry<DataSource, Heartbeat> DEDICATED = new IdentityRegistry<>();
 
   /** One running attempt. */
   public interface Member {
@@ -124,6 +137,67 @@ public final class Heartbeat {
   /** A round that replaces every connection, for tests of the schedule. */
   private final @Nullable Round fixedRound;
 
+  /** Whether the heartbeat holds a connection across rounds: dedicated, with no fixed round. */
+  private final boolean holdsConnection;
+
+  /** The open reservations of workers. They change under {@link #lock}. */
+  private final List<Reservation> reservations = new ArrayList<>();
+
+  /**
+   * The held connection, or {@code null}. A checkout installs it, and only the heartbeat thread
+   * sends rounds on it or discards it. It changes under {@link #lock}.
+   */
+  private @Nullable Held held;
+
+  /** Mirrors {@code held != null}, so a worker reads it without the lock. */
+  private volatile boolean connected;
+
+  /** Whether a checkout of the held connection runs. It changes under {@link #lock}. */
+  private boolean checkingOut;
+
+  /**
+   * The failure of a checkout since the latest installed connection, or {@code null}. It changes
+   * under {@link #lock}.
+   */
+  private @Nullable Throwable checkoutFailure;
+
+  /**
+   * The connection that the latest round sent on, or {@code null} when it got none. A failed round
+   * discards only this connection. Only the heartbeat thread uses it.
+   */
+  private @Nullable Held sent;
+
+  /**
+   * True when the latest round got a new connection only during its bound, and so sent nothing on
+   * it. The next round then starts at once, with a full bound. Only the heartbeat thread uses it.
+   */
+  private boolean freshConnection;
+
+  /**
+   * True when the next round must run at once, whatever the intervals of the members are now: the
+   * latest round got a new connection during its bound and sent nothing. Only the heartbeat thread
+   * uses it.
+   */
+  private boolean runNow;
+
+  /**
+   * Runs when a round starts to wait for a new connection, on the heartbeat thread, or {@code
+   * null}. A test sets it to deliver the connection at a known point of that round.
+   */
+  volatile @Nullable Runnable onAwaitConnection;
+
+  /**
+   * Runs when a round that waited for a new connection gets it before the round's deadline, on the
+   * heartbeat thread, or {@code null}. A test uses it to see which round got the connection.
+   */
+  volatile @Nullable Runnable onConnectionInRound;
+
+  /**
+   * The number of rounds that this heartbeat started, regular rounds and busy retries. Only the
+   * heartbeat thread changes it. A test reads it to tell one round from the next.
+   */
+  final AtomicLong roundsStarted = new AtomicLong();
+
   /**
    * The start of the latest regular round, a {@link System#nanoTime} value. Only the heartbeat
    * thread uses it. A new connection keeps it, so a failed round does not start a new schedule. A
@@ -162,27 +236,109 @@ public final class Heartbeat {
     this.dataSource = dataSource;
     this.dedicated = dedicated;
     this.fixedRound = fixedRound;
+    this.holdsConnection = dedicated && fixedRound == null;
   }
 
-  /** The heartbeat that every worker on {@code dataSource} shares. */
+  /** The heartbeat that every worker on the {@code dataSource} object shares. */
   public static Heartbeat dedicated(DataSource dataSource) {
-    DEDICATED_LOCK.lock();
-    try {
-      WeakReference<Heartbeat> reference = DEDICATED.get(dataSource);
-      Heartbeat heartbeat = reference == null ? null : reference.get();
-      if (heartbeat == null) {
-        heartbeat = new Heartbeat(dataSource, true);
-        DEDICATED.put(dataSource, new WeakReference<>(heartbeat));
-      }
-      return heartbeat;
-    } finally {
-      DEDICATED_LOCK.unlock();
-    }
+    return DEDICATED.get(dataSource, source -> new Heartbeat(source, true));
   }
 
   /** A heartbeat of one worker that borrows a connection for each round. */
   public static Heartbeat borrowing(DataSource dataSource) {
     return new Heartbeat(dataSource, false);
+  }
+
+  /**
+   * Reserves the held connection for a worker, and returns the reservation. While a reservation is
+   * open, a dedicated heartbeat keeps its connection, and replaces a lost one at once, also when no
+   * attempt is registered. {@code intervalNanos} is the worker's heartbeat interval, which caps the
+   * wait between two failed checkouts. {@code onConnected} runs on the checkout thread each time a
+   * new connection is installed. A reservation of a borrowing heartbeat is always connected.
+   */
+  public Reservation reserve(long intervalNanos, Runnable onConnected) {
+    Reservation reservation = new Reservation(intervalNanos, onConnected);
+    if (!holdsConnection) {
+      return reservation;
+    }
+    lock.lock();
+    try {
+      reservations.add(reservation);
+      startCheckoutLocked();
+      startThreadLocked();
+      changed.signalAll();
+    } finally {
+      lock.unlock();
+    }
+    return reservation;
+  }
+
+  /**
+   * A worker's hold on the connection of a dedicated heartbeat. {@link #close} gives it up, and
+   * closing twice is harmless. When the last hold closes and no attempt is registered, the
+   * heartbeat thread gives the connection back to the pool.
+   */
+  public final class Reservation implements AutoCloseable {
+    private final long intervalNanos;
+    private final Runnable onConnected;
+
+    private Reservation(long intervalNanos, Runnable onConnected) {
+      this.intervalNanos = intervalNanos;
+      this.onConnected = onConnected;
+    }
+
+    /**
+     * Whether the heartbeat holds a usable connection now. A failed renewal on a connection that
+     * stays open, and a round that a row lock holds, keep it connected. Only a lost connection
+     * clears it, until the replacement arrives.
+     */
+    public boolean connected() {
+      return !holdsConnection || connected;
+    }
+
+    /**
+     * Waits until the heartbeat holds its connection, until {@code deadline}, a {@link
+     * System#nanoTime} value, or until {@code stopped} is true. It checks {@code stopped} at least
+     * every 50 ms. A checkout that fails runs again after its backoff, so the wait continues until
+     * one of the three ends it.
+     *
+     * @return whether the heartbeat holds its connection
+     */
+    public boolean await(long deadline, BooleanSupplier stopped) {
+      if (!holdsConnection) {
+        return true;
+      }
+      lock.lock();
+      try {
+        return awaitHeldLocked(deadline, stopped) != null;
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    /**
+     * The failure of a checkout since the heartbeat last installed a connection, or {@code null}.
+     */
+    public @Nullable Throwable lastFailure() {
+      lock.lock();
+      try {
+        return checkoutFailure;
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    @Override
+    public void close() {
+      lock.lock();
+      try {
+        if (reservations.remove(this)) {
+          changed.signalAll();
+        }
+      } finally {
+        lock.unlock();
+      }
+    }
   }
 
   /**
@@ -195,13 +351,7 @@ public final class Heartbeat {
     try {
       members.put(key, member);
       changed.signalAll();
-      Thread current = thread;
-      if (current == null || !current.isAlive()) {
-        Thread started = new Thread(this::run, "workhorse-heartbeats");
-        started.setDaemon(true);
-        thread = started;
-        started.start();
-      }
+      startThreadLocked();
     } finally {
       lock.unlock();
     }
@@ -218,79 +368,321 @@ public final class Heartbeat {
     };
   }
 
-  private void run() {
-    previous = System.nanoTime();
-    busyRetry = null;
-    Round fixed = fixedRound;
-    if (fixed != null) {
-      while (true) {
-        try {
-          if (rounds(fixed)) {
-            return;
-          }
-        } catch (SQLException | RuntimeException error) {
-          if (stopIfIdle()) {
-            return;
-          }
-        }
+  /** Starts the heartbeat thread unless it runs. The caller holds {@link #lock}. */
+  private void startThreadLocked() {
+    Thread current = thread;
+    if (current == null || !current.isAlive()) {
+      Thread started = new Thread(this::run, "workhorse-heartbeats");
+      started.setDaemon(true);
+      thread = started;
+      started.start();
+    }
+  }
+
+  /** Whether a worker or an attempt needs the heartbeat. The caller holds {@link #lock}. */
+  private boolean wantedLocked() {
+    return !members.isEmpty() || !reservations.isEmpty();
+  }
+
+  /**
+   * The longest wait between two checkouts: the shortest interval of the reservations and the
+   * members. The caller holds {@link #lock}.
+   */
+  private long retryCapLocked() {
+    long cap = Long.MAX_VALUE;
+    for (Reservation reservation : reservations) {
+      cap = Math.min(cap, reservation.intervalNanos);
+    }
+    for (Member member : members.values()) {
+      cap = Math.min(cap, member.intervalNanos());
+    }
+    return cap == Long.MAX_VALUE ? DEFAULT_RETRY_CAP_NANOS : Math.max(RETRY_NANOS, cap);
+  }
+
+  /**
+   * Waits until the heartbeat holds its connection, and starts a checkout when none runs. Returns
+   * the connection, or {@code null} at {@code deadline} or when {@code stopped} is true. The caller
+   * holds {@link #lock}.
+   */
+  private @Nullable Held awaitHeldLocked(long deadline, BooleanSupplier stopped) {
+    while (held == null) {
+      startCheckoutLocked();
+      long remaining = deadline - System.nanoTime();
+      if (remaining <= 0 || stopped.getAsBoolean()) {
+        return null;
+      }
+      try {
+        changed.awaitNanos(Math.min(remaining, AWAIT_SLICE_NANOS));
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return null;
       }
     }
-    if (!dedicated) {
-      ConnectionSource source = ConnectionSource.of(dataSource);
-      try {
-        rounds(
-            (timeoutNanos, statement, parameters) -> {
-              Connection connection = source.acquire();
-              try {
-                return Sql.rows(connection, statement, parameters);
-              } finally {
-                source.release(connection, false);
-              }
-            });
-      } catch (SQLException unreachable) {
-        // A borrowing round skips a failed round, so rounds does not throw here.
-      }
+    return held;
+  }
+
+  /**
+   * Starts the checkout thread, unless one runs, the heartbeat holds its connection, or nothing
+   * needs one. The caller holds {@link #lock}.
+   */
+  private void startCheckoutLocked() {
+    if (!holdsConnection || held != null || checkingOut || !wantedLocked()) {
       return;
     }
-    // Holds one connection across rounds. A round that fails discards the connection, and the
-    // next round checks out a new one at once: rounds waits for the slot itself, and starts one
-    // overdue round at once. A pool that refuses a connection is asked again after a wait, and the
-    // lease watchdog covers the rounds that keep failing. A round that expires before its
-    // heartbeat statement with a clean connection does not throw out of rounds (RoundExpired), so
-    // the next round uses the same connection.
+    checkingOut = true;
+    Thread.ofPlatform().daemon().name("workhorse-heartbeat-checkout").start(this::checkOut);
+  }
+
+  /**
+   * Checks out the held connection on its own thread, so a round or a worker waits for it only
+   * until its own deadline. A failed checkout runs again after a backoff that doubles from 100 ms
+   * up to {@link #retryCapLocked}.
+   *
+   * <p>The thread is the one owner of each connection that it gets. It installs the connection, or
+   * gives it back to the pool when nothing needs it or the heartbeat already holds one. The thread
+   * ends when it installs a connection or when nothing needs one. So the heartbeat runs at most one
+   * checkout at a time, however many waits time out. The installed connection wakes every
+   * reservation.
+   */
+  private void checkOut() {
+    long backoff = RETRY_NANOS;
     while (true) {
-      Held held;
+      Connection connection = null;
+      Throwable failure = null;
       try {
-        held = new Held(dataSource.getConnection());
-      } catch (SQLException | RuntimeException error) {
-        if (stopIfIdle()) {
-          return;
-        }
-        waitFor(retryWaitNanos(previous, shortestIntervalNanos(), System.nanoTime()));
-        continue;
+        connection = dataSource.getConnection();
+      } catch (Throwable error) {
+        failure = error;
       }
-      try (held) {
-        if (rounds(
-            (timeoutNanos, statement, parameters) ->
-                held.round(timeoutNanos, statement, parameters))) {
-          return;
+      Held installed = null;
+      if (connection != null) {
+        try {
+          installed = new Held(connection);
+        } catch (SQLException | RuntimeException setup) {
+          failure = setup;
         }
+      }
+      Held extra = null;
+      List<Runnable> wake = new ArrayList<>();
+      boolean done;
+      lock.lock();
+      try {
+        if (installed != null) {
+          done = true;
+          checkingOut = false;
+          if (held == null && wantedLocked()) {
+            held = installed;
+            connected = true;
+            checkoutFailure = null;
+            for (Reservation reservation : reservations) {
+              wake.add(reservation.onConnected);
+            }
+          } else {
+            extra = installed;
+          }
+          changed.signalAll();
+        } else {
+          checkoutFailure = failure;
+          changed.signalAll();
+          long until = System.nanoTime() + Math.min(backoff, retryCapLocked());
+          try {
+            while (wantedLocked() && until - System.nanoTime() > 0) {
+              changed.awaitNanos(until - System.nanoTime());
+            }
+            done = !wantedLocked();
+          } catch (InterruptedException interrupted) {
+            done = true;
+          }
+          if (done) {
+            checkingOut = false;
+          }
+          backoff = Math.min(backoff * 2, retryCapLocked());
+        }
+      } finally {
+        lock.unlock();
+      }
+      closeQuietly(extra);
+      for (Runnable callback : wake) {
+        try {
+          callback.run();
+        } catch (RuntimeException ignored) {
+          // One worker's callback must not keep the others from their wake.
+        }
+      }
+      if (done) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * Acts on the connection of a failed round. A failed renewal on a connection that stays open
+   * keeps the connection, because its rollback ended the round's transaction. Thus a statement
+   * error does not close the claim gate of the workers. A closed or aborted connection is
+   * discarded, and its replacement checkout starts at once. A round that got no connection discards
+   * nothing, so a connection that a checkout installed after the round's deadline stays.
+   */
+  private void discard() {
+    Held failed = sent;
+    sent = null;
+    if (failed == null || failed.usable()) {
+      return;
+    }
+    lock.lock();
+    try {
+      if (held != failed) {
+        return;
+      }
+      held = null;
+      connected = false;
+      startCheckoutLocked();
+    } finally {
+      lock.unlock();
+    }
+    closeQuietly(failed);
+  }
+
+  private static void closeQuietly(@Nullable Held connection) {
+    if (connection == null) {
+      return;
+    }
+    try {
+      connection.close();
+    } catch (SQLException | RuntimeException ignored) {
+      // The pool sees a closed connection and replaces it.
+    }
+  }
+
+  /**
+   * Runs rounds while members are registered. Without members, a dedicated heartbeat keeps its
+   * connection while a reservation is open, and replaces a discarded one. The thread ends, and the
+   * connection goes back to the pool, when no member and no reservation is left. A register or a
+   * reserve that races the end starts a new thread.
+   *
+   * <p>A dedicated round that fails keeps a connection that stays open, and discards a closed or
+   * aborted one ({@link #discard}). The replacement checkout then starts at once: rounds waits for
+   * the slot itself, and starts one overdue round at once. A round that expires before its
+   * heartbeat statement with a clean connection does not throw out of rounds (RoundExpired), so the
+   * next round uses the same connection. A borrowing round that fails is skipped.
+   */
+  private void run() {
+    Round round;
+    Round fixed = fixedRound;
+    if (fixed != null) {
+      round = fixed;
+    } else if (dedicated) {
+      round = this::sendOnHeld;
+    } else {
+      ConnectionSource source = ConnectionSource.of(dataSource);
+      round =
+          (timeoutNanos, statement, parameters) -> {
+            Connection connection = source.acquire();
+            try {
+              return Sql.rows(connection, statement, parameters);
+            } finally {
+              source.release(connection, false);
+            }
+          };
+    }
+    boolean idle = true;
+    while (true) {
+      boolean exit = false;
+      Held release = null;
+      lock.lock();
+      try {
+        while (members.isEmpty()) {
+          idle = true;
+          if (reservations.isEmpty()) {
+            exit = true;
+            release = exitLocked();
+            break;
+          }
+          // A reservation without members keeps its connection, and recovers a lost one.
+          startCheckoutLocked();
+          changed.await();
+        }
+        if (!exit) {
+          // A heartbeat without a reservation checks out its connection when its first member
+          // arrives, so the checkout runs before the first round's slot.
+          startCheckoutLocked();
+        }
+      } catch (InterruptedException interrupted) {
+        exit = true;
+        release = exitLocked();
+      } finally {
+        lock.unlock();
+      }
+      if (exit) {
+        closeQuietly(release);
+        return;
+      }
+      if (idle) {
+        // The first member after an idle time starts a new schedule, as a new thread did.
+        previous = System.nanoTime();
+        busyRetry = null;
+        idle = false;
+      }
+      try {
+        idle = rounds(round);
       } catch (SQLException | RuntimeException error) {
-        // The next pass checks out a new connection, unless no member is left to renew.
-        if (stopIfIdle()) {
-          return;
+        // The next round waits for its slot, and runs on a replacement connection.
+        if (holdsConnection) {
+          discard();
         }
       }
     }
   }
 
-  private boolean stopIfIdle() {
+  /**
+   * Ends the heartbeat thread, and returns the held connection, which the caller gives back to the
+   * pool after it releases {@link #lock}. The caller holds {@link #lock}.
+   */
+  private @Nullable Held exitLocked() {
+    if (Thread.currentThread().equals(thread)) {
+      thread = null;
+    }
+    Held previous = held;
+    held = null;
+    connected = false;
+    return previous;
+  }
+
+  /**
+   * Sends one statement on the held connection. The wait for a checkout counts against the round's
+   * bound, so a pool that has no free connection fails the round at its deadline.
+   */
+  private List<Row> sendOnHeld(
+      long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)
+      throws SQLException {
+    long deadline = System.nanoTime() + timeoutNanos;
+    Held connection;
+    boolean waited;
+    Runnable hook = onAwaitConnection;
     lock.lock();
     try {
-      return stopIfIdleLocked();
+      waited = held == null;
+      if (waited && hook != null) {
+        hook.run();
+      }
+      connection = awaitHeldLocked(deadline, () -> false);
     } finally {
       lock.unlock();
     }
+    sent = connection;
+    if (connection == null) {
+      throw new SQLTimeoutException("The heartbeat got no connection before the round's deadline");
+    }
+    if (waited) {
+      Runnable received = onConnectionInRound;
+      if (received != null) {
+        received.run();
+      }
+      // The wait for the new connection used part of this round's bound. The round sends nothing,
+      // so the connection stays clean, and the next round starts on it at once with a full bound.
+      freshConnection = true;
+      throw new RoundExpired("The heartbeat got its new connection during the round");
+    }
+    return connection.round(deadline - System.nanoTime(), statement, parameters);
   }
 
   /**
@@ -324,14 +716,15 @@ public final class Heartbeat {
         for (Member member : members.values()) {
           interval = Math.min(interval, member.intervalNanos());
         }
-        if (stopIfIdleLocked()) {
+        if (members.isEmpty()) {
           busyRetry = null;
+          runNow = false;
           return true;
         }
         long now = System.nanoTime();
         long slot = previous + interval;
         List<Member> selection = null;
-        if (busyRetry != null && slot - now > 0) {
+        if (!runNow && busyRetry != null && slot - now > 0) {
           if (busyRetryAt - now > 0) {
             changed.awaitNanos(Math.min(busyRetryAt - now, slot - now));
             continue;
@@ -345,10 +738,14 @@ public final class Heartbeat {
           due = selection;
           retry = true;
         } else {
-          if (slot - now > 0) {
+          // A round that must run now does not wait for a slot. The member with the shortest
+          // interval can have left while the previous round waited, so no slot of the current
+          // members would bring this round forward.
+          if (!runNow && slot - now > 0) {
             changed.awaitNanos(slot - now);
             continue;
           }
+          runNow = false;
           due = new ArrayList<>(members.values());
           retry = false;
         }
@@ -379,7 +776,16 @@ public final class Heartbeat {
         batches = batches(due);
         first = nextFirstBatch(batches.size());
       }
+      roundsStarted.incrementAndGet();
       List<Member> busy = sendBatches(batches, first, deadline, round);
+      if (freshConnection) {
+        // The round waited for a new connection and sent nothing on it. A regular round runs at
+        // once on the replacement, with a full bound. It replays no missed slot, and it starts the
+        // schedule from then.
+        freshConnection = false;
+        runNow = true;
+        continue;
+      }
       if (!busy.isEmpty() && !(retry && roundExpired)) {
         busyRetry = busy;
         busyRetryAt = System.nanoTime() + busyRetryDelayNanos(interval);
@@ -540,32 +946,6 @@ public final class Heartbeat {
     return TimeUnit.MILLISECONDS.toNanos(boundMs);
   }
 
-  /**
-   * The wait before a new connection after a failed round. It ends at the next slot when that is
-   * sooner than {@link #RETRY_NANOS}, so the retry does not delay the next round. After the slot,
-   * it is {@link #RETRY_NANOS}, so a pool that keeps refusing is not asked in a loop.
-   */
-  static long retryWaitNanos(long previous, long intervalNanos, long now) {
-    long untilSlot = previous + intervalNanos - now;
-    return untilSlot > 0 ? Math.min(RETRY_NANOS, untilSlot) : RETRY_NANOS;
-  }
-
-  /** The shortest member interval, or {@link #RETRY_NANOS} when no member is left. */
-  private long shortestIntervalNanos() {
-    lock.lock();
-    try {
-      long interval = RETRY_NANOS;
-      boolean first = true;
-      for (Member member : members.values()) {
-        interval = first ? member.intervalNanos() : Math.min(interval, member.intervalNanos());
-        first = false;
-      }
-      return interval;
-    } finally {
-      lock.unlock();
-    }
-  }
-
   private static String leases(List<Member> chunk) {
     List<Object> leases = new ArrayList<>();
     for (Member member : chunk) {
@@ -614,25 +994,6 @@ public final class Heartbeat {
     }
   }
 
-  private static void waitFor(long nanos) {
-    try {
-      TimeUnit.NANOSECONDS.sleep(nanos);
-    } catch (InterruptedException interrupted) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
-  /** Ends the thread when no member remains. A register that races this starts a new one. */
-  private boolean stopIfIdleLocked() {
-    if (!members.isEmpty()) {
-      return false;
-    }
-    if (Thread.currentThread().equals(thread)) {
-      thread = null;
-    }
-    return true;
-  }
-
   /**
    * A round that reached its deadline before its heartbeat statement, and left the connection
    * clean: it sent nothing, or its {@code ROLLBACK} finished before the deadline. It is not a
@@ -671,6 +1032,12 @@ public final class Heartbeat {
     private final boolean restoreAutoCommit;
     private final int previousTimeout;
     private boolean bounded;
+
+    /**
+     * True once the connection is aborted or reports a connection failure (SQLSTATE class 08). A
+     * pool proxy can still report an aborted connection as open, so {@link #usable} reads this too.
+     */
+    private boolean broken;
 
     Held(Connection connection) throws SQLException {
       this.connection = connection;
@@ -748,7 +1115,7 @@ public final class Heartbeat {
             connection.rollback();
           } catch (SQLException rollback) {
             // The heartbeat statement did not go out, but the transaction state is not known.
-            connection.abort(Runnable::run);
+            abort();
             SQLTimeoutException failed = new SQLTimeoutException(expired.getMessage(), rollback);
             failed.addSuppressed(expired);
             throw failed;
@@ -756,7 +1123,7 @@ public final class Heartbeat {
           // A rollback that ends after the deadline did not end in the round's bound, so the
           // connection is discarded, as in every SDK.
           if (System.nanoTime() - deadline >= 0) {
-            connection.abort(Runnable::run);
+            abort();
             SQLTimeoutException late = new SQLTimeoutException(expired.getMessage());
             late.addSuppressed(expired);
             throw late;
@@ -764,6 +1131,12 @@ public final class Heartbeat {
         }
         throw expired;
       } catch (SQLException | RuntimeException error) {
+        if (error instanceof SQLException sql) {
+          String state = sql.getSQLState();
+          if (state != null && state.startsWith("08")) {
+            broken = true;
+          }
+        }
         try {
           if (!connection.isClosed()) {
             boundUntil(deadline);
@@ -772,7 +1145,7 @@ public final class Heartbeat {
         } catch (SQLException rollback) {
           // The rollback keeps the round's deadline. A connection that cannot finish it in time
           // has a state the round cannot know.
-          connection.abort(Runnable::run);
+          abort();
         }
         throw error;
       } finally {
@@ -780,6 +1153,27 @@ public final class Heartbeat {
           connection.setAutoCommit(true);
         }
       }
+    }
+
+    /**
+     * Whether the connection is still open. A round that failed closes or aborts a connection whose
+     * state it cannot know, so an open connection after a failed round is clean.
+     */
+    boolean usable() {
+      if (broken) {
+        return false;
+      }
+      try {
+        return !connection.isClosed();
+      } catch (SQLException | RuntimeException error) {
+        return false;
+      }
+    }
+
+    /** Aborts the connection, whose state the round cannot know, and marks it broken. */
+    private void abort() throws SQLException {
+      broken = true;
+      connection.abort(Runnable::run);
     }
 
     /** Bounds the next read by the time left before {@code deadline}, a nanoTime value. */

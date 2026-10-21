@@ -9,6 +9,61 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Fixes
+
+- **Workers on one `DataSource` no longer lose leases on a small pool.** Before this release, each
+  worker held its own listener connection. When a HikariCP pool had fewer connections than
+  workers, the listener connections filled the pool. The shared heartbeat then waited up to 30 s,
+  the HikariCP timeout, for a connection. A lease of 3 s expired in that wait, so recovery returned
+  the task to its queue while the first attempt still ran, and a second attempt could run the task
+  again. Now every worker on one `DataSource` object shares one listener connection and one
+  heartbeat connection. A pool needs those two connections plus one for each statement in flight,
+  so at least 3 (SM-1569).
+- The key of both shared connections is the `DataSource` object itself, by reference identity,
+  never by `equals`. A wrapper of a pool is a key of its own, with its own two connections. So a
+  worker on a wrapper and a worker on its delegate hold four connections of one physical pool.
+- Each worker's queues filter its wakes from the shared listener. The last worker that stops gives
+  the listener connection back to the pool. After a reconnect, the listener wakes every worker.
+- The heartbeat gets its connection, and each replacement, on one checkout thread at a time. A
+  round waits for that checkout only inside its round bound, 7.5 s by default, so the timeout of
+  the pool never delays a renewal past the bound. The shorter deadlines of a busy retry do not
+  change. A failed checkout runs again after a backoff that doubles from 100 ms up to the heartbeat
+  interval, also while no task runs. A connection that arrives after every wait for it ended goes
+  back to the pool.
+- A failed renewal on a connection that stays open now keeps the connection. A closed or aborted
+  connection is replaced at once. The first round on the replacement has the full round bound: a
+  round that gets the replacement during its bound sends nothing, and a regular round then runs at
+  once.
+
+### Behavior changes
+
+- **A worker now checks its pool when it starts, and refuses to start on a failed check.** The
+  worker reserves the heartbeat connection, starts its listener, and borrows one ordinary
+  connection for the compatibility query. The reservation and the borrow share one budget, the
+  larger of `heartbeat` and 5 s, and the wait for the listener between them does not count against
+  it. If the two steps do not end within the budget, `run`, and the thread of `start`, throw
+  `WorkhorseException`. The message names the `DataSource`, the budget of at least 3 connections,
+  and the `sharedHeartbeats(true)` opt-out. Before this release, a run that could not get a
+  heartbeat connection at start continued, and took the connection when its first task ran. Now a
+  startup reservation failure ends that run. A worker with `sharedHeartbeats(true)` reserves
+  nothing and starts as before.
+- The listener stays best effort. The worker waits until the listener holds its connection, so a
+  `LISTEN` that stalls does not use the time of the compatibility check. If the listener does not
+  listen yet, the worker logs `workhorse.worker.polling_only` once and polls, and the listener
+  keeps trying.
+- **A worker claims no task while its heartbeat holds no connection.** This applies to ordinary
+  claims and to the claims of fused completions. The worker reads this gate again on the borrowed
+  connection, just before each claim statement goes out, a resend after a deadlock too. A fast-tier
+  completion still settles its task, with a claim limit of 0. A failed renewal or a busy round does
+  not close this gate. When the replacement connection arrives, the worker claims at once, without
+  a wait for its next poll. Running tasks continue under their lease watchdogs.
+- **The total stop time is now `shutdownGrace` plus the 250 ms unwind window.** Every wait after the
+  grace ends by then, also when the pool has no free connection. Before this release, the cleanup
+  after the grace could take about 2 s, of which the deregistration took up to 1 s. A deregistration
+  that still waits at the end continues in the background.
+
 ## 0.9.0 — 2026-10-20
 
 This is the first release of the JVM SDK. The npm packages, Python distribution, Go module, Rust

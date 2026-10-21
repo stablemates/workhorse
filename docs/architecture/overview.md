@@ -282,10 +282,11 @@ Before handlers and cohorts take connections, each language holds these connecti
 | Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                  | One `Worker::Heartbeat.dedicated(pool)` per pool object, holding one pool connection.       |
 | Python     | One per `Worker` or `AsyncWorker`, from the supplied Psycopg or asyncpg pool.                                                                      | One per `Worker` or `AsyncWorker`, from the same pool.                                      |
 | Rust       | Opened per worker by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool.                                                | One per worker, from the pool.                                                              |
-| JVM        | One per `Worker`, from its `DataSource`, while `run` or `start` runs. None under `pollingOnly(true)` or `runOnce`.                                 | One `Heartbeat.dedicated(dataSource)` per `DataSource` object, held while any attempt runs. |
+| JVM        | One `Listener.shared(dataSource)` per `DataSource` object, held while any worker runs. None under `pollingOnly(true)` or `runOnce`.                | One `Heartbeat.dedicated(dataSource)` per `DataSource`, held while a worker or a task runs. |
 
 TypeScript keys both its listener and its heartbeat connection by the pool object. Go follows the
-same pattern. The JVM keys its heartbeat connection by the `DataSource` object.
+same pattern. The JVM keys both its listener and its heartbeat connection by the `DataSource`
+object, by reference identity, never by `equals`. A wrapper of a pool is a key of its own.
 
 In every language except the JVM, a dedicated heartbeat connection needs a pool of at least 3
 connections, unless the opt-out is set:
@@ -294,7 +295,13 @@ connections, unless the opt-out is set:
 - `SharedHeartbeats` in Go
 - `shared_heartbeats` in Python, Rust, and Ruby
 
-A `DataSource` reports no pool size, so the JVM worker makes no such check. Its opt-out is
+A `DataSource` reports no pool size, so the JVM worker checks the pool when it starts. Within the larger of
+`heartbeat` and 5 seconds, it reserves its heartbeat connection and borrows one ordinary connection
+for the compatibility query. Between the two steps, it waits until the listener holds its
+connection, and that wait does not count against the budget. It refuses to start if the
+reservation or the borrow does not end in time. The pool's own timeout, such as the 30 s of
+HikariCP, does not extend these waits. The check proves only the headroom at that moment. At run
+time, the JVM worker claims no new task while its heartbeat holds no connection. Its opt-out is
 `sharedHeartbeats(true)`.
 
 #### Schema operations

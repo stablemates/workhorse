@@ -2538,8 +2538,9 @@ The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a sho
 `disableRegistry(true)` turns off the worker registry. `sharedHeartbeats(true)` makes heartbeat
 rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
 `RetryDelay` that returns a delay of 0 through 2,147,483,647 milliseconds, or `null` for the
-persisted policy. A `DataSource` reports no pool size, so the worker never refuses a small pool and
-never caps the default cohorts.
+persisted policy. A `DataSource` reports no pool size, so the worker checks no pool size and never
+caps the default cohorts. It refuses to start only when its startup steps do not end within the
+startup budget ([JVM connections](#jvm-connections)).
 
 `handle(taskType, payloadClass, handler)` and `handle(TaskHandler)` register a handler. A second
 registration of a task type replaces the first. The worker releases a claimed task that has no
@@ -2558,16 +2559,76 @@ cannot delay a lease renewal. `start()` runs the worker loop on a non-daemon pla
 
 #### JVM connections
 
-Each worker holds one listener connection from its `DataSource` while `run` or `start` runs. It
-holds none under `pollingOnly(true)` or `runOnce`. After a listener failure, it calls
-`onNotificationError`, reconnects with a backoff of 100 milliseconds through 5 seconds, and polls in
-the meantime.
+Workers built on one `DataSource` object share one listener, `Listener.shared(dataSource)`. The key
+is the object itself, by reference identity, never by `equals`, so a wrapper of a pool is a key of
+its own. The listener holds one connection from the `DataSource` while the `run` or `start` of any
+of these workers runs. A worker under `pollingOnly(true)` or `runOnce` does not subscribe to it. A
+notification wakes each worker whose queues it names, and `*` wakes every worker. A callback that
+throws does not stop the wakes of another worker. After a listener failure, the listener calls the
+`onNotificationError` of each worker and reconnects with a backoff of 100 milliseconds through 5
+seconds. It wakes every worker when it listens again, and the workers poll in the meantime. When
+the last worker stops, the listener gives its connection back to the pool.
 
-Workers built on one `DataSource` object share one dedicated heartbeat connection. The heartbeat
-holds that connection while any attempt runs. After a failed round, it takes a new connection at
-once and keeps its round schedule. If the pool refuses a connection, it asks again after at most
-100 milliseconds. [Task lifecycle: Heartbeat schedule](lifecycle.md#heartbeat-schedule) states the
-schedule. Every other statement borrows a connection for its own duration.
+Workers built on one `DataSource` object share one dedicated heartbeat connection, with the same
+identity key. The registry holds each `DataSource` and each shared listener or heartbeat through a
+weak reference, so it keeps no pool alive. The heartbeat holds its connection while any worker runs
+or any attempt runs. It gets the connection, and each replacement, on one checkout thread at a time,
+so the timeout of the pool does not apply to a wait. For example, HikariCP waits 30 seconds by
+default.
+
+- **Start.** The startup budget is the larger of `heartbeat` and 5 seconds. The 5 second floor is a
+  design choice. The reservation and the readiness check share this one budget. In order:
+  1. The worker reserves the heartbeat connection.
+  2. The worker subscribes to the shared listener. It waits until the listener holds its
+     connection or listens, for at most the time that the budget has left. A `LISTEN` that is still
+     in flight does not hold the start. This wait does not count against the budget, so the
+     readiness check still has the time that was left before it.
+  3. The worker borrows one ordinary connection, runs the compatibility query, and returns the
+     connection at once. This is the readiness check.
+
+  Thus a stalled listener does not use the time of the readiness check, and a pool of 2 still
+  fails the check, because the listener holds the second connection. If the reservation and the
+  readiness check together do not finish within the budget, the run throws
+  `WorkhorseException`. Its text names the `DataSource`, the budget, and the `sharedHeartbeats(true)`
+  opt-out. The budget is at least 3 connections: the listener, the heartbeat, and one statement. A
+  worker that does not listen needs at least 2. The listener is best effort. If it does not listen
+  when its wait ends, the worker logs `workhorse.worker.polling_only` once and polls, and the
+  listener keeps trying. The readiness check proves only the headroom at that moment. It does not prove later
+  availability, or the total budget of one physical pool across wrappers. As for the other steps
+  before the claims, a stop ends each wait when the stop deadline passes, and a stopping worker ends
+  its run without the error. A worker with `sharedHeartbeats(true)` reserves nothing, and runs its
+  compatibility check without the startup budget.
+
+- **Rounds.** A round waits for a checkout only inside its round bound, 7.5 seconds by default. The
+  shorter deadlines of a busy retry do not change. If no connection arrives by then, the round
+  fails, and the lease watchdog bounds the loss. A failed renewal on a connection that stays open
+  keeps the connection, because its rollback ended the transaction. A closed or aborted connection
+  is discarded, and its replacement checkout starts at once. A round that gets the replacement
+  during its bound sends nothing on it, because the wait used part of the bound. A regular round then
+  runs at once on the replacement, with a full bound, also when the lease with the shortest interval
+  left during the wait. The round schedule continues from that round.
+- **Recovery.** A failed checkout runs again after a backoff that starts at 100 milliseconds,
+  doubles, and stops at the shortest heartbeat interval of the workers and attempts. Recovery runs
+  also while no attempt runs. The checkout thread owns each connection that it gets. It installs
+  the connection, or gives it back to the pool when no worker and no attempt needs it, or when the
+  heartbeat already holds one. Thus waits that time out do not add checkouts or threads. In the
+  same way, the shared listener keeps one pending checkout across its restarts, and gives a
+  connection that arrives with no subscriber back to the pool. A worker reuses a readiness check
+  that still waits for the pool.
+- **Claims.** While the heartbeat holds no connection, the worker starts no claim of any kind. The
+  worker reads the gate when it plans a claim, and again on the borrowed connection just before each
+  attempt goes out, a resend after a deadlock too. So a claim that waited for the pool, or a
+  completion that waited behind another batch, sends no claim after the heartbeat lost its
+  connection. A fast-tier completion still sends its fused statement, with a claim limit of 0, so
+  it settles its task and claims nothing. Its reserved slots go back, and the queue does not count
+  as empty. A failed renewal or a round that a row lock holds does not close this
+  gate. The installed replacement wakes the dispatch loop at once, so claims do not wait for a poll.
+  Running attempts continue under their lease watchdogs, and maintenance continues. A pass of
+  `runOnce` ends while the gate is closed, so it does not wait for the database.
+
+[Task lifecycle: Heartbeat schedule](lifecycle.md#heartbeat-schedule) states the schedule. Every
+other statement borrows a connection for its own duration. A worker with `sharedHeartbeats(true)`
+borrows a connection for each round, and reserves none at start.
 
 If a claim fails with SQLSTATE `0A000` because the connection does not use read committed
 isolation, the worker logs `workhorse.worker.claim_isolation`. It treats the claim as empty, and the
@@ -2598,28 +2659,27 @@ ends the run, and `run` throws it. This includes an `Error` from the pass. A reg
 After `stop()`, the worker shuts down in this order:
 
 1. It claims nothing new. It runs the tasks of claims already in flight.
-2. It waits up to `shutdownGrace` for running handlers.
-3. It cancels the rest with `SHUTDOWN` and calls `Thread.interrupt()` on their threads. The
+2. It gives up its listener subscription. The shared listener gives its connection back to the pool
+   when the last worker on the `DataSource` leaves.
+3. It waits up to `shutdownGrace` for running handlers.
+4. It cancels the rest with `SHUTDOWN` and calls `Thread.interrupt()` on their threads. The
    interrupt waits while the worker's own statement runs on that thread. A child request also
    defers it while it gets a connection, reads a payload contract, and gives the connection back.
-4. It waits a 250 millisecond unwind window.
-5. It abandons a handler that still runs after that window, and stops renewing its lease. A task
+5. It waits the 250 millisecond unwind window.
+6. It abandons a handler that still runs after that window, and stops renewing its lease. A task
    that the caller's `executor` never started goes back to its queue through `release_owned_v1`,
-   which charges no attempt. That task does not count as an abandoned handler. If the release
-   fails, the worker logs `workhorse.task.release_failed`, and the lease expires.
-6. It deregisters the worker. This step waits up to 1 second.
-7. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
+   which charges no attempt. That task does not count as an abandoned handler. If a release fails,
+   the worker logs `workhorse.task.release_failed`, and the lease expires.
+7. It gives up its heartbeat reservation. The shared heartbeat gives its connection back to the
+   pool when the last worker on the `DataSource` leaves and no attempt needs it.
+8. It deregisters the worker.
+9. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
 
-Some cleanup can take time after `shutdownGrace`:
-
-| Step             | Wait after the grace                              |
-| ---------------- | ------------------------------------------------- |
-| Claims in flight | Up to 250 milliseconds, when the grace is shorter |
-| Listener close   | At least 200 milliseconds                         |
-| Unwind window    | 250 milliseconds                                  |
-| Deregistration   | Up to 1 second                                    |
-
-Thus a complete shutdown can end up to about 2 seconds after `shutdownGrace`.
+The total stop time is `shutdownGrace` plus the 250 millisecond unwind window. Every wait after the
+grace ends by then: the claims in flight, the listener close, the unwind window, the release of the
+unstarted tasks, and the deregistration. Thus a pool with no free connection cannot extend a stop.
+A release or a deregistration that still waits then continues, and gives its connection back when
+it ends.
 
 The worker installs no JVM shutdown hook and traps no signal.
 
@@ -2928,7 +2988,8 @@ gives no order to beans of the same phase, so a lifecycle bean of the default ph
 the worker drains. It starts the worker with `start()` after the context refreshes. On stop, it calls `worker.stop()` and then `close()` on
 its own thread. Spring waits for that drain only for `spring.lifecycle.timeout-per-shutdown-phase`.
 Keep that timeout above `workhorse.worker.shutdown-grace` plus 2 seconds. The worker cleanup after
-the grace takes up to about 2 seconds, as the JVM running and stopping section shows.
+the grace takes up to the 250 millisecond unwind window, as the JVM running and stopping section
+shows, and the rest is a margin.
 
 | Lifecycle state       | Health    |
 | --------------------- | --------- |

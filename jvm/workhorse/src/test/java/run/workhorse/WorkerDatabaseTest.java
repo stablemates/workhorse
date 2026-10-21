@@ -1175,16 +1175,20 @@ class WorkerDatabaseTest {
                       sends.add(
                           new HeartbeatSend(connectStartedAt, connectedAt, System.nanoTime()));
                     }
-                    boolean delay =
-                        call.getName().equals("commit")
-                            && heartbeat.getAndSet(false)
-                            && delayed.getAndUpdate(n -> n < count ? n + 1 : n) < count;
+                    boolean heartbeatCommit =
+                        call.getName().equals("commit") && heartbeat.getAndSet(false);
                     Object answer;
                     try {
                       answer = call.invoke(connection, values);
                     } catch (InvocationTargetException error) {
                       throw error.getCause();
                     }
+                    // Only a COMMIT that succeeded counts. A COMMIT can also fail on its own, for
+                    // example after the server ended a session whose round had no time left. That
+                    // COMMIT must not use one of the delays, or the test never sees its last
+                    // failure.
+                    boolean delay =
+                        heartbeatCommit && delayed.getAndUpdate(n -> n < count ? n + 1 : n) < count;
                     if (delay) {
                       // After the commit, so no idle gap ends the session first.
                       Thread.sleep(delayMs);
@@ -2048,7 +2052,9 @@ class WorkerDatabaseTest {
   }
 
   // SM-1525 (m16): a task that the caller's executor never started goes back to its queue at the
-  // drain deadline, and the drain does not count it as an abandoned handler.
+  // drain deadline, and the drain does not count it as an abandoned handler. The stop waits for the
+  // release until its total stop time ends, the grace plus the 250 ms unwind window (SM-1569). On a
+  // loaded host the release can end later, so the test waits for it after the close.
   @Test
   void releasesATaskThatTheCallerExecutorNeverStarted() throws Exception {
     UUID taskId = enqueue("unstarted", Map.of());
@@ -2100,6 +2106,15 @@ class WorkerDatabaseTest {
     waitUntil("the executor holds the task", () -> !held.isEmpty());
     worker.close();
 
+    waitUntil(
+        "the task is back in its queue",
+        () -> {
+          try {
+            return "ready".equals(status(taskId).state());
+          } catch (SQLException error) {
+            throw new AssertionError(error);
+          }
+        });
     Status released = status(taskId);
     assertEquals("ready", released.state(), "the task is back in its queue");
     assertNull(released.workerId(), "no worker holds the lease");

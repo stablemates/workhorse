@@ -6,26 +6,35 @@ import java.lang.invoke.MethodType;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Wakes one worker when PostgreSQL announces claimable work. Internal to the SDK; the counterpart
- * of Ruby's {@code Worker::Listener} (ADR 0103, "Connection model").
+ * Wakes workers when PostgreSQL announces claimable work. Internal to the SDK; the counterpart of
+ * Ruby's {@code Worker::Listener} (ADR 0103, "Connection model").
  *
- * <p>The listener holds one connection, which runs {@code LISTEN workhorse_tasks}, on a dedicated
- * platform thread. It blocks in {@code getNotifications} with a bounded timeout, so {@link #close}
- * ends it within one timeout. A notification names a queue, or {@code *} for every queue. A lost
- * connection reconnects with a jittered backoff, and the worker keeps polling meanwhile, so a
- * notification only shortens a wait.
+ * <p>Every worker on one {@link DataSource} object shares one listener, as it shares the heartbeat
+ * ({@link #shared}). The key is the object itself, by reference identity, never by {@code equals}.
+ * So a pool budgets one listener connection however many workers it serves. The listener holds that
+ * connection, which runs {@code LISTEN workhorse_tasks}, on a dedicated platform thread while it
+ * has subscribers. It blocks in {@code getNotifications} with a bounded timeout, so a stop ends it
+ * within one timeout. A notification names a queue, or {@code *} for every queue, and wakes each
+ * subscriber whose queues match. A lost connection reconnects with a jittered backoff, and each
+ * worker keeps polling meanwhile, so a notification only shortens a wait.
  */
-public final class Listener implements AutoCloseable {
+public final class Listener {
   /**
    * PgJDBC's notification API. The root {@code org.postgresql} package carries Checker Framework
    * annotations that the build does not have, so the listener reaches {@code PGConnection} and
@@ -69,66 +78,198 @@ public final class Listener implements AutoCloseable {
   private static final long INITIAL_RECONNECT_MS = 100;
   private static final long MAX_RECONNECT_MS = 5_000;
 
+  private static final IdentityRegistry<DataSource, Listener> SHARED = new IdentityRegistry<>();
+
   private final DataSource dataSource;
-  private final List<String> queues;
-  private final Runnable onWake;
-  private final Consumer<Throwable> onError;
+  private final ReentrantLock lock = new ReentrantLock();
+
+  /** The subscribers, in subscription order. They change under {@link #lock}. */
+  private final List<Subscription> subscribers = new ArrayList<>();
+
   private final AtomicBoolean listening = new AtomicBoolean();
-  private final CountDownLatch stop = new CountDownLatch(1);
-  private final Thread thread;
-
-  private Listener(
-      DataSource dataSource, List<String> queues, Runnable onWake, Consumer<Throwable> onError) {
-    this.dataSource = dataSource;
-    this.queues = List.copyOf(queues);
-    this.onWake = onWake;
-    this.onError = onError;
-    this.thread = new Thread(this::run, "workhorse-notification-listener");
-    thread.setDaemon(true);
-  }
-
-  /** Starts a listener for {@code queues}. */
-  public static Listener start(
-      DataSource dataSource, List<String> queues, Runnable onWake, Consumer<Throwable> onError) {
-    Listener listener = new Listener(dataSource, queues, onWake, onError);
-    listener.thread.start();
-    return listener;
-  }
-
-  /** Whether the connection currently listens. */
-  public boolean isListening() {
-    return listening.get();
-  }
-
-  /** Stops listening, and waits up to 5 s for the thread to give its connection back. */
-  @Override
-  public void close() {
-    close(System.nanoTime() + TimeUnit.SECONDS.toNanos(5));
-  }
 
   /**
-   * Stops listening, and waits for the thread to give its connection back until {@code deadline}, a
-   * {@link System#nanoTime} value, or one read timeout at least.
+   * Whether the thread holds its connection, from the checkout until the connection goes back. A
+   * {@code LISTEN} can still be in flight while it is true.
    */
-  public void close(long deadline) {
-    stop.countDown();
-    long wait =
-        Math.max(deadline - System.nanoTime(), TimeUnit.MILLISECONDS.toNanos(2L * READ_TIMEOUT_MS));
-    try {
-      thread.join(java.time.Duration.ofNanos(wait));
-    } catch (InterruptedException interrupted) {
-      Thread.currentThread().interrupt();
+  private final AtomicBoolean holding = new AtomicBoolean();
+
+  /** The thread, or {@code null} when none runs. It changes under {@link #lock}. */
+  private @Nullable Thread thread;
+
+  /** The stop signal of the thread's current pass. It changes under {@link #lock}. */
+  private CountDownLatch stop = new CountDownLatch(1);
+
+  /**
+   * The checkout that has not given a thread its connection yet, or {@code null}. A pass or a
+   * thread that stops leaves it for the next one, so stops and restarts never add a second
+   * checkout. It changes under {@link #lock}, and its owner is settled there once: a thread adopts
+   * the connection, or {@link #orphaned} gives it back to the pool when no subscriber is left.
+   */
+  private @Nullable Pending pending;
+
+  /** One checkout of the listener connection. */
+  private static final class Pending {
+    final CompletableFuture<Connection> result;
+
+    Pending(CompletableFuture<Connection> result) {
+      this.result = result;
     }
   }
 
+  private Listener(DataSource dataSource) {
+    this.dataSource = dataSource;
+  }
+
+  /** The listener that every worker on the {@code dataSource} object shares. */
+  public static Listener shared(DataSource dataSource) {
+    return SHARED.get(dataSource, Listener::new);
+  }
+
+  /**
+   * Wakes {@code onWake} for each notification that names one of {@code queues} or every queue, and
+   * gives each connection failure to {@code onError}. The first subscriber starts the thread. It
+   * never waits: a thread that still stops, perhaps on a stalled connection, sees the new
+   * subscriber once that connection is back in the pool, and listens again. So a pool never holds
+   * two listener connections, and the worker polls meanwhile.
+   */
+  public Subscription subscribe(List<String> queues, Runnable onWake, Consumer<Throwable> onError) {
+    Subscription subscription = new Subscription(queues, onWake, onError);
+    lock.lock();
+    try {
+      subscribers.add(subscription);
+      Thread current = thread;
+      if (current == null || !current.isAlive()) {
+        stop = new CountDownLatch(1);
+        Thread started = new Thread(this::run, "workhorse-notification-listener");
+        started.setDaemon(true);
+        thread = started;
+        started.start();
+      }
+    } finally {
+      lock.unlock();
+    }
+    return subscription;
+  }
+
+  /** One worker's registration. {@link #close} removes it, and closing twice is harmless. */
+  public final class Subscription implements AutoCloseable {
+    private final List<String> queues;
+    private final Runnable onWake;
+    private final Consumer<Throwable> onError;
+
+    private Subscription(List<String> queues, Runnable onWake, Consumer<Throwable> onError) {
+      this.queues = List.copyOf(queues);
+      this.onWake = onWake;
+      this.onError = onError;
+    }
+
+    /** Whether the shared connection currently listens. */
+    public boolean isListening() {
+      return listening.get();
+    }
+
+    /**
+     * Whether the listener holds its connection from the pool, also while its {@code LISTEN} is in
+     * flight. A starting worker reads it to know that the listener's connection is no longer free.
+     */
+    public boolean holdsConnection() {
+      return holding.get();
+    }
+
+    /** Removes the subscription, and waits up to 5 s for the thread to give its connection back. */
+    @Override
+    public void close() {
+      close(System.nanoTime() + TimeUnit.SECONDS.toNanos(5));
+    }
+
+    /**
+     * Removes the subscription. The last subscriber stops the thread, and waits for it to give its
+     * connection back until {@code deadline}, a {@link System#nanoTime} value. The thread ends
+     * within one read timeout of the stop.
+     */
+    public void close(long deadline) {
+      Thread stopping = null;
+      lock.lock();
+      try {
+        if (subscribers.remove(this) && subscribers.isEmpty()) {
+          stop.countDown();
+          stopping = thread;
+        }
+      } finally {
+        lock.unlock();
+      }
+      if (stopping == null || stopping.equals(Thread.currentThread())) {
+        return;
+      }
+      long wait = deadline - System.nanoTime();
+      if (wait <= 0) {
+        return;
+      }
+      try {
+        stopping.join(Duration.ofNanos(wait));
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  /**
+   * Listens until stopped. Once its connection is back in the pool, the thread ends unless a
+   * subscriber arrived while it stopped.
+   */
   private void run() {
+    CountDownLatch current;
+    lock.lock();
+    try {
+      current = stop;
+    } finally {
+      lock.unlock();
+    }
+    while (true) {
+      listenUntil(current);
+      lock.lock();
+      try {
+        // Nothing interrupts the thread, but an interrupted thread could not wait, so it ends. The
+        // next subscriber starts a new one.
+        if (subscribers.isEmpty() || Thread.currentThread().isInterrupted()) {
+          if (Thread.currentThread().equals(thread)) {
+            thread = null;
+          }
+          // A checkout that ended while this thread waited out its backoff has no owner yet.
+          Pending left = pending;
+          if (left != null && left.result.isDone()) {
+            pending = null;
+            Checkout.abandon(left.result);
+          }
+          return;
+        }
+        if (current.getCount() == 0) {
+          stop = new CountDownLatch(1);
+        }
+        current = stop;
+      } finally {
+        lock.unlock();
+      }
+    }
+  }
+
+  private void listenUntil(CountDownLatch stop) {
     long backoff = INITIAL_RECONNECT_MS;
     while (stop.getCount() > 0) {
-      try (Connection connection = dataSource.getConnection()) {
-        backoff = listen(connection, backoff);
+      try (Connection connection = checkout(stop)) {
+        if (connection == null) {
+          return;
+        }
+        holding.set(true);
+        try {
+          backoff = listen(connection, stop, backoff);
+        } finally {
+          holding.set(false);
+        }
       } catch (SQLException | RuntimeException error) {
-        notify(onError, error);
-        wake();
+        report(error);
+        wakeAll();
       }
       long jittered = Math.round(backoff * ThreadLocalRandom.current().nextDouble(0.9, 1.1));
       try {
@@ -142,8 +283,92 @@ public final class Listener implements AutoCloseable {
     }
   }
 
+  /**
+   * A connection from the pool, or {@code null} when {@code stop} counts down first. The checkout
+   * runs on its own thread, so a full pool cannot hold a stop for the timeout of the pool. A
+   * stopped pass leaves the checkout for the next pass ({@link #pending}).
+   */
+  private @Nullable Connection checkout(CountDownLatch stop) throws SQLException {
+    Pending current;
+    lock.lock();
+    try {
+      current = pending;
+      if (current == null) {
+        Pending created = new Pending(Checkout.start(dataSource, "workhorse-listener-checkout"));
+        pending = created;
+        current = created;
+        var unused =
+            created.result.whenComplete((connection, error) -> orphaned(created, connection));
+      }
+    } finally {
+      lock.unlock();
+    }
+    while (stop.getCount() > 0) {
+      Connection connection;
+      try {
+        connection = current.result.get(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+      } catch (TimeoutException waiting) {
+        // The stop check runs once each read timeout.
+        continue;
+      } catch (ExecutionException failed) {
+        adopt(current);
+        Throwable cause = failed.getCause();
+        if (cause instanceof SQLException error) {
+          throw error;
+        }
+        if (cause instanceof RuntimeException error) {
+          throw error;
+        }
+        throw new SQLException("The listener could not check out a connection", cause);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+      // The connection is this thread's only when the checkout is still pending: otherwise it
+      // ended with no subscriber, and orphaned gave the connection back to the pool.
+      return adopt(current) ? connection : null;
+    }
+    return null;
+  }
+
+  /** Takes {@code checkout} as the thread's own, and returns whether it was still pending. */
+  private boolean adopt(Pending checkout) {
+    lock.lock();
+    try {
+      if (pending != checkout) {
+        return false;
+      }
+      pending = null;
+      return true;
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * Gives the connection of {@code checkout} back to the pool when the checkout ends with no
+   * subscriber left. Otherwise the checkout stays pending, and the thread of a subscriber adopts
+   * it.
+   */
+  private void orphaned(Pending checkout, @Nullable Connection connection) {
+    boolean close = false;
+    lock.lock();
+    try {
+      if (pending == checkout && subscribers.isEmpty()) {
+        pending = null;
+        close = true;
+      }
+    } finally {
+      lock.unlock();
+    }
+    if (close) {
+      Checkout.closeQuietly(connection);
+    }
+  }
+
   /** Listens on {@code connection} until stopped. Returns the backoff for the next connection. */
-  private long listen(Connection connection, long backoff) throws SQLException {
+  private long listen(Connection connection, CountDownLatch stop, long backoff)
+      throws SQLException {
     boolean restoreAutoCommit = !connection.getAutoCommit();
     // A LISTEN inside an open transaction takes effect only at the commit.
     if (restoreAutoCommit) {
@@ -156,17 +381,14 @@ public final class Listener implements AutoCloseable {
       }
       backoff = INITIAL_RECONNECT_MS;
       listening.set(true);
-      wake();
+      wakeAll();
       while (stop.getCount() > 0) {
         Object[] received = receive(notifications);
         if (received == null) {
           continue;
         }
         for (Object notification : received) {
-          String payload = parameter(notification);
-          if (payload.equals("*") || queues.contains(payload)) {
-            wake();
-          }
+          wakeMatching(parameter(notification));
         }
       }
       return backoff;
@@ -218,19 +440,44 @@ public final class Listener implements AutoCloseable {
     }
   }
 
-  private void wake() {
+  private List<Subscription> subscribers() {
+    lock.lock();
     try {
-      onWake.run();
-    } catch (RuntimeException ignored) {
-      // A callback that throws must not end the listener.
+      return List.copyOf(subscribers);
+    } finally {
+      lock.unlock();
     }
   }
 
-  private static void notify(Consumer<Throwable> callback, Throwable error) {
+  private void wakeMatching(String payload) {
+    for (Subscription subscriber : subscribers()) {
+      if (payload.equals("*") || subscriber.queues.contains(payload)) {
+        run(subscriber.onWake);
+      }
+    }
+  }
+
+  private void wakeAll() {
+    for (Subscription subscriber : subscribers()) {
+      run(subscriber.onWake);
+    }
+  }
+
+  private void report(Throwable error) {
+    for (Subscription subscriber : subscribers()) {
+      try {
+        subscriber.onError.accept(error);
+      } catch (RuntimeException ignored) {
+        // A callback that throws must not end the listener, or keep another subscriber's report.
+      }
+    }
+  }
+
+  private static void run(Runnable callback) {
     try {
-      callback.accept(error);
+      callback.run();
     } catch (RuntimeException ignored) {
-      // A callback that throws must not end the listener.
+      // A callback that throws must not end the listener, or keep another subscriber's wake.
     }
   }
 }
