@@ -14,6 +14,9 @@
   its listener connection outside the pool. The connection model section records the change.
 - **Amended:** 2026-10-06 (SM-1152): `DashboardOptions` no longer has `audit_actor`. The dashboard
   section records the change.
+- **Amended:** 2026-10-21 (SM-1565): Every Rust worker on one pool identity shares one heartbeat
+  connection from the pool and one listener connection outside the pool. This supersedes the
+  2026-09-30 amendment. The connection model section records the change.
 
 ## Context
 
@@ -90,6 +93,40 @@ because neither describes the crate that shipped. Statements still borrow pooled
 Rust worker takes its own heartbeat connection from the pool, so workers on one pool do not share
 it. Each worker opens its listener connection outside the pool, from `WorkerOptions::listen_config`.
 ADR 0071's amendment records the same exception.
+
+The 2026-10-21 amendment (SM-1565) supersedes the 2026-09-30 paragraph above. ADR 0071's
+2026-10-21 amendment states the full rule set. For Rust, it decides these points:
+
+- The pool identity is the address of the reference that `Pool::manager()` returns. Clones of one
+  pool share, and two pools that a caller builds separately do not share. `Worker::new(pool,
+  options)` does not change.
+- The key depends on deadpool 0.13: it stores `PoolInner` in an `Arc`, clones share that
+  allocation, and `manager()` returns a reference into it. A code comment records this dependency.
+  A unit test asserts that two clones give one address and two separate pools give two addresses.
+- The registry value holds a weak pool reference. Cleanup removes the entry before the last
+  retained clone drops, and a generation tag stops an old cleanup from deleting a new entry.
+  Lifetime tests cover failed startup, cancellation, a dropped run, the last subscription release,
+  rapid pool recreation at one address, and repeated run and stop cycles.
+- Every worker on one pool identity shares one heartbeat connection from the pool.
+- Those workers share one listener connection, which stays outside the pool. If two workers on one
+  pool identity give different `listen_config` values, the second worker refuses to start.
+- The static floor of three connections stays for each pool identity, although the listener
+  connection is outside the pool.
+- The startup budget is max(I, 5 s), where I is the heartbeat interval. Within it, the worker
+  reserves the heartbeat connection and then runs the compatibility query on one ordinary
+  connection. If either step fails, the worker refuses to start, and the run ends.
+- A runtime acquisition of a reserved connection completes inside the round bound. While the pool
+  identity holds no usable heartbeat reservation, the worker claims no task.
+- The startup compatibility wait observes the shutdown signal and a timeout. The total stop time is
+  the shutdown grace plus the documented unwind window.
+
+The startup reservation, the readiness check, and the claim gate apply to a worker that uses the
+dedicated heartbeat connection. A worker with `shared_heartbeats` has no reserved heartbeat
+connection, and these rules do not apply to it. Its heartbeat rounds borrow a pooled connection for
+each statement.
+
+An explicit shared handle was rejected. ADR 0071's amendment states the reasons. SM-1572 implements
+these points. Until it ships, the crate keeps the budget of the 2026-09-30 amendment.
 
 `Queue` takes an executor, as Go's `NewQueue` does. The crate defines a sealed `Executor` trait
 with explicit implementations for `tokio_postgres::Client`, `tokio_postgres::Transaction<'_>`,

@@ -1703,3 +1703,58 @@ virtual thread in `runInterruptible`. Its connection belongs to the core, and th
 to its source. No public signature changes, and `api/kotlin.txt` does not change.
 
 The SM-1487 coordinator chose this form during SM-1526.
+
+## Amendment: every worker on one DataSource shares the listener connection (2026-10-21)
+
+The Connection model section gives each worker its own listener connection. SM-1565 found that 64
+workers on one `DataSource` with a pool of 20 fill the pool with listener connections. The shared
+heartbeat connection then waits for a pool connection before its round bound applies. The leases
+expire, and peers claim the tasks again. ADR 0071's 2026-10-21 amendment states the rule set for
+every SDK. This amendment applies it to the JVM. In it, I is the heartbeat interval and B is the
+round bound.
+
+It supersedes these statements of the Connection model section:
+
+- **"The worker holds one listener connection for its life."** Every worker on one `DataSource`
+  shares one listener connection. The listener still unwraps the connection with
+  `unwrap(PGConnection.class)`. The listener stays best effort: a failure logs one warning, the
+  worker polls, and a background retry continues.
+- **"The sharing key is the `DataSource` object."** The sharing key of the listener and the
+  heartbeat connection is the exact `DataSource` reference. The registry has identity semantics and
+  never compares two keys with `equals`. A registry value must not retain the pool.
+- **"A `DataSource` reports no pool size, so the worker cannot refuse a small pool at
+  construction."** The size stays unknown, so a readiness check replaces the size check. Within the
+  startup budget of max(I, 5 s), the worker reserves the heartbeat connection. Then it borrows one
+  ordinary connection, runs the compatibility query, and returns that connection at once. If either
+  step fails, the worker refuses to start. The check proves current headroom only. It does not prove
+  future availability or the total budget of one physical pool across wrappers.
+- **"The guide states the budget: two held connections plus one for each claim in flight."** The
+  two held connections are for each `DataSource`, not for each worker.
+
+The amendment adds these rules:
+
+- The worker does not unwrap a `DataSource`. A wrapper object is its own sharing key, with its own
+  two reserved connections. One worker on a wrapper and one worker on its delegate thus hold four
+  reserved connections on one physical pool. The Spring Boot starter gives the same `DataSource`
+  bean reference to every worker and queue that it builds.
+- A runtime acquisition of a reserved connection completes inside B. A pool timeout, such as the
+  30 s default of HikariCP, is never the bound. The worker does not change the configuration of the
+  caller's pool.
+- The worker claims no task, ordinary or fused, while its `DataSource` holds no usable heartbeat
+  reservation. A fused completion then runs with a zero claim limit. Replacement acquisition starts
+  at once, retries with backoff capped at I, and wakes dispatch when the connection is ready.
+- A connection that arrives after its wait timed out or was cancelled gets one settled owner, which
+  adopts or disposes of it. A stopping worker releases only its own subscription. A shared
+  connection closes when its last user releases it.
+- The total stop time is `shutdownGrace` plus the unwind window of 250 ms. Every wait on the stop
+  path has a deadline that comes from the grace.
+- A startup reservation failure now ends a run that previously continued. The JVM changelog states
+  this change.
+
+The readiness check, the startup reservation, and the claim gate apply to a worker that uses the
+dedicated heartbeat connection. A worker with `sharedHeartbeats(true)` has no reserved heartbeat
+connection, and these rules do not apply to it. Its heartbeat rounds borrow from the `DataSource`
+like other statements, as the Connection model section states.
+
+The data does not yet support a JVM capacity statement. That statement waits for a passing post-fix
+64 × 25 run, as ADR 0071 states. SM-1569 implements this amendment.
