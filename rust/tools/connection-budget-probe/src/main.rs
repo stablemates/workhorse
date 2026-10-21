@@ -1,4 +1,6 @@
-//! Runs several Rust workers on one pool and holds every claimed task until SIGTERM.
+//! Runs several Rust workers on one pool. A task whose payload has `handlerMs` returns after that
+//! time; any other task holds its slot until SIGTERM. Every handler returns at SIGTERM, so the stop
+//! time measures the SDK.
 //!
 //! `pnpm benchmark:connection-budget` builds this binary, starts it for each cell, and reads the
 //! `WH_BENCH_*` variables below. Each worker gets a `listen_config`, so it listens as in
@@ -26,6 +28,14 @@ fn count(name: &str) -> Result<u64, Failure> {
     }
 }
 
+/// A positive integer from an optional variable, or `None` when the variable is empty.
+fn optional_count(name: &str) -> Result<Option<u64>, Failure> {
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => count(name).map(Some),
+        _ => Ok(None),
+    }
+}
+
 fn emit(event: &Value) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{event}");
@@ -48,6 +58,8 @@ async fn main() -> Result<(), Failure> {
     let concurrency = usize::try_from(count("WH_BENCH_CONCURRENCY")?)?;
     let heartbeat = Duration::from_millis(count("WH_BENCH_HEARTBEAT_MS")?);
     let lease = Duration::from_millis(count("WH_BENCH_LEASE_MS")?);
+    let poll_ms = optional_count("WH_BENCH_POLL_MS")?;
+    let shutdown_grace_ms = count("WH_BENCH_SHUTDOWN_GRACE_MS")?;
 
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let (stop, stopped) = watch::channel(false);
@@ -61,6 +73,9 @@ async fn main() -> Result<(), Failure> {
                 concurrency,
                 heartbeat_interval: Some(heartbeat),
                 lease_duration: lease,
+                // `None` keeps the default polling interval.
+                poll_interval: poll_ms.map(Duration::from_millis),
+                shutdown_grace_period: Duration::from_millis(shutdown_grace_ms),
                 listen_config: Some(config.clone()),
                 ..WorkerOptions::default()
             },
@@ -74,13 +89,22 @@ async fn main() -> Result<(), Failure> {
             }
         };
         let release = stopped.clone();
-        // The handler holds its slot until the probe stops or the worker cancels the attempt.
-        worker.handle(&task_type, move |_payload: Value, context: HandlerContext| {
+        // A handler returns when the probe stops or the worker cancels the attempt. A handler with
+        // a time also returns after it.
+        worker.handle(&task_type, move |payload: Value, context: HandlerContext| {
             let release = release.clone();
+            let handler_ms = payload.get("handlerMs").and_then(Value::as_u64);
             async move {
-                tokio::select! {
-                    () = released(release) => {}
-                    () = context.cancellation().cancelled() => {}
+                match handler_ms {
+                    Some(ms) => tokio::select! {
+                        () = tokio::time::sleep(Duration::from_millis(ms)) => {}
+                        () = released(release) => {}
+                        () = context.cancellation().cancelled() => {}
+                    },
+                    None => tokio::select! {
+                        () = released(release) => {}
+                        () = context.cancellation().cancelled() => {}
+                    },
                 }
                 Ok::<Value, HandlerError>(Value::Null)
             }
@@ -94,7 +118,14 @@ async fn main() -> Result<(), Failure> {
             }
         }));
     }
-    emit(&json!({"event": "started", "sdk": "rust", "workers": workers}));
+    emit(&json!({
+        "event": "started",
+        "sdk": "rust",
+        "workers": workers,
+        "pollMs": poll_ms,
+        "shutdownGraceMs": shutdown_grace_ms,
+        "grace": "shutdown_grace_period",
+    }));
 
     // The pool state, seen from inside the process. The listener connections are outside the
     // pool, so the pool does not count them.

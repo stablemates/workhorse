@@ -23,25 +23,48 @@ import {
 import { Queue } from "../typescript/core/src/queue.js";
 import { installSchema } from "../typescript/core/src/schema.js";
 import {
+  type AttemptRecords,
+  attributeFaultClaims,
+  type BackendIdentity,
+  type CellFacts,
+  type CellKind,
+  cellResult,
+  type Claim,
+  type ClosedAttempt,
   connectionRoles,
+  dispatchAllowanceMs,
   emptyRoleSampling,
+  faultRecovery,
+  heartbeatReadyIntervals,
+  heartbeatRoleBackendsAt,
+  type Interval,
+  latestNextSlot,
   mergeChunk,
+  refillClaimGapLimitMs,
+  refillPollMs,
+  replayDispatch,
+  type RoleChunk,
   roleChunkMs,
   roleSampleIntervalMs,
-  round,
-  type RoleChunk,
   type RoleSampling,
+  round,
+  watchdogVerdict,
+  type WorkerStart,
 } from "./connection-budget-roles.js";
 
 const help = `Workhorse connection budget benchmark
 
 Starts the probe of one SDK for each cell of a matrix. A probe runs W workers in one process on
-one pool of P connections, with concurrency C, heartbeat interval I, and lease L. Every handler
-sleeps until the probe stops. Every 250 ms the driver samples pg_stat_activity and
-workhorse.task_runtime, and records the pool state that the probe reports. A role sampler in the
-database reads pg_stat_activity about every 2 ms to find the listener and heartbeat connections.
-The driver writes one JSON artifact. Cells run one at a time. Before each cell the driver
-waits while the 1-minute load is above 16 or available memory is below 8 GB.
+one pool of P connections, with concurrency C, heartbeat interval I, and lease L. In a held-task
+cell every handler sleeps until the probe stops. In a refill cell every handler finishes after a
+fixed time, so the workers claim again. A fault cell ends the heartbeat connection of a refill
+workload once. Every 250 ms the driver samples pg_stat_activity and workhorse.task_runtime, and
+records the pool state that the probe reports. A role sampler in the database reads
+pg_stat_activity about every 2 ms to find the listener and heartbeat connections. The driver
+gives each cell a result, pass, fail, or inconclusive, and writes one JSON artifact with a summary
+table. Cells run
+one at a time. Before each cell the driver waits while the 1-minute load is above 16 or available
+memory is below 8 GB.
 
 Usage:
   pnpm benchmark:connection-budget -- [options]
@@ -63,7 +86,12 @@ const queueName = "benchmark-connection-budget";
 const taskType = "benchmark.connection-budget.sleep";
 const driverApplicationName = "wh-bench-driver";
 const sampleIntervalMs = 250;
-const stopGraceMs = 20_000;
+/**
+ * The shutdown grace that the driver gives every probe. The driver sends SIGKILL when the probe
+ * has not exited this long, plus the unwind window of its SDK, plus `killMarginMs`, after SIGTERM.
+ */
+const shutdownGraceMs = 10_000;
+const killMarginMs = 5_000;
 /** A claim gap at least this long, with free slots and ready tasks, is a progress failure. */
 const progressFailureMs = 10_000;
 const guard = { maxLoad1m: 16, minAvailableBytes: 8 * 1024 ** 3, pollMs: 15_000 };
@@ -102,7 +130,21 @@ interface SdkVariant {
   versions: ProbeCommand[];
   /** The manifest that declares the SDK version, and the pattern whose first group reads it. */
   manifest: [path: string, pattern: RegExp];
+  /**
+   * The time that the SDK documents for its stop after the shutdown grace, and where it says so.
+   * The kill deadline of the driver is the grace, plus this window, plus 5 s.
+   */
+  unwind: { ms: number; source: string };
 }
+
+/**
+ * The TypeScript and Python workers have no shutdown grace. Their process runners exit the process
+ * with status 1 when the grace passes, and the probes do the same.
+ */
+const noGraceUnwind = (runner: string) => ({
+  ms: 0,
+  source: `${runner}; no unwind window after the grace`,
+});
 
 function sdkVersion({ manifest: [path, pattern] }: SdkVariant): string | null {
   try {
@@ -142,6 +184,9 @@ function pythonVariant(variant: string): SdkVariant {
       ]),
     ],
     manifest: ["python/pyproject.toml", /^version = "([^"]+)"/m],
+    unwind: noGraceUnwind(
+      "python/src/workhorse/worker_process.py: run_worker_process exits at shutdown_timeout_ms",
+    ),
   };
 }
 
@@ -158,6 +203,9 @@ const sdkVariants: Record<string, SdkVariant> = {
       ]),
     versions: [mise(["node", "--version"])],
     manifest: ["typescript/core/package.json", /"version": "([^"]+)"/],
+    unwind: noGraceUnwind(
+      "typescript/core/src/worker-process.ts: runWorkerProcess exits at shutdownTimeoutMs",
+    ),
   },
   go: {
     build: [
@@ -169,6 +217,11 @@ const sdkVariants: Record<string, SdkVariant> = {
     probe: () => ({ command: goProbeBinary, args: [], cwd: root }),
     versions: [mise(["go", "version"])],
     manifest: ["go/version.go", /const Version = "([^"]+)"/],
+    unwind: {
+      ms: 2_250,
+      source:
+        "docs/architecture/schema-and-protocol.md, Go shutdown grace period and listener: a 250 ms unwind, deregister_worker_v1 for at most 1,000 ms, and UNLISTEN for at most 1,000 ms (go/worker.go handlerUnwindPeriod, deregistrationTimeout)",
+    },
   },
   ruby: {
     build: [mise(["bundle", "install", "--quiet"], join(root, "ruby"))],
@@ -176,6 +229,11 @@ const sdkVariants: Record<string, SdkVariant> = {
       mise(["bundle", "exec", "ruby", "tools/connection_budget_probe.rb"], join(root, "ruby")),
     versions: [mise(["ruby", "--version"])],
     manifest: ["ruby/lib/stablemates/workhorse/version.rb", /VERSION = "([^"]+)"/],
+    unwind: {
+      ms: 250,
+      source:
+        "docs/architecture/schema-and-protocol.md, Ruby shutdown: a 250 millisecond unwind window (ruby/lib/stablemates/workhorse/worker.rb UNWIND_WINDOW)",
+    },
   },
   "python-sync": pythonVariant("sync"),
   "python-async": pythonVariant("async"),
@@ -191,6 +249,11 @@ const sdkVariants: Record<string, SdkVariant> = {
     }),
     versions: [mise(["rustc", "--version"])],
     manifest: ["rust/Cargo.toml", /^version = "([^"]+)"/m],
+    unwind: {
+      ms: 1_250,
+      source:
+        "docs/architecture/schema-and-protocol.md, Rust shutdown: a 250 ms unwind, then a cleanup window that ends 1 second after the deadline (rust/src/worker/mod.rs UNWIND_WINDOW, CLEANUP_WINDOW)",
+    },
   },
   jvm: {
     build: [
@@ -211,6 +274,11 @@ const sdkVariants: Record<string, SdkVariant> = {
       ]),
     versions: [mise(["java", "--version"])],
     manifest: ["jvm/gradle.properties", /^version=(\S+)/m],
+    unwind: {
+      ms: 2_000,
+      source:
+        "docs/architecture/schema-and-protocol.md, JVM shutdown: a complete shutdown can end up to about 2 seconds after shutdownGrace",
+    },
   },
 };
 
@@ -218,6 +286,7 @@ const sdkVariants: Record<string, SdkVariant> = {
 
 interface Cell {
   id: string;
+  kind: CellKind;
   workers: number;
   concurrency: number;
   poolSize: number;
@@ -225,53 +294,130 @@ interface Cell {
   leaseMs: number;
   /** Time from the probe start to the start of the measurement window. */
   warmupMs: number;
-  /** Length of the measurement window. The cell ends when it closes. */
+  /**
+   * Length of the measurement window. A held-task cell ends when it closes. A refill cell ends
+   * earlier when no task remains, and a fault cell when its observation after the fault ends.
+   */
   measureMs: number;
+  /**
+   * Refill and fault cells: the time that each handler runs before it returns. The payload of each
+   * task carries it; a held task has none.
+   */
+  handlerMs: number | null;
+  /** Fault cells: every `every`-th task runs `ms` instead, so leases need renewal. */
+  longHandler: { ms: number; every: number } | null;
+  /** Refill and fault cells: the tasks for each slot, so that each slot claims many times. */
+  tasksPerSlot: number | null;
+  /** The polling interval that the probe sets, or null for the default of the SDK. */
+  pollMs: number | null;
+  /** Fault cells: how long the driver observes after the fault. */
+  faultObserveMs: number | null;
 }
 
-function cell(
-  id: string,
-  shape: Pick<Cell, "workers" | "concurrency" | "poolSize" | "heartbeatMs" | "leaseMs">,
-  warmupMs: number,
-  measureMs: number,
-): Cell {
-  return { id, ...shape, warmupMs, measureMs };
+type Shape = Pick<Cell, "workers" | "concurrency" | "poolSize" | "heartbeatMs" | "leaseMs">;
+
+function held(id: string, shape: Shape, warmupMs: number, measureMs: number): Cell {
+  return {
+    id,
+    kind: "held",
+    ...shape,
+    warmupMs,
+    measureMs,
+    handlerMs: null,
+    longHandler: null,
+    tasksPerSlot: null,
+    pollMs: null,
+    faultObserveMs: null,
+  };
 }
+
+/**
+ * A refill cell. Handlers return after 1.2 s, so a heartbeat round renews each task at least once.
+ */
+function refill(id: string, shape: Shape, tasksPerSlot: number): Cell {
+  return {
+    id,
+    kind: "refill",
+    ...shape,
+    warmupMs: 5_000,
+    measureMs: 25_000 + tasksPerSlot * 3_000,
+    handlerMs: 1_200,
+    longHandler: null,
+    tasksPerSlot,
+    pollMs: refillPollMs,
+    faultObserveMs: null,
+  };
+}
+
+/**
+ * A fault cell at the default timing, I = 10 s and L = 30 s. One task in four runs 15 s, so its
+ * lease needs renewal through the fault. The other tasks run 1 s, so claims come often. Each slot
+ * has more tasks than the cell can finish, so claims go on through the fault. The fault comes at
+ * the first heartbeat round after the warm-up, and the driver observes for 3 x I after it.
+ */
+function faultCell(id: string, shape: Pick<Shape, "workers" | "concurrency" | "poolSize">): Cell {
+  return {
+    id,
+    kind: "fault",
+    ...shape,
+    heartbeatMs: 10_000,
+    leaseMs: 30_000,
+    warmupMs: 15_000,
+    measureMs: 70_000,
+    handlerMs: 1_000,
+    longHandler: { ms: 15_000, every: 4 },
+    tasksPerSlot: 25,
+    pollMs: refillPollMs,
+    faultObserveMs: 30_000,
+  };
+}
+
+const fastTiming = { heartbeatMs: 1_000, leaseMs: 3_000 };
 
 const profiles: Record<"smoke" | "full", Cell[]> = {
   smoke: [
-    cell(
+    held(
       "smoke-w2-c2-p20",
-      { workers: 2, concurrency: 2, poolSize: 20, heartbeatMs: 1_000, leaseMs: 3_000 },
+      { workers: 2, concurrency: 2, poolSize: 20, ...fastTiming },
       5_000,
       15_000,
     ),
+    refill(
+      "smoke-refill-w2-c2-p20",
+      { workers: 2, concurrency: 2, poolSize: 20, ...fastTiming },
+      10,
+    ),
+    faultCell("smoke-fault-w4-c4-p20", { workers: 4, concurrency: 4, poolSize: 20 }),
   ],
   full: [
-    cell(
+    held(
       "starvation-w2-c1-p4",
-      { workers: 2, concurrency: 1, poolSize: 4, heartbeatMs: 1_000, leaseMs: 3_000 },
+      { workers: 2, concurrency: 1, poolSize: 4, ...fastTiming },
       10_000,
       30_000,
     ),
     ...[1, 4, 16, 64].flatMap((workers) =>
       [1, 25].map((concurrency) =>
-        cell(
+        held(
           `capacity-w${workers}-c${concurrency}-p20`,
-          { workers, concurrency, poolSize: 20, heartbeatMs: 1_000, leaseMs: 3_000 },
+          { workers, concurrency, poolSize: 20, ...fastTiming },
           15_000,
           60_000,
         ),
       ),
     ),
     ...[16, 64].map((workers) =>
-      cell(
+      held(
         `default-timing-w${workers}-c25-p20`,
         { workers, concurrency: 25, poolSize: 20, heartbeatMs: 10_000, leaseMs: 30_000 },
         20_000,
         180_000,
       ),
     ),
+    refill("refill-w2-c1-p4", { workers: 2, concurrency: 1, poolSize: 4, ...fastTiming }, 20),
+    refill("refill-w4-c2-p6", { workers: 4, concurrency: 2, poolSize: 6, ...fastTiming }, 20),
+    refill("refill-w16-c4-p20", { workers: 16, concurrency: 4, poolSize: 20, ...fastTiming }, 20),
+    faultCell("fault-w16-c4-p20", { workers: 16, concurrency: 4, poolSize: 20 }),
   ],
 };
 
@@ -365,14 +511,25 @@ async function resetSchema(pool: Pool): Promise<void> {
   await installSchema(pool);
 }
 
-async function enqueueTasks(pool: Pool, count: number): Promise<void> {
+/**
+ * The handler time of task `index`, which its payload carries. A task without one is held until the
+ * probe stops.
+ */
+function taskHandlerMs(run: Cell, index: number): number | null {
+  if (run.handlerMs === null) return null;
+  return run.longHandler !== null && index % run.longHandler.every === 0
+    ? run.longHandler.ms
+    : run.handlerMs;
+}
+
+async function enqueueTasks(pool: Pool, run: Cell, count: number): Promise<void> {
   const queue = new Queue(pool, queueName);
   for (let offset = 0; offset < count; offset += 1_000) {
     const size = Math.min(1_000, count - offset);
     await queue.enqueueMany(
       Array.from({ length: size }, (_, index) => ({
         type: taskType,
-        payload: { index: offset + index },
+        payload: { index: offset + index, handlerMs: taskHandlerMs(run, offset + index) },
         // A lost lease retries the task. A high limit keeps a retried task in play.
         options: { maxAttempts: 100 },
       })),
@@ -417,11 +574,24 @@ const connectionsSql = `
    WHERE datname = current_database() AND application_name = $1`;
 
 // `heartbeat_at` is the last accepted renewal. `expires_at` is the end of the current lease.
+// Only an accepted renewal changes `heartbeat_at` and `expires_at`, so the samples give the last
+// accepted renewal and the deadline of each attempt.
 const leasesSql = `
   SELECT (extract(epoch FROM clock_timestamp() - heartbeat_at) * 1000)::double precision AS age_ms,
-         (extract(epoch FROM expires_at - clock_timestamp()) * 1000)::double precision AS margin_ms
+         (extract(epoch FROM expires_at - clock_timestamp()) * 1000)::double precision AS margin_ms,
+         task_id::text || ':' || fence_token::text AS attempt,
+         (extract(epoch FROM heartbeat_at) * 1000)::double precision AS renewal_ms,
+         (extract(epoch FROM expires_at) * 1000)::double precision AS deadline_ms,
+         (extract(epoch FROM clock_timestamp()) * 1000)::double precision AS sampled_ms
     FROM workhorse.task_runtime
    WHERE queue_name = $1 AND state = 'active'`;
+
+/** The last sample of one attempt, with epoch times from the database. */
+interface AttemptSample {
+  renewalMs: number;
+  deadlineMs: number;
+  sampledMs: number;
+}
 
 // Each attempt writes one `claimed` event, so the count grows with every claim, also when a task
 // that lost its lease is claimed again. The distinct tasks show how much of the queue was claimed.
@@ -472,6 +642,11 @@ interface PoolSample {
 
 interface CellSampling {
   samples: Sample[];
+  /** The last sample of each attempt, by task and fence token. */
+  attempts: Map<string, AttemptSample>;
+  /** The attempts in the last sample whose deadline was after it, and the time of that sample. */
+  liveAtEnd: string[];
+  lastAttemptSampleMs: number | null;
   measuredRenewalAgesMs: number[];
   measuredLeaseMarginsMs: number[];
   sampleErrors: number;
@@ -487,10 +662,22 @@ async function takeSample(
   applicationName: string,
   elapsedMs: number,
   poolSample: PoolSample | null,
-): Promise<{ sample: Sample; ages: number[]; margins: number[] }> {
+): Promise<{
+  sample: Sample;
+  ages: number[];
+  margins: number[];
+  attempts: [string, AttemptSample][];
+}> {
   const [connections, leases, claims] = await Promise.all([
     pool.query<ConnectionCounts>(connectionsSql, [applicationName]),
-    pool.query<{ age_ms: number; margin_ms: number }>(leasesSql, [queueName]),
+    pool.query<{
+      age_ms: number;
+      margin_ms: number;
+      attempt: string;
+      renewal_ms: number;
+      deadline_ms: number;
+      sampled_ms: number;
+    }>(leasesSql, [queueName]),
     pool.query<{ claim_events: number; claimed_tasks: number; ready: number }>(claimsSql, [
       queueName,
     ]),
@@ -506,6 +693,10 @@ async function takeSample(
   return {
     ages,
     margins,
+    attempts: leases.rows.map((row) => [
+      row.attempt,
+      { renewalMs: row.renewal_ms, deadlineMs: row.deadline_ms, sampledMs: row.sampled_ms },
+    ]),
     sample: {
       elapsedMs,
       connectionsTotal: counts.total,
@@ -573,10 +764,13 @@ async function endProbeSessions(
  * start times of each `COMMIT` that it ran. It empties its table with TRUNCATE, so the table does
  * not grow from one call to the next.
  */
+/** The statements of a heartbeat round: the `heartbeat` kind of the role sampler. */
+const heartbeatMarkerPattern = "heartbeat(_many)?_v[0-9]|idle_in_transaction_session_timeout";
+
 const roleSamplerSetupSql = [
   `CREATE TEMP TABLE IF NOT EXISTS wh_bench_seen (
      pid integer NOT NULL, backend_start timestamptz NOT NULL, at timestamptz NOT NULL,
-     kind text NOT NULL, query_start timestamptz)`,
+     kind text NOT NULL, query_start timestamptz, state text, state_change timestamptz)`,
   `CREATE OR REPLACE FUNCTION pg_temp.wh_bench_roles(
      p_application_name text, p_duration_ms integer, p_interval_ms integer)
    RETURNS jsonb LANGUAGE plpgsql AS $fn$
@@ -592,18 +786,17 @@ const roleSamplerSetupSql = [
        PERFORM pg_stat_clear_snapshot();
        v_now := clock_timestamp();
        v_times := v_times || v_now;
-       INSERT INTO wh_bench_seen (pid, backend_start, at, kind, query_start)
+       INSERT INTO wh_bench_seen (pid, backend_start, at, kind, query_start, state, state_change)
        SELECT a.pid, a.backend_start, v_now,
               CASE
                 WHEN a.query ~* '^\\s*LISTEN\\s' THEN 'listen'
-                WHEN a.query ~ 'heartbeat(_many)?_v[0-9]|idle_in_transaction_session_timeout'
-                  THEN 'heartbeat'
+                WHEN a.query ~ '${heartbeatMarkerPattern}' THEN 'heartbeat'
                 WHEN a.query ~* '^\\s*(COMMIT|END)\\s*;?\\s*$' THEN 'commit'
                 WHEN a.query ~* '^\\s*(BEGIN|ROLLBACK|START TRANSACTION)\\s*;?\\s*$'
                   OR a.query = '' THEN 'neutral'
                 ELSE 'statement'
               END,
-              a.query_start
+              a.query_start, a.state, a.state_change
          FROM pg_stat_activity a
         WHERE a.datname = current_database() AND a.application_name = p_application_name
           AND a.backend_start IS NOT NULL;
@@ -612,7 +805,7 @@ const roleSamplerSetupSql = [
      END LOOP;
      v_bytes := pg_relation_size('wh_bench_seen');
      WITH marked AS (
-       SELECT pid, backend_start, at, kind,
+       SELECT pid, backend_start, at, kind, state, state_change,
               CASE WHEN kind IS DISTINCT FROM lag(kind) OVER own THEN 1 ELSE 0 END AS changed
          FROM wh_bench_seen
         WHERE kind IN ('listen', 'heartbeat', 'statement')
@@ -647,7 +840,12 @@ const roleSamplerSetupSql = [
                          extract(epoch FROM backend_start) * 1000 AS "backendStartMs",
                          kind AS "kind",
                          extract(epoch FROM min(at)) * 1000 AS "firstMs",
-                         extract(epoch FROM max(at)) * 1000 AS "lastMs"
+                         extract(epoch FROM max(at)) * 1000 AS "lastMs",
+                         -- An idle backend keeps the text of its last statement. Its state_change
+                         -- is when that statement ended, so only a running sample or that end
+                         -- time shows a use.
+                         extract(epoch FROM max(CASE WHEN state = 'idle' THEN state_change
+                                                     ELSE at END)) * 1000 AS "lastUseMs"
                     FROM numbered
                    GROUP BY pid, backend_start, run, kind) span), '[]'::jsonb))
        INTO v_result;
@@ -672,6 +870,8 @@ function processCpuMs(pid: number): number | null {
 }
 
 interface StartedRoleSampler {
+  /** The observations so far. They grow after each call of the sampler. */
+  sampling: RoleSampling;
   stop: () => Promise<RoleSampling>;
 }
 
@@ -723,6 +923,7 @@ async function startRoleSampler(
     }
   })();
   return {
+    sampling,
     stop: async () => {
       state.stopping = true;
       await loop;
@@ -736,14 +937,235 @@ async function startRoleSampler(
   };
 }
 
+// --- Fault -----------------------------------------------------------------------------------
+
+/**
+ * The fault of a fault cell. The function reads `pg_stat_activity` about every millisecond, with
+ * the marker of the role sampler, until a probe backend runs a heartbeat round. Then it ends that
+ * backend with `pg_terminate_backend`. The round fails immediately, so the SDK knows of the loss
+ * at the time of the fault, and not only at its next round. Like the role sampler, the function
+ * lives in `pg_temp` of a driver session.
+ *
+ * Just before it ends the backend, the function records the other statements of the probe that are
+ * running: a claim from one of them can come after the fault although the statement started
+ * before it. Then it reads `pg_stat_activity` until each of those statements has ended, for at most
+ * `faultWatchMs`, and returns that time.
+ */
+/** How long the fault function waits for the statements that run at the fault to end. */
+const faultWatchMs = 3_000;
+
+const faultSetupSql = `
+  CREATE OR REPLACE FUNCTION pg_temp.wh_bench_end_heartbeat(
+    p_application_name text, p_timeout_ms integer)
+  RETURNS jsonb LANGUAGE plpgsql AS $fn$
+  DECLARE
+    v_end timestamptz := clock_timestamp() + make_interval(secs => p_timeout_ms / 1000.0);
+    v_found record;
+    v_at timestamptz;
+    v_in_flight jsonb;
+    v_open integer;
+    v_watch_end timestamptz;
+  BEGIN
+    LOOP
+      PERFORM pg_stat_clear_snapshot();
+      SELECT a.pid, a.backend_start, a.state, left(a.query, 120) AS query,
+             a.xact_start, a.query_start INTO v_found
+        FROM pg_stat_activity a
+       WHERE a.datname = current_database() AND a.application_name = p_application_name
+         AND a.state <> 'idle' AND a.query ~ '${heartbeatMarkerPattern}'
+       LIMIT 1;
+      IF FOUND THEN
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                 'pid', a.pid, 'queryStart', a.query_start,
+                 'queryStartMs', extract(epoch FROM a.query_start) * 1000,
+                 'state', a.state, 'query', left(a.query, 120))), '[]'::jsonb)
+          INTO v_in_flight
+          FROM pg_stat_activity a
+         WHERE a.datname = current_database() AND a.application_name = p_application_name
+           AND a.pid <> v_found.pid AND a.state <> 'idle'
+           AND a.query !~* '^\\s*LISTEN\\s' AND a.query !~ '${heartbeatMarkerPattern}';
+        v_at := clock_timestamp();
+        IF pg_terminate_backend(v_found.pid) THEN
+          v_watch_end := clock_timestamp() + make_interval(secs => ${faultWatchMs} / 1000.0);
+          LOOP
+            PERFORM pg_stat_clear_snapshot();
+            SELECT count(*) INTO v_open
+              FROM jsonb_array_elements(v_in_flight) flight
+              JOIN pg_stat_activity a ON a.pid = (flight->>'pid')::integer
+             WHERE a.query_start = (flight->>'queryStart')::timestamptz AND a.state <> 'idle';
+            EXIT WHEN v_open = 0 OR clock_timestamp() >= v_watch_end;
+            PERFORM pg_sleep(0.001);
+          END LOOP;
+          RETURN jsonb_build_object(
+            'pid', v_found.pid,
+            'backendStartMs', extract(epoch FROM v_found.backend_start) * 1000,
+            'atMs', extract(epoch FROM v_at) * 1000,
+            'state', v_found.state,
+            'query', v_found.query,
+            'roundStartMs', extract(epoch FROM COALESCE(v_found.xact_start, v_found.query_start))
+              * 1000,
+            'inFlight', v_in_flight,
+            'inFlightEndedMs', extract(epoch FROM clock_timestamp()) * 1000,
+            'inFlightOpen', v_open);
+        END IF;
+      END IF;
+      EXIT WHEN clock_timestamp() >= v_end;
+      PERFORM pg_sleep(0.001);
+    END LOOP;
+    RETURN NULL;
+  END
+  $fn$`;
+
+interface FaultRecord {
+  /** When the driver started to look for a heartbeat round. */
+  armedMs: number;
+  /** When the first backend ended, or when the search ended without a round. */
+  atMs: number;
+  /** No backend ran a heartbeat round in the search time. */
+  searchTimedOut: boolean;
+  /** The backend that a round was running on, and its state and statement at the fault. */
+  inRound: (BackendIdentity & { state: string; query: string }) | null;
+  /** The start of the interrupted round: the `xact_start` of its backend at the fault. */
+  roundStartMs: number | null;
+  /** The other backends with the heartbeat role at the fault, which the driver also ended. */
+  roleBackends: BackendIdentity[];
+  /** When the query that ended `roleBackends` returned. */
+  roleBackendsEndedMs: number | null;
+  /** The other statements of the probe that were running at the fault, with their start times. */
+  inFlight: { pid: number; queryStartMs: number; state: string; query: string }[];
+  /**
+   * When every statement of `inFlight` had ended. Null when it is not known: no round was found,
+   * or a statement still ran when the watch ended.
+   */
+  inFlightEndedMs: number | null;
+  error: string | null;
+}
+
+/**
+ * Ends the heartbeat connections of the probe once: the backend that runs the next heartbeat round,
+ * and each other backend that has the heartbeat role in the observations of the role sampler. No
+ * other probe backend ends, and the database stays reachable.
+ */
+async function injectFault(
+  applicationName: string,
+  run: Cell,
+  started: number,
+  sampler: StartedRoleSampler | null,
+  final: Pool,
+): Promise<FaultRecord> {
+  const armedMs = Date.now() - started;
+  const record: FaultRecord = {
+    armedMs,
+    atMs: armedMs,
+    searchTimedOut: false,
+    inRound: null,
+    roundStartMs: null,
+    roleBackends: [],
+    roleBackendsEndedMs: null,
+    inFlight: [],
+    inFlightEndedMs: null,
+    error: null,
+  };
+  const searchMs = 2 * run.heartbeatMs + 2_000;
+  const client = new Client({
+    connectionString: withApplicationName(databaseUrl, driverApplicationName),
+    statement_timeout: searchMs + faultWatchMs + 5_000,
+    query_timeout: searchMs + faultWatchMs + 5_500,
+    connectionTimeoutMillis: 5_000,
+  });
+  client.on("error", () => {
+    // The query reports the error.
+  });
+  try {
+    await client.connect();
+    await client.query(faultSetupSql);
+    const found = (
+      await client.query<{
+        ended: {
+          pid: number;
+          backendStartMs: number;
+          atMs: number;
+          state: string;
+          query: string;
+          roundStartMs: number | null;
+          inFlight: { pid: number; queryStartMs: number; state: string; query: string }[];
+          inFlightEndedMs: number;
+          inFlightOpen: number;
+        } | null;
+      }>("SELECT pg_temp.wh_bench_end_heartbeat($1, $2) AS ended", [applicationName, searchMs])
+    ).rows[0]!.ended;
+    if (found === null) {
+      record.searchTimedOut = true;
+      record.atMs = Date.now() - started;
+    } else {
+      record.atMs = found.atMs - started;
+      record.inRound = {
+        pid: found.pid,
+        backendStartMs: found.backendStartMs - started,
+        state: found.state,
+        query: found.query,
+      };
+      record.roundStartMs = found.roundStartMs === null ? null : found.roundStartMs - started;
+      record.inFlight = found.inFlight.map((entry) => ({
+        ...entry,
+        queryStartMs: entry.queryStartMs - started,
+      }));
+      record.inFlightEndedMs = found.inFlightOpen === 0 ? found.inFlightEndedMs - started : null;
+    }
+    if (sampler !== null) {
+      const others = heartbeatRoleBackendsAt(
+        sampler.sampling,
+        {
+          windowStartMs: 0,
+          samplerEndMs: sampler.sampling.lastIterationMs ?? record.atMs,
+          heartbeatMs: run.heartbeatMs,
+          commitInference,
+        },
+        record.atMs,
+      ).filter((backend) => backend.pid !== record.inRound?.pid);
+      if (others.length > 0) {
+        // The CTE selects the targets first. PostgreSQL can test the conditions of one WHERE
+        // clause in any order, so pg_terminate_backend must not share a WHERE clause with them.
+        const ended = await final.query<{ pid: number; ended: boolean }>(
+          `WITH target AS MATERIALIZED (
+             SELECT a.pid FROM pg_stat_activity a
+              WHERE a.pid = ANY($1::integer[]) AND a.application_name = $2
+                AND a.datname = current_database() AND a.pid <> pg_backend_pid())
+           SELECT pid, pg_terminate_backend(pid) AS ended FROM target`,
+          [others.map((backend) => backend.pid), applicationName],
+        );
+        const endedPids = new Set(ended.rows.filter((row) => row.ended).map((row) => row.pid));
+        record.roleBackends = others.filter((backend) => endedPids.has(backend.pid));
+        record.roleBackendsEndedMs = Date.now() - started;
+        if (record.inRound === null && record.roleBackends.length > 0) {
+          record.atMs = Date.now() - started;
+        }
+      }
+    }
+  } catch (error) {
+    record.error = String(error);
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+  return record;
+}
+
 // --- Probe process ---------------------------------------------------------------------------
 
 interface ProbeRun {
   exitCode: number | null;
   signal: string | null;
-  /** The driver had to send SIGKILL, because the probe did not stop within the grace period. */
+  /** The driver had to send SIGKILL, because the probe did not stop by the kill deadline. */
   killed: boolean;
   stopMs: number | null;
+  /** The time after SIGTERM at which the driver sends SIGKILL. */
+  killDeadlineMs: number;
+  /** Every `worker_error` line of the probe. `events` keeps only the first 200 events. */
+  workerErrors: number;
+  /** The `worker_error` and `shutdown_incomplete` lines after SIGTERM. */
+  errorsAfterStop: number;
+  /** The `started` event, which names the settings that the probe applied. */
+  started: Record<string, unknown> | null;
   events: unknown[];
   stdoutTail: string;
   stderrTail: string;
@@ -764,8 +1186,14 @@ interface StartedProbe {
   stop: () => Promise<ProbeRun>;
 }
 
+/** The time after SIGTERM at which the driver sends SIGKILL to a probe of `sdk`. */
+function killDeadlineMs(sdk: string): number {
+  return shutdownGraceMs + sdkVariants[sdk]!.unwind.ms + killMarginMs;
+}
+
 function startProbe(sdk: string, run: Cell, applicationName: string): StartedProbe {
   const { command, args, cwd } = sdkVariants[sdk]!.probe();
+  const deadlineMs = killDeadlineMs(sdk);
   const spawnedAt = Date.now();
   // The probe leads its own process group, so a signal reaches `mise exec` and every child of it.
   const child = spawn(command, args, {
@@ -783,6 +1211,8 @@ function startProbe(sdk: string, run: Cell, applicationName: string): StartedPro
       WH_BENCH_POOL_SIZE: String(run.poolSize),
       WH_BENCH_HEARTBEAT_MS: String(run.heartbeatMs),
       WH_BENCH_LEASE_MS: String(run.leaseMs),
+      WH_BENCH_SHUTDOWN_GRACE_MS: String(shutdownGraceMs),
+      WH_BENCH_POLL_MS: run.pollMs === null ? "" : String(run.pollMs),
     },
   });
   let stdoutTail = "";
@@ -790,6 +1220,10 @@ function startProbe(sdk: string, run: Cell, applicationName: string): StartedPro
   let stdoutLine = "";
   const events: unknown[] = [];
   const poolSamples: PoolSample[] = [];
+  let workerErrors = 0;
+  let errorsAfterStop = 0;
+  let stopSent = false;
+  let startedEvent: Record<string, unknown> | null = null;
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
@@ -818,6 +1252,14 @@ function startProbe(sdk: string, run: Cell, applicationName: string): StartedPro
         });
       } else {
         stdoutTail = appendTail(stdoutTail, `${line}\n`);
+        if (event?.["event"] === "worker_error") workerErrors += 1;
+        if (
+          stopSent &&
+          (event?.["event"] === "worker_error" || event?.["event"] === "shutdown_incomplete")
+        ) {
+          errorsAfterStop += 1;
+        }
+        if (event?.["event"] === "started") startedEvent ??= event;
         if (event !== null && events.length < 200) events.push(event);
       }
       newline = stdoutLine.indexOf("\n");
@@ -855,10 +1297,11 @@ function startProbe(sdk: string, run: Cell, applicationName: string): StartedPro
     let stopMs: number | null = null;
     if (running) {
       const started = Date.now();
+      stopSent = true;
       signalGroup("SIGTERM");
       const stopped = await Promise.race([
         exited.then(() => true),
-        sleep(stopGraceMs).then(() => false),
+        sleep(deadlineMs).then(() => false),
       ]);
       if (!stopped) {
         killed = true;
@@ -869,7 +1312,19 @@ function startProbe(sdk: string, run: Cell, applicationName: string): StartedPro
     }
     // A child of `mise exec` can outlive it; end what remains of the group.
     signalGroup("SIGKILL");
-    return { exitCode, signal, killed, stopMs, events, stdoutTail, stderrTail };
+    return {
+      exitCode,
+      signal,
+      killed,
+      stopMs,
+      killDeadlineMs: deadlineMs,
+      workerErrors,
+      errorsAfterStop,
+      started: startedEvent,
+      events,
+      stdoutTail,
+      stderrTail,
+    };
   };
   return {
     isRunning: () => running,
@@ -939,6 +1394,132 @@ async function countLostLeases(pool: Pool): Promise<{
 }
 
 /**
+ * The claims, the closed attempts, and the workers of the queue, with their times from the cell
+ * start. A claim writes its `claimed` event and a settlement writes its attempt history row with
+ * `clock_timestamp()`, so these times are more exact than the samples. The `expires_at` of a claim
+ * event is the start of its claim function plus the lease. A worker has slots from its registration
+ * in `workhorse.worker_registry`. The times are relative to the clock of the driver, so PostgreSQL
+ * must run on the same host.
+ */
+async function claimTimeline(
+  pool: Pool,
+  started: number,
+  leaseMs: number,
+): Promise<{
+  claims: (Claim & { attempt: string })[];
+  closes: (ClosedAttempt & { outcome: string; claimedAtMs: number; attempt: string })[];
+  workers: WorkerStart[];
+}> {
+  const claims = await pool.query<{
+    at_ms: number;
+    acquired_ms: number | null;
+    worker: string | null;
+    attempt: string;
+  }>(
+    `SELECT extract(epoch FROM e.occurred_at)::double precision * 1000 AS at_ms,
+            e.task_id::text || ':' || (e.details->>'fence_token') AS attempt,
+            extract(epoch FROM (e.details->>'expires_at')::timestamptz)::double precision * 1000
+              - $2::double precision AS acquired_ms,
+            e.details->>'worker_id' AS worker
+       FROM workhorse.task_event e JOIN workhorse.task t ON t.id = e.task_id
+      WHERE t.queue_name = $1 AND e.event_type = 'claimed'
+      ORDER BY 1`,
+    [queueName, leaseMs],
+  );
+  const closes = await pool.query<{
+    at_ms: number;
+    claimed_at_ms: number;
+    worker: string;
+    outcome: string;
+    attempt: string;
+  }>(
+    `SELECT extract(epoch FROM h.finished_at)::double precision * 1000 AS at_ms,
+            extract(epoch FROM h.claimed_at)::double precision * 1000 AS claimed_at_ms,
+            h.worker_id AS worker, h.outcome,
+            h.task_id::text || ':' || h.fence_token::text AS attempt
+       FROM workhorse.attempt_history h JOIN workhorse.task t ON t.id = h.task_id
+      WHERE t.queue_name = $1
+      ORDER BY 1`,
+    [queueName],
+  );
+  const workers = await pool.query<{ worker: string; started_ms: number }>(
+    `SELECT worker_id AS worker,
+            extract(epoch FROM started_at)::double precision * 1000 AS started_ms
+       FROM workhorse.worker_registry
+      WHERE queue_name = $1`,
+    [queueName],
+  );
+  return {
+    claims: claims.rows.map((row) => ({
+      atMs: row.at_ms - started,
+      worker: row.worker ?? "",
+      acquiredMs: row.acquired_ms === null ? null : row.acquired_ms - started,
+      attempt: row.attempt,
+    })),
+    closes: closes.rows.map((row) => ({
+      atMs: row.at_ms - started,
+      claimedAtMs: row.claimed_at_ms - started,
+      worker: row.worker,
+      outcome: row.outcome,
+      attempt: row.attempt,
+      // The probe allows 100 attempts, so these outcomes make the task ready again.
+      returnsToReady: ["retry", "lease_expired", "timeout"].includes(row.outcome),
+    })),
+    workers: workers.rows.map((row) => ({ worker: row.worker, atMs: row.started_ms - started })),
+  };
+}
+
+/**
+ * For each task: its completions, its attempts, and its claims. A refill cell passes only when
+ * each task completed once, with one attempt and one claim, and no task remains.
+ */
+async function completionCounts(pool: Pool) {
+  const perTask = await pool.query<{
+    attempts: number;
+    succeeded: number;
+    claims: number;
+    tasks: number;
+  }>(
+    `SELECT counts.attempts, counts.succeeded, counts.claims, count(*)::integer AS tasks
+       FROM workhorse.task t
+       CROSS JOIN LATERAL (
+         SELECT (SELECT count(*) FROM workhorse.attempt_history h
+                  WHERE h.task_id = t.id)::integer AS attempts,
+                (SELECT count(*) FROM workhorse.attempt_history h
+                  WHERE h.task_id = t.id AND h.outcome = 'succeeded')::integer AS succeeded,
+                (SELECT count(*) FROM workhorse.task_event e
+                  WHERE e.task_id = t.id AND e.event_type = 'claimed')::integer AS claims) counts
+      WHERE t.queue_name = $1
+      GROUP BY 1, 2, 3
+      ORDER BY 1, 2, 3`,
+    [queueName],
+  );
+  const remaining = await pool.query<{ state: string; tasks: number }>(
+    `SELECT state, count(*)::integer AS tasks FROM workhorse.task_runtime
+      WHERE queue_name = $1 GROUP BY state`,
+    [queueName],
+  );
+  const rows = perTask.rows;
+  const sum = (pick: (row: (typeof rows)[number]) => boolean) =>
+    rows.filter(pick).reduce((total, row) => total + row.tasks, 0);
+  const remainingIn = (state: string) =>
+    remaining.rows.find((row) => row.state === state)?.tasks ?? 0;
+  return {
+    tasks: sum(() => true),
+    completedOnce: sum((row) => row.succeeded === 1 && row.attempts === 1 && row.claims === 1),
+    completed: sum((row) => row.succeeded >= 1),
+    completedMoreThanOnce: sum((row) => row.succeeded > 1),
+    tasksWithMoreThanOneAttempt: sum((row) => row.attempts > 1),
+    tasksWithMoreThanOneClaim: sum((row) => row.claims > 1),
+    neverClaimed: sum((row) => row.claims === 0),
+    remainingActive: remainingIn("active"),
+    remainingReady: remainingIn("ready"),
+    // Each combination of completions, closed attempts, and claims, with its count of tasks.
+    perTask: rows,
+  };
+}
+
+/**
  * The longest time, after the first claim, in which slots were free, ready tasks waited, and no
  * claim came. A slot is free when fewer unexpired leases are active than the cell has slots.
  */
@@ -989,6 +1570,211 @@ function poolState(measured: readonly Sample[]) {
   };
 }
 
+/** What a refill cell shows: the completions and attempts of each task, and the claim gaps. */
+/**
+ * The one replay of the dispatch state of a cell: the claim gaps of each worker, and the times in
+ * which some worker had a free slot and a task was ready. Null without the timeline.
+ */
+function dispatchReplay(
+  run: Cell,
+  enqueued: number,
+  endMs: number,
+  timeline: Awaited<ReturnType<typeof claimTimeline>> | null,
+  ready: readonly Interval[],
+) {
+  if (timeline === null) return null;
+  return replayDispatch({
+    claims: timeline.claims,
+    closes: timeline.closes,
+    tasks: enqueued,
+    workers: timeline.workers,
+    slotsPerWorker: run.concurrency,
+    readiness: { ready, notReady: [] },
+    endMs,
+  });
+}
+
+function refillResult(
+  run: Cell,
+  enqueued: number,
+  timeline: Awaited<ReturnType<typeof claimTimeline>> | null,
+  completion: Awaited<ReturnType<typeof completionCounts>> | null,
+  replay: ReturnType<typeof dispatchReplay>,
+  ready: readonly Interval[],
+) {
+  if (run.kind !== "refill") return null;
+  const closedAttempts: Record<string, number> = {};
+  for (const close of timeline?.closes ?? []) {
+    closedAttempts[close.outcome] = (closedAttempts[close.outcome] ?? 0) + 1;
+  }
+  return {
+    handlerMs: run.handlerMs,
+    tasksPerSlot: run.tasksPerSlot,
+    // Every enqueued task must complete, also when the count of tasks fails.
+    tasks: enqueued,
+    tasksFound: completion?.tasks ?? null,
+    completedOnce: completion?.completedOnce ?? 0,
+    completed: completion?.completed ?? null,
+    completedMoreThanOnce: completion?.completedMoreThanOnce ?? null,
+    tasksWithMoreThanOneAttempt: completion?.tasksWithMoreThanOneAttempt ?? null,
+    tasksWithMoreThanOneClaim: completion?.tasksWithMoreThanOneClaim ?? null,
+    neverClaimed: completion?.neverClaimed ?? null,
+    remainingActive: completion?.remainingActive ?? null,
+    remainingReady: completion?.remainingReady ?? null,
+    perTask: completion?.perTask ?? null,
+    claimEvents: timeline?.claims.length ?? null,
+    closedAttempts,
+    claimGapLimitMs: refillClaimGapLimitMs,
+    workers: timeline?.workers ?? null,
+    // The times with an observed heartbeat role. Other times have an unknown readiness.
+    readyIntervals: ready.map((entry) => ({
+      fromMs: round(entry.fromMs),
+      toMs: round(entry.toMs),
+    })),
+    // Without the timeline the gaps are unknown, and an infinite gap fails the rule.
+    certainGap: replay?.certain ?? {
+      lengthMs: Number.POSITIVE_INFINITY,
+      startMs: null,
+      endMs: null,
+      worker: null,
+    },
+    possibleGap: replay?.possible ?? {
+      lengthMs: Number.POSITIVE_INFINITY,
+      startMs: null,
+      endMs: null,
+      worker: null,
+    },
+  };
+}
+
+/**
+ * What a fault cell shows. The fault ends the heartbeat connections, and the database stays
+ * reachable, so the outage is the time without a usable heartbeat reservation. It starts at the
+ * fault. The driver cannot see when the replacement is ready: `faultRecovery` gives a lower and an
+ * upper bound. The result reads the claims after the fault, each with the start of its claim
+ * function, and the end of the statements that ran at the fault.
+ */
+function faultResult(
+  run: Cell,
+  started: number,
+  endMs: number,
+  record: FaultRecord | null,
+  timeline: Awaited<ReturnType<typeof claimTimeline>> | null,
+  sampling: RoleSampling | null,
+  driverSampling: CellSampling,
+  options: Parameters<typeof connectionRoles>[1],
+  roles: ReturnType<typeof connectionRoles> | null,
+  replay: ReturnType<typeof dispatchReplay>,
+) {
+  if (run.kind !== "fault") return null;
+  const terminated: BackendIdentity[] =
+    record === null
+      ? []
+      : [...(record.inRound === null ? [] : [record.inRound]), ...record.roleBackends];
+  const faultAtMs = record?.atMs ?? endMs;
+  const recovery =
+    sampling === null || record === null
+      ? null
+      : faultRecovery(sampling, options, {
+          faultAtMs,
+          interrupted: record.inRound,
+          terminated,
+        });
+  const replacement = recovery?.replacement ?? null;
+  const claims = (timeline?.claims ?? []).filter((claim) => claim.atMs >= faultAtMs);
+  const attributed = attributeFaultClaims(claims, faultAtMs, record?.inFlightEndedMs ?? null);
+  // The latest possible next regular slot: the start of the interrupted round plus I, or the
+  // fault plus I without one.
+  const nextRound = latestNextSlot({
+    faultAtMs,
+    interruptedStartMs: record?.roundStartMs ?? null,
+    heartbeatMs: run.heartbeatMs,
+  });
+  // The attempts of the observation: their claims, their settlements, their last samples, and the
+  // attempts that were live and unexpired in the last sample.
+  const attemptRecords: AttemptRecords = {
+    claimed: (timeline?.claims ?? []).map((claim) => ({
+      attempt: claim.attempt,
+      atMs: claim.atMs,
+    })),
+    closed: (timeline?.closes ?? []).map((close) => ({
+      attempt: close.attempt,
+      outcome: close.outcome,
+      finishedAtMs: close.atMs,
+    })),
+    lastSamples: [...driverSampling.attempts].map(([attempt, sample]) => ({
+      attempt,
+      renewalMs: sample.renewalMs - started,
+      deadlineMs: sample.deadlineMs - started,
+    })),
+    liveAtEnd: driverSampling.liveAtEnd,
+    observedUntilMs: driverSampling.lastAttemptSampleMs ?? -Infinity,
+  };
+  const watchdog = watchdogVerdict(attemptRecords, faultAtMs);
+  const replacementRoundMs = replacement?.firstRoundMs ?? endMs;
+  const firstClaimAfterRoundMs = claims.find((claim) => claim.atMs > replacementRoundMs)?.atMs;
+  // The roles from the first round on the replacement to the end of the observation.
+  const afterRecovery =
+    replacement === null || roles === null
+      ? []
+      : roles.series.rows.filter((row) => row[0]! >= replacementRoundMs);
+  const maxColumn = (column: number) =>
+    afterRecovery.length === 0 ? null : Math.max(...afterRecovery.map((row) => row[column]!));
+  return {
+    armedMs: record?.armedMs ?? null,
+    atMs: record === null ? null : round(faultAtMs),
+    searchTimedOut: record?.searchTimedOut ?? null,
+    inRound: record?.inRound ?? null,
+    roleBackends: record?.roleBackends ?? [],
+    roleBackendsEndedMs: record?.roleBackendsEndedMs ?? null,
+    inFlight: record?.inFlight ?? [],
+    inFlightEndedMs: round(record?.inFlightEndedMs ?? null),
+    error: record?.error ?? null,
+    replacement,
+    lastRoundBeforeFaultMs: round(recovery?.lastRoundBeforeFaultMs ?? null),
+    nextRound,
+    watchdog,
+    // The claims after the fault by origin: from a statement that started before the fault,
+    // unattributed, or fresh.
+    claimsFromStatementsBeforeFault: attributed.beforeFault,
+    unattributedClaimsMs: attributed.uncertain.map((atMs) => round(atMs)!),
+    freshClaimsMs: attributed.fresh.map((atMs) => round(atMs)!),
+    firstClaimAfterReplacementRoundMs:
+      replacement === null || firstClaimAfterRoundMs === undefined
+        ? null
+        : round(firstClaimAfterRoundMs - replacementRoundMs),
+    // Each recovered attempt with its `finished_at` and the deadline of its last sample.
+    recoveries: attemptRecords.closed
+      .filter((close) => close.outcome === "lease_expired")
+      .map((close) => ({
+        attempt: close.attempt,
+        finishedAtMs: round(close.finishedAtMs),
+        deadlineMs: round(
+          attemptRecords.lastSamples.find((entry) => entry.attempt === close.attempt)?.deadlineMs ??
+            null,
+        ),
+      })),
+    demand: (replay?.demand ?? []).map((entry) => ({
+      fromMs: round(entry.fromMs),
+      toMs: round(entry.toMs),
+    })),
+    facts: {
+      terminated: terminated.length,
+      faultAtMs,
+      claims,
+      inFlightEndedMs: record?.inFlightEndedMs ?? null,
+      readyNotBeforeMs: replacement?.readyNotBeforeMs ?? null,
+      replacementRoundMs: replacement?.firstRoundMs ?? null,
+      observationEndMs: endMs,
+      nextRound,
+      demand: replay?.demand ?? [],
+      attempts: attemptRecords,
+      maxListenerAfterRecovery: maxColumn(1),
+      maxHeartbeatAfterRecovery: maxColumn(2),
+    },
+  };
+}
+
 /** The probe that runs now, so a signal to the driver can stop it. */
 let activeProbe: StartedProbe | null = null;
 
@@ -999,15 +1785,18 @@ async function stopActiveProbe(): Promise<void> {
 async function runCell(pools: DriverPools, sdk: string, run: Cell) {
   const expected = run.workers * run.concurrency;
   const spare = Math.max(2, Math.ceil(expected / 10));
+  // A held-task cell needs one task for each slot and some spare tasks. A refill or a fault cell
+  // gives each slot many tasks, so each slot claims again many times.
+  const enqueued = run.tasksPerSlot === null ? expected + spare : expected * run.tasksPerSlot;
   const applicationName = `wh-bench-${sdk}`;
   const guardWait = await waitForQuietMachine();
   const machineBefore = machineState();
   // A probe from an earlier cell or run must not share this cell.
   const strayBefore = await endProbeSessions(pools.final, 0);
   await resetSchema(pools.admin);
-  await enqueueTasks(pools.admin, expected + spare);
+  await enqueueTasks(pools.admin, run, enqueued);
 
-  console.error(`${sdk} ${run.id}: start (${expected} slots, ${expected + spare} tasks)`);
+  console.error(`${sdk} ${run.id}: start (${run.kind}, ${expected} slots, ${enqueued} tasks)`);
   const probe = startProbe(sdk, run, applicationName);
   activeProbe = probe;
   const started = Date.now();
@@ -1019,12 +1808,25 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
   const cellEndMs = run.warmupMs + run.measureMs;
   const sampling: CellSampling = {
     samples: [],
+    attempts: new Map(),
+    liveAtEnd: [],
+    lastAttemptSampleMs: null,
     measuredRenewalAgesMs: [],
     measuredLeaseMarginsMs: [],
     sampleErrors: 0,
     sampleErrorMessages: [],
   };
   let probeExitedEarlyMs: number | null = null;
+  // Why the sampling ended: the window closed, no task remained, the observation after the fault
+  // ended, or the probe exited.
+  let endReason: "window" | "drained" | "fault-observed" | "probe-exited" = "window";
+  let drainedSinceMs: number | null = null;
+  const fault: { injecting: Promise<FaultRecord> | null; record: FaultRecord | null } = {
+    injecting: null,
+    record: null,
+  };
+  let timeline: Awaited<ReturnType<typeof claimTimeline>> | null = null;
+  let completion: Awaited<ReturnType<typeof completionCounts>> | null = null;
   let leases: Awaited<ReturnType<typeof countLostLeases>> | null = null;
   let connectionSnapshot: { state: string | null; lastQuery: string; connections: number }[] = [];
   const finalErrors: string[] = [];
@@ -1042,17 +1844,44 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
       const elapsedMs = Date.now() - started;
       if (elapsedMs >= cellEndMs) break;
       if (!probe.isRunning() && probeExitedEarlyMs === null) probeExitedEarlyMs = elapsedMs;
+      if (run.kind === "fault") {
+        // The fault runs in parallel, so the samples go on while it looks for a heartbeat round.
+        if (fault.injecting === null && elapsedMs >= run.warmupMs) {
+          fault.injecting = injectFault(applicationName, run, started, roleSampler, pools.final);
+          void fault.injecting.then((record) => {
+            fault.record = record;
+          });
+        }
+        if (fault.record !== null && elapsedMs >= fault.record.atMs + run.faultObserveMs!) {
+          endReason = "fault-observed";
+          break;
+        }
+      }
       try {
-        const { sample, ages, margins } = await takeSample(
+        const { sample, ages, margins, attempts } = await takeSample(
           pools.sample,
           applicationName,
           elapsedMs,
           probe.poolSamples.at(-1) ?? null,
         );
         sampling.samples.push(sample);
+        for (const [key, value] of attempts) sampling.attempts.set(key, value);
+        sampling.liveAtEnd = attempts
+          .filter(([, value]) => value.deadlineMs > value.sampledMs)
+          .map(([key]) => key);
+        sampling.lastAttemptSampleMs = elapsedMs;
         if (elapsedMs >= run.warmupMs) {
           sampling.measuredRenewalAgesMs.push(...ages);
           sampling.measuredLeaseMarginsMs.push(...margins);
+        }
+        // A refill cell ends when no task has been ready or active for one second.
+        if (run.kind === "refill") {
+          if (sample.readyTasks !== 0 || sample.activeTasks !== 0) drainedSinceMs = null;
+          else drainedSinceMs ??= elapsedMs;
+          if (drainedSinceMs !== null && elapsedMs - drainedSinceMs >= 1_000) {
+            endReason = "drained";
+            break;
+          }
         }
       } catch (error) {
         sampling.sampleErrors += 1;
@@ -1061,8 +1890,12 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
         }
       }
       // A probe that exited holds nothing more. Two seconds of samples show its connections close.
-      if (probeExitedEarlyMs !== null && elapsedMs - probeExitedEarlyMs > 2_000) break;
+      if (probeExitedEarlyMs !== null && elapsedMs - probeExitedEarlyMs > 2_000) {
+        endReason = "probe-exited";
+        break;
+      }
     }
+    if (fault.injecting !== null) fault.record = await fault.injecting;
     // The roles describe the running probe, so the sampler stops before the probe.
     if (roleSampler !== null) {
       roleSampling = await roleSampler.stop();
@@ -1073,6 +1906,20 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
       leases = await countLostLeases(pools.final);
     } catch (error) {
       finalErrors.push(`lost leases: ${String(error)}`);
+    }
+    if (run.kind !== "held") {
+      try {
+        timeline = await claimTimeline(pools.final, started, run.leaseMs);
+      } catch (error) {
+        finalErrors.push(`claim timeline: ${String(error)}`);
+      }
+    }
+    if (run.kind === "refill") {
+      try {
+        completion = await completionCounts(pools.final);
+      } catch (error) {
+        finalErrors.push(`completion counts: ${String(error)}`);
+      }
     }
     try {
       connectionSnapshot = (
@@ -1105,19 +1952,37 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
   const percentiles = summarizeLatencies(sampling.measuredRenewalAgesMs);
   const driverCpu = process.cpuUsage(driverCpuBefore);
   const pool = poolState(measured);
-  const roles =
-    roleSampling === null
+  const roleOptions = {
+    windowStartMs: run.warmupMs,
+    samplerEndMs: roleSamplerEndMs,
+    heartbeatMs: run.heartbeatMs,
+    commitInference,
+  };
+  const roles = roleSampling === null ? null : connectionRoles(roleSampling, roleOptions);
+  const readyIntervals =
+    roleSampling === null ? [] : heartbeatReadyIntervals(roleSampling, roleOptions);
+  const replay =
+    run.kind === "held"
       ? null
-      : connectionRoles(roleSampling, {
-          windowStartMs: run.warmupMs,
-          samplerEndMs: roleSamplerEndMs,
-          heartbeatMs: run.heartbeatMs,
-          commitInference,
-        });
+      : dispatchReplay(run, enqueued, roleSamplerEndMs, timeline, readyIntervals);
+  const refillOutcome = refillResult(run, enqueued, timeline, completion, replay, readyIntervals);
+  const faultOutcome = faultResult(
+    run,
+    started,
+    roleSamplerEndMs,
+    fault.record,
+    timeline,
+    roleSampling,
+    sampling,
+    roleOptions,
+    roles,
+    replay,
+  );
   const cellSeconds = roleSamplerEndMs / 1000;
   const outcome = {
     expectedSlots: expected,
-    enqueuedTasks: expected + spare,
+    enqueuedTasks: enqueued,
+    endReason,
     finalUnexpiredActiveTasks: finalSample?.unexpiredActiveTasks ?? null,
     finalClaimEvents: finalSample?.claimEvents ?? null,
     finalClaimedTasks: finalSample?.claimedTasks ?? null,
@@ -1185,14 +2050,21 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
     sampleErrors: sampling.sampleErrors,
     sampleErrorMessages: sampling.sampleErrorMessages,
     finalErrors,
+    refill: refillOutcome,
+    fault: faultOutcome,
     strayProbeSessionsBefore: strayBefore,
     leftoverProbeSessionsAfter: leftoverSessions,
     probe: {
       exitedBeforeStopMs: probeExitedEarlyMs,
       exitCode: probeRun.exitCode,
       signal: probeRun.signal,
-      killedAfterGrace: probeRun.killed,
+      shutdownGraceMs,
+      killDeadlineMs: probeRun.killDeadlineMs,
+      killedAtDeadline: probeRun.killed,
       stopMs: probeRun.stopMs,
+      workerErrors: probeRun.workerErrors,
+      errorsAfterStop: probeRun.errorsAfterStop,
+      started: probeRun.started,
       poolSamples: probe.poolSamples.length,
       waitedAcquires: probe.poolSamples.at(-1)?.waitedAcquires ?? null,
       events: probeRun.events,
@@ -1200,12 +2072,71 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
       stderrTail: probeRun.stderrTail,
     },
   };
+  const heartbeatRole = roles?.observedHeartbeatRoleConnections;
+  const facts: CellFacts = {
+    kind: run.kind,
+    heartbeatMs: run.heartbeatMs,
+    leaseMs: run.leaseMs,
+    slots: expected,
+    finalUnexpiredActiveTasks: outcome.finalUnexpiredActiveTasks,
+    lostLeases: outcome.lostLeases,
+    maxExpiredActiveTasks: outcome.maxExpiredActiveTasks,
+    maxRenewalAgeMs: outcome.renewalAgeMs.max,
+    minLeaseMarginMs: outcome.minLeaseMarginMs,
+    maxListenerConnections: roles?.listenerConnections.max ?? null,
+    maxHeartbeatConnections:
+      heartbeatRole === undefined
+        ? null
+        : typeof heartbeatRole === "string"
+          ? "unknown"
+          : heartbeatRole.max,
+    workerErrors: probeRun.workerErrors,
+    // Every failed or timed-out query of the driver: samples, final reads, the role sampler, and
+    // the fault.
+    sampleErrors:
+      sampling.sampleErrors +
+      finalErrors.length +
+      (roleSamplerError === null ? 0 : 1) +
+      (roles?.errors.length ?? 0) +
+      (fault.record?.error ? 1 : 0),
+    probe: {
+      exitedBeforeStopMs: probeExitedEarlyMs,
+      exitCode: probeRun.exitCode,
+      killed: probeRun.killed,
+      stopMs: probeRun.stopMs,
+      killDeadlineMs: probeRun.killDeadlineMs,
+      errorsAfterStop: probeRun.errorsAfterStop,
+    },
+    ...(refillOutcome === null
+      ? {}
+      : {
+          refill: {
+            tasks: refillOutcome.tasks,
+            completedOnce: refillOutcome.completedOnce,
+            remainingActive: refillOutcome.remainingActive,
+            remainingReady: refillOutcome.remainingReady,
+            pollMs: nullableNumber(probeRun.started?.["pollMs"]),
+            certainGapMs: refillOutcome.certainGap.lengthMs,
+            possibleGapMs: refillOutcome.possibleGap.lengthMs,
+          },
+        }),
+    ...(faultOutcome === null ? {} : { fault: faultOutcome.facts }),
+  };
+  const result = cellResult(facts);
+  const verdict =
+    result.outcome === "pass"
+      ? "PASS"
+      : result.outcome === "fail"
+        ? `FAIL (${result.failed.join(", ")})`
+        : `INCONCLUSIVE (${result.inconclusive.join(", ")})`;
+  console.error(`${sdk} ${run.id}: ${verdict}`);
   console.error(
     `${sdk} ${run.id}: unexpired ${outcome.finalUnexpiredActiveTasks}/${expected}, sessions ${outcome.maxConnections.total}, roles listen ${JSON.stringify(roles?.listenerConnections)} heartbeat-role ${JSON.stringify(roles?.observedHeartbeatRoleConnections)} peak ${roles?.peakHeartbeatBackendsInOneInterval} former ${JSON.stringify(roles?.formerHeartbeatConnections)} statement ${JSON.stringify(roles?.statementConnections)}, heartbeat starts ${roles?.heartbeatStarts} ends ${roles?.heartbeatEnds}, incomplete ${roles?.heartbeatObservationIncomplete}, sampler interval ${JSON.stringify(roles?.effectiveIntervalMs)} temp bytes ${roles?.maxRelationBytes}, pool idle max ${pool.idleCached.max} waiting max ${pool.waitingMax}, driver CPU ${outcome.measurementCost.driverCpuPercentOfOneCore}% sampler CPU ${outcome.measurementCost.roleSamplerBackendCpuPercentOfOneCore}%, lost leases ${outcome.lostLeases}, capacity failure ${outcome.initialCapacityFailure}, progress failure ${outcome.progressFailure}, exit ${probeRun.exitCode ?? probeRun.signal}`,
   );
   return {
     sdk,
     cell: run,
+    result,
     applicationName,
     startedAt: new Date(started).toISOString(),
     guardWait,
@@ -1228,6 +2159,96 @@ async function runCell(pools: DriverPools, sdk: string, run: Cell) {
       ]),
     },
   };
+}
+
+// --- Summary ---------------------------------------------------------------------------------
+
+type CellRun = Awaited<ReturnType<typeof runCell>>;
+
+const summaryColumns = [
+  "sdk",
+  "cell",
+  "kind",
+  "result",
+  "failedRules",
+  "tasks",
+  "lostLeases",
+  "expiredActiveTasks",
+  "maxRenewalAgeMs",
+  "minLeaseMarginMs",
+  "claimGapMs",
+  "outageClaims",
+  "firstFreshClaimMs",
+  "listeners",
+  "heartbeatRole",
+  "stopMs",
+  "sigkill",
+] as const;
+
+/**
+ * One row for each cell. `tasks` gives the live leases at the end of a held-task cell, and the
+ * tasks that completed once of a refill cell. `expiredActiveTasks` is the most active tasks with an
+ * expired lease in one sample: a lease can expire while no worker records its loss. `claimGapMs`
+ * gives the longest gap with the reservation ready, then with its state unknown. `outageClaims`
+ * gives the fresh and the unattributed claims before the first round on the replacement.
+ */
+function summaryRow(run: CellRun): (string | number | null)[] {
+  const { outcome, result } = run;
+  const roles = outcome.connectionRoles;
+  const heartbeat = roles?.observedHeartbeatRoleConnections;
+  const fault = outcome.fault;
+  const roundMs = fault?.replacement?.firstRoundMs ?? Number.POSITIVE_INFINITY;
+  const outageFresh = fault?.freshClaimsMs.filter((atMs) => atMs! < roundMs).length ?? 0;
+  const outageUnattributed =
+    fault?.unattributedClaimsMs.filter((atMs) => atMs! < roundMs).length ?? 0;
+  const tasks =
+    run.cell.kind === "refill"
+      ? `${outcome.refill?.completedOnce}/${outcome.refill?.tasks} once`
+      : run.cell.kind === "held"
+        ? `${outcome.finalUnexpiredActiveTasks}/${outcome.expectedSlots} live`
+        : `${outcome.finalClaimEvents} claims`;
+  const row: Record<(typeof summaryColumns)[number], string | number | null> = {
+    sdk: run.sdk,
+    cell: run.cell.id,
+    kind: run.cell.kind,
+    result: result.outcome === "fail" ? "FAIL" : result.outcome,
+    // A rule that the observations could not decide ends with "?".
+    failedRules:
+      [...result.failed, ...result.inconclusive.map((rule) => `${rule}?`)].join("; ") || "-",
+    tasks,
+    lostLeases: outcome.lostLeases,
+    expiredActiveTasks: outcome.maxExpiredActiveTasks,
+    maxRenewalAgeMs: outcome.renewalAgeMs.max,
+    minLeaseMarginMs: outcome.minLeaseMarginMs,
+    claimGapMs:
+      outcome.refill === null
+        ? null
+        : `${outcome.refill.certainGap.lengthMs}/${outcome.refill.possibleGap.lengthMs}`,
+    outageClaims: fault === null ? null : `${outageFresh}/${outageUnattributed}`,
+    firstFreshClaimMs:
+      fault === null || fault.atMs === null || fault.freshClaimsMs[0] === undefined
+        ? null
+        : round(fault.freshClaimsMs[0]! - fault.atMs),
+    listeners: roles?.listenerConnections.max ?? null,
+    heartbeatRole:
+      heartbeat === undefined ? null : typeof heartbeat === "string" ? heartbeat : heartbeat.max,
+    stopMs: outcome.probe.stopMs,
+    sigkill: outcome.probe.killedAtDeadline ? "yes" : "no",
+  };
+  return summaryColumns.map((column) => row[column]);
+}
+
+/** The summary as a plain-text table for the terminal. */
+function summaryText(rows: readonly (string | number | null)[][]): string {
+  const cells = [summaryColumns as readonly string[], ...rows].map((row) =>
+    row.map((value) => (value === null ? "-" : String(value))),
+  );
+  const widths = summaryColumns.map((_, column) =>
+    Math.max(...cells.map((row) => row[column]!.length)),
+  );
+  return cells
+    .map((row) => row.map((value, column) => value.padEnd(widths[column]!)).join("  "))
+    .join("\n");
 }
 
 // --- Main ------------------------------------------------------------------------------------
@@ -1367,9 +2388,11 @@ try {
     aborted = error instanceof Error ? (error.stack ?? error.message) : String(error);
     console.error(`run aborted: ${aborted}`);
   }
+  const summaryRows = runs.map(summaryRow);
+  console.error(summaryText(summaryRows));
   const report = {
     benchmark: "connection-budget",
-    schemaVersion: 3,
+    schemaVersion: 4,
     recordedAt: new Date().toISOString(),
     profile,
     aborted,
@@ -1385,8 +2408,19 @@ try {
       queue: queueName,
       taskType,
       sampleIntervalMs,
-      stopGraceMs,
+      shutdownGraceMs,
+      killMarginMs,
+      // The unwind window of each SDK, its source, and the kill deadline that follows from it.
+      shutdown: Object.fromEntries(
+        sdks.map((sdk) => [
+          sdk,
+          { ...sdkVariants[sdk]!.unwind, killDeadlineMs: killDeadlineMs(sdk) },
+        ]),
+      ),
       progressFailureMs,
+      refillClaimGapLimitMs,
+      faultWatchMs,
+      dispatchAllowanceMs,
       roleSampleIntervalMs,
       roleChunkMs,
       commitInference,
@@ -1395,6 +2429,7 @@ try {
       matrix: cells,
     },
     wallTimeMs: Date.now() - started,
+    summary: { columns: summaryColumns, rows: summaryRows },
     runs,
   };
   await mkdir(dirname(output), { recursive: true });

@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-10-21 connection budget baseline analysis](benchmarks/2026-10-21-connection-budget-baseline-analysis.md): the listener and heartbeat connections of each SDK on one pool before SM-1565, and the result of each cell against the held-task thresholds.
+- [`results/2026-10-21-connection-budget-baseline/`](benchmarks/results/2026-10-21-connection-budget-baseline/): one `full`-profile artifact for each of the eight SDK variants, with load averages.
 - [2026-10-11 checkpoint replay analysis](benchmarks/2026-10-11-checkpoint-replay-analysis.md): what a full-tier handler pays to replay 0 to 10,000 stored checkpoints on each pass after a durable wait, for SM-1209.
 - [`results/2026-10-11-checkpoint-replay.json`](benchmarks/results/2026-10-11-checkpoint-replay.json): three sequential `full`-profile invocations of the `checkpoint-replay` scenario, with load averages.
 - [2026-09-27 dependency release guard analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md): what the pending-edge probe before a zero-counter release costs `resolve_dependents_many_v1` on PostgreSQL 18 and 15, for SM-937.
@@ -470,7 +472,9 @@ A worker holds connections that its handlers cannot use: the listener connection
 connection. The SDKs do not hold them in the same way. Some SDKs share one of each for all the
 workers on a pool, and other SDKs hold one of each for each worker. The connection budget benchmark
 measures what these connections cost in each SDK. It also measures whether leases renew in time
-when several workers share one pool.
+when several workers share one pool, whether workers continue to claim after tasks complete, and
+how workers recover when they lose the heartbeat connection. Each cell gets a result from the
+acceptance thresholds of SM-1565.
 
 The benchmark measures from PostgreSQL. Thus one driver, `scripts/benchmark-connection-budget.ts`,
 serves every SDK. It does not run under `pnpm benchmark`, and nothing in CI runs it.
@@ -480,7 +484,8 @@ serves every SDK. It does not run under `pnpm benchmark`, and nothing in CI runs
 The benchmark uses the `DATABASE_URL_BENCH` database of the checkout. It drops and installs the
 `workhorse` schema before each cell. It builds each probe with the toolchains that `mise.toml` pins.
 
-1. Run the smoke profile for each SDK variant. Each cell takes about 20 s.
+1. Run the smoke profile for each SDK variant. It runs one cell of each kind and takes about
+   2 minutes for one variant.
 
    ```bash
    pnpm benchmark:connection-budget -- --profile smoke
@@ -504,30 +509,75 @@ Run one benchmark at a time. The driver runs one cell at a time, but it cannot s
 
 ### What a cell does
 
-A cell has W workers, a pool of P connections, concurrency C, heartbeat interval I, and lease L. The
-driver does these steps for each cell:
+A cell has W workers, a pool of P connections, concurrency C, heartbeat interval I, and lease L. A
+cell has one of three kinds:
+
+- A **held-task cell** holds every claimed task until the probe stops.
+- A **refill cell** finishes each task after a fixed time, so the workers must claim again.
+- A **fault cell** runs a refill workload and ends the heartbeat connection of the probe once.
+
+The driver does these steps for each cell:
 
 1. It ends each probe session that an earlier cell left open, and it records the session.
-2. It drops and installs the schema, and it enqueues W × C tasks and 10% more, with a minimum of 2.
+2. It drops and installs the schema. Then it enqueues tasks:
+   - for a held-task cell, W × C tasks and 10% more, with a minimum of 2;
+   - for a refill or a fault cell, W × C × the tasks for each slot.
 3. It starts the probe of the SDK as a child process, in a process group of its own.
 4. It samples the database every 250 ms and records the latest pool state that the probe reported.
    In parallel, the role sampler records what each probe connection runs, until the cell ends.
-5. It sends SIGTERM to the process group of the probe. If the probe does not stop in 20 s, it sends
-   SIGKILL.
-6. It waits up to 10 s for the probe sessions to close. Then it ends each session that remains, and
+5. In a fault cell, it ends the heartbeat connection after the warm-up. The
+   [fault cell](#fault-cells) section gives the steps.
+6. It reads the claims, the closed attempts, and the completions of each task.
+7. It sends SIGTERM to the process group of the probe. If the probe has not exited at the kill
+   deadline, it sends SIGKILL.
+8. It waits up to 10 s for the probe sessions to close. Then it ends each session that remains, and
    it records the session.
+9. It gives the cell a result: pass, fail, or inconclusive.
 
-The driver always does steps 5 and 6, also when a step before them fails. If the driver gets SIGINT
+A held-task cell ends when its measurement window closes. A refill cell ends when no task has been
+ready or active for 1 s, or when its window closes. A fault cell ends 3 × I after the fault, or when
+its window closes.
+
+The driver always does steps 7 and 8, also when a step before them fails. If the driver gets SIGINT
 or SIGTERM, it stops the probe before it exits. If a cell fails, the driver writes the artifact with
 the cells that finished, and `aborted` gives the error. Each driver query has a timeout. A sample
 query stops after 1 s, so a blocked query cannot keep a cell past its end.
 
-Each probe starts W workers in one process on one pool. Each handler holds its slot until the probe
-stops or the worker cancels the attempt. The probe does not set `sharedHeartbeats`,
+Each probe starts W workers in one process on one pool. The payload of each task of a refill or a
+fault cell has a `handlerMs` value. Its handler returns after that time. A task without the value
+holds its slot. Every handler returns when the probe stops or the worker cancels the attempt, so
+the stop time measures the SDK and not the handler. The probe does not set `sharedHeartbeats`,
 `SharedHeartbeats`, or `shared_heartbeats`. Each pool opens a connection only when the SDK asks for
 one, so the count shows what the SDK needs. Each probe sets a fixed `application_name`,
 `wh-bench-<sdk>`, on every connection that it opens. The Rust probe gives each worker a
 `listen_config` with the same name, so the Rust listener connections outside the pool also count.
+
+The driver gives each probe these settings:
+
+- `WH_BENCH_SHUTDOWN_GRACE_MS`: the shutdown grace, 10 s in every cell.
+- `WH_BENCH_POLL_MS`: the polling interval, 1 s in refill and fault cells. A held-task cell keeps
+  the default of the SDK.
+
+The probe applies them, and its `started` event names the values that it applied. In Go, Ruby,
+Rust, and the JVM, the grace is a worker option. The TypeScript and Python workers have no grace.
+Their process runners, `runWorkerProcess` and `run_worker_process`, exit with status 1 when the
+grace passes, and their probes do the same.
+
+The kill deadline of the driver is the grace, plus the unwind window that the SDK documents, plus
+5 s. A probe that is still running at the deadline gets SIGKILL. The driver records each unwind
+window and its source in `settings.shutdown`:
+
+| SDK variant                                     | Unwind window | Source                                                                    |
+| ----------------------------------------------- | ------------- | ------------------------------------------------------------------------- |
+| `typescript`                                    | 0 ms          | `runWorkerProcess` exits at `shutdownTimeoutMs`                           |
+| `go`                                            | 2,250 ms      | a 250 ms unwind, `deregister_worker_v1` and `UNLISTEN` for 1,000 ms each  |
+| `ruby`                                          | 250 ms        | the unwind window, `UNWIND_WINDOW`                                        |
+| `python-sync`, `python-async`, `python-asyncpg` | 0 ms          | `run_worker_process` exits at `shutdown_timeout_ms`                       |
+| `rust`                                          | 1,250 ms      | `UNWIND_WINDOW`, then `CLEANUP_WINDOW`, which ends 1 s after the deadline |
+| `jvm`                                           | 2,000 ms      | a complete shutdown can end up to about 2 seconds after `shutdownGrace`   |
+
+The shutdown sections of [the schema and protocol reference](architecture/schema-and-protocol.md)
+give each window.
 
 Each probe writes the state of its pool to standard output as one JSON line every 250 ms. The probe
 reads the state from inside its process, with the API of the pool. No SDK code changes for this.
@@ -555,19 +605,286 @@ its `include` list, and the JVM probe project has no publication.
 
 ### Profiles
 
-The warm-up starts when the probe starts. The measurement window follows the warm-up, and the cell
-ends when the window closes. A cell that stalls also ends then.
+The warm-up starts when the probe starts. The measurement window follows the warm-up. A held-task
+cell ends when the window closes. A refill cell or a fault cell can end before that, as
+[What a cell does](#what-a-cell-does) states. A cell that stalls also ends when the window closes.
 
-| Profile | Cell ids                      | W            | C     | P   | I    | L    | Warm-up | Window |
-| ------- | ----------------------------- | ------------ | ----- | --- | ---- | ---- | ------- | ------ |
-| `smoke` | `smoke-w2-c2-p20`             | 2            | 2     | 20  | 1 s  | 3 s  | 5 s     | 15 s   |
-| `full`  | `starvation-w2-c1-p4`         | 2            | 1     | 4   | 1 s  | 3 s  | 10 s    | 30 s   |
-| `full`  | `capacity-w<W>-c<C>-p20`      | 1, 4, 16, 64 | 1, 25 | 20  | 1 s  | 3 s  | 15 s    | 60 s   |
-| `full`  | `default-timing-w<W>-c25-p20` | 16, 64       | 25    | 20  | 10 s | 30 s | 20 s    | 180 s  |
+| Profile | Kind   | Cell ids                      | W            | C       | P        | I    | L    | Tasks per slot | Warm-up | Window |
+| ------- | ------ | ----------------------------- | ------------ | ------- | -------- | ---- | ---- | -------------- | ------- | ------ |
+| `smoke` | held   | `smoke-w2-c2-p20`             | 2            | 2       | 20       | 1 s  | 3 s  | -              | 5 s     | 15 s   |
+| `smoke` | refill | `smoke-refill-w2-c2-p20`      | 2            | 2       | 20       | 1 s  | 3 s  | 10             | 5 s     | 55 s   |
+| `smoke` | fault  | `smoke-fault-w4-c4-p20`       | 4            | 4       | 20       | 10 s | 30 s | 25             | 15 s    | 70 s   |
+| `full`  | held   | `starvation-w2-c1-p4`         | 2            | 1       | 4        | 1 s  | 3 s  | -              | 10 s    | 30 s   |
+| `full`  | held   | `capacity-w<W>-c<C>-p20`      | 1, 4, 16, 64 | 1, 25   | 20       | 1 s  | 3 s  | -              | 15 s    | 60 s   |
+| `full`  | held   | `default-timing-w<W>-c25-p20` | 16, 64       | 25      | 20       | 10 s | 30 s | -              | 20 s    | 180 s  |
+| `full`  | refill | `refill-w<W>-c<C>-p<P>`       | 2, 4, 16     | 1, 2, 4 | 4, 6, 20 | 1 s  | 3 s  | 20             | 5 s     | 85 s   |
+| `full`  | fault  | `fault-w16-c4-p20`            | 16           | 4       | 20       | 10 s | 30 s | 25             | 15 s    | 70 s   |
 
-The full profile has 11 cells and about 17 minutes of cell time for one SDK variant. Schema
+The refill cells of the full profile are `refill-w2-c1-p4`, `refill-w4-c2-p6`, and
+`refill-w16-c4-p20`. The small pools have few free connections after the reserved connections.
+Thus these cells show whether claims continue when the pool is almost full.
+
+The full profile has 15 cells and about 20 minutes of cell time for one SDK variant. Schema
 installation, enqueue, and probe stop add about 10 s to each cell. Thus a full run of one SDK
-variant takes about 20 minutes, when the machine guard does not wait.
+variant takes about 23 minutes, when the machine guard does not wait.
+
+### Refill cells
+
+A refill cell tests whether the workers continue to claim after tasks complete. Every handler
+returns after 1.2 s, so a heartbeat round renews each task at least once. Each slot has 20 tasks,
+or 10 in the smoke profile, so each slot claims many times. The probe sets its polling interval to
+1 s, because the default fallback poll of 5 s is as long as the claim gap limit.
+
+The driver reads the time and the worker of each `claimed` event and of each closed attempt in
+`workhorse.attempt_history`. Both times come from `clock_timestamp()`, so they are more exact than
+the samples. It reads the start time of each worker from `started_at` in
+`workhorse.worker_registry`. From these times, the driver replays the dispatch state once, for the
+whole observation:
+
+- A worker has its slots from its start, or from its first claim if that comes first.
+- A claim takes one slot of its worker and one ready task.
+- A closed attempt frees the slot of its worker. A retry or a lost lease makes its task ready
+  again.
+- A claim and a closed attempt at the same time are a fused completion. The closed attempt counts
+  first.
+
+The replay also reads the readiness of the heartbeat reservation. The benchmark has one pool
+identity, so one heartbeat connection serves every worker. The reservation is ready while some
+backend has the heartbeat role. At other times, for example before the first round or between a
+closed heartbeat connection and its replacement, its state is unknown.
+
+A claim gap is a time in which one worker has a free slot, a task is ready, and that worker claims
+nothing. A claim of another worker does not end the gap. The gap ends at the next claim of the
+worker, or when one of its conditions ends. The replay gives two gaps:
+
+- the longest gap while the reservation was ready, from the observations;
+- the longest gap while the reservation was ready or its state was unknown.
+
+Thus the delay of a worker before its first claim counts, and the time after the last ready task
+does not. The probe has no pauses, policy limits, or held claims in a refill cell, so no other time
+is excluded.
+
+`outcome.refill.certainGap` and `outcome.refill.possibleGap` give the two gaps, each with its start,
+its end, and its worker. `readyIntervals` gives the times with an observed heartbeat role, and
+`workers` gives the start of each worker. The driver also counts, for each task, its successful
+attempts, its closed attempts, and its `claimed` events. `outcome.refill.perTask` gives each
+combination with its count of tasks. `completedOnce` counts the tasks with one success, one
+attempt, and one claim.
+
+### Fault cells
+
+A fault cell tests what the workers do when they lose the heartbeat connection. It runs at the
+default timing, I = 10 s and L = 30 s. One task in four runs 15 s, so its lease needs renewal
+through the fault. The other tasks run 1 s, so claims come often. The probe sets its polling
+interval to 1 s.
+
+The driver does the fault in these steps:
+
+1. After the warm-up, it starts a PL/pgSQL function in `pg_temp` of a driver session. The function
+   reads `pg_stat_activity` about every millisecond, with the heartbeat marker of the role sampler.
+2. When a probe backend runs a heartbeat round, the function records the start of that round, the
+   `xact_start` of the backend, and the other statements of the probe that are running. Then it
+   ends the backend of the round with `pg_terminate_backend`. The round fails immediately, so the
+   SDK knows of the loss at the time of the fault.
+3. The function reads `pg_stat_activity` until each recorded statement has ended, for at most 3 s.
+4. The driver ends each other backend that has the heartbeat role in the observations of the role
+   sampler. No other probe backend ends.
+5. The driver observes for 3 × I more.
+
+If no round comes in 2 × I + 2 s, the function stops. The fault then ends only the backends that
+have the heartbeat role, and `outcome.fault.searchTimedOut` is true.
+
+The outage is the time without a usable heartbeat reservation. It starts at the fault. The driver
+sorts each claim after the fault by the start of its claim function. The `expires_at` of the
+`claimed` event is that start plus the lease:
+
+- A claim whose claim function started before the fault came from a statement that started before
+  it. It does not count.
+- A claim whose claim function started before the recorded statements ended is unattributed. Such
+  a statement started before the fault, but its claim function can start after a lock wait.
+- Every other claim is fresh. If the function did not record the end of the statements, no claim
+  is fresh.
+
+The driver cannot see when the SDK reserves the replacement connection. It finds the first
+heartbeat round on another backend after the fault, and that round is the upper bound. The lower
+bound is the last time before that round at which the backend was in ordinary use, or its start.
+Only a sample of a running statement, or the `state_change` of an idle sample, shows a use. An
+idle backend keeps the text of its last statement, so that text alone does not move the bound. If
+the backend shows no use after the fault, the lower bound is the fault itself.
+
+The rule on claims in the outage has three results:
+
+- It fails when a fresh claim came before the lower bound.
+- It passes when no fresh and no unattributed claim came before the upper bound.
+- In all other cases, the observations cannot decide it, and the rule is inconclusive.
+
+After the replacement is ready, a free slot and a ready task must lead to a claim before the next
+regular round. The SDK sends a regular round at its slot, and a busy retry runs between two slots.
+The driver cannot prove when the next slot falls. A sampler of `pg_stat_activity` can miss any
+round between two samples, so no sampled data shows the slot. The driver gives only the latest
+possible next slot:
+
+- If the fault interrupted a round, the latest possible slot is the start of that round plus I. A
+  slot is never later than the start of a round that runs in it.
+- Otherwise, the latest possible slot is the fault plus I. A round that the sampler did not see can
+  move the slot past an older observation.
+
+Thus the benchmark detects only a clear violation of the immediate dispatch wake. The positive
+proof is the deterministic test "dispatch wakes on recovery". Each SDK pull request for SM-1565
+must include that test, as its child issues require.
+
+`outcome.fault.demand` gives the times in which some worker had a free slot and a task was
+ready, from the same replay as a refill cell.
+
+The watchdog runs inside the worker, and no driver data shows when it fired. The driver has these
+records for each attempt:
+
+- its claim, from its `claimed` event;
+- its last accepted renewal and its lease deadline, from the last sample of `heartbeat_at` and
+  `expires_at` in `workhorse.task_runtime` for its task and fence token. Only an accepted renewal
+  changes these columns. A heartbeat statement in `pg_stat_activity` does not prove a renewal,
+  because a round can fail or report a busy lease;
+- its settlement in `workhorse.attempt_history`. For a lost lease, `finished_at` is when the
+  database recovered the attempt, not when the worker ended it. The worker can end an attempt
+  locally and early, and the database recovers it only after its deadline;
+- whether it was live with an unexpired lease in the last sample.
+
+`outcome.fault` gives these values:
+
+- `atMs`, `inRound`, `roleBackends`, and `roleBackendsEndedMs`: the time of the fault, the
+  backends that it ended, and when the driver ended the backends of step 4.
+- `inFlight` and `inFlightEndedMs`: the statements that ran at the fault, and when they had all
+  ended. `inFlightEndedMs` is null when a statement still ran after 3 s.
+- `replacement`: the backend of the first round after the fault, with `readyNotBeforeMs` and
+  `firstRoundMs`, the two bounds.
+- `claimsFromStatementsBeforeFault`, `unattributedClaimsMs`, and `freshClaimsMs`: the claims after
+  the fault by origin.
+- `nextRound` and `demand`: the latest possible next regular slot, and the times with a free slot
+  and a ready task.
+- `watchdog` and `recoveries`: the counts of the watchdog rule, and each recovered attempt with its
+  `finished_at` and the deadline of its last sample.
+- `lastRoundBeforeFaultMs`: the last observed round before the fault. The interrupted round
+  renews nothing. Thus a round on the backend of `inRound` counts only when it came at least I / 2
+  before the fault.
+- `firstClaimAfterReplacementRoundMs`: the delay from the first round on the replacement to the
+  next claim.
+
+Ending one backend does not make the database unreachable. This limit changes what the cell
+measures:
+
+- The other probe connections keep working. Thus an SDK can get a replacement connection
+  immediately, and the outage can be a few milliseconds long.
+- The database is reachable at the time of the fault. Thus the delay from recovery to the first
+  claim is the delay from the fault.
+- The cell does not test a failed replacement: a connection attempt that fails, and a retry with
+  backoff.
+
+A test of an unreachable database must stop the connections of the probe at the network or at the
+server. This benchmark does not do that.
+
+The cell has three other limits:
+
+- It expects one heartbeat connection for each pool identity. If an SDK holds one for each worker,
+  the driver ends them all, but it ends the others some milliseconds after the first. The role
+  sampler can also miss a heartbeat connection that ran its first round less than 1 s before the
+  fault.
+- If an SDK runs a statement other than a heartbeat round on its replacement connection before the
+  first round, the lower bound comes too late. Then a claim after the true ready time can count as
+  a claim in the outage.
+- The driver compares its own clock with `clock_timestamp()`, so PostgreSQL must run on the same
+  host as the driver.
+
+### Cell results
+
+Each run has a `result`. Its `outcome` is `pass`, `fail`, or `inconclusive`. It names the
+`failed` rules and the `inconclusive` rules, and it gives each rule with its values. A cell passes
+only when every rule of its kind passes. It fails when one rule fails. It is inconclusive when no
+rule fails, but the observations cannot decide one rule. The rules are the acceptance thresholds of
+SM-1565.
+
+An inconclusive result is not a pass. Treat it in this way:
+
+1. Run the inconclusive cell again once. Use the driver with `--cells` and the id of that cell.
+2. Record the first result and the reason for it in the Linear issue of the run.
+3. If the second run is not a pass, the cell does not pass the acceptance.
+
+A detection-only rule gives `violated` or `notDetected` in `detected` instead of `pass`. A
+violation fails the cell. `notDetected` is not a pass, it does not make the cell inconclusive, and
+it does not change the outcome.
+
+A failed cell can also run once more. Record the anomaly and both results in the Linear issue of
+the run.
+
+A held-task cell has these rules:
+
+1. **live leases**: W × C live leases at the end, no lost lease, and no expired active task in
+   any sample.
+2. **renewal age and margin**: the maximum sampled renewal age is below 2 × I, and the minimum
+   sampled lease margin is above I.
+3. **reserved backends**: the role sampler observes at most one listener connection and at most
+   one heartbeat connection at one time in the window. The pool has one identity in each probe. A
+   heartbeat count of `unknown` fails.
+4. **no errors**: no `worker_error` event and no failed driver query.
+5. **shutdown**: the probe exits with status 0 after SIGTERM, before the kill deadline. It writes
+   no `worker_error` or `shutdown_incomplete` event after SIGTERM. Thus an incomplete drain fails
+   in every SDK: Go, Ruby, Rust, and the JVM report it as an error, and the TypeScript and Python
+   probes exit with status 1 at the grace.
+
+A refill cell has these rules:
+
+1. **complete once**: each enqueued task completed once, with one attempt and one claim. No
+   active task and no ready task remain. No lease was lost, and no active task had an expired
+   lease.
+2. **claim gap**: the probe applied a polling interval of 1 s. The rule fails when a gap with the
+   reservation ready is longer than 5 s. It is inconclusive when only a gap with an unknown
+   reservation state is longer than 5 s.
+3. Rules 3, 4, and 5 of a held-task cell.
+
+A fault cell has these rules:
+
+1. **no claim in outage**: the fault ended a heartbeat connection, and no claim came in the
+   outage. The three results are above.
+2. **lease loss in watchdog bound**: the watchdog of ADR 0071 and ADR 0105 ends an attempt only
+   after one lease without an accepted renewal. The driver cannot see when a watchdog fired, so:
+   - The rule fails when the database recovered an attempt before the deadline that its samples
+     show.
+   - Any other recovered attempt makes the rule inconclusive, because its local loss time is not
+     known.
+   - An attempt with no settlement proves nothing about an early local abort. It makes the rule
+     inconclusive, unless it is live with an unexpired lease in the last sample and had an
+     accepted renewal after the fault. A worker that ended it would not renew it.
+   - An attempt that the worker settled with another outcome was not ended early.
+
+   Thus the rule passes only when every attempt claimed before the last sample is settled or
+   proven live. A cell with a lost lease is never a pass.
+
+3. **claim after recovery**: the first fresh claim comes within 2 × I of the fault. If only an
+   unattributed claim comes within that time, the rule is inconclusive.
+4. **dispatch before next round**, detection only: the rule gives `violated` when no claim of
+   either kind came before the latest possible next slot, although the replacement was ready and a
+   worker had a free slot and a ready task at least 1 s before that slot. Otherwise it gives
+   `notDetected`. A delayed dispatch that ends before the latest possible slot is not detected.
+   The limit of 2 × I in rule 3 still applies.
+5. **reserved after recovery**: from the first round on the replacement to the end, at most one
+   listener and one heartbeat connection.
+6. **no sample errors**: no failed driver query. The cell records worker errors, but a worker
+   error does not fail it.
+7. **shutdown**: as in rule 5 of a held-task cell.
+
+The artifact also has a `summary` with one row for each cell, and the driver prints it at the end.
+Each row gives these values:
+
+- the result, which is `pass`, `FAIL`, or `inconclusive`, and the rules that failed, with `?` after
+  a rule that is inconclusive;
+- the live leases of a held-task cell, the tasks that completed once of a refill cell, or the
+  claims of a fault cell;
+- the lost leases and the most expired active tasks in one sample;
+- the maximum renewal age and the minimum lease margin;
+- the two claim gaps of a refill cell, with the reservation ready and with its state unknown;
+- the fresh and the unattributed claims before the first round on the replacement, and the delay
+  from the fault to the first fresh claim;
+- the most listener and heartbeat connections at one time;
+- the stop time, and whether the probe got SIGKILL.
 
 ### Machine guard
 
@@ -708,14 +1025,18 @@ core, and the mean time between two samples stayed at 2.5 ms to 2.6 ms.
 The other values of the `outcome` of each run are:
 
 - `finalUnexpiredActiveTasks`, `finalClaimEvents`, and `finalClaimedTasks` against `expectedSlots`,
-  which is W × C.
+  which is W × C. `enqueuedTasks` is the count of tasks that the driver enqueued.
+- `endReason`: why the sampling ended: `window`, `drained`, `fault-observed`, or `probe-exited`.
 - `firstClaimMs` and `fullOccupancyMs`: the time from the probe start to the first claim, and to
   W × C active tasks whose leases are not expired.
 - `initialCapacityFailure`: true when the cell never had W × C active tasks with unexpired leases.
 - `longestClaimGapMs`: after the first claim, the longest time in which slots were free, ready tasks
   waited, and no claim came. A slot is free when fewer unexpired leases are active than the cell
   has slots.
-- `progressFailure`: true when `longestClaimGapMs` is 10 s or more.
+- `progressFailure`: true when `longestClaimGapMs` is 10 s or more. These two values come from the
+  samples. A refill cell uses the exact claim gap in `refill`.
+- `refill` and `fault`: the values of a refill cell and of a fault cell, as the sections above
+  describe. They are null in other cells.
 - `lostLeases`: the `lease_expired` attempts in `workhorse.attempt_history`.
   `leaseExpiredEvents` counts the `lease_expired` events, and `maxAttempt` is the highest attempt.
 - `renewalAgeMs`: the maximum, p50, p95, and p99 renewal age in the measurement window.
@@ -725,11 +1046,15 @@ The other values of the `outcome` of each run are:
 - `sampleErrors`, `sampleErrorMessages`, and `finalErrors`: the queries that failed or timed out.
 - `strayProbeSessionsBefore` and `leftoverProbeSessionsAfter`: the probe sessions that the driver
   ended before and after the cell.
-- `probe`: the exit code or signal, whether the driver sent SIGKILL, the time to stop, the count of
-  pool states, the events of the probe, and the last 4 KB of its other output.
+- `probe`: the exit code or signal, the shutdown grace, the kill deadline, `killedAtDeadline`, the
+  time to stop, the count of `worker_error` events, the `started` event with the settings that the
+  probe applied, the count of pool states, the first 200 events of the probe, and the last 4 KB of
+  its other output.
 
-The top level records the PostgreSQL version, the SDK and toolchain versions, the matrix, the wall
-time, and the provenance of the run.
+Each run also has its `result`. The top level records the PostgreSQL version, the SDK and toolchain
+versions, the matrix, the shutdown settings, the `summary`, the wall time, and the provenance of the
+run. Schema version 4 adds the cell kinds, the results, and the summary. Version 3 artifacts stop a
+probe with SIGKILL 20 s after SIGTERM, and they name that stop `killedAfterGrace`.
 
 Use these rules when you read a result:
 
