@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -15,8 +16,9 @@ import java.util.concurrent.TimeUnit;
 import run.workhorse.Worker;
 
 /**
- * Runs W workers on one HikariCP pool and holds every claimed task until SIGTERM. All workers share
- * the pool object, so they share the heartbeat connection that the SDK keys by {@code DataSource}.
+ * Runs W workers on one HikariCP pool. A task whose payload has {@code handlerMs} returns after
+ * that time; any other task holds its slot until SIGTERM. All workers share the pool object, so
+ * they share the heartbeat connection that the SDK keys by {@code DataSource}.
  */
 public final class ConnectionBudgetProbe {
   private ConnectionBudgetProbe() {}
@@ -35,6 +37,17 @@ public final class ConnectionBudgetProbe {
       throw new IllegalArgumentException(name + " must be a positive integer");
     }
     return value;
+  }
+
+  /** A positive integer from an optional variable, or 0 when the variable is empty. */
+  private static int optionalCount(String name) {
+    String value = System.getenv(name);
+    return value == null || value.isEmpty() ? 0 : count(name);
+  }
+
+  /** A JSON number, or null for 0. */
+  private static String nullable(int value) {
+    return value == 0 ? "null" : String.valueOf(value);
   }
 
   private static String quoted(String value) {
@@ -122,6 +135,8 @@ public final class ConnectionBudgetProbe {
 
   public static void main(String[] args) throws InterruptedException {
     int workerCount = count("WH_BENCH_WORKERS");
+    int pollMs = optionalCount("WH_BENCH_POLL_MS");
+    int shutdownGraceMs = count("WH_BENCH_SHUTDOWN_GRACE_MS");
     HikariDataSource dataSource =
         pool(
             setting("WH_BENCH_DATABASE_URL"),
@@ -132,25 +147,47 @@ public final class ConnectionBudgetProbe {
     List<Integer> indexes = new ArrayList<>();
     for (int index = 0; index < workerCount; index++) {
       try {
-        workers.add(
+        Worker.Builder builder =
             Worker.builder(dataSource)
                 .queues(setting("WH_BENCH_QUEUE"))
                 .workerId("wh-bench-jvm-" + ProcessHandle.current().pid() + "-" + index)
                 .concurrency(count("WH_BENCH_CONCURRENCY"))
                 .heartbeat(Duration.ofMillis(count("WH_BENCH_HEARTBEAT_MS")))
                 .lease(Duration.ofMillis(count("WH_BENCH_LEASE_MS")))
+                .shutdownGrace(Duration.ofMillis(shutdownGraceMs))
                 .handle(
                     setting("WH_BENCH_TASK_TYPE"),
                     Object.class,
                     (context, payload) -> {
+                      long handlerMs =
+                          payload instanceof Map<?, ?> fields
+                                  && fields.get("handlerMs") instanceof Number number
+                              ? number.longValue()
+                              : 0;
+                      if (handlerMs > 0) {
+                        // The handler returns after its time, when the probe stops, or when the
+                        // worker cancels the attempt.
+                        long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(handlerMs);
+                        while (System.nanoTime() < end && !context.isCancelled()) {
+                          long waitMs =
+                              Math.max(1, Math.min(50, (end - System.nanoTime()) / 1_000_000));
+                          if (release.await(waitMs, TimeUnit.MILLISECONDS)) {
+                            break;
+                          }
+                        }
+                        return null;
+                      }
                       // The handler holds its slot until the probe stops or the worker cancels
                       // the attempt.
                       while (!release.await(50, TimeUnit.MILLISECONDS) && !context.isCancelled()) {
                         Thread.onSpinWait();
                       }
                       return null;
-                    })
-                .build());
+                    });
+        if (pollMs > 0) {
+          builder.pollInterval(Duration.ofMillis(pollMs));
+        }
+        workers.add(builder.build());
         indexes.add(index);
       } catch (RuntimeException error) {
         workerError(index, error);
@@ -183,7 +220,14 @@ public final class ConnectionBudgetProbe {
     workers.forEach(Worker::start);
     var unused =
         reporter.scheduleAtFixedRate(() -> reportPool(dataSource), 0, 250, TimeUnit.MILLISECONDS);
-    emit("{\"event\":\"started\",\"sdk\":\"jvm\",\"workers\":" + workerCount + "}");
+    emit(
+        "{\"event\":\"started\",\"sdk\":\"jvm\",\"workers\":"
+            + workerCount
+            + ",\"pollMs\":"
+            + nullable(pollMs)
+            + ",\"shutdownGraceMs\":"
+            + shutdownGraceMs
+            + ",\"grace\":\"shutdownGrace\"}");
     done.await();
   }
 }

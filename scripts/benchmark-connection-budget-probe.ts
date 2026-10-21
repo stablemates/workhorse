@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * The TypeScript probe of the connection budget benchmark (SM-1566). It runs W workers on one pool
- * and holds every claimed task until SIGTERM. `scripts/benchmark-connection-budget.ts` starts it
- * and reads the WH_BENCH_* variables below; the probe does not run on its own.
+ * The TypeScript probe of the connection budget benchmark (SM-1566). It runs W workers on one pool.
+ * A task whose payload has `handlerMs` returns after that time; any other task holds its slot
+ * until SIGTERM. Every handler returns at SIGTERM, so the stop time measures the SDK.
+ * `scripts/benchmark-connection-budget.ts` starts the probe and reads the WH_BENCH_* variables
+ * below; the probe does not run on its own.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
 import { Queue } from "../typescript/core/src/queue.js";
 import { Worker } from "../typescript/core/src/worker.js";
@@ -21,12 +24,21 @@ function count(name: string): number {
   return value;
 }
 
+/** A positive integer from an optional variable, or null when the variable is empty. */
+function optionalCount(name: string): number | null {
+  return process.env[name] ? count(name) : null;
+}
+
 function emit(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
 const queueName = setting("WH_BENCH_QUEUE");
 const workers = count("WH_BENCH_WORKERS");
+const pollMs = optionalCount("WH_BENCH_POLL_MS");
+// The worker has no shutdown grace. Like `runWorkerProcess`, the probe exits with status 1 when
+// the workers have not stopped this long after SIGTERM.
+const shutdownGraceMs = count("WH_BENCH_SHUTDOWN_GRACE_MS");
 const pool = new Pool({
   connectionString: setting("WH_BENCH_DATABASE_URL"),
   application_name: setting("WH_BENCH_APPLICATION_NAME"),
@@ -50,9 +62,20 @@ const running = Array.from({ length: workers }, (_, index) => {
     concurrency: count("WH_BENCH_CONCURRENCY"),
     heartbeatMs: count("WH_BENCH_HEARTBEAT_MS"),
     leaseMs: count("WH_BENCH_LEASE_MS"),
+    ...(pollMs === null ? {} : { pollMs }),
   });
-  // The handler holds its slot until the probe stops or the worker aborts the attempt.
-  worker.handle(setting("WH_BENCH_TASK_TYPE"), async (_payload, context) => {
+  worker.handle(setting("WH_BENCH_TASK_TYPE"), async (payload, context) => {
+    // The handler returns after its time, when the probe stops, or when the worker aborts the
+    // attempt.
+    const handlerMs = (payload as { handlerMs?: number | null } | null)?.handlerMs ?? null;
+    if (handlerMs !== null) {
+      await Promise.race([
+        stopped,
+        sleep(handlerMs, undefined, { signal: context.signal }).catch(() => undefined),
+      ]);
+      return null;
+    }
+    // The handler holds its slot until the probe stops or the worker aborts the attempt.
     await Promise.race([
       stopped,
       new Promise<void>((resolve) => {
@@ -66,7 +89,14 @@ const running = Array.from({ length: workers }, (_, index) => {
   });
   return { worker, done };
 });
-emit({ event: "started", sdk: "typescript", workers });
+emit({
+  event: "started",
+  sdk: "typescript",
+  workers,
+  pollMs,
+  shutdownGraceMs,
+  grace: "probe exit",
+});
 
 // The pool state, seen from inside the process. A connection is checked out when the pool counts
 // it but it is not idle.
@@ -83,6 +113,10 @@ const poolReport = setInterval(() => {
 
 process.once("SIGTERM", () => {
   clearInterval(poolReport);
+  setTimeout(() => {
+    emit({ event: "shutdown_incomplete", shutdownGraceMs });
+    process.exit(1);
+  }, shutdownGraceMs);
   // Stop claims first, then let the handlers return.
   for (const { worker } of running) worker.stop();
   release();
