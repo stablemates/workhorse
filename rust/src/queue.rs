@@ -76,6 +76,75 @@ impl Executor for deadpool_postgres::Pool {
     }
 }
 
+/// A pool whose checkout waits at most `wait` for a connection. The worker sends its own statements
+/// through it, so a full pool cannot hold a worker statement without a deadline (ADR 0071, rule 8).
+///
+/// A gated pool asks `gate` for a permit after each checkout, immediately before the statement. If
+/// the gate gives none, it sends nothing, returns the connection to the pool, and records the
+/// refusal. The permit stays held until the statement ends. A claim uses the gate, so a heartbeat
+/// connection lost while the claim waited for a connection stops the claim, and the reservation
+/// stays valid while a claim statement runs (ADR 0071, rule 6). A deadlock resend checks out again,
+/// so it asks the gate again.
+pub(crate) struct BoundedPool<'a> {
+    pool: &'a deadpool_postgres::Pool,
+    wait: std::time::Duration,
+    gate: Option<&'a (dyn Fn() -> Option<GatePermit> + Sync)>,
+    refused: std::sync::atomic::AtomicBool,
+}
+
+/// What a gate gives one statement. The statement holds it until it ends.
+pub(crate) type GatePermit = Box<dyn std::any::Any + Send>;
+
+impl<'a> BoundedPool<'a> {
+    pub(crate) fn new(pool: &'a deadpool_postgres::Pool, wait: std::time::Duration) -> Self {
+        Self { pool, wait, gate: None, refused: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    /// The same pool, with a statement only while `gate` gives a permit.
+    pub(crate) fn gated(mut self, gate: &'a (dyn Fn() -> Option<GatePermit> + Sync)) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Whether a closed gate stopped a statement.
+    pub(crate) fn refused(&self) -> bool {
+        self.refused.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl private::Sealed for BoundedPool<'_> {}
+impl Executor for BoundedPool<'_> {
+    async fn rows(
+        &self,
+        statement: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, Error> {
+        // Dropping the checkout of deadpool 0.13 before it returns gives the slot back to the pool.
+        let connection =
+            tokio::time::timeout(self.wait, self.pool.get()).await.map_err(|_| {
+                deadpool_postgres::PoolError::Timeout(deadpool_postgres::TimeoutType::Wait)
+            })??;
+        let permit = match self.gate {
+            Some(gate) => match gate() {
+                Some(permit) => Some(permit),
+                None => {
+                    self.refused.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return Err(Error::invalid(
+                        "the worker claims no task while its pool holds no heartbeat connection",
+                    ));
+                }
+            },
+            None => None,
+        };
+        let mut held = Discarded(Some(connection));
+        let rows = held.0.as_ref().expect("held above").query(statement, params).await;
+        // A dropped statement drops its connection first, then its permit.
+        drop(held.0.take());
+        drop(permit);
+        Ok(rows?)
+    }
+}
+
 /// Holds a pooled connection and removes it from the pool if dropped while still held.
 ///
 /// Dropping a statement's future does not stop the statement. Returned to the pool, its connection

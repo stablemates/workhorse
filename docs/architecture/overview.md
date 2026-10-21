@@ -284,13 +284,15 @@ Before handlers and cohorts take connections, each language holds these connecti
 | Go         | One `taskNotificationHub` per `*pgxpool.Pool`. `subscribeToTaskNotifications` polls instead when `MaxConns` is below 2.                            | `holdHeartbeatConnection` holds the shared heartbeat connection.                            |
 | Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                  | One `Worker::Heartbeat.dedicated(pool)` per pool object, held while any worker on it runs.  |
 | Python     | One `PoolHub` listener per pool object, holding one pool connection, in each of three domains: psycopg sync, psycopg async, and asyncpg.           | One `HeartbeatReservation` per pool object, in the same `PoolHub`.                          |
-| Rust       | Opened per worker by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool.                                                | One per worker, from the pool.                                                              |
+| Rust       | One `shared::SharedListener` per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool.           | One `shared::HeartbeatConnection` per pool identity, from the pool.                         |
 | JVM        | One `Listener.shared(dataSource)` per `DataSource` object, held while any worker runs. None under `pollingOnly(true)` or `runOnce`.                | One `Heartbeat.dedicated(dataSource)` per `DataSource`, held while a worker or a task runs. |
 
 TypeScript keys both its listener and its heartbeat connection by the pool object. Go follows the
 same pattern. Python keys both by the pool object in a weak registry, one for each domain
 ([Schema and SQL protocol: Shared pool connections](schema-and-protocol.md#shared-pool-connections)).
-The JVM keys both its listener and its heartbeat connection by the `DataSource` object, by
+Rust keys both by the address that `Pool::manager()` returns, so clones of one pool share them. If
+two Rust workers on one pool give different `listen_config` values, the second worker refuses to
+start. The JVM keys both its listener and its heartbeat connection by the `DataSource` object, by
 reference identity, never by `equals`. A wrapper of a pool is a key of its own.
 
 In every language except the JVM, a dedicated heartbeat connection needs a pool of at least 3

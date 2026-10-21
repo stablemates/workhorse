@@ -438,7 +438,7 @@ impl TaskGroupContext<'_> {
         let context = self.context;
         context
             .task_group_link()
-            .get_or_try_init(|| find(context.pool(), context.task().id))
+            .get_or_try_init(|| async move { find(&context.pool(), context.task().id).await })
             .await
             .cloned()
     }
@@ -461,7 +461,7 @@ impl TaskGroupContext<'_> {
             }
         };
         let member = Some((task.id, context.worker_id(), task.fence_token));
-        add(context.group_enqueue(), context.pool(), group_id, &requests, member).await
+        add(context.group_enqueue(), &context.pool(), group_id, &requests, member).await
     }
 }
 

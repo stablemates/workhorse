@@ -35,6 +35,8 @@ struct Durable {
     task: Arc<ClaimedTask>,
     cancellation: CancellationToken,
     pool: deadpool_postgres::Pool,
+    /// The longest wait of a checkout for a context statement (ADR 0071, rule 8).
+    checkout: std::time::Duration,
     worker_id: String,
     suspended: AtomicBool,
     calls: InFlight<Error>,
@@ -59,6 +61,7 @@ impl HandlerContext {
         task: Arc<ClaimedTask>,
         cancellation: CancellationToken,
         pool: deadpool_postgres::Pool,
+        checkout: std::time::Duration,
         worker_id: String,
     ) -> Self {
         // A task group add with no queue goes to the queue of the member task that adds it.
@@ -67,6 +70,7 @@ impl HandlerContext {
             task,
             cancellation,
             pool,
+            checkout,
             worker_id,
             suspended: AtomicBool::new(false),
             calls: InFlight::default(),
@@ -85,9 +89,10 @@ impl HandlerContext {
         &self.inner.cancellation
     }
 
-    /// The pool unfenced reads go through.
-    pub(crate) fn pool(&self) -> &deadpool_postgres::Pool {
-        &self.inner.pool
+    /// The pool that the statements of the context go through. A checkout waits for the bound of
+    /// the worker at most, so a full pool cannot hold a context statement without a deadline.
+    pub(crate) fn pool(&self) -> crate::queue::BoundedPool<'_> {
+        crate::queue::BoundedPool::new(&self.inner.pool, self.inner.checkout)
     }
 
     pub(crate) fn worker_id(&self) -> &str {
@@ -182,7 +187,7 @@ impl HandlerContext {
     {
         self.check(Operation::Checkpoint).map_err(named)?;
         let task = &self.inner.task;
-        let rows = self.inner.pool.rows(sql::GET_CHECKPOINT, &[&task.id, &name]).await?;
+        let rows = self.pool().rows(sql::GET_CHECKPOINT, &[&task.id, &name]).await?;
         if let [row] = rows.as_slice() {
             let stored = row.try_get::<_, Option<String>>("input_fingerprint")?;
             if let (Some(stored), Some(requested)) = (stored.as_deref(), fingerprint) {
@@ -217,7 +222,7 @@ impl HandlerContext {
 
     /// The task's latest progress, or `None` when no attempt has reported any.
     pub async fn get_progress<T: DeserializeOwned>(&self) -> Result<Option<T>, Error> {
-        let rows = self.inner.pool.rows(sql::LIST_PROGRESS, &[&self.inner.task.id]).await?;
+        let rows = self.pool().rows(sql::LIST_PROGRESS, &[&self.inner.task.id]).await?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => Ok(Some(serde_json::from_value(row.try_get("progress_value")?)?)),
@@ -292,7 +297,7 @@ impl HandlerContext {
         let mut all: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
             vec![&task.id, &self.inner.worker_id, &task.fence_token];
         all.extend_from_slice(params);
-        let mut rows = fenced_rows(&self.inner.pool, statement, &all).await?;
+        let mut rows = fenced_rows(&self.pool(), statement, &all).await?;
         exactly_one(&rows, function)?;
         Ok(rows.remove(0))
     }
@@ -769,6 +774,9 @@ mod tests {
     use super::*;
     use crate::{ChildTaskRequest, EnqueueOptions};
 
+    /// The checkout bound that the test contexts get from their worker.
+    const CHECKOUT: Duration = Duration::from_secs(5);
+
     /// A pool over a database that does not exist, so any round trip fails with a pool error.
     fn unreachable_pool() -> deadpool_postgres::Pool {
         let mut config = deadpool_postgres::Config::new();
@@ -806,7 +814,7 @@ mod tests {
             claim_sent_at: tokio::time::Instant::now(),
             fast_tier,
         };
-        HandlerContext::new(Arc::new(task), cancellation, pool, "worker".into())
+        HandlerContext::new(Arc::new(task), cancellation, pool, CHECKOUT, "worker".into())
     }
 
     /// A pool over a server that accepts connections and never answers the handshake.
@@ -912,6 +920,30 @@ mod tests {
         non_finite(batch.set_progress(&f64::NAN).await.unwrap_err(), "Progress");
         non_finite(batch.set_progress(&field).await.unwrap_err(), "Progress");
         non_finite(batch.set_progress(&list).await.unwrap_err(), "Progress");
+    }
+
+    // SM-1572: a context statement waits for a pooled connection for the checkout bound of its
+    // worker, not without a limit. The server never answers, so the checkout cannot end any other
+    // way. Paused time reaches the bound as soon as every task waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_context_statement_waits_for_its_checkout_bound_at_most() {
+        let (pool, server) = stalled_pool().await;
+        let context = context(false, CancellationToken::default(), pool);
+        let started = tokio::time::Instant::now();
+        let read = tokio::time::timeout(CHECKOUT * 12, context.get_progress::<Value>())
+            .await
+            .expect("the checkout waited without a limit");
+        assert!(
+            matches!(
+                read,
+                Err(Error::Pool(deadpool_postgres::PoolError::Timeout(
+                    deadpool_postgres::TimeoutType::Wait
+                )))
+            ),
+            "{read:?}"
+        );
+        assert_eq!(started.elapsed(), CHECKOUT);
+        server.abort();
     }
 
     // The first call waits on the stalled server, so an overlapping call with one name can only

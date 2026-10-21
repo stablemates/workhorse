@@ -766,12 +766,18 @@ async fn a_drain_finishes_running_handlers_within_grace() {
 #[tokio::test]
 async fn shutdown_returns_within_its_bound_while_the_registry_row_stays_locked() {
     let Some(harness) = harness("worker_stalled_registry").await else { return };
-    for _ in 0..STALLED_ATTEMPTS {
-        if shutdown_with_a_locked_registry_row(&harness).await {
-            return;
+    // A wait without a bound fails the test here, not after the CI step timeout.
+    let judged = tokio::time::timeout(Duration::from_secs(120), async {
+        for _ in 0..STALLED_ATTEMPTS {
+            if shutdown_with_a_locked_registry_row(&harness).await {
+                return true;
+            }
         }
-    }
-    panic!("a runtime stall pushed every attempt past its unwind window");
+        false
+    })
+    .await
+    .expect("the locked registry test waited without a bound");
+    assert!(judged, "a runtime stall pushed every attempt past its unwind window");
 }
 
 /// One attempt of the test above. Returns false when a host stall leaves the attempt unjudged.
@@ -832,20 +838,38 @@ async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
         );
         // The handler that honored cancellation released its task.
         assert_eq!(harness.state(task).await, TaskState::Ready);
-        // The abandoned registry statements still wait on the lock. Their connections left the
-        // pool, so every connection the pool lends now answers at once.
+        // The registry statements that outlived the deadline still wait on the lock. The worker
+        // owns them as late statements, and each keeps its connection out of the pool until it
+        // ends. So every connection that the pool can still lend answers at once.
+        let status = pool.status();
+        let free = status.max_size - (status.size - status.available);
         let mut lent = Vec::new();
-        for _ in 0..pool.status().max_size {
-            lent.push(pool.get().await.unwrap());
+        for _ in 0..free {
+            let connection = tokio::time::timeout(WAIT, pool.get())
+                .await
+                .expect("the pool could not lend a free connection")
+                .unwrap();
+            lent.push(connection);
         }
         for connection in &lent {
             tokio::time::timeout(Duration::from_secs(2), connection.query_one("SELECT 1", &[]))
                 .await
-                .expect("the pool lent a connection still running an abandoned registry statement")
+                .expect("the pool lent a connection still running a late registry statement")
                 .unwrap();
         }
+        drop(lent);
     }
     lock.rollback().await.unwrap();
+    if judged {
+        // With the lock gone, the late statements end and return their connections.
+        let settled = tokio::time::timeout(WAIT, async {
+            while pool.status().available != pool.status().size {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(settled.is_ok(), "a late registry statement never ended: {:?}", pool.status());
+    }
     judged
 }
 
@@ -1405,9 +1429,12 @@ async fn the_proxy_intercepts_a_query_that_arrives_in_fragments() {
     assert_eq!(received, forwarded);
 }
 
-#[tokio::test]
-async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
-    let Some(harness) = harness("worker_stalled_listen").await else { return };
+/// A `listen_config` whose connection reaches the test database through a proxy that swallows
+/// `LISTEN`, so the statement waits for a reply that never comes. The first receiver fires when
+/// the proxy swallows `LISTEN`, and the second when the client closes the connection.
+async fn stalling_listen(
+    harness: &Harness,
+) -> (tokio_postgres::Config, oneshot::Receiver<()>, oneshot::Receiver<()>) {
     let database: tokio_postgres::Config = harness.database.url().parse().unwrap();
     let tokio_postgres::config::Host::Tcp(host) = &database.get_hosts()[0] else {
         panic!("the test database must be reachable over TCP");
@@ -1424,7 +1451,6 @@ async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
     }
     let (stalled, listen_sent) = oneshot::channel();
     let (closed, client_closed) = oneshot::channel();
-    let grace = Duration::from_millis(100);
     tokio::spawn(async move {
         let (client, _) = proxy.accept().await.unwrap();
         let server = tokio::net::TcpStream::connect(upstream).await.unwrap();
@@ -1434,6 +1460,14 @@ async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
         forward_until_query(client_reader, server_writer, b"LISTEN workhorse_tasks", stalled).await;
         let _ = closed.send(());
     });
+    (listen, listen_sent, client_closed)
+}
+
+#[tokio::test]
+async fn shutdown_closes_the_notification_connection_while_listen_stalls() {
+    let Some(harness) = harness("worker_stalled_listen").await else { return };
+    let (listen, listen_sent, client_closed) = stalling_listen(&harness).await;
+    let grace = Duration::from_millis(100);
     let worker = harness.worker(WorkerOptions {
         polling_only: false,
         listen_config: Some(listen),
@@ -2810,4 +2844,556 @@ async fn a_fast_oversized_result_fails_its_attempt_through_the_retry_policy() {
     let Some(harness) = harness("fast_oversized").await else { return };
     harness.make_fast("fast-oversized").await;
     run_oversized_results(&harness, "fast-oversized").await;
+}
+
+// SM-1572: all workers on one pool identity share one heartbeat connection from the pool and one
+// listener connection outside it (ADR 0071, amendment of 2026-10-21).
+//
+// These tests use two runtime threads: the drop of the scratch database blocks one thread, and the
+// other still ends the connections of the workers, also after a failed assertion.
+
+/// A pool of `size` connections whose sessions carry `application`, so the tests can find them.
+fn named_pool(harness: &Harness, size: usize, application: &str) -> deadpool_postgres::Pool {
+    let mut config: tokio_postgres::Config = harness.database.url().parse().unwrap();
+    config.application_name(application);
+    let manager = deadpool_postgres::Manager::new(config, NoTls);
+    deadpool_postgres::Pool::builder(manager).max_size(size).build().unwrap()
+}
+
+/// Waits until `pool` lends out exactly one connection: the shared heartbeat connection. A short
+/// statement can borrow another one for a moment, so the test waits for the moment between.
+async fn one_reserved_connection(pool: &deadpool_postgres::Pool, what: &str) {
+    let lent = || {
+        let status = pool.status();
+        status.size - status.available
+    };
+    let reached = tokio::time::timeout(WAIT, async {
+        while lent() != 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "{what}: the pool still lends out {} connections", lent());
+}
+
+/// Registers `rust.held` on `worker`. Each handler reports its start on `started`, then waits until
+/// `release` turns true.
+fn hold_until_released(
+    worker: &Worker,
+    started: &mpsc::UnboundedSender<()>,
+    release: &tokio::sync::watch::Receiver<bool>,
+) {
+    let (started, release) = (started.clone(), release.clone());
+    worker.handle("rust.held", move |_: Value, _| {
+        let (started, mut release) = (started.clone(), release.clone());
+        async move {
+            let _ = started.send(());
+            let _ = release.wait_for(|released| *released).await;
+            Ok(Value::Null)
+        }
+    });
+}
+
+/// A running worker: the sender that starts its shutdown, and its run.
+type Running = (oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), Error>>);
+
+/// Stops every run at once and waits for each within the shutdown bound of `grace`.
+async fn stop_all(runs: Vec<Running>, grace: Duration) {
+    let began = tokio::time::Instant::now();
+    let mut running = Vec::new();
+    for (stop, run) in runs {
+        stop.send(()).unwrap();
+        running.push(run);
+    }
+    for run in running {
+        let (outcome, _) = shutdown_outcome(run, grace, began).await;
+        outcome.unwrap();
+    }
+}
+
+/// `workers` workers on clones of one pool of 20, each with concurrency 1, claim one task each,
+/// hold it while only the shared heartbeat connection stays out of the pool, and complete it.
+///
+/// Before SM-1572, each worker held its own heartbeat connection, so the reserved connections grew
+/// with the workers. With more workers than pooled connections, no claim started, and the run did
+/// not stop.
+async fn workers_on_a_pool_of_20_claim_and_complete(name: &str, workers: usize) {
+    let Some(harness) = harness(name).await else { return };
+    let pool = named_pool(&harness, 20, name);
+    let grace = Duration::from_secs(1);
+    let (started, mut handlers) = mpsc::unbounded_channel();
+    let (release, released) = tokio::sync::watch::channel(false);
+    let mut runs = Vec::new();
+    for _ in 0..workers {
+        let worker = Worker::new(
+            pool.clone(),
+            WorkerOptions {
+                maintenance_interval: Duration::from_secs(60),
+                disable_registry: true,
+                shutdown_grace_period: grace,
+                ..options()
+            },
+        )
+        .unwrap();
+        hold_until_released(&worker, &started, &released);
+        runs.push(run(&worker));
+    }
+    let mut tasks = Vec::new();
+    for _ in 0..workers {
+        tasks.push(harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await);
+    }
+    let mut running = 0;
+    let all_started = tokio::time::timeout(Duration::from_secs(60), async {
+        while running < workers {
+            handlers.recv().await.unwrap();
+            running += 1;
+        }
+    })
+    .await;
+    assert!(all_started.is_ok(), "only {running} of {workers} workers claimed a task");
+    // Every slot is full, so no worker claims, and only the heartbeat connection stays out.
+    one_reserved_connection(&pool, "the workers did not share one heartbeat connection").await;
+    release.send_replace(true);
+    for task in tasks {
+        harness.wait_for(task, TaskState::Succeeded).await;
+    }
+    stop_all(runs, grace).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sixteen_workers_on_a_pool_of_20_claim_and_complete() {
+    workers_on_a_pool_of_20_claim_and_complete("worker_sixteen_on_twenty", 16).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sixty_four_workers_on_a_pool_of_20_claim_and_complete() {
+    workers_on_a_pool_of_20_claim_and_complete("worker_sixty_four_on_twenty", 64).await;
+}
+
+/// The listener backends and the heartbeat backends whose application name starts with `prefix`,
+/// in one snapshot. A listener backend last ran `LISTEN`. A heartbeat backend runs a round or last
+/// ended one, and a round ends with `COMMIT` or `ROLLBACK`. No other statement of these workers
+/// ends that way.
+async fn shared_backends(observer: &Client, prefix: &str) -> (usize, usize) {
+    let rows = observer
+        .query(
+            "SELECT query FROM pg_stat_activity WHERE starts_with(application_name, $1)",
+            &[&prefix],
+        )
+        .await
+        .unwrap();
+    let queries: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+    let listeners = queries.iter().filter(|query| query.starts_with("LISTEN")).count();
+    let heartbeats = queries
+        .iter()
+        .filter(|query| {
+            query.contains("heartbeat_many_v")
+                || query.contains("idle_in_transaction_session_timeout")
+                || *query == "COMMIT"
+                || *query == "ROLLBACK"
+        })
+        .count();
+    (listeners, heartbeats)
+}
+
+/// The latest accepted renewal of each task in `tasks`.
+async fn renewals(observer: &Client, tasks: &[Uuid]) -> Vec<std::time::SystemTime> {
+    let rows = observer
+        .query(
+            "SELECT heartbeat_at FROM workhorse.task_runtime WHERE task_id = ANY($1) ORDER BY task_id",
+            &[&tasks],
+        )
+        .await
+        .unwrap();
+    rows.iter().map(|row| row.get(0)).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_workers_share_one_heartbeat_connection_and_one_listener_connection() {
+    let Some(harness) = harness("worker_shared_connections").await else { return };
+    let observer = harness.database.connect().await;
+    let prefix = format!("wh-shared-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let pool = named_pool(&harness, 6, &format!("{prefix}-pool"));
+    let mut listen: tokio_postgres::Config = harness.database.url().parse().unwrap();
+    listen.application_name(format!("{prefix}-listen"));
+    let grace = Duration::from_secs(1);
+    let (started, mut handlers) = mpsc::unbounded_channel();
+    let (release, released) = tokio::sync::watch::channel(false);
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let worker = Worker::new(
+            pool.clone(),
+            WorkerOptions {
+                polling_only: false,
+                listen_config: Some(listen.clone()),
+                poll_interval: Some(Duration::from_secs(60)),
+                lease_duration: Duration::from_millis(2_000),
+                heartbeat_interval: Some(Duration::from_millis(500)),
+                maintenance_interval: Duration::from_secs(60),
+                disable_registry: true,
+                shutdown_grace_period: grace,
+                ..options()
+            },
+        )
+        .unwrap();
+        hold_until_released(&worker, &started, &released);
+        runs.push(run(&worker));
+    }
+    // Once the listener runs LISTEN, a new task wakes the idle workers, and each claims one.
+    let listening = tokio::time::timeout(WAIT, async {
+        while shared_backends(&observer, &prefix).await.0 == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(listening.is_ok(), "the listener never ran LISTEN");
+    let mut tasks = vec![
+        harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await,
+        harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await,
+    ];
+    tasks.sort();
+    for _ in 0..2 {
+        tokio::time::timeout(WAIT, handlers.recv()).await.expect("a worker never claimed").unwrap();
+    }
+    // After the rounds of both workers renewed their leases, each worker has used the heartbeat
+    // connection. Before SM-1572, each had its own, and both stayed open.
+    let claimed = renewals(&observer, &tasks).await;
+    let renewed = tokio::time::timeout(WAIT, async {
+        loop {
+            let latest = renewals(&observer, &tasks).await;
+            if latest.iter().zip(&claimed).all(|(latest, claimed)| latest > claimed) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(renewed.is_ok(), "a lease was never renewed");
+    one_reserved_connection(&pool, "the pool lent out more than the heartbeat").await;
+    let mut backends = (0, 0);
+    let shared = tokio::time::timeout(WAIT, async {
+        loop {
+            backends = shared_backends(&observer, &prefix).await;
+            if backends == (1, 1) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(shared.is_ok(), "listener and heartbeat backends: {backends:?}");
+    release.send_replace(true);
+    for task in tasks {
+        harness.wait_for(task, TaskState::Succeeded).await;
+    }
+    stop_all(runs, grace).await;
+}
+
+// SM-1572: the listener is best effort. A LISTEN that never answers uses none of the startup
+// budget: the worker starts, polls, and runs a task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_listen_leaves_startup_alone_and_the_worker_polls() {
+    let Some(harness) = harness("worker_stalled_listen_startup").await else { return };
+    let (listen, listen_sent, _client_closed) = stalling_listen(&harness).await;
+    let grace = Duration::from_millis(500);
+    let worker = harness.worker(WorkerOptions {
+        polling_only: false,
+        listen_config: Some(listen),
+        poll_interval: Some(Duration::from_millis(50)),
+        shutdown_grace_period: grace,
+        ..options()
+    });
+    worker.handle("rust.polled", |_: Value, _| async { Ok(Value::Null) });
+    let (stop, running) = run(&worker);
+    tokio::time::timeout(WAIT, listen_sent).await.expect("the listener never sent LISTEN").unwrap();
+    // The listener waits for an answer to LISTEN that never comes, so only a poll claims.
+    let task = harness.enqueue("rust.polled", json!({}), EnqueueOptions::default()).await;
+    harness.wait_for(task, TaskState::Succeeded).await;
+    let began = tokio::time::Instant::now();
+    stop.send(()).unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    outcome.unwrap();
+}
+
+/// Takes `count` connections from `pool`, waiting for each, and holds them until the result drops.
+async fn hold(pool: &deadpool_postgres::Pool, count: usize) -> Vec<deadpool_postgres::Object> {
+    let mut held = Vec::new();
+    for _ in 0..count {
+        held.push(pool.get().await.unwrap());
+    }
+    held
+}
+
+/// The startup budget for the options of `full_pool_options`: the 5 s floor.
+const STARTUP_BUDGET: Duration = Duration::from_secs(5);
+
+fn full_pool_options() -> WorkerOptions {
+    WorkerOptions {
+        lease_duration: Duration::from_millis(1_000),
+        heartbeat_interval: Some(Duration::from_millis(300)),
+        ..options()
+    }
+}
+
+// Before SM-1572, startup waited without a bound for a connection for the compatibility check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_on_a_full_pool_refuses_to_start_within_the_startup_budget() {
+    let Some(harness) = harness("worker_full_pool_startup").await else { return };
+    let pool = harness.pool();
+    let _held = hold(&pool, pool.status().max_size).await;
+    let worker = Worker::new(pool, full_pool_options()).unwrap();
+    let began = tokio::time::Instant::now();
+    let error = tokio::time::timeout(STARTUP_BUDGET + WAIT, worker.run(std::future::pending()))
+        .await
+        .expect("startup outlived its budget")
+        .unwrap_err();
+    assert!(began.elapsed() >= STARTUP_BUDGET, "the worker gave up early");
+    let message = error.to_string();
+    assert!(
+        message.starts_with(
+            "worker could not reserve its heartbeat connection within the startup budget of 5s"
+        ) && message.contains("set shared_heartbeats to opt out"),
+        "{message}"
+    );
+}
+
+// A shutdown while startup waits for the heartbeat connection ends the run with `Ok`. If startup
+// waited for its budget instead, it would end with its refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_during_startup_ends_the_run_at_once() {
+    let Some(harness) = harness("worker_full_pool_cancel").await else { return };
+    let pool = harness.pool();
+    let _held = hold(&pool, pool.status().max_size).await;
+    let worker = Worker::new(pool.clone(), full_pool_options()).unwrap();
+    let (stop, running) = run(&worker);
+    let waiting = tokio::time::timeout(WAIT, async {
+        while pool.status().waiting == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(waiting.is_ok(), "startup never waited for a connection");
+    stop.send(()).unwrap();
+    let outcome = tokio::time::timeout(WAIT, running).await.expect("the run never ended");
+    outcome.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_with_a_full_pool_finishes_within_the_grace() {
+    let Some(harness) = harness("worker_full_pool_stop").await else { return };
+    let pool = harness.pool();
+    let grace = Duration::from_millis(500);
+    let worker =
+        Worker::new(pool.clone(), WorkerOptions { shutdown_grace_period: grace, ..options() })
+            .unwrap();
+    worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
+    let (stop, running) = run(&worker);
+    // The worker holds the heartbeat connection once it claims.
+    let task = harness.enqueue("rust.quick", json!({}), EnqueueOptions::default()).await;
+    harness.wait_for(task, TaskState::Succeeded).await;
+    // The test takes every connection but the heartbeat connection. A claim in flight returns its
+    // connection, so the checkout waits for it.
+    let held = hold(&pool, pool.status().max_size - 1).await;
+    assert_eq!(pool.status().available, 0, "the pool still had a connection");
+    let began = tokio::time::Instant::now();
+    stop.send(()).unwrap();
+    let (outcome, _) = shutdown_outcome(running, grace, began).await;
+    outcome.unwrap();
+    drop(held);
+}
+
+/// Whether a statement waits for a lock on `workhorse.worker_registry`.
+async fn registry_lock_waits(observer: &Client) -> bool {
+    let waiting: i64 = observer
+        .query_one(
+            "SELECT count(*) FROM pg_locks WHERE NOT granted \
+             AND relation = 'workhorse.worker_registry'::regclass",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    waiting > 0
+}
+
+/// The `draining` flags of the registry rows of `worker_id`.
+async fn registry_draining(observer: &Client, worker_id: &str) -> Vec<bool> {
+    observer
+        .query("SELECT draining FROM workhorse.worker_registry WHERE worker_id = $1", &[&worker_id])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+/// Runs `worker` until a new task of type `rust.quick` succeeds. The handler execution proves that
+/// this run finished its startup, its registration included.
+async fn run_until_a_task_succeeds(
+    harness: &Harness,
+    worker: &Worker,
+) -> (oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), Error>>) {
+    let running = run(worker);
+    let task = harness.enqueue("rust.quick", json!({}), EnqueueOptions::default()).await;
+    harness.wait_for(task, TaskState::Succeeded).await;
+    running
+}
+
+/// The registry rows of `worker_id`.
+async fn registry_rows(observer: &Client, worker_id: &str) -> i64 {
+    observer
+        .query_one(
+            "SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = $1",
+            &[&worker_id],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+// SM-1572 review: a shutdown while the first registration waits for a locked registry ends by
+// the stop deadline. The late registration stays owned: the next run waits for it within its
+// startup budget and refuses to start while it runs. When it ends, its run deregisters, and the
+// next run registers its own row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_during_the_first_registration_ends_and_the_next_run_waits_for_it() {
+    let Some(harness) = harness("worker_late_registration").await else { return };
+    let observer = harness.database.connect().await;
+    let mut locker = harness.database.connect().await;
+    let lock = locker.transaction().await.unwrap();
+    lock.batch_execute("LOCK TABLE workhorse.worker_registry IN ACCESS EXCLUSIVE MODE")
+        .await
+        .unwrap();
+    let options = full_pool_options();
+    let worker_id = options.worker_id.clone().unwrap();
+    let worker = harness
+        .worker(WorkerOptions { shutdown_grace_period: Duration::from_millis(200), ..options });
+    worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
+    let (stop, running) = run(&worker);
+    let waiting = tokio::time::timeout(WAIT, async {
+        while !registry_lock_waits(&observer).await {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(waiting.is_ok(), "the first registration never waited for the registry");
+    stop.send(()).unwrap();
+    // The lock stays held, so only a bounded teardown lets the run end.
+    let outcome = tokio::time::timeout(WAIT, running)
+        .await
+        .expect("shutdown waited for the first registration");
+    outcome.unwrap().unwrap();
+    let refused = tokio::time::timeout(STARTUP_BUDGET + WAIT, worker.run(std::future::pending()))
+        .await
+        .expect("the next startup outlived its budget")
+        .expect_err("the next run started while the late registration still ran");
+    assert!(refused.to_string().contains("of its previous run has not ended"), "{refused}");
+    lock.rollback().await.unwrap();
+    // The next run waits for the late registration and for its deregistration, then registers. A
+    // handler execution proves that it finished its startup, so the row is its own.
+    let (stop, running) = run_until_a_task_succeeds(&harness, &worker).await;
+    assert_eq!(registry_draining(&observer, &worker_id).await, [false], "the next run has no row");
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, running).await.expect("the run never ended").unwrap().unwrap();
+    assert_eq!(registry_rows(&observer, &worker_id).await, 0, "a registry row outlived the run");
+}
+
+/// The advisory lock key that holds a draining registry refresh in the test below.
+const DRAINING_REFRESH_HOLD: i64 = 15_721;
+
+/// Installs a trigger that holds each registry write which sets `draining`, until the session that
+/// holds `DRAINING_REFRESH_HOLD` releases it. A `BEFORE INSERT` row trigger runs for the proposed
+/// row before the conflict check of `register_worker_v1`, so it holds no row lock while it waits.
+/// The deregistration deletes the row, which no insert trigger sees, so the trigger never holds it.
+async fn hold_draining_refreshes(observer: &Client) {
+    observer
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.hold_draining_refresh() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN \
+               IF NEW.draining THEN PERFORM pg_advisory_xact_lock({DRAINING_REFRESH_HOLD}); END IF; \
+               RETURN NEW; \
+             END $$; \
+             CREATE TRIGGER hold_draining_refresh BEFORE INSERT ON workhorse.worker_registry \
+               FOR EACH ROW EXECUTE FUNCTION public.hold_draining_refresh();"
+        ))
+        .await
+        .unwrap();
+}
+
+/// Whether a statement waits for the advisory lock `DRAINING_REFRESH_HOLD`.
+async fn draining_refresh_held(observer: &Client) -> bool {
+    let waiting: i64 = observer
+        .query_one(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted \
+             AND objid = $1::bigint::oid",
+            &[&DRAINING_REFRESH_HOLD],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    waiting > 0
+}
+
+// SM-1572 review rounds 2 and 3: a run dropped while its draining refresh waits hands that refresh
+// to its teardown. Only the refresh is held: the deregistration is not blocked by any lock. The
+// teardown orders the deregistration after the refresh it owns, so the next run waits for the
+// refresh within its startup budget and refuses to start. If teardown did not own the refresh, the
+// deregistration would end at once and the next run would start while the old refresh still runs.
+// When the refresh ends, its run deregisters, and the next run registers its own row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_dropped_during_its_draining_refresh_keeps_that_refresh_from_the_next_run() {
+    let Some(harness) = harness("worker_dropped_drain_refresh").await else { return };
+    let observer = harness.database.connect().await;
+    hold_draining_refreshes(&observer).await;
+    let options = full_pool_options();
+    let worker_id = options.worker_id.clone().unwrap();
+    let worker = harness.worker(WorkerOptions {
+        // No periodic refresh runs, so the only held statement is the draining refresh.
+        registry_interval: Duration::from_secs(3_600),
+        shutdown_grace_period: Duration::from_secs(60),
+        ..options
+    });
+    worker.handle("rust.quick", |_: Value, _| async { Ok(Value::Null) });
+    let (stop, running) = run_until_a_task_succeeds(&harness, &worker).await;
+    let holder = harness.database.connect().await;
+    holder.execute("SELECT pg_advisory_lock($1)", &[&DRAINING_REFRESH_HOLD]).await.unwrap();
+    stop.send(()).unwrap();
+    let waiting = tokio::time::timeout(WAIT, async {
+        while !draining_refresh_held(&observer).await {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(waiting.is_ok(), "the draining refresh never reached its hold");
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    // A run that starts claims this task. A run that refuses ends with its refusal.
+    let probe = harness.enqueue("rust.quick", json!({}), EnqueueOptions::default()).await;
+    let next = worker.run(std::future::pending());
+    tokio::pin!(next);
+    let refused = tokio::select! {
+        outcome = &mut next => outcome.expect_err("the next run ended without an error"),
+        () = async {
+            while harness.state(probe).await != TaskState::Succeeded {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        } => {
+            panic!("the next run started while the draining refresh of the dropped run still ran")
+        }
+        () = tokio::time::sleep(STARTUP_BUDGET + WAIT) => {
+            panic!("the next run neither started nor refused within its startup budget")
+        }
+    };
+    assert!(refused.to_string().contains("of its previous run has not ended"), "{refused}");
+    assert!(draining_refresh_held(&observer).await, "the draining refresh ended before the check");
+    holder.execute("SELECT pg_advisory_unlock($1)", &[&DRAINING_REFRESH_HOLD]).await.unwrap();
+    let (stop, running) = run_until_a_task_succeeds(&harness, &worker).await;
+    assert_eq!(
+        registry_draining(&observer, &worker_id).await,
+        [false],
+        "the old draining refresh changed the row of the next run"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(WAIT, running).await.expect("the run never ended").unwrap().unwrap();
+    assert_eq!(registry_rows(&observer, &worker_id).await, 0, "a registry row outlived the run");
 }

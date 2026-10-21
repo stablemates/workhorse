@@ -9,6 +9,49 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Workers on one pool share one heartbeat connection and one listener connection
+
+Before this change, each worker took its own heartbeat connection from its pool and opened its own
+listener connection outside the pool. If a pool had no more connections than its workers, the
+heartbeat connections held every pooled connection. No claim started, and `run` did not stop. Now
+all workers on clones of one pool share one heartbeat connection from the pool and one listener
+connection outside it (SM-1572, ADR 0071). The pool identity is the address that `Pool::manager()`
+returns, so two pools that you build separately do not share. `Worker::new(pool, options)` does not
+change.
+
+**Upgrade steps.** Budget one heartbeat connection for each pool, not for each worker. The pool
+still needs at least 3 connections unless `shared_heartbeats` is set. If workers on one pool set
+`listen_config`, give each worker the same value: a worker whose value differs from that of a
+running worker on the same pool refuses to start.
+
+**A failed startup reservation now ends the run.** Before this change, a worker that could not
+reserve its heartbeat connection within one heartbeat interval ran without it. Now startup has a
+budget, the larger of the heartbeat interval and 5 s. Within it, the shared heartbeat connection
+must be present, and one more pooled connection must run the compatibility check. If either step
+does not finish, `run` returns an error that names the pool, the budget, and the opt-out. A
+`shutdown` that resolves during startup ends the run with `Ok`.
+
+**No claim without the heartbeat connection.** If a failed round discards the shared heartbeat
+connection, no worker on the pool claims a task until a replacement arrives. A claim reads this gate
+again after it gets its pooled connection, so a claim that waited for a connection sends nothing. A
+fast-tier completion then claims nothing. The last worker to stop waits for the claim statements in
+flight before it closes the heartbeat connection. The replacement starts at once, also when no task
+runs, and the delay between attempts grows to at most the heartbeat interval. When the replacement
+arrives, the workers claim at once and do not wait for their poll.
+
+**Bounded waits for a pooled connection.** A statement of the worker or of a `HandlerContext` now
+waits for a pooled connection for the larger of the lease and 5 s at most. Before this change, a
+full pool could hold startup or a statement without a limit. A stop with a full pool now ends within
+the grace period, the unwind window, and the cleanup window.
+
+**A stop does not wait for a registry statement without a limit.** A stop now waits for the first
+registration, a registry refresh, the draining refresh, and the deregistration until the stop
+deadline at most. A dropped run gets one cleanup window as its deadline. A statement that outlives
+the deadline keeps running, and the next run of the worker waits for it before it registers. If it
+still runs at the end of the startup budget, `run` refuses to start.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

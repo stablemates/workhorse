@@ -1,10 +1,10 @@
-//! The `LISTEN workhorse_tasks` connection that wakes an idle worker early.
+//! The `LISTEN workhorse_tasks` connection that wakes idle workers early. All workers on one pool
+//! identity share it (`shared::SharedListener`).
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use tokio::sync::Notify;
 use tokio_postgres::{AsyncMessage, NoTls};
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +25,8 @@ impl Drop for Driver {
     }
 }
 
-/// Listens until `stop` fires, waking the worker for a matching queue or the `*` wildcard.
+/// Listens until `stop` fires, and gives each notification payload to `deliver`. After each
+/// successful `LISTEN`, it calls `deliver(None)`, so every subscriber claims once.
 ///
 /// A pool cannot hand out a connection's notification stream, so the listener opens its own
 /// connection from `config`. It reconnects with a doubling delay after a failure. `stop` also ends
@@ -33,8 +34,7 @@ impl Drop for Driver {
 /// worker's teardown.
 pub(super) async fn listen(
     config: tokio_postgres::Config,
-    queues: Vec<String>,
-    wake: Arc<Notify>,
+    deliver: impl Fn(Option<&str>) + Send + 'static,
     listening: Arc<AtomicBool>,
     stop: CancellationToken,
 ) {
@@ -77,13 +77,12 @@ pub(super) async fn listen(
                     Ok(()) => {
                         listening.store(true, Ordering::SeqCst);
                         delay = RECONNECT_INITIAL;
-                        wake.notify_one();
+                        deliver(None);
                         loop {
                             tokio::select! {
                                 () = stop.cancelled() => break String::new(),
                                 message = received.recv() => match message {
-                                    Some(Ok(payload)) if payload == "*" || queues.contains(&payload) => wake.notify_one(),
-                                    Some(Ok(_)) => {}
+                                    Some(Ok(payload)) => deliver(Some(&payload)),
                                     Some(Err(error)) => break error,
                                     None => break "notification connection closed".into(),
                                 },
@@ -128,13 +127,7 @@ mod tests {
         config.host("127.0.0.1").port(port).user("unused").dbname("unused");
         let stop = CancellationToken::new();
         let listening = Arc::new(AtomicBool::new(false));
-        let listener = tokio::spawn(listen(
-            config,
-            vec!["default".into()],
-            Arc::new(Notify::new()),
-            Arc::clone(&listening),
-            stop.clone(),
-        ));
+        let listener = tokio::spawn(listen(config, |_| {}, Arc::clone(&listening), stop.clone()));
         tokio::time::timeout(Duration::from_secs(5), accepted.recv())
             .await
             .expect("the listener never connected")

@@ -9,6 +9,10 @@
 //! that fused claim through its [`Ticket`] and hands its own slot over to the tasks it claims.
 //! With more than one cohort, the slots split into cohorts, and a fused claim fills only its own
 //! cohort (rules 10 to 15).
+//!
+//! While the pool identity holds no heartbeat connection, the gate is closed: no claim starts, and
+//! a completion claims nothing (ADR 0071, rule 6). When the connection comes back, the loop claims
+//! at once.
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -17,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::{Id, JoinError, JoinSet};
 use tokio::time::Instant;
 
@@ -38,6 +42,14 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     fn tiers_known(&self) -> bool;
     /// The wait after `consecutive_empty` claims found nothing to run.
     fn poll_delay(&self, consecutive_empty: u32) -> Duration;
+    /// Whether the claim gate is open.
+    fn claims_allowed(&self) -> bool {
+        true
+    }
+    /// Changes when the claim gate opens or closes. `None` when it never closes.
+    fn readiness(&self) -> Option<watch::Receiver<bool>> {
+        None
+    }
     /// The delay before a claim that a notification woke from idle. A short random delay spreads
     /// one notification's claims across workers.
     fn notification_delay(&self) -> Duration {
@@ -153,6 +165,7 @@ struct Shared<T: Send + 'static> {
     slots: Mutex<Slots>,
     handoffs: mpsc::UnboundedSender<Handoff<T>>,
     paused: Box<dyn Fn() -> bool + Send + Sync>,
+    claims_allowed: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 /// A running task's hold on its slot. Dropping it frees the slot.
@@ -172,9 +185,10 @@ impl<T: Send + 'static> Ticket<T> {
     ///
     /// The claim may fill the free slots of the task's cohort plus the slot the task hands over.
     /// While a plain claim that can fill that cohort is in flight, it claims only when that
-    /// would fill at least a refill batch. A paused worker starts no claim.
+    /// would fill at least a refill batch. A paused worker starts no claim, and neither does a
+    /// worker whose claim gate is closed: its completion uses a claim limit of zero.
     pub(super) fn reserve(&self) -> Option<Reservation<'_, T>> {
-        if (self.shared.paused)() {
+        if (self.shared.paused)() || !(self.shared.claims_allowed)() {
             return None;
         }
         let mut slots = lock(&self.shared.slots);
@@ -332,6 +346,10 @@ impl<D: Dispatch> Dispatcher<D> {
                 paused: Box::new({
                     let worker = Arc::clone(worker);
                     move || worker.paused()
+                }),
+                claims_allowed: Box::new({
+                    let worker = Arc::clone(worker);
+                    move || worker.claims_allowed()
                 }),
             }),
             handoffs,
@@ -529,11 +547,21 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
     grace: Duration,
 ) -> Instant {
     let mut dispatcher = Dispatcher::new(worker);
+    let mut readiness = worker.readiness();
     loop {
         if shutdown.as_mut().now_or_never().is_some() {
             break;
         }
-        let wake_at = if worker.paused() {
+        if let Some(readiness) = readiness.as_mut() {
+            readiness.borrow_and_update();
+        }
+        let wake_at = if !worker.claims_allowed() {
+            // A closed gate ends the empty wait, so the loop claims as soon as the gate opens.
+            if dispatcher.empty_wait.is_some() {
+                dispatcher.set_empty_wait(None);
+            }
+            None
+        } else if worker.paused() {
             // A pause ends the empty wait, so a resume claims at once. A release wait ignores the
             // wake of the resume, so it must end here.
             if dispatcher.empty_wait.is_some() {
@@ -557,6 +585,15 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
                 None => std::future::pending().await,
             }
         };
+        let gate = async {
+            let changed = match readiness.as_mut() {
+                Some(readiness) => readiness.changed().await.is_ok(),
+                None => false,
+            };
+            if !changed {
+                std::future::pending::<()>().await;
+            }
+        };
         tokio::select! {
             () = shutdown.as_mut() => break,
             Some(result) = executions.join_next() => record(result, first_error),
@@ -565,6 +602,7 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
             }
             Some(handoff) = dispatcher.handoffs.recv() => dispatcher.receive(handoff, executions),
             () = timer => {}
+            () = gate => {}
             () = notification.notified() => {
                 dispatcher.wake_version += 1;
                 lock(&dispatcher.shared.slots).wake_version = dispatcher.wake_version;
@@ -651,6 +689,8 @@ mod tests {
         fused: mpsc::UnboundedSender<FusedRequest>,
         started: Arc<AtomicUsize>,
         released: AtomicUsize,
+        /// The claim gate, open unless a test closes it.
+        gate: watch::Sender<bool>,
     }
 
     impl Dispatch for Fake {
@@ -682,6 +722,14 @@ mod tests {
 
         fn poll_delay(&self, _: u32) -> Duration {
             self.poll
+        }
+
+        fn claims_allowed(&self) -> bool {
+            *self.gate.borrow()
+        }
+
+        fn readiness(&self) -> Option<watch::Receiver<bool>> {
+            Some(self.gate.subscribe())
         }
 
         fn notification_delay(&self) -> Duration {
@@ -758,6 +806,7 @@ mod tests {
                 fused: fused_sender,
                 started: Arc::new(AtomicUsize::new(0)),
                 released: AtomicUsize::new(0),
+                gate: watch::Sender::new(true),
             });
             (worker, claims, fused)
         }
@@ -1036,6 +1085,46 @@ mod tests {
         let (limit, _, answer) = harness.next_claim().await;
         assert_eq!(limit, 4);
         let _ = answer.send(Vec::new());
+        harness.stop().await;
+    }
+
+    // SM-1572: no claim starts while the gate is closed. When it opens, the loop claims at once,
+    // and does not wait for the rest of an empty wait. Paused time advances only when every task
+    // waits, so the absence of a claim does not depend on the speed of the host.
+    #[tokio::test(start_paused = true)]
+    async fn a_closed_gate_starts_no_claim_and_an_opened_gate_claims_at_once() {
+        let mut harness = Harness::start_plain(4, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        harness.worker.gate.send_replace(false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(harness.claims.try_recv().is_err(), "a worker claimed with its gate closed");
+        let opened = Instant::now();
+        harness.worker.gate.send_replace(true);
+        let (limit, _, answer) = harness.next_claim().await;
+        assert_eq!(limit, 4);
+        assert_eq!(opened.elapsed(), Duration::ZERO, "the claim waited for a timer");
+        let _ = answer.send(Vec::new());
+        harness.stop().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_closed_gate_gives_a_completion_a_claim_limit_of_zero() {
+        let mut harness = Harness::start(Setup { concurrency: 2, ..Setup::default() });
+        let (_, _, answer) = harness.next_claim().await;
+        let (tasks, mut fused) = gated_with(2, true);
+        let _ = answer.send(tasks);
+        settled().await;
+        harness.worker.gate.send_replace(false);
+        let _ = fused.remove(0).send(());
+        let request = harness.next_fused().await;
+        assert_eq!(request.limit, None, "a completion claimed with the gate closed");
+        harness.worker.gate.send_replace(true);
+        let _ = fused.remove(0).send(());
+        let request = harness.next_fused().await;
+        // The opened gate also started a plain claim for the first slot, which holds that slot.
+        assert_eq!(request.limit, Some(1), "an open gate lets the completion claim again");
+        let _ = request.answer.send(Some(Vec::new()));
         harness.stop().await;
     }
 
