@@ -400,11 +400,15 @@ that reaches a session-pooled PgBouncer or PostgreSQL directly to restore hints.
 session grant or `SET` lands on a pooled backend that outlives the client that created it, so a
 transaction-mode pool must never serve a code path that leaves session state behind.
 
-Connection budget: a notification-capable pool reserves one client connection for the listener no
-matter how many `Queue` or `Worker` objects share it, so a worker pool needs at least two
-connections for listening plus claims; a pool limited to one stays polling-only. Behind any
-pooler that cannot deliver notifications that listener slot is held without delivering anything,
-which is wasted budget on both the client pool and the pooler's client cap.
+Connection budget: the workers on one pool share one listener connection and one heartbeat
+connection, for any number of `Queue` or `Worker` objects. A worker pool thus needs at least 3
+connections: the listener, the heartbeat, and one claim. Under the heartbeat opt-out, a TypeScript
+or Go pool limited to one connection stays polling-only. Behind a pooler that cannot deliver
+notifications, the listener connection delivers nothing. It still counts against the client limit
+of the pooler and against the pool of your app. A Rust listener connection is outside the pool, so
+it counts only against the client limit. [Overview: Connection budgets per
+language](architecture/overview.md#connection-budgets-per-language) states the budget of each
+language.
 
 A PgCat routing detail: its `pgcat.toml` names each pool statically, so a client URL's database
 name must match a configured pool — unlike PgBouncer, a PgCat deployment cannot forward a database

@@ -10,12 +10,11 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
  * notification and no error, and the worker claims at its next fallback poll. A direct or
  * session-mode pool delivers the wake hint.
  *
- * "Budget the connections that each worker holds": four workers on one pool of 20. TypeScript, Go,
- * and Ruby workers share one listener and one heartbeat connection. Each Python worker takes its
- * own listener and heartbeat connection from the pool. Each Rust worker takes a heartbeat
- * connection from the pool and opens its listener outside the pool. Each Java or Kotlin worker
- * takes its own listener from its `DataSource`, and the workers on one `DataSource` share one
- * heartbeat connection.
+ * "Budget the connections that each worker holds": four workers on one pool of 20. In every SDK, the
+ * workers on one pool share one listener connection and one heartbeat connection. In TypeScript, Go,
+ * Python, Ruby, and the JVM, both come from the pool, so 18 pooled connections remain. In Rust, only
+ * the heartbeat connection comes from the pool, so 19 remain. The Rust listener connection is
+ * outside the pool, so the server or the pooler must accept one more client.
  *
  * Check each fact against its source before you change a label.
  */
@@ -152,25 +151,31 @@ export const poolerPathsNarrow = {
   },
 };
 
-const budgetTitle = "Four workers on a pool of 20 keep some connections for themselves";
+const budgetTitle = "Four workers on one pool share one listener and one heartbeat connection";
 const budgetDescription =
-  "Four workers share one pool of 20 connections. TypeScript, Go, and Ruby workers keep one " +
-  "listener and one heartbeat connection, so 18 remain for claims and handlers. Python workers keep " +
-  "four listeners and four heartbeat connections, so 12 remain. Rust workers keep four heartbeat " +
-  "connections in the pool, so 16 remain. Their four listeners are outside the pool. Java and " +
-  "Kotlin workers keep four listeners and one heartbeat connection, so 15 remain.";
+  "Four workers run on one pool of 20 connections. In TypeScript, Go, Python, Ruby, Java, and " +
+  "Kotlin, the four workers share one listener connection and one heartbeat connection from the " +
+  "pool. Thus 18 connections remain for claims and handlers. In Rust, the four workers share one " +
+  "heartbeat connection from the pool, so 19 remain. The shared Rust listener connection is " +
+  "outside the pool, so the server or the pooler must accept one more client.";
 
-const CONNECTION = 36;
+const CONNECTION = 32;
 const BAR_LEFT = 200;
+const POOL = 20;
+const OUTSIDE_LEFT = 856;
+const OUTSIDE_WIDTH = 80;
 
-const budgets: readonly (readonly [language: string, kept: number, keptSub: string])[] = [
-  ["TypeScript, Go, Ruby", 2, "1 + 1"],
-  ["Python", 8, "4 listeners · 4 heartbeats"],
-  ["Rust", 4, "4 heartbeats"],
-  ["Java, Kotlin", 5, "4 listeners · 1 heartbeat"],
+const budgets: readonly (readonly [
+  languages: readonly string[],
+  kept: string,
+  pooled: number,
+  outside: number,
+])[] = [
+  [["TypeScript, Go, Python,", "Ruby, Java, Kotlin"], "1 listener · 1 heartbeat", 2, 0],
+  [["Rust"], "1 heartbeat in the pool", 1, 1],
 ];
 
-/** The budget diagram: one bar of 20 connections for each language. */
+/** The budget diagram: one bar of 20 pooled connections for each budget, and the clients outside. */
 export const poolerBudget = {
   slug: "pgbouncer-budget",
   title: budgetTitle,
@@ -188,39 +193,50 @@ export const poolerBudget = {
     for (const count of [0, 5, 10, 15, 20]) {
       d.rows(BAR_LEFT + count * CONNECTION, 44, [[`${count}`, 8, "soft", MONO, 400]]);
     }
-    d.divider(BAR_LEFT, BAR_LEFT + 20 * CONNECTION, 52);
-    budgets.forEach(([language, kept, keptSub], index) => {
-      const y = 72 + index * 56;
-      d.text(24, y + 25, language, { size: 10, color: "ink" });
-      const keptWidth = kept * CONNECTION;
-      d.box(
-        BAR_LEFT,
-        y,
-        keptWidth - 4,
-        40,
-        "focal",
-        `${kept} kept`,
-        kept > 2 ? keptSub : undefined,
-        10,
+    d.rows(OUTSIDE_LEFT + OUTSIDE_WIDTH / 2, 44, [["outside the pool", 8, "soft", MONO, 400]]);
+    d.divider(BAR_LEFT, BAR_LEFT + POOL * CONNECTION, 52);
+    d.divider(OUTSIDE_LEFT, OUTSIDE_LEFT + OUTSIDE_WIDTH, 52);
+    budgets.forEach(([languages, kept, pooled, outside], index) => {
+      const y = 72 + index * 64;
+      d.rows(
+        24,
+        y + (languages.length === 1 ? 19 : 12),
+        [
+          ...languages.map((line) => [line, 10, "ink", MONO, 400] as const),
+          [kept, 9, "muted", MONO, 400] as const,
+        ],
+        "start",
       );
+      const keptWidth = pooled * CONNECTION;
+      d.box(BAR_LEFT, y, keptWidth - 4, 40, "focal", `${pooled}`, undefined, 11);
       d.box(
         BAR_LEFT + keptWidth,
         y,
-        (20 - kept) * CONNECTION,
+        (POOL - pooled) * CONNECTION,
         40,
         "backend",
-        `${20 - kept} for claims and handlers`,
+        `${POOL - pooled} for claims and handlers`,
         undefined,
         11,
       );
+      if (outside > 0) {
+        d.box(OUTSIDE_LEFT, y, OUTSIDE_WIDTH, 40, "external", `${outside} listener`, undefined, 10);
+      }
     });
-    const footerY = 72 + budgets.length * 56 + 24;
+    const footerY = 72 + budgets.length * 64 + 16;
     d.rows(
       24,
       footerY,
       [
         [
-          "The four Rust listeners are outside the pool, so the server or the pooler must accept four more clients.",
+          "All the workers on one pool share these connections, so the count does not grow with the workers.",
+          9,
+          "muted",
+          MONO,
+          400,
+        ],
+        [
+          "The Rust listener is outside the pool, so the server or the pooler must accept one more client.",
           9,
           "muted",
           MONO,
@@ -229,11 +245,11 @@ export const poolerBudget = {
       ],
       "start",
     );
-    return d.render(this.slug, 960, footerY + 16, budgetTitle, budgetDescription);
+    return d.render(this.slug, 960, footerY + 31, budgetTitle, budgetDescription);
   },
 };
 
-/** The budget diagram for screens up to 600 px wide: one language on each line. */
+/** The budget diagram for screens up to 600 px wide: one budget on each line. */
 export const poolerBudgetNarrow = {
   slug: "pgbouncer-budget-narrow",
   title: budgetTitle,
@@ -242,12 +258,16 @@ export const poolerBudgetNarrow = {
     const height = eventList(
       d,
       [
-        ["TS, Go, Ruby", "backend", "18 remain", "2 kept: 1 listener, 1 heartbeat"],
-        ["Python", "backend", "12 remain", "8 kept: 4 listeners, 4 heartbeats"],
-        ["Rust", "backend", "16 remain", "4 kept: 4 heartbeats"],
-        ["Java, Kotlin", "backend", "15 remain", "5 kept: 4 listeners, 1 heartbeat"],
+        ["5 SDKs", "backend", "18 remain", "2 kept: 1 listener, 1 heartbeat"],
+        ["Rust", "backend", "19 remain", "1 kept: 1 heartbeat"],
+        ["Rust", "external", "1 listener", "outside the pool"],
       ],
-      ["The Rust listeners are outside the pool."],
+      [
+        "5 SDKs: TypeScript, Go, Python, Ruby, JVM.",
+        "The workers on one pool share these",
+        "connections. The Rust listener needs one",
+        "more client of the server or the pooler.",
+      ],
     );
     return d.render(this.slug, 400, height, budgetTitle, budgetDescription);
   },

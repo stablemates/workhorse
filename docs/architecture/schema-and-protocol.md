@@ -740,7 +740,7 @@ renewal.
   waiting for it and opens a replacement, and the round closes the connection when it returns.
 - A round that fails on the connection discards it, and the reservation starts the replacement at
   once.
-- The reservation closes the connection when the last worker on the pool stops.
+- The reservation gives the connection back to the pool when the last worker on the pool stops.
 - With `shared_heartbeats`, each round borrows a pool connection, as any other statement does.
 
 `AsyncWorker` uses the reservation of its async pool, with the same lifecycle.
@@ -774,8 +774,8 @@ Every Python worker on one pool object shares one listener connection and one he
 - An async listener task waits at most 1,000 ms for the release of its connection. A cancellation
   during that wait does not cut it short, and the task raises the cancellation after it. A
   listener task reconnects only while it still has subscribers.
-- The `HeartbeatReservation` holds its connection while a worker uses it. It closes the connection
-  when the last worker leaves. One lock guards its whole connection lifecycle: acquisition,
+- The `HeartbeatReservation` holds its connection while a worker uses it. It gives the connection
+  back to the pool when the last worker leaves. One lock guards its whole connection lifecycle: acquisition,
   lending, and disposal. While a disposal runs, the reservation is busy and starts no acquisition.
 
 **One owner for the connections of an async hub.** An async hub has one `AsyncConnectionOwner`.
@@ -838,10 +838,11 @@ subscribes and when a round loses the connection. It also runs when no task is a
 - Each attempt waits at most the round bound of the shortest `heartbeat_ms` of the subscribed
   workers. While a worker waits at startup, the attempt can use the rest of that startup budget.
 - A failed attempt retries after a jittered backoff. The backoff starts at 100 ms, doubles, and is
-  capped at the shortest `heartbeat_ms`.
+  capped at the shortest `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, so a
+  wait can pass that cap by up to 10%.
 - When the connection arrives, the reservation wakes the dispatcher of every subscribed worker.
-- A connection that arrives after every worker left, or after a round gave one back, belongs to the
-  acquirer, which closes it.
+- A connection can arrive after every worker left, or after a round gave one back. The acquirer
+  owns that connection and gives it back to the pool.
 - On an async pool, each attempt is a request to the hub's `AsyncConnectionOwner`, which holds at
   most one heartbeat connection. A replacement thus starts only after the earlier heartbeat
   connection is back in the pool.
@@ -941,10 +942,19 @@ budget and retry policy. `_error_envelope` builds that envelope in the shape tha
 `Worker._run_loop()` clears the wake event before a sweep. Thus a completion or state change during
 an in-flight empty claim stays latched for the next wait.
 
-`run()` starts one daemon listener thread, `_TaskNotificationListener`. It borrows one autocommit
-connection from the pool through `_psycopg_pool_notification_factory`. It holds that connection
-while it listens. The listener runs `LISTEN workhorse_tasks` and wakes for a configured queue or
-`*`.
+`run()` subscribes the worker to the shared listener of its pool, in the `PoolHub` of that pool
+([Shared pool connections](#shared-pool-connections)). `run_once()` does not subscribe. The run
+does not own the listener:
+
+- The first subscriber starts one daemon thread, `workhorse-notification-listener`, for the
+  `SharedTaskNotificationListener` of the pool.
+- That thread borrows one autocommit connection from the pool. It waits at most 7,500 ms
+  (`LISTENER_ACQUIRE_SECONDS`) for it. It holds the connection while the listener has
+  subscribers.
+- The listener runs `LISTEN workhorse_tasks`. A notification wakes each subscriber whose queues
+  contain its payload, and `*` wakes every subscriber.
+- When the run ends, the worker leaves the listener. The last subscriber stops the listener, which
+  gives its connection back to the pool.
 
 The wait between empty sweeps depends on the listener:
 
@@ -954,11 +964,11 @@ The wait between empty sweeps depends on the listener:
 - An explicit `poll_ms` replaces both defaults.
 
 The listener reconnects after errors with 10 percent jitter around exponential delays from 100 to
-5,000 milliseconds. Each successful `LISTEN` resets the delay and wakes the worker.
+5,000 milliseconds. Each successful `LISTEN` resets the delay and wakes every subscriber.
 
 The optional `on_notification_error` callback receives setup, connection, read, and close failures.
-Listener failure never stops dispatch. `stop()` waits at most 200 milliseconds for the listener
-thread, so a blocked pool checkout cannot prevent the worker from draining.
+Listener failure never stops dispatch. The last worker that leaves waits at most 200 milliseconds
+for the listener thread, so a blocked pool checkout cannot prevent the worker from draining.
 
 ### Python handler context
 
@@ -1141,9 +1151,13 @@ the `children` array that `create_children_v1` returns. Thus both drivers join a
 
 #### Pool connections
 
-- Unless `shared_heartbeats` is set, `_open_heartbeat_executor` reserves one pool connection for
-  heartbeat rounds for the whole run.
-- The listener holds another pool connection while it listens.
+- An `AsyncWorker` uses the `PoolHub` of its async pool
+  ([Shared pool connections](#shared-pool-connections)). Each run subscribes to the heartbeat
+  reservation of the hub, unless `shared_heartbeats` is set. After the startup check, the run also
+  subscribes to the listener of the hub.
+- The run does not own these connections. Every worker on the pool shares the one heartbeat
+  connection and the one listener connection of the hub. The `AsyncConnectionOwner` of the hub
+  acquires and releases them on the event loop of the pool.
 - Psycopg connections must use `autocommit=True`. If a Psycopg heartbeat or listener connection
   lacks it, the worker raises `ValueError`.
 
