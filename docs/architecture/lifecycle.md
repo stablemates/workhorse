@@ -1432,8 +1432,12 @@ Each bounded round does these steps, all before one deadline:
    starts its own checkout. A Rust round starts the replacement inside its own
    deadline. If the connect is not ready by the deadline, it continues, and each later round waits
    for the same connect until its own deadline. A pool without a wait timeout can keep that connect
-   pending for several rounds. Ruby and JVM hold their connection between rounds, and take a new one
-   in their loop before the next round waits for its slot.
+   pending for several rounds. Ruby holds its connection between rounds, and takes a new one in its
+   loop before the next round waits for its slot. JVM holds its connection between rounds. When a
+   failed round closed or aborted it, JVM starts a replacement on a checkout thread at once. A JVM
+   round waits for that checkout only until its own deadline. A round that gets the replacement
+   during its bound sends nothing on it. A regular round then runs at once on the replacement, with
+   a full bound, whatever the intervals of the leases are by then.
 3. Sends `BEGIN`.
 4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
    as its own statement, so that both values apply to the statements after it.
@@ -1608,8 +1612,9 @@ The scheduler follows these rules in every SDK:
    leaves, so that it can stop.
 5. A replaced connection keeps the schedule. Ruby (`@previous`) and JVM (`previous`) keep the start
    of the latest round in the heartbeat object, outside the loop that replaces a failed connection.
-   After a failed round, JVM takes a new connection at once. If the pool refuses a connection, JVM
-   waits 100 ms, or until the next slot if that is sooner (`retryWaitNanos`), before it asks again.
+   A failed JVM round that leaves its connection open keeps it. After a failed round that closed or
+   aborted it, JVM starts a new checkout at once. A failed checkout runs again after a backoff that
+   starts at 100 ms, doubles, and stops at the shortest interval, also when no lease remains.
 6. When no lease remains, the scheduler stops. The next lease starts a new schedule. In TypeScript,
    a lease that registers while the round of an earlier lease is in flight gets its slot one
    interval after it registers.
@@ -1629,15 +1634,18 @@ time:
 | Python     | when the failed round ends, in `_replace_heartbeat_connection`, on its thread   | the `timeout` of a psycopg pool (30 s by default); none for asyncpg |
 | Rust       | in the next round, inside its deadline (`replacement_connection`), a Tokio task | the wait timeout of the deadpool pool (none by default)             |
 | Ruby       | in the loop of the heartbeat thread, before the next round waits for its slot   | the checkout timeout of the connection pool                         |
-| JVM        | in the loop of the heartbeat thread, before the next round waits for its slot   | the `getConnection` timeout of the `DataSource`                     |
+| JVM        | when the failed round ends, in `Heartbeat.discard`, on a checkout thread        | one round bound; the open itself has the `getConnection` timeout    |
 
 In TypeScript, Go, and Python, the open does not hold the scheduler. The next round starts at its
 slot. If the replacement is not ready, the round waits for it (TypeScript and Go) or starts its own
 checkout (Python), in both cases only until its own deadline. A Rust connect that is not
 ready by the deadline continues, and each later round waits for it until its own deadline. A pool
-without a wait timeout can keep it pending for several rounds. In Ruby and JVM, the heartbeat thread
-opens the connection itself. If the open ends after the next slot, the next round is overdue, and it
-starts when the open ends. Only one round is in flight in each case.
+without a wait timeout can keep it pending for several rounds. In Ruby, the heartbeat thread opens
+the connection itself. If the open ends after the next slot, the next round is overdue, and it
+starts when the open ends. In JVM, the open does not hold the heartbeat thread, and a round waits
+for it only until its own deadline. A JVM round that gets the connection during its bound sends
+nothing, and a regular round then runs at once with a full bound. Only one round is in flight in each
+case.
 
 A Ruby or JVM round sends one statement for each worker on the pool, and also one for each 100
 leases of a worker. On the dedicated connection, all statements of one round share one deadline: the

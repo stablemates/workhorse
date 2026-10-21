@@ -18,7 +18,8 @@ import run.workhorse.Worker;
 /**
  * Runs W workers on one HikariCP pool. A task whose payload has {@code handlerMs} returns after
  * that time; any other task holds its slot until SIGTERM. All workers share the pool object, so
- * they share the heartbeat connection that the SDK keys by {@code DataSource}.
+ * they share the listener connection and the heartbeat connection that the SDK keys by the {@code
+ * DataSource} object.
  */
 public final class ConnectionBudgetProbe {
   private ConnectionBudgetProbe() {}

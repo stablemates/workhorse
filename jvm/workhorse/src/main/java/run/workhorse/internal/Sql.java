@@ -84,15 +84,37 @@ public final class Sql {
    */
   public static List<Row> fencedRows(
       Connection connection, SqlCatalogue.Statement statement, @Nullable Object... parameters) {
+    return fencedRows(connection, statement, () -> parameters);
+  }
+
+  /** The parameters of one attempt of a fenced write, or {@code null} to send no attempt. */
+  @FunctionalInterface
+  public interface Attempt {
+    /** The parameters for the next attempt, or {@code null} to stop before it. */
+    @Nullable Object @Nullable [] parameters();
+  }
+
+  /**
+   * Sends a fenced write as {@link #fencedRows(Connection, SqlCatalogue.Statement, Object...)}
+   * does, but takes the parameters from {@code attempt} just before each attempt, a resend after a
+   * deadlock too. A claim thus reads its claim limit when it reaches PostgreSQL. If {@code attempt}
+   * gives {@code null}, nothing more is sent, and the result has no rows.
+   */
+  public static List<Row> fencedRows(
+      Connection connection, SqlCatalogue.Statement statement, Attempt attempt) {
     DatabaseException deadlock = null;
-    for (int attempt = 1; ; attempt++) {
+    for (int count = 1; ; count++) {
+      @Nullable Object[] parameters = attempt.parameters();
+      if (parameters == null) {
+        return List.of();
+      }
       try {
         return rows(connection, statement, parameters);
       } catch (DatabaseException error) {
         if (deadlock != null && "25P02".equals(error.sqlState())) {
           throw deadlock;
         }
-        if (attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS || !"40P01".equals(error.sqlState())) {
+        if (count >= FENCED_WRITE_DEADLOCK_ATTEMPTS || !"40P01".equals(error.sqlState())) {
           throw error;
         }
         deadlock = error;

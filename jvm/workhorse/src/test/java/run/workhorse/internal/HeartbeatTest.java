@@ -2,9 +2,12 @@ package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Proxy;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
@@ -17,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -50,14 +54,33 @@ class HeartbeatTest {
     }
   }
 
+  /**
+   * SM-1569: the shared heartbeat of a {@code DataSource} is keyed by the object itself. Two pools
+   * that compare equal are still two pools.
+   */
   @Test
-  void retriesAFailedRoundNoLaterThanTheNextSlot() {
-    // A 40 ms interval: the round that started at 0 failed at 30 ms, so the next slot is in 10 ms.
-    assertEquals(millis(10), Heartbeat.retryWaitNanos(0, millis(40), millis(30)));
-    // The next slot is later than the retry wait, so the retry wait applies.
-    assertEquals(millis(100), Heartbeat.retryWaitNanos(0, millis(10_000), millis(7_500)));
-    // The slot has passed, for example after a checkout that the pool refused.
-    assertEquals(millis(100), Heartbeat.retryWaitNanos(0, millis(40), millis(50)));
+  void sharesOneDedicatedHeartbeatForEachDataSourceObjectByIdentity() {
+    DataSource first = equalDataSource();
+    DataSource second = equalDataSource();
+    assertEquals(first, second, "the two sources compare equal");
+    assertSame(Heartbeat.dedicated(first), Heartbeat.dedicated(first));
+    assertNotSame(Heartbeat.dedicated(first), Heartbeat.dedicated(second));
+  }
+
+  /** A data source that equals every other one from this method, and opens no connection. */
+  private static DataSource equalDataSource() {
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) ->
+                switch (method.getName()) {
+                  case "equals" ->
+                      arguments[0] != null && Proxy.isProxyClass(arguments[0].getClass());
+                  case "hashCode" -> 1;
+                  case "toString" -> "equal data source";
+                  default -> throw new UnsupportedOperationException(method.getName());
+                });
   }
 
   @Test
@@ -386,7 +409,12 @@ class HeartbeatTest {
     Runnable removeBusy = heartbeat.register(busy);
     Runnable removeAccepted = heartbeat.register(accepted);
     try {
-      waitUntil("a busy retry ran", () -> round.calls.size() >= 2);
+      // The recorder adds a call before the heartbeat thread settles its answer. A member that
+      // leaves before the settlement gets nothing from the round, so the test waits for the
+      // renewal of the retry too. Without that, a loaded host left the busy lease with 0 renewals.
+      waitUntil(
+          "a busy retry ran and renewed the lease",
+          () -> round.calls.size() >= 2 && busy.renewals.get() >= 1);
     } finally {
       removeBusy.run();
       removeAccepted.run();

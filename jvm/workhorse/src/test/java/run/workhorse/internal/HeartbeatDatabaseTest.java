@@ -1,6 +1,7 @@
 package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.InvocationTargetException;
@@ -23,9 +24,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -84,13 +88,20 @@ class HeartbeatDatabaseTest {
     final List<Long> statusAt = new CopyOnWriteArrayList<>();
     final AtomicInteger renewals = new AtomicInteger();
     final AtomicLong renewedAt = new AtomicLong();
+    final AtomicLong lastRenewedAt = new AtomicLong();
+    private final long interval;
 
     /** The local lease window always ends this many nanoseconds after each read. */
     final AtomicLong windowLeft = new AtomicLong(TimeUnit.SECONDS.toNanos(30));
 
     Recorded(UUID taskId, Lease lease) {
+      this(taskId, lease, TimeUnit.SECONDS.toNanos(1));
+    }
+
+    Recorded(UUID taskId, Lease lease, long interval) {
       this.taskId = taskId;
       this.lease = lease;
+      this.interval = interval;
     }
 
     @Override
@@ -115,7 +126,7 @@ class HeartbeatDatabaseTest {
 
     @Override
     public long intervalNanos() {
-      return TimeUnit.SECONDS.toNanos(1);
+      return interval;
     }
 
     @Override
@@ -126,6 +137,7 @@ class HeartbeatDatabaseTest {
     @Override
     public void renew(long sentAt) {
       renewedAt.compareAndSet(0, System.nanoTime());
+      lastRenewedAt.set(System.nanoTime());
       renewals.incrementAndGet();
     }
 
@@ -220,6 +232,347 @@ class HeartbeatDatabaseTest {
   }
 
   /**
+   * A source over {@code source} that counts checkouts and records the backend PID of each. Once
+   * {@link #hold} is true, a checkout waits until {@link #open} counts down.
+   */
+  private static final class Gated {
+    final AtomicInteger checkouts = new AtomicInteger();
+    final AtomicInteger openConnections = new AtomicInteger();
+    final AtomicInteger waiting = new AtomicInteger();
+    final List<Integer> backends = new CopyOnWriteArrayList<>();
+    final AtomicBoolean hold = new AtomicBoolean();
+    final CountDownLatch open = new CountDownLatch(1);
+
+    DataSource over(DataSource source) {
+      return (DataSource)
+          Proxy.newProxyInstance(
+              DataSource.class.getClassLoader(),
+              new Class<?>[] {DataSource.class},
+              (proxy, method, arguments) -> {
+                if (!method.getName().equals("getConnection")) {
+                  return Watched.invoke(method, source, arguments);
+                }
+                checkouts.incrementAndGet();
+                if (hold.get()) {
+                  waiting.incrementAndGet();
+                  try {
+                    open.await(30, TimeUnit.SECONDS);
+                  } finally {
+                    waiting.decrementAndGet();
+                  }
+                }
+                Connection connection = (Connection) Watched.invoke(method, source, arguments);
+                backends.add(connection.unwrap(PGConnection.class).getBackendPID());
+                openConnections.incrementAndGet();
+                AtomicBoolean closed = new AtomicBoolean();
+                return (Connection)
+                    Proxy.newProxyInstance(
+                        Connection.class.getClassLoader(),
+                        new Class<?>[] {Connection.class},
+                        (inner, call, values) -> {
+                          if (call.getName().equals("close") && closed.compareAndSet(false, true)) {
+                            openConnections.decrementAndGet();
+                          }
+                          return Watched.invoke(call, connection, values);
+                        });
+              });
+    }
+  }
+
+  /**
+   * SM-1569: a dedicated heartbeat replaces a lost connection on a checkout thread. While that
+   * checkout waits, the reservation is not connected, no round renews, and the heartbeat starts no
+   * second checkout. The installed replacement wakes the reservation, and the next round renews.
+   */
+  @Test
+  void replacesALostConnectionOnACheckoutThreadAndWakesTheReservation() throws Exception {
+    Gated gated = new Gated();
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    AtomicInteger wakes = new AtomicInteger();
+    Heartbeat.Reservation reservation =
+        heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), wakes::incrementAndGet);
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("replaced")) {
+      assertTrue(
+          reservation.await(System.nanoTime() + TimeUnit.SECONDS.toNanos(5), () -> false),
+          "the reservation gets its connection");
+      assertEquals(1, wakes.get(), "the first connection wakes the reservation");
+      Recorded member = new Recorded(task.taskId, task.claimed);
+      unregister = heartbeat.register(member);
+      waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
+
+      gated.hold.set(true);
+      try (Connection admin = ScratchDatabase.connect();
+          PreparedStatement terminate = admin.prepareStatement("SELECT pg_terminate_backend(?)")) {
+        terminate.setInt(1, gated.backends.get(0));
+        terminate.execute();
+      }
+      waitUntil("the failed round discarded the connection", () -> !reservation.connected());
+      waitUntil("the replacement checkout waits", () -> gated.waiting.get() == 1);
+      int renewals = member.renewals.get();
+      // Two more slots of 1 s pass without a connection.
+      Thread.sleep(2_200);
+      assertEquals(2, gated.checkouts.get(), "one replacement checkout at a time");
+      assertEquals(renewals, member.renewals.get(), "no round renews without a connection");
+      assertTrue(member.statuses.isEmpty(), "statuses: " + List.copyOf(member.statuses));
+
+      gated.open.countDown();
+      waitUntil("the replacement wakes the reservation", () -> wakes.get() == 2);
+      assertTrue(reservation.connected(), "the heartbeat holds the replacement");
+      waitUntil("a round renewed on the replacement", () -> member.renewals.get() > renewals);
+    } finally {
+      unregister.run();
+      reservation.close();
+      gated.open.countDown();
+    }
+  }
+
+  /** Terminates the backend {@code pid}, so the next round on its connection fails. */
+  private static void terminate(String pid) throws SQLException {
+    try (Connection admin = ScratchDatabase.connect();
+        PreparedStatement terminate = admin.prepareStatement("SELECT pg_terminate_backend(?)")) {
+      terminate.setInt(1, Integer.parseInt(pid));
+      terminate.execute();
+    }
+  }
+
+  /**
+   * The rounds around one replacement connection, as the heartbeat counts them ({@link
+   * Heartbeat#roundsStarted}). Each value is 0 until it is known.
+   */
+  private static final class Replacement {
+    /** The first round that waited for a connection. */
+    final AtomicLong waitingRound = new AtomicLong();
+
+    /** The first round that got its connection before its deadline after a wait. */
+    final AtomicLong receivedRound = new AtomicLong();
+
+    /** The renewals of the member when the round started to wait, after the termination. */
+    final AtomicInteger renewalsAtWait = new AtomicInteger(-1);
+
+    final CountDownLatch waiting = new CountDownLatch(1);
+
+    Replacement(Heartbeat heartbeat, Recorded member) {
+      heartbeat.onAwaitConnection =
+          () -> {
+            if (waitingRound.compareAndSet(0, heartbeat.roundsStarted.get())) {
+              renewalsAtWait.set(member.renewals.get());
+              waiting.countDown();
+            }
+          };
+      heartbeat.onConnectionInRound =
+          () -> receivedRound.compareAndSet(0, heartbeat.roundsStarted.get());
+    }
+
+    /** True when the member has a renewal that the round after the wait reported. */
+    boolean renewed(Recorded member) {
+      int before = renewalsAtWait.get();
+      return before >= 0 && member.renewals.get() > before;
+    }
+
+    /**
+     * Checks that the round that waited got the replacement, so the delivery came inside that
+     * round's bound, and that the next round sent the first statement on it. Returns that
+     * statement.
+     */
+    Watched.Sent firstOnReplacement(Watched watched) {
+      long waited = waitingRound.get();
+      assertEquals(
+          waited,
+          receivedRound.get(),
+          "the round that waited got the replacement before its deadline");
+      assertEquals(2, watched.checkouts.get(), "one replacement connection");
+      Watched.Sent first = watched.firstHeartbeat(watched.checkoutPids.get(1));
+      assertEquals(
+          waited + 1,
+          first.round(),
+          "the round after the one that waited sent the first statement on the replacement");
+      return first;
+    }
+  }
+
+  /**
+   * SM-1569: the first round on a replacement connection has the full round bound. The interval is
+   * 2 s, so a round has a bound of 1.5 s. The replacement checkout is held until a round waits for
+   * it, and it arrives about 0.6 s into that round's bound. The round that waited gets it and sends
+   * nothing, and the next round runs at once on the replacement. The first statement on the
+   * replacement thus gets half of the full bound as its {@code statement_timeout}, about 750 ms.
+   * Without the fix the round that waited sends it, with half of the 0.9 s that it had left.
+   */
+  @Test
+  void startsTheFirstRoundOnAReplacementWithTheFullBound() throws Exception {
+    Watched watched = new Watched();
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    watched.round = heartbeat.roundsStarted::get;
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("replaced-bound")) {
+      Recorded member = new Recorded(task.taskId, task.claimed, TimeUnit.SECONDS.toNanos(2));
+      unregister = heartbeat.register(member);
+      waitUntil("a round renewed the lease", () -> member.renewals.get() > 0);
+      Replacement replacement = new Replacement(heartbeat, member);
+      watched.holdCheckout.set(true);
+      terminate(watched.checkoutPids.get(0));
+      assertTrue(
+          replacement.waiting.await(20, TimeUnit.SECONDS), "a round waits for the replacement");
+      // The replacement arrives about 0.6 s into the waiting round's bound of 1.5 s.
+      Thread.sleep(600);
+      watched.checkoutOpen.countDown();
+      waitUntil("a round renewed on the replacement", () -> replacement.renewed(member));
+      Watched.Sent first = replacement.firstOnReplacement(watched);
+      long timeout = watched.firstTimeout(first.pid());
+      assertTrue(
+          timeout >= 600,
+          "the first statement on the replacement had a statement timeout of "
+              + timeout
+              + " ms, not about 750 ms: "
+              + List.copyOf(watched.statementTimeouts));
+      assertTrue(member.statuses.isEmpty(), "statuses: " + List.copyOf(member.statuses));
+    } finally {
+      unregister.run();
+      watched.checkoutOpen.countDown();
+    }
+  }
+
+  /**
+   * SM-1569, validator round 4: the member with the shortest interval leaves while a round waits
+   * for the replacement. The round that waited gets the replacement and sends nothing, and the next
+   * round still runs at once on it, so the member with the long interval is renewed at once. A
+   * schedule from the old shortest interval would move that round almost a whole long interval
+   * away.
+   */
+  @Test
+  void renewsAtOnceOnAReplacementAfterTheShortestIntervalLeft() throws Exception {
+    Watched watched = new Watched();
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    watched.round = heartbeat.roundsStarted::get;
+    Runnable removeFast = () -> {};
+    Runnable removeSlow = () -> {};
+    try (RunningTask fastTask = new RunningTask("short-interval");
+        RunningTask slowTask = new RunningTask("long-interval")) {
+      Recorded fast = new Recorded(fastTask.taskId, fastTask.claimed, TimeUnit.SECONDS.toNanos(1));
+      Recorded slow = new Recorded(slowTask.taskId, slowTask.claimed, TimeUnit.SECONDS.toNanos(10));
+      removeFast = heartbeat.register(fast);
+      removeSlow = heartbeat.register(slow);
+      waitUntil(
+          "a round renewed both leases", () -> fast.renewals.get() > 0 && slow.renewals.get() > 0);
+      Replacement replacement = new Replacement(heartbeat, slow);
+      watched.holdCheckout.set(true);
+      terminate(watched.checkoutPids.get(0));
+      assertTrue(
+          replacement.waiting.await(20, TimeUnit.SECONDS), "a round waits for the replacement");
+      // The member with the interval of 1 s leaves during the wait, and the replacement arrives.
+      removeFast.run();
+      long released = System.nanoTime();
+      watched.checkoutOpen.countDown();
+      waitUntil("the long lease renewed on the replacement", () -> replacement.renewed(slow));
+      Watched.Sent first = replacement.firstOnReplacement(watched);
+      long renewedAt = slow.lastRenewedAt.get();
+      assertTrue(
+          renewedAt - first.at() >= 0,
+          "the renewal came after the first statement on the replacement");
+      double renewedMs = (renewedAt - released) / 1e6;
+      assertTrue(
+          renewedMs < 2_000,
+          "the long lease was renewed " + renewedMs + " ms after the replacement arrived");
+    } finally {
+      removeFast.run();
+      removeSlow.run();
+      watched.checkoutOpen.countDown();
+    }
+  }
+
+  /**
+   * SM-1569: a failed renewal on a connection that stays open, and a round that a row lock holds,
+   * are not a loss of readiness. The reservation stays connected, so the claim gate stays open, and
+   * the heartbeat keeps its one connection.
+   */
+  @Test
+  void staysConnectedThroughAFailedRenewalAndABusyRound() throws Exception {
+    Watched watched = new Watched();
+    Heartbeat heartbeat = new Heartbeat(watched.over(dataSource), true);
+    Heartbeat.Reservation reservation = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
+    AtomicBoolean disconnected = new AtomicBoolean();
+    AtomicBoolean sampling = new AtomicBoolean(true);
+    Thread sampler = null;
+    Runnable unregister = () -> {};
+    try (RunningTask task = new RunningTask("kept");
+        Connection blocker = ScratchDatabase.connect()) {
+      assertTrue(
+          reservation.await(System.nanoTime() + TimeUnit.SECONDS.toNanos(5), () -> false),
+          "the reservation gets its connection");
+      sampler =
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    while (sampling.get()) {
+                      if (!reservation.connected()) {
+                        disconnected.set(true);
+                      }
+                      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(2));
+                    }
+                  });
+      watched.failHeartbeats.set(1);
+      Recorded member = new Recorded(task.taskId, task.claimed);
+      unregister = heartbeat.register(member);
+      waitUntil("a round renewed after the failed one", () -> member.renewals.get() > 0);
+      List<String> events = List.copyOf(watched.events);
+      assertTrue(
+          events.stream().anyMatch(event -> event.startsWith("failed heartbeat")),
+          "events: " + events);
+
+      blocker.setAutoCommit(false);
+      try (PreparedStatement lock =
+          blocker.prepareStatement(
+              "SELECT FROM workhorse.task_runtime WHERE task_id = ?::uuid FOR UPDATE")) {
+        lock.setString(1, task.taskId.toString());
+        lock.execute();
+      }
+      waitUntil("a round reported the lease busy", () -> member.statuses.contains("busy"));
+      int renewals = member.renewals.get();
+      blocker.commit();
+      waitUntil("a round renewed after the lock", () -> member.renewals.get() > renewals);
+
+      sampling.set(false);
+      sampler.join(Duration.ofSeconds(5));
+      assertFalse(disconnected.get(), "the reservation stayed connected");
+      assertEquals(1, watched.checkouts.get(), "the heartbeat kept its one connection");
+    } finally {
+      sampling.set(false);
+      unregister.run();
+      reservation.close();
+    }
+  }
+
+  /**
+   * SM-1569: a connection that arrives after every wait for it timed out has one owner, the
+   * checkout thread, which gives it back to the pool. Waits that time out again and again run one
+   * checkout, not one each.
+   */
+  @Test
+  void runsOneCheckoutForRepeatedTimeoutsAndClosesTheLateConnection() throws Exception {
+    Gated gated = new Gated();
+    gated.hold.set(true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    try {
+      for (int attempt = 0; attempt < 5; attempt++) {
+        Heartbeat.Reservation reservation =
+            heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
+        assertFalse(
+            reservation.await(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(50), () -> false),
+            "the held checkout gives no connection");
+        reservation.close();
+      }
+      waitUntil("the checkout waits", () -> gated.waiting.get() == 1);
+      assertEquals(1, gated.checkouts.get(), "five timed-out waits ran one checkout");
+    } finally {
+      gated.open.countDown();
+    }
+    waitUntil("the checkout got its connection", () -> gated.backends.size() == 1);
+    waitUntil("the late connection went back to the pool", () -> gated.openConnections.get() == 0);
+    assertEquals(1, gated.checkouts.get(), "nothing needed a second checkout");
+  }
+
+  /**
    * A task whose handler runs until {@link #close}. The worker's own heartbeat is far away, so only
    * the test's heartbeat renews in the test.
    */
@@ -286,12 +639,59 @@ class HeartbeatDatabaseTest {
     final AtomicLong slowSettingsMs = new AtomicLong();
     final AtomicLong slowRollbackMs = new AtomicLong();
 
+    /** The number of heartbeat statements that fail before they go out, on an open connection. */
+    final AtomicInteger failHeartbeats = new AtomicInteger();
+
+    /** While true, each checkout waits until {@link #checkoutOpen} counts down. */
+    final AtomicBoolean holdCheckout = new AtomicBoolean();
+
+    final CountDownLatch checkoutOpen = new CountDownLatch(1);
+
+    /** The backend PID of each checkout, in checkout order. */
+    final List<String> checkoutPids = new CopyOnWriteArrayList<>();
+
+    /** Each heartbeat statement: its backend PID, its round, and when it went out. */
+    record Sent(String pid, long round, long at) {}
+
+    /** The heartbeat statements, in order. */
+    final List<Sent> heartbeats = new CopyOnWriteArrayList<>();
+
+    /** The round that a heartbeat statement belongs to; a test sets it to the heartbeat's count. */
+    volatile LongSupplier round = () -> 0;
+
+    /** The first heartbeat statement on the connection of {@code pid}. */
+    Sent firstHeartbeat(String pid) {
+      for (Sent sent : heartbeats) {
+        if (sent.pid().equals(pid)) {
+          return sent;
+        }
+      }
+      throw new AssertionError("no heartbeat statement on backend " + pid + ": " + heartbeats);
+    }
+
+    /** The {@code statement_timeout} of each round, as {@code <pid> <milliseconds>}, in order. */
+    final List<String> statementTimeouts = new CopyOnWriteArrayList<>();
+
+    /** The {@code statement_timeout} of the first round on the connection of {@code pid}. */
+    long firstTimeout(String pid) {
+      for (String entry : statementTimeouts) {
+        int space = entry.indexOf(' ');
+        if (entry.substring(0, space).equals(pid)) {
+          return Long.parseLong(entry.substring(space + 1));
+        }
+      }
+      throw new AssertionError("no round on backend " + pid + ": " + statementTimeouts);
+    }
+
     DataSource over(DataSource source) {
       return (DataSource)
           Proxy.newProxyInstance(
               DataSource.class.getClassLoader(),
               new Class<?>[] {DataSource.class},
               (proxy, method, arguments) -> {
+                if (method.getName().equals("getConnection") && holdCheckout.get()) {
+                  checkoutOpen.await(60, TimeUnit.SECONDS);
+                }
                 Object result = invoke(method, source, arguments);
                 if (!method.getName().equals("getConnection")) {
                   return result;
@@ -303,6 +703,7 @@ class HeartbeatDatabaseTest {
 
     private Connection connection(Connection connection) throws SQLException {
       int pid = connection.unwrap(PGConnection.class).getBackendPID();
+      checkoutPids.add(Integer.toString(pid));
       return (Connection)
           Proxy.newProxyInstance(
               Connection.class.getClassLoader(),
@@ -331,21 +732,32 @@ class HeartbeatDatabaseTest {
                 }
                 String sql = String.valueOf(arguments[0]);
                 if (sql.contains("heartbeat_many_v2")) {
+                  if (failHeartbeats.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                    ((PreparedStatement) result).close();
+                    events.add("failed heartbeat " + pid);
+                    throw new SQLException("injected heartbeat failure", "XX000");
+                  }
                   events.add("heartbeat " + pid);
+                  heartbeats.add(
+                      new Sent(Integer.toString(pid), round.getAsLong(), System.nanoTime()));
                 } else if (sql.contains("statement_timeout")) {
                   events.add("settings " + pid);
-                  return settings((PreparedStatement) result);
+                  return settings((PreparedStatement) result, pid);
                 }
                 return result;
               });
     }
 
-    private PreparedStatement settings(PreparedStatement statement) {
+    private PreparedStatement settings(PreparedStatement statement, int pid) {
       return (PreparedStatement)
           Proxy.newProxyInstance(
               PreparedStatement.class.getClassLoader(),
               new Class<?>[] {PreparedStatement.class},
               (proxy, method, arguments) -> {
+                if (method.getName().equals("setString")
+                    && Integer.valueOf(1).equals(arguments[0])) {
+                  statementTimeouts.add(pid + " " + arguments[1]);
+                }
                 if (method.getName().equals("execute")) {
                   long delay = slowSettingsMs.getAndSet(0);
                   if (delay > 0) {
