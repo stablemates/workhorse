@@ -1526,24 +1526,53 @@ SM-1576). `SharedHeartbeats` turns off all of them.
 5. A round waits for the connection at most until its round bound, and a startup at most until the
    end of its budget. A waiter that stops waiting starts no acquisition, so repeated timeouts start
    no second `Acquire` and no second connect. The loop keeps the connection that its `Acquire`
-   returns, or it releases it to the pool if the last holder released first. If the last holder
-   releases while a connect still runs, pgxpool finishes the connect and adopts the connection as
-   idle.
-6. While the pool holds no heartbeat connection, `heartbeatReady` is false, and the worker claims
-   no task. The dispatch loop starts no claim. A claim first takes its pooled connection
-   (`holdClaimConnection`). Then it reads the gate before each statement attempt: each queue, each
-   deadlock resend (`queryFencedWriteEach`), and the `claim_many_v1` fallback after a refused fast
-   claim. If the gate is closed, it sends no more claim statements. The closed gate does not make
-   the claim count as empty or failed, and the tasks that it already claimed run. A fused
-   completion gets no reservation. If the gate closes after the reservation, `completeChunk` reads
-   it on its held connection before each attempt. From the first attempt that finds it closed, the
-   statement has a claim limit of 0, so it settles its tasks and claims nothing. That completion
-   also does not count as an empty claim. `RunOnce` claims nothing and reports no progress.
-7. A round that holds the connection does not close the gate. A failed round that keeps its
-   connection also does not close it. A round that discards its connection closes the gate until
-   the replacement arrives.
-8. When the replacement arrives, the loop wakes the dispatch loop of each worker on the pool. The
-   wake ends a poll wait, so the first claim starts at once, not at the next poll.
+   returns. If the last holder released first, it closes that connection and removes it from the
+   pool (`closeAndRemove`). If the last holder releases while a connect still runs, pgxpool finishes
+   the connect and adopts the connection as idle.
+6. After the last holder releases, the connection keeps one owner until it settles, as the listener
+   hub does (SM-1579). It settles when four conditions are true. No round runs. The loop has removed
+   any late connection. The pool no longer counts the held connection. The connection that it
+   replaced has settled.
+7. The registry keeps the `settled` channel of a released connection in
+   `heldHeartbeatConnections.settling`. A new holder on the pool gets a new connection whose loop
+   waits for that channel before its first `Acquire`. The new holder's own deadline bounds its wait,
+   so a startup can end in its budget while the old round still runs. The error then gives
+   `heartbeatConnectionSettlingMessage` as the cause. If the last holder of the new connection
+   releases before its loop starts, `closeUnstarted` gives the old channel back to the registry. So
+   repeated startups leave no goroutine that waits for the old round.
+8. `closeAndRemove` ends each heartbeat connection that leaves the pool. It calls `BeforeClose`,
+   then `Close` within `heartbeatCloseTimeout` (15 s), and waits for the cleanup, as the pool
+   destructor does. Then `Hijack` removes the connection from the pool at once. `Release` returns
+   before the pool counts the connection free, because pgxpool runs an `AfterRelease` hook on a
+   goroutine and destroys a closed or expired connection on a goroutine.
+9. `removeLocked` runs `closeAndRemove` on its own goroutine and counts it in `removing`. The
+   connection settles only when `removing` is 0. So a round that discards its connection ends at
+   once, frees the round slot, and the next round uses the replacement. The replacement starts at
+   once (ADR 0071, rule 6), so the pool can count both connections while the discarded session
+   closes. A stop does not wait for a removal. A removal can end up to 15 s after `BeforeClose`
+   returns, after `Run` has returned, and a `BeforeClose` hook that blocks delays it further.
+10. While the pool holds no heartbeat connection, `heartbeatReady` is false, and the worker claims
+    no task. The dispatch loop starts no claim. A claim first takes its pooled connection
+    (`holdClaimConnection`). Then it reads the gate before each statement attempt: each queue, each
+    deadlock resend (`queryFencedWriteEach`), and the `claim_many_v1` fallback after a refused fast
+    claim. If the gate is closed, it sends no more claim statements. The closed gate does not make
+    the claim count as empty or failed, and the tasks that it already claimed run. A fused
+    completion gets no reservation. If the gate closes after the reservation, `completeChunk` reads
+    it on its held connection before each attempt. From the first attempt that finds it closed, the
+    statement has a claim limit of 0, so it settles its tasks and claims nothing. That completion
+    also does not count as an empty claim. `RunOnce` claims nothing and reports no progress.
+11. A round that holds the connection does not close the gate. A failed round that keeps its
+    connection also does not close it. A round that discards its connection closes the gate until
+    the replacement arrives.
+12. When the replacement arrives, the loop wakes the dispatch loop of each worker on the pool. The
+    wake ends a poll wait, so the first claim starts at once, not at the next poll.
+13. On stop, `dispatch` waits for every claim and every fused claim in flight before it returns. It
+    has no deadline of its own. The drain context ends a claim statement at the end of the grace,
+    and the execution context ends a fused completion. If claims are still in flight when the grace
+    ends, `dispatch` logs `claimsOutlivedGraceLogMessage` once, with the counts in `claims` and
+    `completion_claims`, and keeps waiting. `Run` and `RunOnce` release their hold on the heartbeat
+    connection only when they return. So a claim outcome never arrives after the worker released its
+    hold (SM-1579).
 
 The Go driver reports a lost connection only on the next statement. So a heartbeat connection that
 PostgreSQL closed while no round ran keeps the gate open until the next round fails.

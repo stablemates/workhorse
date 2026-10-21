@@ -37,6 +37,56 @@ deregistration and the wait for the listener end by the grace period plus the 25
 A worker with `SharedHeartbeats` keeps the earlier behavior: it reserves nothing and has no claim
 gate.
 
+### A new worker waits for the released heartbeat connection to return
+
+Before this release, a pool could lend two heartbeat connections at once. Worker A released its
+last hold while one of its heartbeat rounds still used the connection. Worker B then started on the
+same pool and took a second heartbeat connection before the round returned the first. A connection
+that arrived for A after A released could also overlap a new one for B.
+
+Now the heartbeat connection of a pool has one owner until it settles. It settles when its last
+round has ended and the pool no longer counts its connections. This includes a connection that
+arrived after the release. A new worker on that pool acquires its heartbeat connection only after
+that. The notification listener already waits for its predecessor the same way (SM-1579).
+
+**Behavior change.** When the last worker on a pool releases the heartbeat connection, the worker
+now closes that connection and removes it from the pool. Before, it returned the connection to the
+pool as idle. The pool does not call `AfterRelease` for this connection. The next worker on the pool
+opens a new connection or takes an idle one.
+
+pgxpool gives back a connection on a goroutine when the pool has an `AfterRelease` hook, and it
+destroys a closed or expired connection on a goroutine too. The worker cannot see when that return
+ends. So the worker does what the pool's destructor does: it calls `BeforeClose`, closes the
+connection within 15 s, and then removes it from the pool. It does this on a goroutine of its own,
+also for a connection that a failed round discards. So a heartbeat round never waits for a close,
+and the next round uses the replacement at once. A stop does not wait for the close either, so a
+close can end up to 15 s after `BeforeClose` returns, after `Run` has returned.
+
+The startup budget of the new worker bounds its wait. The round bound of the released worker bounds
+the round (ADR 0071), and the close of each removed connection also counts. If the connection does
+not return within the budget, the new worker refuses to start. The error says that the worker waited
+for the released connection. A startup that ends this way leaves no goroutine that waits for the
+round.
+
+### A stop logs the claims it still waits for at the end of the grace
+
+A stop waits for every claim in flight, also after the shutdown grace. The worker keeps its
+heartbeat connection until each claim returns, so a claim cannot lease tasks that no heartbeat
+renews. If claims are still in flight when the grace ends, the worker now logs one warning, "claims
+are still in flight at the end of the shutdown grace; the worker waits for them". The warning gives
+the counts in `claims` and `completion_claims` (SM-1579).
+
+### A fast-tier completion claims only for the run that started it
+
+Before this release, a fast-tier handler could outlive a `Run` that returned
+`ErrShutdownIncomplete`. If the caller then ran the same `Worker` again, that handler's completion
+could reserve slots of the new run and claim tasks for them. The counters of the new run then
+included a task that it did not launch.
+
+Now each task records the run that launched it. Its completion asks only that run for replacement
+tasks. A completion that outlives its run settles its task and claims nothing. It also goes in a
+statement of its own, so it cannot join or fail a batch of the new run (SM-1579).
+
 ### Dependencies
 
 - The repository now builds and checks the module with go1.26.10, because advisory GO-2026-6809 in

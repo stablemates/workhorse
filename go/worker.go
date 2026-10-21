@@ -309,10 +309,7 @@ type Worker struct {
 	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
 	// member, in the order of members. It is queryHeartbeatRound outside tests.
 	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
-	// completionClaims is the running dispatch loop's handle for fused completion claims. It is
-	// nil outside Run, so a completion from RunOnce claims nothing.
-	completionClaims atomic.Pointer[completionClaimer]
-	completions      completionBatcher
+	completions    completionBatcher
 	// claimConnection is holdClaimConnection outside tests. A claim and a fused completion take
 	// their connection through it before they read the claim gate.
 	claimConnection func(ctx context.Context, executor Executor) (Executor, func(), error)
@@ -689,7 +686,8 @@ func (worker *Worker) Run(ctx context.Context) error {
 		heartbeatWake:     heartbeatWake,
 		// A maintenance, claim, or execution error stops the run while the caller's context is
 		// still live. The grace period starts then, so a stalled claim cannot hold the settlement.
-		stopped: startGrace,
+		stopped:    startGrace,
+		graceEnded: drainContext.Done(),
 	})
 
 	startGrace()
@@ -803,6 +801,8 @@ type dispatchEnvironment struct {
 	// stopped runs once, when the loop stops and before it waits for the claims in flight. A claim
 	// that waits on a lifecycle error's shutdown must see that the shutdown has started.
 	stopped func()
+	// graceEnded closes when the shutdown grace ends. Nil never closes.
+	graceEnded <-chan struct{}
 }
 
 // executionResult is one finished execution and the slot it held.
@@ -814,8 +814,13 @@ type executionResult struct {
 // dispatchSlot is the slot one execution holds. The loop owns cohort and handedOver. released
 // makes sure the handler slot returns exactly once: either the execution returns it when it ends,
 // or the loop returns it early when the execution's fused completion claimed replacements.
+//
+// claimer belongs to the dispatch loop of the run that launched the execution. A fused completion
+// asks only that loop for a reservation. After the run ends, that loop grants none, so an execution
+// that outlived its run never reserves the slots of a later run of the same Worker.
 type dispatchSlot struct {
 	cohort     int
+	claimer    *completionClaimer
 	handedOver bool
 	released   atomic.Bool
 }
@@ -873,10 +878,10 @@ type completionSettlement struct {
 	answered bool
 }
 
-// reserve asks the loop for a fused claim. It returns nil when the task holds no dispatch slot,
+// reserve asks the loop for a fused claim. It returns nil when the task holds no slot of this loop,
 // the loop has stopped, or the loop declines.
 func (claimer *completionClaimer) reserve(task ClaimedTask) *completionReservation {
-	if claimer == nil || task.slot == nil {
+	if claimer == nil || task.slot == nil || task.slot.claimer != claimer {
 		return nil
 	}
 	reply := make(chan *completionReservation, 1)
@@ -939,7 +944,6 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		settlements: make(chan completionSettlement),
 		done:        make(chan struct{}),
 	}
-	worker.completionClaims.Store(claimer)
 	active := 0
 	// handedOver counts executions whose fused completion is in flight or claimed replacements:
 	// their slots already belong to the reservation or to the replacements.
@@ -1029,7 +1033,7 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		if cohort < 0 || cohortFree(cohort) <= 0 {
 			cohort = roomiestCohort()
 		}
-		slot := &dispatchSlot{cohort: cohort}
+		slot := &dispatchSlot{cohort: cohort, claimer: claimer}
 		task.slot = slot
 		worker.handlerSlots <- struct{}{}
 		active++
@@ -1156,6 +1160,10 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	// completing task's cohort is in flight, a completion claims only when that would fill at least
 	// a refill batch of slots. A claim for another cohort does not hold a completion back.
 	reserveCompletionClaim := func(slot *dispatchSlot) *completionReservation {
+		// A slot of another run never changes this loop's counters.
+		if slot.claimer != claimer {
+			return nil
+		}
 		if stopping || firstError != nil || emptyWait != nil || worker.remotelyPaused.Load() || !claimable() {
 			return nil
 		}
@@ -1294,8 +1302,8 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	}
 	// No reservation is granted from here on. Every claim and fused claim still in flight settles
 	// first, so the executions the caller drains include every task they leased.
-	worker.completionClaims.CompareAndSwap(claimer, nil)
 	close(claimer.done)
+	graceEnded := environment.graceEnded
 	for claimsInFlight > 0 || completionClaimsInFlight > 0 {
 		select {
 		case settlement := <-claimResults:
@@ -1304,6 +1312,15 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 			settleCompletionClaim(settlement)
 		case request := <-claimer.requests:
 			request.reply <- nil
+		case <-graceEnded:
+			// The grace ends their statements. The loop still waits until each one returns, so Run
+			// keeps its hold on the heartbeat connection while a claim can still lease tasks.
+			graceEnded = nil
+			worker.logger.Warn(
+				claimsOutlivedGraceLogMessage,
+				claimsInFlightLogField, claimsInFlight,
+				completionClaimsInFlightLogField, completionClaimsInFlight,
+			)
 		}
 	}
 	return active, firstError
@@ -1758,11 +1775,13 @@ func (worker *Worker) writeFastCompletion(
 		answer := <-entry.answer
 		return answer.accepted, answer.err
 	}
-	reservation := worker.completionClaims.Load().reserve(task)
+	// Only the loop of the run that launched the task can reserve slots for its fused claim.
+	reservation := task.slot.claimer.reserve(task)
 	if reservation != nil {
 		entry.limit = reservation.limit
 	}
-	answer := worker.completions.submit(worker, completionBatchKey{queue: task.Queue, cohort: task.slot.cohort}, entry)
+	key := completionBatchKey{queue: task.Queue, cohort: task.slot.cohort, claimer: task.slot.claimer}
+	answer := worker.completions.submit(worker, key, entry)
 	if answer.err != nil {
 		reservation.settle(nil, false)
 		return false, answer.err
@@ -1786,9 +1805,12 @@ type completionBatcher struct {
 	flushing map[completionBatchKey]bool
 }
 
+// completionBatchKey names one batch. claimer keeps the completions of each run in their own
+// statements, so a completion that outlived its run cannot join, or fail, a later run's batch.
 type completionBatchKey struct {
-	queue  string
-	cohort int
+	queue   string
+	cohort  int
+	claimer *completionClaimer
 }
 
 type completionEntry struct {
