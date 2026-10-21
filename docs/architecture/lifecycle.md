@@ -1456,7 +1456,8 @@ fails the round and discards the connection. Their heartbeat connections work as
   `WorkerOptions::shared_heartbeats` is set. The pool identity is the address that
   `Pool::manager()` returns, so clones of one pool share the connection, and two pools that the
   caller builds separately do not. `shared::HeartbeatConnection` holds the connection while a run
-  of any worker on the pool identity holds it, and the last run to stop closes it.
+  of any worker on the pool identity holds it. When the last run stops, the connection goes back to
+  the pool.
 - Each Rust worker sends its own rounds on the shared connection, one round at a time. It bounds a
   round by `heartbeat_round_bound`, and the wait for the rounds of the other workers counts against
   that bound. A failed round discards the connection. One keeper task then takes a replacement at
@@ -1858,24 +1859,30 @@ The scheduler follows these rules in every SDK:
 A replacement connection never starts a second round. Each SDK opens at most one replacement at a
 time:
 
-| SDK        | Where the replacement opens                                                     | Bound on the open                                                   |
-| ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| TypeScript | when the failed round ends, in `ReservedConnection.reserve`, asynchronously     | the `connectionTimeoutMillis` of the pool (none by default)         |
-| Go         | when the failed round discards it, in `acquireUntilHeld`, a goroutine           | none; each round waits for it at most one round bound               |
-| Python     | when the failed round ends, in `_replace_heartbeat_connection`, on its thread   | the `timeout` of a psycopg pool (30 s by default); none for asyncpg |
-| Rust       | when the failed round ends, in the keeper task of `shared::HeartbeatConnection` | one round bound                                                     |
-| Ruby       | in the loop of the heartbeat thread, before the next round waits for its slot   | the checkout timeout of the connection pool                         |
-| JVM        | after the failed round, once its connection is back, on the checkout thread     | one round bound; the open itself has the `getConnection` timeout    |
+| SDK        | Where the replacement opens                                                                                                                                                                              | Bound on the open                                                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | when the failed round ends, in `ReservedConnection.reserve`, asynchronously                                                                                                                              | the `connectionTimeoutMillis` of the pool (none by default)                                                                                                |
+| Go         | when the failed round discards it, in `acquireUntilHeld`, a goroutine                                                                                                                                    | none; each round waits for it at most one round bound                                                                                                      |
+| Python     | when the failed round gives up its connection (`HeartbeatReservation.lose`). The one acquirer thread of the reservation opens it. On an async pool, each attempt is a request to `AsyncConnectionOwner`. | one round bound of the shortest `heartbeat_ms`. At startup, an attempt can use the rest of the startup budget.                                             |
+| Rust       | when the failed round ends, in the keeper task of `shared::HeartbeatConnection`                                                                                                                          | one round bound                                                                                                                                            |
+| Ruby       | when the failed round has ended its checkout. A separate checkout thread (`Heartbeat::Acquisition`) opens it.                                                                                            | the heartbeat thread waits one round bound for each attempt. A `ConnectionPool` checkout uses the round bound as its timeout, not the timeout of the pool. |
+| JVM        | after the failed round, once its connection is back, on the checkout thread                                                                                                                              | one round bound; the open itself has the `getConnection` timeout                                                                                           |
 
-In TypeScript, Go, Python, and Rust, the open does not hold the scheduler. The next round starts at
-its slot. If the replacement is not ready, the round waits for it (TypeScript, Go, and Rust) or
-starts its own checkout (Python), in both cases only until its own deadline. A Rust acquisition that
-reaches its bound stops, and the keeper tries again after its delay. In Ruby, the heartbeat thread
-opens the connection itself. If the open ends after the next slot, the next round is overdue, and it
-starts when the open ends. In JVM, the open does not hold the heartbeat thread, and a round waits
-for it only until its own deadline. A JVM round that gets the connection during its bound sends
-nothing, and a regular round then runs at once with a full bound. Only one round is in flight in
-each case.
+In TypeScript, Go, Python, Rust, and JVM, the open does not hold the scheduler. The next round
+starts at its slot. If the replacement is not ready, the round waits for it only until its own
+deadline. No round starts a checkout of its own.
+
+- A Rust acquisition that reaches its bound stops, and the keeper tries again after its delay.
+- A Python attempt that reaches its bound fails. The acquirer thread then tries again after its
+  backoff.
+- A JVM round that gets the connection during its bound sends nothing. A regular round then runs at
+  once with a full bound.
+- In Ruby, the heartbeat thread sends no round while it has no connection. It waits for the checkout
+  thread one round bound at a time. A checkout that is still pending stays the current one, so the
+  next attempt waits for it and starts no second checkout. If the connection arrives after the next
+  slot, the next round is overdue, and it starts when the connection arrives.
+
+Only one round is in flight in each case.
 
 A Ruby or JVM round sends one statement for each worker on the pool, and also one for each 100
 leases of a worker. On the dedicated connection, all statements of one round share one deadline: the

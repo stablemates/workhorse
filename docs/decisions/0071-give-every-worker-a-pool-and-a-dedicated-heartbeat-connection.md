@@ -12,6 +12,8 @@
 - **Amended:** 2026-10-21 (SM-1565): Every SDK shares one listener connection and one heartbeat
   connection for each pool identity. The amendment at the end of this record states the rules, the
   measured envelope, and the acceptance thresholds.
+- **Amended:** 2026-10-21 (SM-1573): Every SDK issue of the SM-1565 amendment has shipped. Notes
+  mark the paragraphs of the decision that the SM-1565 amendment supersedes.
 
 ## Context
 
@@ -70,12 +72,22 @@ Rust worker takes its own heartbeat connection from its pool and opens its liste
 pool. Each such worker therefore adds its own connections to the budget. The minimum pool of 3
 still applies to every worker that reserves one.
 
+Rules 5 and 6 of the 2026-10-21 amendment supersede the replacement in the next paragraph. A
+failed round now starts the replacement at once, also when no task runs. Each round waits for the
+connection only until its round bound. In TypeScript and Go, the acquisition itself can stay
+pending after that wait ends. The paragraph stays as the record of the original decision.
+
 Each heartbeat round on that connection is bounded by the heartbeat interval. A round that exceeds
 the bound, or whose statement fails, destroys the connection. The next round takes a fresh one
 from the pool. The connection holds no session state, so it works behind a transaction-mode
 pooler.
 
 ### A worker that cannot reserve refuses to start
+
+Rules 3 and 4 of the 2026-10-21 amendment extend the next paragraph. A worker also refuses to
+start when it cannot reserve the heartbeat connection and borrow one more connection within its
+startup budget. A JVM `DataSource` reports no capacity, so on the JVM that startup check replaces
+the check at construction. The paragraph stays as the record of the original decision.
 
 A worker whose pool cannot lend the heartbeat connection fails at construction. The pool must have
 a known capacity of at least 3: the listener, the heartbeat connection, and one statement. The
@@ -201,8 +213,8 @@ them:
 | Go         | SM-1576 |
 | Ruby       | SM-1577 |
 
-Until each of those issues ships, its SDK keeps the budget and the startup behavior that
-`docs/architecture/overview.md` states.
+Each of those issues has shipped. Before its issue shipped, an SDK kept its earlier budget and
+startup behavior.
 
 ### The rules
 

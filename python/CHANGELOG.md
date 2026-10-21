@@ -21,8 +21,8 @@ no timeout.
 Now every worker on one pool object shares one listener connection and one heartbeat connection,
 as ADR 0071 requires (SM-1571). Each of the three pool types is its own domain: the psycopg
 `ConnectionPool`, the psycopg `AsyncConnectionPool`, and the `asyncpg.Pool`. The worker keys the
-shared connections by the pool object and holds only a weak reference to the pool. The shared
-connections close when the last worker on the pool stops.
+shared connections by the pool object and holds only a weak reference to the pool. When the last worker
+on the pool stops, the shared connections go back to the pool.
 
 - **Startup.** Within max(`heartbeat_ms`, 5 s), a worker first reserves the shared heartbeat
   connection. Then it borrows one connection for the compatibility check. If either step does not
@@ -31,8 +31,10 @@ connections close when the last worker on the pool stops.
 - **No claim without a heartbeat connection.** While the pool holds no usable heartbeat connection,
   a worker claims no task, and a completion claims no next task. The worker reads this again after
   each claim borrows its connection, because the heartbeat connection can be lost during that wait.
-  The worker opens the replacement at once and retries with a backoff of at most `heartbeat_ms`.
-  When the replacement is ready, the worker claims again at once.
+  The worker opens the replacement at once. It retries after a backoff that starts at 100 ms and
+  doubles up to `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, so one wait
+  can reach 1.1 times `heartbeat_ms`. When the replacement is ready, the worker claims again at
+  once.
 - **Fair heartbeat rounds.** The rounds of the workers on one pool take the shared heartbeat
   connection in arrival order. A round with less than a quarter of its time left skips, so it cannot
   expire during a statement and lose the connection for every worker.
