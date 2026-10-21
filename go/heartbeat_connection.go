@@ -3,6 +3,7 @@ package workhorse
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -155,9 +156,15 @@ func runBoundedOnPool(
 // because the heartbeat never waits for the shared pool. A round that outlives its bound closes the
 // connection, so the pool discards it instead of lending it again, and server timeouts end its
 // heartbeat and its idle waits by the same deadline (serverBoundedExecutor). The bound covers the wait for the slot,
-// the checkout, and the transaction. A failed round acquires the replacement when it ends (replace),
-// so the checkout starts before the next round. The timeouts are transaction-scoped, so the
+// the wait for the connection, and the transaction. The timeouts are transaction-scoped, so the
 // connection stays safe behind a transaction-mode pooler.
+//
+// Only one acquisition loop asks the pool for the connection (acquireUntilHeld), with one Acquire in
+// flight. A round or a startup that needs the connection waits for that loop until its own deadline,
+// and the Acquire continues past that deadline. So waiters that time out start no new acquisition
+// and leave none behind. The loop starts when the first holder reserves and again when a round
+// discards the connection, and it retries until a connection arrives or the last holder releases.
+// It runs whether or not any task is active (ADR 0071).
 type heartbeatConnection struct {
 	pool *pgxpool.Pool
 	// slot serializes rounds, because one PostgreSQL session runs one transaction at a time and
@@ -167,26 +174,168 @@ type heartbeatConnection struct {
 	conn   *pgxpool.Conn
 	rounds int
 	closed bool
-	// replacing is true while a replacement that a failed round started is still acquiring.
-	replacing bool
+	// held closes when the loop stores a connection. A discard replaces it with an open channel, so a
+	// waiter sees only a connection that arrived after the discard.
+	held chan struct{}
+	// acquiring is true while the acquisition loop runs.
+	acquiring bool
+	// lastErr is the error of the loop's last failed attempt since the connection was last held.
+	lastErr error
+	// interval caps the delay between two failed attempts of the loop. It is the shortest that any
+	// worker gave since the connection was created.
+	interval time.Duration
+	// lifetime ends when the last holder releases, which stops the loop and every wait.
+	lifetime      context.Context
+	endLifetime   context.CancelFunc
+	readyHandlers map[*heartbeatConnectionLease]func()
 }
 
-func newHeartbeatConnection(pool *pgxpool.Pool) *heartbeatConnection {
-	return &heartbeatConnection{pool: pool, slot: make(chan struct{}, 1)}
+// heartbeatReacquireInitialDelay is the first delay between two attempts of the acquisition loop.
+// Each later delay doubles, up to the heartbeat interval.
+const heartbeatReacquireInitialDelay = 10 * time.Millisecond
+
+func newHeartbeatConnection(pool *pgxpool.Pool, interval time.Duration) *heartbeatConnection {
+	lifetime, endLifetime := context.WithCancel(context.Background())
+	return &heartbeatConnection{
+		pool:          pool,
+		slot:          make(chan struct{}, 1),
+		held:          make(chan struct{}),
+		interval:      interval,
+		lifetime:      lifetime,
+		endLifetime:   endLifetime,
+		readyHandlers: make(map[*heartbeatConnectionLease]func()),
+	}
 }
 
-// reserve takes the connection before any handler can exhaust the pool. A pool that cannot lend one
-// now is asked again by the first round.
-func (connection *heartbeatConnection) reserve(ctx context.Context, bound time.Duration) {
-	reserveContext, cancel := context.WithTimeout(ctx, bound)
-	defer cancel()
-	_, _ = connection.acquire(reserveContext)
+// reserve waits until the connection is held or ctx ends.
+func (connection *heartbeatConnection) reserve(ctx context.Context) error {
+	_, err := connection.await(ctx)
+	return err
+}
+
+// ready reports whether the connection is held now. A round in flight keeps it held, so a slow or
+// failed round that keeps its connection does not make the connection unready.
+func (connection *heartbeatConnection) ready() bool {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	return connection.conn != nil && !connection.closed
+}
+
+// await returns the held connection. Without one, it starts the acquisition loop if the loop is not
+// running and waits for it until ctx ends.
+func (connection *heartbeatConnection) await(ctx context.Context) (*pgxpool.Conn, error) {
+	for {
+		connection.mu.Lock()
+		if connection.closed {
+			connection.mu.Unlock()
+			return nil, errors.New(heartbeatConnectionClosedMessage)
+		}
+		if held := connection.conn; held != nil {
+			connection.mu.Unlock()
+			return held, nil
+		}
+		connection.startAcquiringLocked()
+		held := connection.held
+		connection.mu.Unlock()
+		select {
+		case <-held:
+		case <-connection.lifetime.Done():
+		case <-ctx.Done():
+			connection.mu.Lock()
+			lastErr := connection.lastErr
+			connection.mu.Unlock()
+			if lastErr != nil {
+				return nil, fmt.Errorf(heartbeatAcquisitionFailedFormat, ctx.Err(), lastErr)
+			}
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// startAcquiringLocked starts the acquisition loop unless a connection is held, the loop runs, or the
+// connection is released. The caller holds mu.
+func (connection *heartbeatConnection) startAcquiringLocked() {
+	if connection.conn != nil || connection.acquiring || connection.closed {
+		return
+	}
+	connection.acquiring = true
+	go connection.acquireUntilHeld()
+}
+
+// acquireUntilHeld asks the pool for the connection until one arrives or the connection is released.
+// It has one Acquire in flight. That Acquire ends only when the pool lends a connection, the
+// connection fails to open, or the last holder releases. No waiter's deadline ends it, so repeated
+// waiter timeouts start no further Acquire and no further connect. After a failed attempt the loop
+// waits, starting at heartbeatReacquireInitialDelay and doubling up to the heartbeat interval.
+//
+// The loop is the one owner of what its Acquire returns: it keeps the connection, or it releases it
+// to the pool when the last holder released first. If the release ends an Acquire whose connect is
+// still running, pgxpool finishes that connect and adopts the connection as idle.
+func (connection *heartbeatConnection) acquireUntilHeld() {
+	delay := heartbeatReacquireInitialDelay
+	for {
+		acquired, err := connection.pool.Acquire(connection.lifetime)
+		connection.mu.Lock()
+		if connection.closed {
+			connection.acquiring = false
+			connection.mu.Unlock()
+			if acquired != nil {
+				acquired.Release()
+			}
+			return
+		}
+		if err == nil {
+			connection.conn = acquired
+			connection.acquiring = false
+			connection.lastErr = nil
+			close(connection.held)
+			handlers := make([]func(), 0, len(connection.readyHandlers))
+			for _, handler := range connection.readyHandlers {
+				handlers = append(handlers, handler)
+			}
+			connection.mu.Unlock()
+			for _, handler := range handlers {
+				handler()
+			}
+			return
+		}
+		connection.lastErr = err
+		interval := connection.interval
+		connection.mu.Unlock()
+		wait := time.NewTimer(min(delay, interval))
+		select {
+		case <-wait.C:
+		case <-connection.lifetime.Done():
+			wait.Stop()
+		}
+		delay = min(2*delay, interval)
+	}
+}
+
+// watch calls onReady each time the acquisition loop stores a connection, until lease releases.
+func (connection *heartbeatConnection) watch(lease *heartbeatConnectionLease, onReady func()) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	connection.readyHandlers[lease] = onReady
+}
+
+func (connection *heartbeatConnection) unwatch(lease *heartbeatConnectionLease) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	delete(connection.readyHandlers, lease)
+}
+
+// shorten lowers the loop's delay cap to the interval of a new holder with a shorter one.
+func (connection *heartbeatConnection) shorten(interval time.Duration) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	connection.interval = min(connection.interval, interval)
 }
 
 // run executes one bounded round on the reserved connection. A round that fails discards the
-// connection, so the next round starts from a healthy one. A round that expired before its heartbeat
-// statement and left the connection clean keeps it, so the next round uses it. This keeps the
-// connection that handlers cannot take (ADR 0071).
+// connection, and the acquisition loop starts at once, so the next round starts from a healthy one.
+// A round that expired before its heartbeat statement and left the connection clean keeps it, so
+// the next round uses it. This keeps the connection that handlers cannot take (ADR 0071).
 func (connection *heartbeatConnection) run(
 	ctx context.Context,
 	bound time.Duration,
@@ -204,9 +353,8 @@ func (connection *heartbeatConnection) run(
 		return err
 	}
 	defer connection.finishRound()
-	held, err := connection.acquire(roundContext)
+	held, err := connection.await(roundContext)
 	if err != nil {
-		connection.replace(ctx, bound)
 		return err
 	}
 	if err := round(roundContext, serverBoundedExecutor{conn: held.Conn()}); err != nil {
@@ -214,37 +362,18 @@ func (connection *heartbeatConnection) run(
 			return err
 		}
 		connection.discard(held)
-		connection.replace(ctx, bound)
 		return err
 	}
 	return nil
 }
 
-// replace acquires the connection for the next round after a failed round. Rounds start on a fixed
-// schedule, so the next round can start soon after a failed one. Acquiring now starts the checkout
-// before that round, which waits for it only if it is still pending. One replacement runs at a time,
-// and each waits at most bound.
-func (connection *heartbeatConnection) replace(ctx context.Context, bound time.Duration) {
-	connection.mu.Lock()
-	if connection.replacing || connection.conn != nil || connection.closed {
-		connection.mu.Unlock()
-		return
-	}
-	connection.replacing = true
-	connection.mu.Unlock()
-	go func() {
-		connection.reserve(context.WithoutCancel(ctx), bound)
-		connection.mu.Lock()
-		connection.replacing = false
-		connection.mu.Unlock()
-	}()
-}
-
-// release stops reserving. A round still in flight owns the connection until it returns, so
-// releasing never takes a session out from under a statement.
+// release stops reserving and ends the acquisition loop. A round still in flight owns the
+// connection until it returns, so releasing never takes a session out from under a statement.
+// Release waits for nothing.
 func (connection *heartbeatConnection) release() {
 	connection.mu.Lock()
 	connection.closed = true
+	connection.endLifetime()
 	if connection.rounds > 0 {
 		connection.mu.Unlock()
 		return
@@ -282,38 +411,8 @@ func (connection *heartbeatConnection) finishRound() {
 	}
 }
 
-func (connection *heartbeatConnection) acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	connection.mu.Lock()
-	held := connection.conn
-	closed := connection.closed
-	connection.mu.Unlock()
-	if held != nil {
-		return held, nil
-	}
-	if closed {
-		return nil, errors.New(heartbeatConnectionClosedMessage)
-	}
-	acquired, err := connection.pool.Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	connection.mu.Lock()
-	if connection.conn == nil && !connection.closed {
-		connection.conn = acquired
-		connection.mu.Unlock()
-		return acquired, nil
-	}
-	held = connection.conn
-	connection.mu.Unlock()
-	acquired.Release()
-	if held == nil {
-		return nil, errors.New(heartbeatConnectionClosedMessage)
-	}
-	return held, nil
-}
-
-// discard closes the session so the pool cannot lend it again. A heartbeat or an idle wait still open
-// on it ends by its server-side timeout.
+// discard closes the session so the pool cannot lend it again, and starts the acquisition loop for
+// its replacement. A heartbeat or an idle wait still open on it ends by its server-side timeout.
 func (connection *heartbeatConnection) discard(held *pgxpool.Conn) {
 	connection.mu.Lock()
 	if connection.conn != held {
@@ -321,6 +420,8 @@ func (connection *heartbeatConnection) discard(held *pgxpool.Conn) {
 		return
 	}
 	connection.conn = nil
+	connection.held = make(chan struct{})
+	connection.startAcquiringLocked()
 	connection.mu.Unlock()
 	_ = held.Conn().Close(context.Background())
 	held.Release()
@@ -333,8 +434,19 @@ type heartbeatConnectionLease struct {
 	released   bool
 }
 
-func (lease *heartbeatConnectionLease) reserve(ctx context.Context, bound time.Duration) {
-	lease.connection.reserve(ctx, bound)
+// reserve waits until the shared connection is held or ctx ends.
+func (lease *heartbeatConnectionLease) reserve(ctx context.Context) error {
+	return lease.connection.reserve(ctx)
+}
+
+// ready reports whether the shared connection is held now.
+func (lease *heartbeatConnectionLease) ready() bool {
+	return lease.connection.ready()
+}
+
+// watch calls onReady each time a replacement connection arrives, until this hold releases.
+func (lease *heartbeatConnectionLease) watch(onReady func()) {
+	lease.connection.watch(lease, onReady)
 }
 
 func (lease *heartbeatConnectionLease) run(
@@ -358,13 +470,16 @@ type sharedHeartbeatConnection struct {
 // holdHeartbeatConnection hands the caller the heartbeat connection shared by every worker on one
 // pool. Workers share it the way they share the notification listener, so a pool gives up one
 // connection for heartbeats however many workers run on it. The last holder to release returns it.
-func holdHeartbeatConnection(pool *pgxpool.Pool) *heartbeatConnectionLease {
+// interval is the holder's heartbeat interval, which caps the delay of the shared acquisition loop.
+func holdHeartbeatConnection(pool *pgxpool.Pool, interval time.Duration) *heartbeatConnectionLease {
 	heldHeartbeatConnections.mu.Lock()
 	defer heldHeartbeatConnections.mu.Unlock()
 	shared, ok := heldHeartbeatConnections.held[pool]
 	if !ok {
-		shared = &sharedHeartbeatConnection{connection: newHeartbeatConnection(pool)}
+		shared = &sharedHeartbeatConnection{connection: newHeartbeatConnection(pool, interval)}
 		heldHeartbeatConnections.held[pool] = shared
+	} else {
+		shared.connection.shorten(interval)
 	}
 	shared.holders++
 	return &heartbeatConnectionLease{pool: pool, connection: shared.connection}
@@ -379,6 +494,7 @@ func (lease *heartbeatConnectionLease) release() {
 		return
 	}
 	lease.released = true
+	lease.connection.unwatch(lease)
 	shared, ok := heldHeartbeatConnections.held[lease.pool]
 	if !ok || shared.connection != lease.connection {
 		heldHeartbeatConnections.mu.Unlock()

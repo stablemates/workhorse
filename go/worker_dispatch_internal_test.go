@@ -52,9 +52,17 @@ type dispatchHarness struct {
 	registry     chan struct{}
 	// notificationDelay is the delay a notified claim waits when it waits. It defaults to none.
 	notificationDelay atomic.Int64
-	cancel            context.CancelFunc
-	outcome           chan dispatchOutcome
-	nextTask          int
+	// delayEntered runs when a notified claim enters its delay, before the delay starts. Nil runs
+	// nothing.
+	delayEntered atomic.Pointer[func()]
+	// settled receives whether each claim that the loop settles was skipped.
+	settled chan bool
+	// withoutHeartbeat closes the claim gate, as a pool without its heartbeat connection does.
+	withoutHeartbeat atomic.Bool
+	heartbeat        chan struct{}
+	cancel           context.CancelFunc
+	outcome          chan dispatchOutcome
+	nextTask         int
 }
 
 type dispatchOutcome struct {
@@ -83,6 +91,8 @@ func startDispatchOn(t *testing.T, options WorkerOptions, paused bool, tier disp
 		results:      make(chan executionResult, 2*worker.concurrency),
 		notification: make(chan struct{}, 1),
 		registry:     make(chan struct{}, 1),
+		heartbeat:    make(chan struct{}, 1),
+		settled:      make(chan bool, 100),
 		cancel:       cancel,
 		outcome:      make(chan dispatchOutcome, 1),
 	}
@@ -106,11 +116,25 @@ func startDispatchOn(t *testing.T, options WorkerOptions, paused bool, tier disp
 				harness.executions <- fakeExecution{task: task, finish: finish}
 				return <-finish
 			},
-			executionResults:  harness.results,
-			notificationWake:  harness.notification,
-			registryWake:      harness.registry,
-			listening:         func() bool { return true },
-			notificationDelay: func() time.Duration { return time.Duration(harness.notificationDelay.Load()) },
+			executionResults: harness.results,
+			notificationWake: harness.notification,
+			registryWake:     harness.registry,
+			listening:        func() bool { return true },
+			claimable:        func() bool { return !harness.withoutHeartbeat.Load() },
+			heartbeatWake:    harness.heartbeat,
+			claimSettled: func(skipped bool) {
+				// A test that does not read settlements must not block the loop.
+				select {
+				case harness.settled <- skipped:
+				default:
+				}
+			},
+			notificationDelay: func() time.Duration {
+				if entered := harness.delayEntered.Load(); entered != nil {
+					(*entered)()
+				}
+				return time.Duration(harness.notificationDelay.Load())
+			},
 		})
 		harness.outcome <- dispatchOutcome{active: active, err: err}
 	}()

@@ -25,8 +25,25 @@ func queryFencedWrite(
 	statement string,
 	arguments ...any,
 ) ([]Row, error) {
+	return queryFencedWriteEach(ctx, executor, statement, func() ([]any, error) { return arguments, nil })
+}
+
+// queryFencedWriteEach is queryFencedWrite with the arguments of each attempt from argumentsFor,
+// which runs right before that attempt is sent. An error from argumentsFor ends the write without
+// sending that attempt. A worker reads its claim gate there, so a resend cannot claim after the
+// heartbeat connection went away.
+func queryFencedWriteEach(
+	ctx context.Context,
+	executor Executor,
+	statement string,
+	argumentsFor func() ([]any, error),
+) ([]Row, error) {
 	var deadlock error
 	for attempt := 1; ; attempt++ {
+		arguments, err := argumentsFor()
+		if err != nil {
+			return nil, err
+		}
 		rows, err := executor.Query(ctx, statement, arguments...)
 		if err == nil {
 			return rows, nil

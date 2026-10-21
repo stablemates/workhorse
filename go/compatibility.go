@@ -135,12 +135,17 @@ func NewCachedCompatibilityCheck(executor Executor) *CachedCompatibilityCheck {
 
 // Assert returns the first answered compatibility result for every call.
 func (check *CachedCompatibilityCheck) Assert(ctx context.Context) error {
+	return check.assertOn(ctx, check.executor)
+}
+
+// assertOn is Assert with the query sent through executor, which a worker's startup borrows.
+func (check *CachedCompatibilityCheck) assertOn(ctx context.Context, executor Executor) error {
 	check.mu.Lock()
 	defer check.mu.Unlock()
 	if check.answered {
 		return check.err
 	}
-	err := AssertSchemaCompatible(ctx, check.executor)
+	err := AssertSchemaCompatible(ctx, executor)
 	var refusal *CompatibilityError
 	if err == nil || errors.As(err, &refusal) {
 		check.answered = true

@@ -19,9 +19,10 @@ func ServerBoundedQueryForTest(ctx context.Context, conn *pgx.Conn, statement st
 // checks a failed round acquires its replacement.
 type HeartbeatConnectionForTest struct{ connection *heartbeatConnection }
 
-// NewHeartbeatConnectionForTest reserves nothing until the first round.
+// NewHeartbeatConnectionForTest reserves nothing until the first round. Its acquisition loop waits
+// at most one second between two failed attempts.
 func NewHeartbeatConnectionForTest(pool *pgxpool.Pool) HeartbeatConnectionForTest {
-	return HeartbeatConnectionForTest{connection: newHeartbeatConnection(pool)}
+	return HeartbeatConnectionForTest{connection: newHeartbeatConnection(pool, time.Second)}
 }
 
 // FailRound runs one round whose statement fails, so the round discards its connection.
@@ -100,4 +101,33 @@ func (worker *Worker) HeartbeatRoundManyForTest(leases []HeartbeatLeaseForTest, 
 		result = append(result, string(status))
 	}
 	return result, nil
+}
+
+// HeartbeatConnectionHeldForTest reports whether the worker's pool holds its heartbeat connection now.
+func (worker *Worker) HeartbeatConnectionHeldForTest() bool {
+	worker.heartbeatMu.Lock()
+	lease := worker.heartbeatLease
+	worker.heartbeatMu.Unlock()
+	if lease == nil {
+		return false
+	}
+	lease.connection.mu.Lock()
+	defer lease.connection.mu.Unlock()
+	return lease.connection.conn != nil
+}
+
+// TakeHeartbeatConnectionForTest takes the heartbeat connection from the worker, as a lost
+// connection does, and gives it to the test, which must release it. The worker then acquires a
+// replacement, as after a failed round.
+func (worker *Worker) TakeHeartbeatConnectionForTest() *pgxpool.Conn {
+	worker.heartbeatMu.Lock()
+	connection := worker.heartbeatLease.connection
+	worker.heartbeatMu.Unlock()
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	held := connection.conn
+	connection.conn = nil
+	connection.held = make(chan struct{})
+	connection.startAcquiringLocked()
+	return held
 }

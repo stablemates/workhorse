@@ -1446,20 +1446,25 @@ The same deadline cancels each shutdown statement that waits for a pooled connec
 
 A claim the deadline cancels leaves any lease it committed to expire. `deregister_worker_v1` then
 gets at most 1,000 milliseconds, so handlers that hold every pool connection cannot keep `Run` from
-returning.
+returning. It also stops at the stop deadline: the grace period plus the 250 millisecond unwind
+window, from the start of the stop. `Run` waits for the listener to stop only until the same
+deadline. The listener then ends its `UNLISTEN` and returns its connection on its own.
 
 #### One pass with `RunOnce`
 
 `Worker.RunOnce` proceeds in this order:
 
-1. It calls `tick_v1(100, 100)`, which promotes due scheduled rows and recovers expired leases. The
+1. It reserves the heartbeat connection and runs the compatibility check inside the startup budget,
+   as `Run` does ([Heartbeat connection](lifecycle.md#heartbeat-connection)).
+2. It calls `tick_v1(100, 100)`, which promotes due scheduled rows and recovers expired leases. The
    claim path sends no separate `promote_v1`.
-2. Before it claims, it evaluates every configured schedule namespace. It does this also if the tick
+3. Before it claims, it evaluates every configured schedule namespace. It does this also if the tick
    skipped.
-3. It checks configured queues in round-robin order until one `claim_many_v1(..., 1, ...)` succeeds
-   or every queue is empty.
-4. It runs at most one matching handler outside a transaction.
-5. It calls `complete_v1` or `fail_v1` under the returned fence. If no handler is registered for
+4. It checks configured queues in round-robin order until one `claim_many_v1(..., 1, ...)` succeeds
+   or every queue is empty. If the pool holds no heartbeat connection, it claims nothing and
+   reports no progress.
+5. It runs at most one matching handler outside a transaction.
+6. It calls `complete_v1` or `fail_v1` under the returned fence. If no handler is registered for
    the claimed type, it calls `release_owned_v1` instead.
 
 It reports whether the pass ran a handler. Thus a pass that only released reports no progress.
@@ -1469,6 +1474,10 @@ It reports whether the pass ran a handler. Thus a pass that only released report
 `Worker.Run` fills free semaphore slots with `claim_many_v1`. Each successful claim starts one
 handler goroutine. The queue cursor advances after every claim attempt. Thus a busy queue cannot
 prevent checks of another configured queue.
+
+While the pool holds no dedicated heartbeat connection, the worker starts no claim, and a fused
+completion claims nothing. When the connection returns, the worker claims at once
+([Heartbeat connection](lifecycle.md#heartbeat-connection)).
 
 An empty sweep waits for `PollInterval` or for a matching PostgreSQL notification. It stops the
 wait at the first of the two.
