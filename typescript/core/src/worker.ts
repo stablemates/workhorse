@@ -14,7 +14,12 @@ import { durableReplayConflict } from "./queue/replay-conflicts.js";
 import { jitterDuration } from "./notifications.js";
 import type { TaskNotificationSubscription } from "./notifications.js";
 import { heartbeatRoundBoundMs } from "./heartbeat-round.js";
-import { MINIMUM_REMAINING_MS } from "./heartbeat-connection.js";
+import {
+  HeartbeatGateClosedError,
+  heartbeatStartupBudgetMs,
+  MINIMUM_REMAINING_MS,
+  withClaimGate,
+} from "./heartbeat-connection.js";
 import { MAX_TIMER_DELAY_MS, monotonicNow } from "./timers.js";
 import type {
   ScheduleWaitRequest,
@@ -66,6 +71,7 @@ import {
   type WorkerCompletionPreparation,
   type WorkerHeartbeatChannel,
   type WorkerHeartbeatReservation,
+  type WorkerReadinessFailure,
   type WorkerQueueTierRead,
   workerCheckpointsRead,
   workerCompletionPrepare,
@@ -605,6 +611,12 @@ export class Worker {
   // start on a fixed schedule, so after one timed-out round the next round still ends before the
   // lease when 2 × heartbeatMs + heartbeatRoundMs < leaseMs, as with the defaults.
   private readonly heartbeatRoundMs: number;
+  // max(heartbeatMs, 5 s). It bounds the startup readiness check, the wait of runOnce() for the
+  // reserved connection, and the unwind of run() after its handlers end (ADR 0071 rules 3 and 8).
+  private readonly startupBudgetMs: number;
+  // Ends the startup waits of the current run(), or the reservation wait of runOnce(), when stop()
+  // is called.
+  private abortRun: (() => void) | undefined;
   private readonly pollMs: number;
   private readonly dispatchPollMs: number;
   private readonly supportsNotifications: boolean;
@@ -629,6 +641,12 @@ export class Worker {
   private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
   private registered = false;
   private pendingStopRegistrationRefresh: Promise<void> | undefined;
+  // The first registration write of the current run(), which stop() can stop waiting for.
+  private pendingStartupRegistration: Promise<void> | undefined;
+  // Settles when every stop-path statement of the ended runs has settled. A later run waits for it
+  // before it registers, because deregister_worker_v1 deletes by worker ID only: a late
+  // deregistration would delete the row, and the pause state, of the later run.
+  private previousRunSettled: Promise<unknown> | undefined;
   private loggedRegistrationState:
     | { activeSlots: number; draining: boolean; paused: boolean }
     | undefined;
@@ -690,8 +708,45 @@ export class Worker {
     const reservation = (this.queue as Partial<WorkerHeartbeatReservation>)[
       workerHeartbeatReservation
     ];
-    this.heartbeatChannel = reservation?.call(this.queue);
+    this.heartbeatChannel = reservation?.call(this.queue, this.heartbeatMs);
     return this.heartbeatChannel;
+  }
+
+  // Runs a claim or a fused completion so that each of its claim statements reads the heartbeat
+  // gate immediately before each attempt (withClaimGate). A worker without a reserved connection
+  // has no gate.
+  // The gate reads the channel that this call started with. A channel that the run's cleanup has
+  // closed is not usable, so the cleanup can never open the gate for a statement still on its way.
+  private gated<T>(operation: () => Promise<T>): Promise<T> {
+    const channel = this.heartbeatChannel;
+    if (channel === undefined) return operation();
+    return withClaimGate(() => channel.usable(), operation);
+  }
+
+  // ADR 0071 rule 6: no claim of any kind, ordinary or fused, while the reserved heartbeat
+  // connection is not usable. A worker without a reserved connection (sharedHeartbeats, or a
+  // custom WorkerQueueApi) has no gate.
+  private heartbeatGateOpen(): boolean {
+    return this.heartbeatChannel?.usable() ?? true;
+  }
+
+  private readinessRefusal(
+    channel: WorkerHeartbeatChannel,
+    failure: Exclude<WorkerReadinessFailure, { step: "stopped" }>,
+    prefix = "Worker refused to start",
+  ): Error {
+    const what =
+      failure.step === "heartbeat"
+        ? "did not lend the dedicated heartbeat connection"
+        : failure.reason === "timeout"
+          ? "did not lend one more connection and answer the compatibility query on it"
+          : "could not run the compatibility query on one more connection";
+    return new Error(
+      `${prefix}: ${channel.pool} ${what} within the startup budget of ` +
+        `${this.startupBudgetMs} ms (max(heartbeatMs, 5000)). Give the pool more free ` +
+        "connections, or set sharedHeartbeats: true to send heartbeats through the shared pool.",
+      failure.cause === undefined ? undefined : { cause: failure.cause },
+    );
   }
 
   // A running worker keeps its reservation between tasks; otherwise it is returned with the last
@@ -916,6 +971,7 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.heartbeatRoundMs = heartbeatRoundBoundMs(this.heartbeatMs);
+    this.startupBudgetMs = heartbeatStartupBudgetMs(this.heartbeatMs);
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
     this.dispatchPollMs =
       options.pollMs ??
@@ -1174,6 +1230,7 @@ export class Worker {
   stop(): void {
     this.stopVersion += 1;
     this.stopping = true;
+    this.abortRun?.();
     this.draining = this.running || this.activeSlots > 0;
     // The maintenance loop exits immediately on stop, so a draining worker would otherwise never
     // publish that state and would simply vanish from an operator's fleet view mid-drain.
@@ -1265,7 +1322,14 @@ export class Worker {
    * between calls, so a caller that calls `runOnce()` in a loop must wait after `false`.
    */
   runOnce(): Promise<boolean> {
-    return this.withExclusiveExecution(() => this.runBatch(true));
+    return this.withExclusiveExecution(async () => {
+      try {
+        return await this.runBatch(true);
+      } finally {
+        // A pass that claimed nothing registered no lease, so no lease returns the hold.
+        await this.releaseHeartbeatChannel();
+      }
+    });
   }
 
   // Claims up to `limit` tasks across this worker's queues. A failing claim on a later queue must
@@ -1277,14 +1341,17 @@ export class Worker {
     try {
       if (!this.queue.claimMany) {
         let emptyQueues = 0;
-        while (tasks.length < limit && emptyQueues < this.queueNames.length) {
+        while (
+          tasks.length < limit &&
+          emptyQueues < this.queueNames.length &&
+          this.heartbeatGateOpen()
+        ) {
           const queueName = this.queueNames[this.nextQueueIndex]!;
           this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
           const sentAt = monotonicNow();
-          const task = await this.queue.claim(this.workerId, {
-            queue: queueName,
-            leaseMs: this.leaseMs,
-          });
+          const task = await this.gated(() =>
+            this.queue.claim(this.workerId, { queue: queueName, leaseMs: this.leaseMs }),
+          );
           if (task) {
             this.claimSentAt.set(task, sentAt);
             tasks.push(task);
@@ -1297,7 +1364,7 @@ export class Worker {
       }
       for (
         let checked = 0;
-        checked < this.queueNames.length && tasks.length < limit;
+        checked < this.queueNames.length && tasks.length < limit && this.heartbeatGateOpen();
         checked += 1
       ) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
@@ -1308,6 +1375,8 @@ export class Worker {
       }
       return { claimed: tasks };
     } catch (error) {
+      // The heartbeat gate closed after the claim borrowed its connection. Nothing was claimed.
+      if (error instanceof HeartbeatGateClosedError) return { claimed: tasks };
       return { claimed: tasks, error };
     }
   }
@@ -1325,7 +1394,9 @@ export class Worker {
     if (this.queue.claimFast && (this.fullTierUntil.get(queueName) ?? 0) <= sentAt) {
       if (fastLimit <= 0) return [];
       try {
-        claimed = await this.queue.claimFast(this.workerId, Math.min(limit, fastLimit), options);
+        claimed = await this.gated(() =>
+          this.queue.claimFast!(this.workerId, Math.min(limit, fastLimit), options),
+        );
         this.fullTierUntil.delete(queueName);
         this.fastTierQueues.add(queueName);
         for (const task of claimed) this.fastTasks.add(task);
@@ -1336,7 +1407,7 @@ export class Worker {
       }
     }
     if (claimed === undefined) {
-      claimed = await this.queue.claimMany!(this.workerId, limit, options);
+      claimed = await this.gated(() => this.queue.claimMany!(this.workerId, limit, options));
       if (claimed.length > 0) this.trackFullTierClaim(queueName, claimed);
     }
     for (const task of claimed) this.claimSentAt.set(task, sentAt);
@@ -1373,7 +1444,32 @@ export class Worker {
     includeMaintenance: boolean,
     shouldStop: () => boolean = () => this.stopping,
   ): Promise<boolean> {
-    if (includeMaintenance) await this.runMaintenance();
+    if (includeMaintenance) {
+      // runOnce() registers in its maintenance pass, so the stop path of an ended run must settle.
+      await this.settlePreviousRun();
+      await this.runMaintenance();
+    }
+    if (shouldStop() || this.paused) return false;
+    // runOnce() has no startup, so it waits for the reserved connection before it claims.
+    const channel = this.reservedHeartbeatChannel();
+    if (channel !== undefined && !channel.usable()) {
+      const stopped = new AbortController();
+      this.abortRun = () => stopped.abort();
+      let ready: boolean;
+      try {
+        ready = await channel.ready(this.startupBudgetMs, stopped.signal);
+      } finally {
+        this.abortRun = undefined;
+      }
+      // A stop during the wait claims nothing and is not a refusal.
+      if (!ready && !shouldStop()) {
+        throw this.readinessRefusal(
+          channel,
+          { step: "heartbeat", reason: "timeout" },
+          "Worker.runOnce() claimed nothing",
+        );
+      }
+    }
     if (shouldStop() || this.paused) return false;
     const executions: Array<Promise<PromiseSettledResult<void>>> = [];
     let claimError: unknown;
@@ -1588,13 +1684,17 @@ export class Worker {
     const sentAt = monotonicNow();
     let claimed: readonly ClaimedTask[] | null = null;
     try {
-      const outcome = await write(
-        reservation?.claim ?? {
-          queue: task.queue,
-          limit: 0,
-          leaseMs: this.leaseMs,
-          cohort: this.taskCohorts.get(task),
-        },
+      // The fused statement reads the heartbeat gate before each attempt, also after it waited
+      // for its batch or its connection, and then claims nothing if the gate is closed.
+      const outcome = await this.gated(() =>
+        write(
+          reservation?.claim ?? {
+            queue: task.queue,
+            limit: 0,
+            leaseMs: this.leaseMs,
+            cohort: this.taskCohorts.get(task),
+          },
+        ),
       );
       for (const next of outcome.claimed) {
         this.fastTasks.add(next);
@@ -1777,6 +1877,9 @@ export class Worker {
 
   /** Best-effort removal of this worker's registration once its loop has stopped. */
   private async deregister(): Promise<void> {
+    const startup = this.pendingStartupRegistration;
+    this.pendingStartupRegistration = undefined;
+    await startup?.catch(() => undefined);
     if (!this.registered) return;
     let refreshFailure: { error: unknown } | undefined;
     try {
@@ -1872,9 +1975,13 @@ export class Worker {
     });
     // Boxed so that a rejection with undefined still counts as a failure.
     let firstError: { error: unknown } | undefined;
-    const shouldStop = () => this.stopping || signal?.aborted === true;
+    // Set once the unwind window has passed. A maintenance pass or a registration write that is
+    // still running then belongs to no run: it neither loops again nor fails a later run.
+    let ended = false;
+    const shouldStop = () => ended || this.stopping || signal?.aborted === true;
     // Called when a loop first observes a fatal error, before dispatch drains active handlers.
     const fail = (error: unknown): void => {
+      if (ended) return;
       if (firstError === undefined) {
         firstError = { error };
         reportWorkerFailure(this, error);
@@ -1886,10 +1993,36 @@ export class Worker {
 
     const notificationSubscriptions: TaskNotificationSubscription[] = [];
     this.notificationSubscriptions = notificationSubscriptions;
-    this.reservedHeartbeatChannel()?.reserve();
+    const channel = this.reservedHeartbeatChannel();
+    channel?.reserve();
+    // A replacement heartbeat connection wakes dispatch at once, not at the next poll.
+    const stopWakingOnReady = channel?.onReady(() => this.wakeDispatch());
+    // Set when dispatch has drained, so the rest of the stop path ends by this deadline.
+    let unwindDeadline: number | undefined;
+    const startup = new AbortController();
+    this.abortRun = () => startup.abort();
+    const stopSignal =
+      signal === undefined ? startup.signal : AbortSignal.any([startup.signal, signal]);
+    // Every statement of this run that can outlive it. The next run waits for all of them.
+    const stopWork: Promise<unknown>[] = [];
+    let maintenance: Promise<unknown> | undefined;
+    let registration: Promise<unknown> | undefined;
     const runFailure = await (async () => {
       if (shouldStop()) return;
-      await this.refreshRegistration();
+      if (!(await this.settlePreviousRun(stopSignal)) || shouldStop()) return;
+      if (channel !== undefined) {
+        const failure = await channel.checkReadiness(this.startupBudgetMs, stopSignal);
+        if (failure?.step === "stopped" || shouldStop()) return;
+        if (failure !== undefined) throw this.readinessRefusal(channel, failure);
+      }
+      // The first registration write can wait for a pooled connection, and stop() ends that wait.
+      // The deregistration waits for it in the unwind window, so a late write leaves no row.
+      // A run always registers at once: the deregistration of an earlier run removed its row.
+      const firstRegistration = this.refreshRegistration(true);
+      this.pendingStartupRegistration = firstRegistration;
+      stopWork.push(firstRegistration);
+      await this.untilAborted(firstRegistration, stopSignal);
+      this.abortRun = undefined;
       if (shouldStop()) return;
 
       const subscribeToTaskNotifications = this.queue.subscribeToTaskNotifications;
@@ -1917,36 +2050,60 @@ export class Worker {
       }
 
       // The first claim does not wait for the startup maintenance pass.
-      const maintenance = this.runMaintenance()
+      maintenance = this.runMaintenance()
         .then(() => this.maintenanceLoop(shouldStop, signal))
         .catch(fail);
-      const registration = this.registrationLoop(shouldStop, signal).catch(fail);
-      const dispatch = this.dispatchLoop(shouldStop, fail, signal).catch(fail);
-      await Promise.all([maintenance, registration, dispatch]);
+      registration = this.registrationLoop(shouldStop, signal).catch(fail);
+      await this.dispatchLoop(shouldStop, fail, signal).catch(fail);
+      // Every handler has ended. A maintenance pass or a registration write can still wait for a
+      // pooled connection, so the unwind window bounds that wait.
+      unwindDeadline = monotonicNow() + this.startupBudgetMs;
+      await this.untilDeadline(Promise.all([maintenance, registration]), unwindDeadline);
+      ended = true;
       if (firstError !== undefined) throw firstError.error;
     })().then(
       () => undefined,
       (error: unknown) => ({ error }),
     );
 
+    ended = true;
+    this.abortRun = undefined;
     this.running = false;
     this.draining = this.activeSlots > 0;
-    await this.releaseHeartbeatChannel();
+    stopWakingOnReady?.();
+    unwindDeadline ??= monotonicNow() + this.startupBudgetMs;
+    if (maintenance !== undefined) stopWork.push(maintenance);
+    if (registration !== undefined) stopWork.push(registration);
+    if (this.pendingStopRegistrationRefresh !== undefined) {
+      stopWork.push(this.pendingStopRegistrationRefresh);
+    }
+    // Each round in flight on the reserved connection ends by its round bound.
+    const release = this.releaseHeartbeatChannel();
+    stopWork.push(release);
+    await this.untilDeadline(release, unwindDeadline);
     const failures: unknown[] = [];
     if (runFailure) failures.push(runFailure.error);
     for (const subscription of notificationSubscriptions) {
+      const closing = subscription.close();
+      stopWork.push(closing);
       try {
-        await subscription.close();
+        await this.untilDeadline(closing, unwindDeadline);
       } catch (error) {
         failures.push(error);
       }
     }
     this.notificationSubscriptions = [];
+    const deregistration = this.deregister();
+    stopWork.push(deregistration);
     try {
-      await this.deregister();
+      await this.untilDeadline(deregistration, unwindDeadline);
     } catch (error) {
       failures.push(error);
     }
+    const prior = this.previousRunSettled;
+    this.previousRunSettled = Promise.allSettled(
+      prior === undefined ? stopWork : [prior, ...stopWork],
+    );
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Worker shutdown failed");
     logInfo("workhorse.worker.stopped", "Worker stopped", {
@@ -2117,7 +2274,7 @@ export class Worker {
         (async (): Promise<ClaimSettlement> => {
           if (delayed) {
             await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
-            if (shouldStop() || this.paused) {
+            if (shouldStop() || this.paused || !this.heartbeatGateOpen()) {
               return {
                 kind: "claim",
                 claimId,
@@ -2188,8 +2345,17 @@ export class Worker {
     // The refill-batch rule applies to a fused claim as well: while a plain claim that can fill
     // the completing task's cohort is in flight, a completion claims only when that would fill at
     // least a refill batch of slots. A claim for another cohort does not hold a completion back.
+    // A fused completion claims nothing while the heartbeat gate is closed: it runs with a claim
+    // limit of zero (ADR 0071 rule 6).
     this.reserveCompletionClaim = (task) => {
-      if (shouldStop() || this.paused || firstFailure || claimError !== undefined || emptyWait) {
+      if (
+        shouldStop() ||
+        this.paused ||
+        firstFailure ||
+        claimError !== undefined ||
+        emptyWait ||
+        !this.heartbeatGateOpen()
+      ) {
         return undefined;
       }
       const cohort = this.taskCohorts.get(task) ?? 0;
@@ -2248,6 +2414,12 @@ export class Worker {
         await nextEvent(this.nextDispatchPollMs());
         continue;
       }
+      const gateWakeVersion = this.dispatchWakeVersion;
+      if (!this.heartbeatGateOpen()) {
+        // The replacement connection wakes dispatch when it arrives, so the poll is only a fallback.
+        await nextEvent(this.nextDispatchPollMs(), gateWakeVersion);
+        continue;
+      }
       if (emptyWait) {
         const remainingMs = emptyWait.deadline - Date.now();
         const woken = !emptyWait.release && this.dispatchWakeVersion !== emptyWait.wakeVersion;
@@ -2285,6 +2457,73 @@ export class Worker {
     while (active.size > 0) observe(await Promise.race(active.values()));
     if (firstFailure) throw firstFailure.reason;
     if (claimError !== undefined) throw claimError.error;
+  }
+
+  // Waits for the stop path of the ended runs within the startup budget. If it does not settle, the
+  // new run refuses to start, so no late statement of an ended run can change it. Resolves false
+  // when `signal` aborts first.
+  private async settlePreviousRun(signal?: AbortSignal): Promise<boolean> {
+    const previous = this.previousRunSettled;
+    if (previous === undefined) return true;
+    let timer: NodeJS.Timeout | undefined;
+    let onAbort: (() => void) | undefined;
+    const outcome = await Promise.race([
+      previous.then(() => "settled" as const),
+      new Promise<"timeout" | "stopped">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), this.startupBudgetMs);
+        if (signal?.aborted === true) resolve("stopped");
+        onAbort = () => resolve("stopped");
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]).finally(() => {
+      clearTimeout(timer);
+      if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
+    });
+    if (outcome === "stopped") return false;
+    if (outcome === "timeout") {
+      throw new Error(
+        "Worker refused to start: the stop path of its previous run did not settle within the " +
+          `startup budget of ${this.startupBudgetMs} ms (max(heartbeatMs, 5000)). A registration ` +
+          "or deregistration statement of that run still waits, and it could change the new run.",
+      );
+    }
+    if (this.previousRunSettled === previous) this.previousRunSettled = undefined;
+    return true;
+  }
+
+  // Waits for `work` until `signal` aborts. After the abort the caller goes on without it, and a
+  // later failure of `work` is ignored.
+  private async untilAborted(work: Promise<unknown>, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      void work.catch(() => undefined);
+      return;
+    }
+    let onAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([work, aborted]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      void work.catch(() => undefined);
+    }
+  }
+
+  // Waits for `work` until `deadline`, a monotonicNow() value. Past the deadline the stop path goes
+  // on without it, and a later failure of `work` is ignored.
+  private async untilDeadline(work: Promise<unknown>, deadline: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, deadline - monotonicNow()));
+    });
+    try {
+      await Promise.race([work, timedOut]);
+    } finally {
+      clearTimeout(timer);
+      void work.catch(() => undefined);
+    }
   }
 
   private nextDispatchPollMs(): number {

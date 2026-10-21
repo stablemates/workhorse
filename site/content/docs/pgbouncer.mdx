@@ -248,6 +248,11 @@ heartbeat connection or the connection for the check in time, the worker does no
 listener is best effort, so the worker starts without it and polls. While the heartbeat has no
 connection, a running Java worker claims no new task.
 
+A TypeScript worker also waits at startup until the pool gives the heartbeat connection and one more
+connection. If the pool cannot give them in time, the worker does not start. While the heartbeat
+connection is lost, the TypeScript worker claims no new task. When the connection is back, the
+worker claims again at once.
+
 To send heartbeats through the shared pool, set `sharedHeartbeats`. Then busy handlers can delay the
 lease renewal. Go names this option `SharedHeartbeats`. Python, Rust, and Ruby name it
 `shared_heartbeats`. Java names it `sharedHeartbeats(true)`, and Kotlin `sharedHeartbeats = true`.

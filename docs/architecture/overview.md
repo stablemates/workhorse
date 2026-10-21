@@ -214,6 +214,9 @@ must still give the same guarantees.
    - The pool object is the sharing identity. Queryables built from one pool share one listener and
      one heartbeat connection.
    - Transaction queryables never carry a pool, because that session ends.
+   - A TypeScript worker with the dedicated heartbeat connection also runs its claim statements on
+     this pool, so that it reads its claim gate after the borrow
+     ([Heartbeat readiness](lifecycle.md#heartbeat-readiness)).
    - Without a pool, a worker refuses to start unless `sharedHeartbeats` is set. If that option is
      set, the worker dispatches by bounded polling.
    - `connectionPoolOf(database)` resolves that pool for any caller. `@stablemates/workhorse`
@@ -303,6 +306,11 @@ reservation or the borrow does not end in time. The pool's own timeout, such as 
 HikariCP, does not extend these waits. The check proves only the headroom at that moment. At run
 time, the JVM worker claims no new task while its heartbeat holds no connection. Its opt-out is
 `sharedHeartbeats(true)`.
+
+A TypeScript worker with the reserved heartbeat connection also checks the pool at startup. It
+waits for the heartbeat connection and borrows one more connection within `max(heartbeatMs, 5 s)`.
+If either step fails, the worker refuses to start. While the heartbeat connection is lost, the
+worker claims no task ([Heartbeat readiness](lifecycle.md#heartbeat-readiness)).
 
 #### Schema operations
 

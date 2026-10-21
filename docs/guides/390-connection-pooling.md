@@ -251,6 +251,11 @@ heartbeat connection or the connection for the check in time, the worker does no
 listener is best effort, so the worker starts without it and polls. While the heartbeat has no
 connection, a running Java worker claims no new task.
 
+A TypeScript worker also waits at startup until the pool gives the heartbeat connection and one more
+connection. If the pool cannot give them in time, the worker does not start. While the heartbeat
+connection is lost, the TypeScript worker claims no new task. When the connection is back, the
+worker claims again at once.
+
 To send heartbeats through the shared pool, set `sharedHeartbeats`. Then busy handlers can delay the
 lease renewal. Go names this option `SharedHeartbeats`. Python, Rust, and Ruby name it
 `shared_heartbeats`. Java names it `sharedHeartbeats(true)`, and Kotlin `sharedHeartbeats = true`.
@@ -270,6 +275,17 @@ connection. The message names the reason and the opt-out:
 - the pool allows fewer than 3 connections.
 
 A custom `WorkerQueueApi` that is not a `Queue` is not checked.
+
+**Startup readiness (TypeScript).** Within `max(heartbeatMs, 5,000)` ms, `Worker.run()` waits for
+the heartbeat connection. Then it borrows one more connection, runs the compatibility query on it,
+and returns it. If a step fails, `run()` rejects. The error names the pool, the budget, and
+`sharedHeartbeats: true`. A run that could not reserve the connection used to continue.
+
+**Claim gate (TypeScript).** While the heartbeat connection is lost, the worker starts no claim, and
+a fast-tier completion uses a claim limit of 0. The worker reads the gate again after a claim gets
+its pooled connection, before each attempt. A failed round does not close the gate. A failed
+connect is tried again after `100 × 2^n` ms, capped at `heartbeatMs`. When the replacement arrives,
+the worker claims at once.
 
 **Refusal in other languages.** Python raises `ValueError` when the pool capacity is unknown or
 below 3. Go's `NewWorker` and Rust's worker constructor return an error when the pool maximum is
@@ -306,7 +322,7 @@ deadline. A round that fails destroys the connection, and asks the pool for a ne
 The connect thus starts before the next round. If it is still pending when the next round starts,
 that round waits for it, and the rest of the wait counts against the deadline of that round.
 
-More detail: [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
+More detail: [Task lifecycle: Heartbeat connection](../architecture/lifecycle.md#heartbeat-connection), [Task lifecycle: Heartbeat readiness](../architecture/lifecycle.md#heartbeat-readiness), [Task lifecycle: Heartbeat round deadline](../architecture/lifecycle.md#heartbeat-round-deadline), and [Schema and SQL protocol: JVM connections](../architecture/schema-and-protocol.md#jvm-connections).
 
 </details>
 

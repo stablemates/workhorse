@@ -129,7 +129,7 @@ describe("heartbeat server bound", () => {
     const id = await queue.enqueue("bounded", {}, { queue: "heartbeat-bound-round" });
     const task = await queue.claim("bound-round-worker", { queue: "heartbeat-bound-round" });
     expect(task?.id).toBe(id);
-    const channel = queue[workerHeartbeatReservation]()!;
+    const channel = queue[workerHeartbeatReservation](1_000)!;
     try {
       const claimedUntil = await expiresAt(id);
       const commit = await blockHeartbeats();

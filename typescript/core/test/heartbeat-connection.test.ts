@@ -332,8 +332,8 @@ describe("reserved heartbeat connection", () => {
   it("runs one round at a time, so transactions of two workers never mix", async () => {
     const { pool, clients } = fakePool();
     const database = asDatabase(pool);
-    const first = holdHeartbeatConnection(database)!;
-    const second = holdHeartbeatConnection(database)!;
+    const first = holdHeartbeatConnection(database, 1_000)!;
+    const second = holdHeartbeatConnection(database, 1_000)!;
     let answer!: () => void;
     const answered = new Promise<void>((resolve) => {
       answer = resolve;
@@ -528,6 +528,9 @@ describe("reserved heartbeat connection", () => {
     emitters[0]!.emit("error", terminated);
 
     await vi.waitFor(() => expect(releases[0]).toHaveBeenCalledExactlyOnceWith(terminated));
+    // A destroyed client can still deliver an error before it ends, so the listener stays.
+    expect(() => emitters[0]!.emit("error", new Error("late FATAL"))).not.toThrow();
+    emitters[0]!.emit("end");
     expect(emitters[0]!.listenerCount("error")).toBe(0);
     await connection.run((client) => client.query("SELECT 2"), 1_000);
     expect(pool.connect).toHaveBeenCalledTimes(2);
@@ -565,12 +568,133 @@ describe("reserved heartbeat connection", () => {
   });
 });
 
+/** A pool whose connects wait until the test resolves them. */
+function stalledPool() {
+  const arrivals: Array<(client: ReturnType<typeof fakeClient>) => void> = [];
+  const pool = {
+    options: { max: 10 },
+    query: vi.fn<Queryable["query"]>(async () => emptyResult),
+    connect: vi.fn<() => Promise<ReturnType<typeof fakeClient>>>(
+      () =>
+        new Promise((resolve) => {
+          arrivals.push(resolve);
+        }),
+    ),
+  };
+  return { pool, arrivals };
+}
+
+describe("late heartbeat connects", () => {
+  it("adopts a replacement that arrives while the last holder closes and a new holder reopens", async () => {
+    const { pool, arrivals } = stalledPool();
+    const connection = new ReservedConnection(asDatabase(pool), () => 100);
+    const ready = connection.ready(1_000);
+    const first = Object.assign(new EventEmitter(), fakeClient());
+    arrivals[0]!(first);
+    await expect(ready).resolves.toBe(true);
+    // A round is in flight, then the connection fails between statements.
+    let finishRound!: () => void;
+    const round = connection.run(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRound = resolve;
+        }),
+      1_000,
+    );
+    await vi.waitFor(() => expect(finishRound).toBeTypeOf("function"));
+    first.emit("error", new Error("terminating connection due to administrator command"));
+    await vi.waitFor(() => expect(arrivals).toHaveLength(2));
+
+    const closing = connection.close();
+    arrivals[1]!(fakeClient());
+    // The replacement arrives while close() waits for the round.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(connection.usable()).toBe(false);
+    connection.reopen();
+    finishRound();
+    await round;
+
+    await expect(closing).resolves.toBe(true);
+    expect(connection.usable()).toBe(true);
+    await expect(connection.ready(10)).resolves.toBe(true);
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    await connection.close();
+  });
+
+  it("queues one connect however often a hold waits, times out, and closes", async () => {
+    const { pool, arrivals } = stalledPool();
+    const database = asDatabase(pool);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const hold = holdHeartbeatConnection(database, 100)!;
+      await expect(hold.ready(10)).resolves.toBe(false);
+      await hold.close();
+    }
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+
+    // The parked connect goes back to the pool when it arrives without a holder.
+    const client = fakeClient();
+    arrivals[0]!(client);
+    await vi.waitFor(() => expect(client.release).toHaveBeenCalledExactlyOnceWith());
+  });
+
+  it("lets the next hold adopt a parked connect", async () => {
+    const { pool, arrivals } = stalledPool();
+    const database = asDatabase(pool);
+    const first = holdHeartbeatConnection(database, 100)!;
+    await expect(first.ready(10)).resolves.toBe(false);
+    await first.close();
+    const second = holdHeartbeatConnection(database, 100)!;
+    const ready = second.ready(1_000);
+    const client = fakeClient();
+    arrivals[0]!(client);
+
+    await expect(ready).resolves.toBe(true);
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+    expect(client.release).not.toHaveBeenCalled();
+    await second.close();
+    expect(client.release).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("queues one ordinary connect however often a borrow times out", async () => {
+    const { pool, arrivals } = stalledPool();
+    const hold = holdHeartbeatConnection(asDatabase(pool), 100)!;
+    pool.connect.mockClear();
+    const operation = vi.fn<() => Promise<string>>(async () => "checked");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(hold.borrow(10, undefined, operation)).resolves.toBe("timeout");
+    }
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+
+    const borrowing = hold.borrow(1_000, undefined, operation);
+    const ordinary = fakeClient();
+    arrivals.at(-1)!(ordinary);
+    await expect(borrowing).resolves.toEqual({ value: "checked" });
+    expect(ordinary.release).toHaveBeenCalledExactlyOnceWith();
+    await hold.close();
+  });
+
+  it("destroys the borrowed connection when its statement outlives the budget", async () => {
+    const { pool } = fakePool();
+    const hold = holdHeartbeatConnection(asDatabase(pool), 100)!;
+    const stalled = hold.borrow(20, undefined, () => never());
+
+    await expect(stalled).resolves.toBe("timeout");
+    const borrowed = pool.connect.mock.results.at(-1)!.value as Promise<
+      ReturnType<typeof fakeClient>
+    >;
+    expect((await borrowed).release).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
+    await hold.close();
+  });
+});
+
 describe("shared heartbeat connection", () => {
   it("lends one connection to every worker on a pool and returns it with the last holder", async () => {
     const { pool, clients } = fakePool();
     const database = asDatabase(pool);
-    const first = holdHeartbeatConnection(database)!;
-    const second = holdHeartbeatConnection(database)!;
+    const first = holdHeartbeatConnection(database, 1_000)!;
+    const second = holdHeartbeatConnection(database, 1_000)!;
 
     await first.run((client) => client.query("SELECT 1"), 1_000);
     await second.run((client) => client.query("SELECT 2"), 1_000);
@@ -583,7 +707,7 @@ describe("shared heartbeat connection", () => {
     expect(sent(clients[0]!)).toEqual([...bounded("SELECT 1"), ...bounded("SELECT 2")]);
     expect(clients[0]!.release).toHaveBeenCalledExactlyOnceWith();
 
-    const next = holdHeartbeatConnection(database)!;
+    const next = holdHeartbeatConnection(database, 1_000)!;
     await next.run((client) => client.query("SELECT 3"), 1_000);
     await next.close();
     expect(pool.connect).toHaveBeenCalledTimes(2);
@@ -596,8 +720,8 @@ describe("shared heartbeat connection", () => {
       attachConnectionPool(queryable, asDatabase(pool));
       return queryable;
     };
-    const first = holdHeartbeatConnection(adapterQueryable())!;
-    const second = holdHeartbeatConnection(adapterQueryable())!;
+    const first = holdHeartbeatConnection(adapterQueryable(), 1_000)!;
+    const second = holdHeartbeatConnection(adapterQueryable(), 1_000)!;
 
     await first.run((client) => client.query("SELECT 1"), 1_000);
     await second.run((client) => client.query("SELECT 2"), 1_000);
@@ -607,6 +731,6 @@ describe("shared heartbeat connection", () => {
   });
 
   it("lends nothing from a pool that cannot reserve", () => {
-    expect(holdHeartbeatConnection(asDatabase(fakePool(2).pool))).toBeUndefined();
+    expect(holdHeartbeatConnection(asDatabase(fakePool(2).pool), 1_000)).toBeUndefined();
   });
 });

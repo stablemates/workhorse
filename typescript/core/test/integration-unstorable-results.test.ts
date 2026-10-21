@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Client } from "pg";
 import { type Json, Worker } from "../src/index.js";
 import { hasUnstorableEscape, mayHoldUnstorableEscape } from "../src/queue/enqueue-contracts.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -55,10 +56,15 @@ const castDocuments = [
 
 type Statement = { text: string; values: readonly unknown[] };
 
+// Statements are recorded on the client, not on the pool: a worker borrows its own connection for
+// a claim statement (SM-1575), so the statement never passes through `pool.query`.
 function recordStatements(): Statement[] {
   const statements: Statement[] = [];
-  const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
-  vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+  const query = Client.prototype.query as (...args: unknown[]) => unknown;
+  vi.spyOn(Client.prototype, "query").mockImplementation(function (
+    this: Client,
+    ...args: unknown[]
+  ) {
     const [first, second] = args;
     if (typeof first === "string") {
       statements.push({ text: first, values: Array.isArray(second) ? second : [] });
@@ -66,8 +72,8 @@ function recordStatements(): Statement[] {
       const config = first as { text: string; values?: unknown[] };
       statements.push({ text: config.text, values: config.values ?? [] });
     }
-    return query(...args);
-  }) as typeof pool.query);
+    return query.apply(this, args);
+  } as typeof Client.prototype.query);
   return statements;
 }
 
@@ -208,15 +214,16 @@ describe("unstorable handler results", () => {
     const queueName = "ts-completion-outage";
     const id = await queue.enqueue("result.outage", {}, { queue: queueName });
     const statements = recordStatements();
-    const query = vi.mocked(pool.query).getMockImplementation()!;
+    const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
     const outage = new Error("connection lost during completion");
-    vi.mocked(pool.query).mockImplementation(((...args: unknown[]) => {
+    // complete_v1 is not a claim statement, so it still goes through pool.query.
+    vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
       const [first] = args;
       if (typeof first === "string" && first.includes("workhorse.complete_v1(")) {
         statements.push({ text: first, values: [] });
         return Promise.reject(outage);
       }
-      return (query as (...inner: unknown[]) => unknown)(...args);
+      return query(...args);
     }) as typeof pool.query);
     const worker = new Worker(queue, { workerId: queueName, queue: queueName }).handle(
       "result.outage",
