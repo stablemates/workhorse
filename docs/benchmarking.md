@@ -463,3 +463,295 @@ pnpm benchmark:metrics-lifecycle -- --output docs/benchmarks/results/<date>-metr
 ```
 
 This benchmark needs no database and does not run under `pnpm benchmark`. Emission cost is nanoseconds per call, roughly four orders of magnitude below claim latency, so a throughput scenario cannot resolve the difference between the lifecycles; do not read one as evidence about them. [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md) interprets the result.
+
+## Connection budget benchmark
+
+A worker holds connections that its handlers cannot use: the listener connection and the heartbeat
+connection. The SDKs do not hold them in the same way. Some SDKs share one of each for all the
+workers on a pool, and other SDKs hold one of each for each worker. The connection budget benchmark
+measures what these connections cost in each SDK. It also measures whether leases renew in time
+when several workers share one pool.
+
+The benchmark measures from PostgreSQL. Thus one driver, `scripts/benchmark-connection-budget.ts`,
+serves every SDK. It does not run under `pnpm benchmark`, and nothing in CI runs it.
+
+### Run the benchmark
+
+The benchmark uses the `DATABASE_URL_BENCH` database of the checkout. It drops and installs the
+`workhorse` schema before each cell. It builds each probe with the toolchains that `mise.toml` pins.
+
+1. Run the smoke profile for each SDK variant. Each cell takes about 20 s.
+
+   ```bash
+   pnpm benchmark:connection-budget -- --profile smoke
+   ```
+
+2. Run the full profile for one SDK variant at a time.
+
+   ```bash
+   pnpm benchmark:connection-budget -- --profile full --sdk go \
+     --out docs/benchmarks/results/<date>-connection-budget-go.json
+   ```
+
+3. To run some cells only, give their ids to `--cells`, separated by commas.
+
+   ```bash
+   pnpm benchmark:connection-budget -- --profile full --sdk rust --cells starvation-w2-c1-p4
+   ```
+
+Run one benchmark at a time. The driver runs one cell at a time, but it cannot see a second driver.
+`--no-build` uses the probe builds that exist. `--help` lists every option.
+
+### What a cell does
+
+A cell has W workers, a pool of P connections, concurrency C, heartbeat interval I, and lease L. The
+driver does these steps for each cell:
+
+1. It ends each probe session that an earlier cell left open, and it records the session.
+2. It drops and installs the schema, and it enqueues W × C tasks and 10% more, with a minimum of 2.
+3. It starts the probe of the SDK as a child process, in a process group of its own.
+4. It samples the database every 250 ms and records the latest pool state that the probe reported.
+   In parallel, the role sampler records what each probe connection runs, until the cell ends.
+5. It sends SIGTERM to the process group of the probe. If the probe does not stop in 20 s, it sends
+   SIGKILL.
+6. It waits up to 10 s for the probe sessions to close. Then it ends each session that remains, and
+   it records the session.
+
+The driver always does steps 5 and 6, also when a step before them fails. If the driver gets SIGINT
+or SIGTERM, it stops the probe before it exits. If a cell fails, the driver writes the artifact with
+the cells that finished, and `aborted` gives the error. Each driver query has a timeout. A sample
+query stops after 1 s, so a blocked query cannot keep a cell past its end.
+
+Each probe starts W workers in one process on one pool. Each handler holds its slot until the probe
+stops or the worker cancels the attempt. The probe does not set `sharedHeartbeats`,
+`SharedHeartbeats`, or `shared_heartbeats`. Each pool opens a connection only when the SDK asks for
+one, so the count shows what the SDK needs. Each probe sets a fixed `application_name`,
+`wh-bench-<sdk>`, on every connection that it opens. The Rust probe gives each worker a
+`listen_config` with the same name, so the Rust listener connections outside the pool also count.
+
+Each probe writes the state of its pool to standard output as one JSON line every 250 ms. The probe
+reads the state from inside its process, with the API of the pool. No SDK code changes for this.
+
+| SDK variant      | Probe                                                                         | Pool state API                            |
+| ---------------- | ----------------------------------------------------------------------------- | ----------------------------------------- |
+| `typescript`     | `scripts/benchmark-connection-budget-probe.ts`                                | `totalCount`, `idleCount`, `waitingCount` |
+| `go`             | `benchmarks/connection-budget/go-probe`, a separate Go module                 | `Stat()`                                  |
+| `ruby`           | `ruby/tools/connection_budget_probe.rb`                                       | `size`, `available`, `idle`               |
+| `python-sync`    | `python/tools/connection_budget_probe.py sync`, `Worker` on a psycopg pool    | `get_stats()`                             |
+| `python-async`   | `python/tools/connection_budget_probe.py async`, `AsyncWorker.from_psycopg`   | `get_stats()`                             |
+| `python-asyncpg` | `python/tools/connection_budget_probe.py asyncpg`, `AsyncWorker.from_asyncpg` | `get_size()`, `get_idle_size()`           |
+| `rust`           | `rust/tools/connection-budget-probe`                                          | `status()`                                |
+| `jvm`            | `jvm/connection-budget-probe`, on a HikariCP pool, started with `java -cp`    | `HikariPoolMXBean`                        |
+
+Three pools count no callers that wait for a connection: pgxpool, connection_pool, and asyncpg.
+Thus `waiting` is null for `go`, `ruby`, and `python-asyncpg`. For `go`, `waitedAcquires` gives the
+acquires that had to wait since the probe started, from `EmptyAcquireCount`. The other variants
+record null there.
+
+No published package holds a probe. The Go probe is a separate module with a `replace` directive
+to `go/`, so the release of the `go/` module does not hold it. The Python source distribution
+excludes `tools/connection_budget_probe.py`. The gem holds only `lib/`, the Rust crate holds only
+its `include` list, and the JVM probe project has no publication.
+
+### Profiles
+
+The warm-up starts when the probe starts. The measurement window follows the warm-up, and the cell
+ends when the window closes. A cell that stalls also ends then.
+
+| Profile | Cell ids                      | W            | C     | P   | I    | L    | Warm-up | Window |
+| ------- | ----------------------------- | ------------ | ----- | --- | ---- | ---- | ------- | ------ |
+| `smoke` | `smoke-w2-c2-p20`             | 2            | 2     | 20  | 1 s  | 3 s  | 5 s     | 15 s   |
+| `full`  | `starvation-w2-c1-p4`         | 2            | 1     | 4   | 1 s  | 3 s  | 10 s    | 30 s   |
+| `full`  | `capacity-w<W>-c<C>-p20`      | 1, 4, 16, 64 | 1, 25 | 20  | 1 s  | 3 s  | 15 s    | 60 s   |
+| `full`  | `default-timing-w<W>-c25-p20` | 16, 64       | 25    | 20  | 10 s | 30 s | 20 s    | 180 s  |
+
+The full profile has 11 cells and about 17 minutes of cell time for one SDK variant. Schema
+installation, enqueue, and probe stop add about 10 s to each cell. Thus a full run of one SDK
+variant takes about 20 minutes, when the machine guard does not wait.
+
+### Machine guard
+
+The machine is shared, so the load of other processes can change a result. Before each cell, the
+driver reads the 1-minute load average and the available memory. If the load is above 16 or the
+available memory is below 8 GB, the driver waits. It reads the values again every 15 s. The
+artifact records the wait, each busy reading, and the values before and after each cell.
+
+### Read the artifact
+
+Each sample has two parts. The database part counts the sessions of the probe in
+`pg_stat_activity`: in total, `active`, `idle`, `idle in transaction`, and the sessions whose last
+statement is `LISTEN`. The pool part gives the latest pool state that the probe reported: the
+connections that the pool holds, the idle connections, the checked-out connections, and the
+callers that wait. `outOfPoolSessions` is the session count less the pool total. It counts the
+Rust listener connections, and any connection that an SDK takes out of its pool.
+
+Each sample also counts the active tasks, the active tasks whose lease is not expired, the active
+tasks whose lease has expired, and the ready tasks. It counts the `claimed` events, which grow with
+each claim, and the distinct tasks that a worker claimed. For each active task, it reads the renewal
+age, `now - heartbeat_at`, and the lease margin, `expires_at - now`, from `workhorse.task_runtime`.
+The `series` of each run keeps every sample, and `poolSeries` keeps every pool state.
+
+### Find the listener and heartbeat connections
+
+A worker reserves its listener connection and its heartbeat connection. A count of connections
+cannot show which connections a worker reserves. Claims, registration, and maintenance can check
+out a connection at every sample, and a heartbeat connection can close and open again. Thus the
+driver finds each listener and heartbeat connection by the statements that it runs. The result is
+an estimate from SQL observation, not a count of reservations. The benchmark does not record when
+an SDK takes or returns a connection, because that needs SDK changes.
+
+The role sampler is a PL/pgSQL function in `pg_temp` of a driver session, so it leaves nothing in
+the bench database. It reads `pg_stat_activity` about every 2 ms, for 1 s in each call, without a
+round trip to the driver. It gives each sample of a probe backend one kind:
+
+| Kind        | Last statement of the backend                                                        |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `listen`    | `LISTEN`                                                                             |
+| `heartbeat` | a `heartbeat_*_v<n>` statement, or the `set_config` of a heartbeat round: the marker |
+| `commit`    | `COMMIT`, with the time at which that `COMMIT` started                               |
+| `neutral`   | `BEGIN`, `ROLLBACK`, or nothing                                                      |
+| `statement` | any other statement: a claim, registration, maintenance, or the reset of a pool      |
+
+Each SDK runs a heartbeat round as `BEGIN`, a `set_config` of `idle_in_transaction_session_timeout`,
+a heartbeat statement, and `COMMIT`. The driver counts an observed round on a backend in two cases:
+
+1. A sample sees the marker.
+2. A sample sees a `COMMIT` that started after a marker of the backend, and no `listen` or
+   `statement` sample came between the marker and that `COMMIT`.
+
+Two observations less than half a heartbeat interval apart are one round. A `COMMIT` stays the last
+statement until the next round, so case 2 sees most rounds that case 1 misses. A returned
+connection keeps its last `COMMIT`, and a rollback ends with `ROLLBACK`. Neither case counts them.
+A round of case 2 is confirmed when it comes at most one expiry time, max(2 × I, 2 s), after the
+last marker. Every round renews the heartbeat role, but only a marker or a confirmed round counts
+for coverage. Thus `COMMIT`s alone cannot make the observation of a backend look complete.
+`heartbeatCoverage` counts the other rounds as `unconfirmedCommitRounds`.
+
+Case 2 depends on one assumption: each probe sends every statement other than a heartbeat round in
+autocommit, so only a heartbeat round ends with an explicit `COMMIT`. These probe settings and SDK
+paths give that:
+
+- Both psycopg probes open their pools with `autocommit` set
+  (`python/tools/connection_budget_probe.py`).
+- The asyncpg executor calls `fetch` (`python/src/workhorse/_drivers.py`).
+- The TypeScript and Go SDKs send each protocol statement through the pool. The Go executor calls
+  `Query` (`go/executor.go`).
+- The Ruby executor calls `exec_params` (`ruby/lib/stablemates/workhorse/executor.rb`).
+- The Rust SDK sends one pooled query (`rust/src/queue.rs`).
+- JVM worker calls use autocommit (`jvm/workhorse/src/main/java/run/workhorse/Worker.java`).
+
+If a probe adds an explicit transaction outside the heartbeat rounds, run the driver with
+`--no-commit-inference`. Then only markers count as rounds.
+
+A backend has the heartbeat role from the first observed round. It keeps the role while the driver
+observes a round at least once in each expiry time, max(2 × I, 2 s). Then the backend becomes a
+former heartbeat connection, until it runs another kind of statement. If it runs another kind of
+statement, its role is that kind at once. Thus a released connection leaves the heartbeat count at
+most one expiry time after its last round. A connection that a worker reserves for a short time
+and that runs no observed round does not show at all.
+
+The driver detects the closure of a backend at the first later sample that does not see it. It
+records the last sample that saw the backend and the first sample that did not, as the bounds of
+the closure. Only a backend whose last call of the sampler failed has an uncertain closure.
+
+`outcome.connectionRoles` gives these values:
+
+- `observedHeartbeatRoleConnections`: the backends with the heartbeat role at one time, every
+  250 ms of the measurement window, as minimum, median, and maximum. In the steady state, this is
+  the value for decisions. It is `unknown` when the driver observed no round in the cell.
+- `peakHeartbeatBackendsInOneInterval`: the most distinct backends with an observed round in one
+  heartbeat interval, at any time in the cell. `peakMarkerBackendsInOneInterval` counts markers only.
+- `listenerConnections`, `formerHeartbeatConnections`, `statementConnections`, and
+  `unclassifiedConnections`: the backends in each other role at one time, in the same form.
+- `listenerPids`, `heartbeatPids`, and `statementPids`: the backends that had each role in the cell.
+- `markerRounds`, `commitInferredRounds`, and `unconfirmedCommitRounds`: the observed rounds by
+  case, for the cell.
+- `heartbeatCoverage`: for each heartbeat backend, these values:
+  - the rounds by case, the unconfirmed rounds of case 2, and the marker samples;
+  - the whole heartbeat intervals of its role, the intervals with a confirmed round, and the
+    intervals with a marker;
+  - the longest gap between confirmed rounds, which includes the gap from the last confirmed round
+    to the end of the role;
+  - the gaps between rounds above 1.5 × I, and the final gaps above 1.5 × I;
+  - the roles that expired while the backend was open.
+
+  A final gap up to 1.5 × I is a short last interval. A longer one is a missing or a late round.
+
+- `heartbeatObservationIncomplete`: true when the driver observed no round, when a sampler call
+  failed, or when a heartbeat backend has a gap above 1.5 × I, a final gap above 1.5 × I, or a role
+  that expired while it was open. A late round also makes a gap, so a gap is a missed or a late
+  round. The flag cannot show a heartbeat connection on which the driver observed no round at all.
+- `events`: each `heartbeat-start` and `heartbeat-end`, with its time and PID. An end gives its
+  reason: `statement`, `listen`, `expired`, `closed` with the closure bounds, or `unresolved`. An
+  end followed by a start on another PID is a replacement of the heartbeat connection.
+- `effectiveIntervalMs`: the mean time between two samples, for the cell and for the first and the
+  last three calls of the measurement window. `maxRelationBytes` is the largest size of the table of
+  the sampler in one call.
+- `series`: the backends in each role, every 250 ms.
+
+`outcome.poolState` gives the pool state that the probe reported in the measurement window:
+
+- `checkedOut`, `idleCached`, and `total`: the minimum, median, and maximum of each count. A
+  checked-out count includes the reserved connections and the short checkouts of claims,
+  registration, and maintenance.
+- `waitingMax`: the most callers that waited for a connection in one sample. This value is the direct
+  sign of starvation. It is null when the pool does not count waiting callers.
+- `outOfPoolSessions`: the sessions outside the pool. `steady` is the median, with a minimum of 0.
+
+`outcome.measurementCost` gives the CPU time of the driver process and of the backend that runs the
+role sampler, from the probe start to the end of the window. It also gives each as a percentage of
+one core. The backend time comes from `/proc`, so it is null when PostgreSQL runs on another host.
+In the smoke cells of 2026-10-21, the driver used less than 1% of one core, and the role sampler
+backend used 5% to 8%. In a 75 s check with 84 probe sessions, the sampler backend used 21% of one
+core, and the mean time between two samples stayed at 2.5 ms to 2.6 ms.
+
+The other values of the `outcome` of each run are:
+
+- `finalUnexpiredActiveTasks`, `finalClaimEvents`, and `finalClaimedTasks` against `expectedSlots`,
+  which is W × C.
+- `firstClaimMs` and `fullOccupancyMs`: the time from the probe start to the first claim, and to
+  W × C active tasks whose leases are not expired.
+- `initialCapacityFailure`: true when the cell never had W × C active tasks with unexpired leases.
+- `longestClaimGapMs`: after the first claim, the longest time in which slots were free, ready tasks
+  waited, and no claim came. A slot is free when fewer unexpired leases are active than the cell
+  has slots.
+- `progressFailure`: true when `longestClaimGapMs` is 10 s or more.
+- `lostLeases`: the `lease_expired` attempts in `workhorse.attempt_history`.
+  `leaseExpiredEvents` counts the `lease_expired` events, and `maxAttempt` is the highest attempt.
+- `renewalAgeMs`: the maximum, p50, p95, and p99 renewal age in the measurement window.
+- `minLeaseMarginMs` and `maxExpiredActiveTasks`.
+- `maxConnections`: the maximum count of each kind of session and pool value in one sample.
+- `connectionsAtEnd`: the state and the last statement of the probe sessions at the end.
+- `sampleErrors`, `sampleErrorMessages`, and `finalErrors`: the queries that failed or timed out.
+- `strayProbeSessionsBefore` and `leftoverProbeSessionsAfter`: the probe sessions that the driver
+  ended before and after the cell.
+- `probe`: the exit code or signal, whether the driver sent SIGKILL, the time to stop, the count of
+  pool states, the events of the probe, and the last 4 KB of its other output.
+
+The top level records the PostgreSQL version, the SDK and toolchain versions, the matrix, the wall
+time, and the provenance of the run.
+
+Use these rules when you read a result:
+
+- Use `observedHeartbeatRoleConnections` in the steady state for the heartbeat connections. It is an
+  estimate from observed SQL, not a count of reservations. The session counts and the checked-out
+  counts include connections that a pool keeps after claims, registration, and maintenance, so no
+  count gives the heartbeat connections.
+- A heartbeat round shows its marker for a few milliseconds only. If the driver observes no round on
+  a backend, that backend does not count. If `heartbeatObservationIncomplete` is true, read
+  `heartbeatCoverage` before you use the count.
+- A connection that a worker reserves and that runs no statement shows as `unknown`. For example, a
+  worker that waits for its first task holds its heartbeat connection with no round. The pool state
+  then shows the connection as checked out.
+- PostgreSQL shows a session as `idle` also when the pool has checked it out. Use the pool state to
+  know whether a connection is checked out.
+- The pool state and the database sample can be up to 250 ms apart. One pair of values can differ
+  while a connection opens or closes.
+- A renewal age up to I is normal, because a lease renews once in each interval.
+- Workhorse records a lost lease only when a worker recovers it. If every worker waits for a
+  connection, nothing recovers the lease. Thus also read `minLeaseMarginMs` and
+  `maxExpiredActiveTasks`. A negative margin is a lease that expired.
+- A smoke run proves that each probe runs. It does not give a capacity result.
+
+Write the artifact of a recorded run to `docs/benchmarks/results/`. Keep a smoke artifact out of
+Git.

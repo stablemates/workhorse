@@ -60,6 +60,11 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/workhorse"]
 
+# The connection budget probe is repository tooling for one benchmark (SM-1566). Users of the
+# source distribution do not need it.
+[tool.hatch.build.targets.sdist]
+exclude = ["tools/connection_budget_probe.py"]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]

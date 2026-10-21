@@ -1,3 +1,9 @@
 [workspace]
-members = ["rust", "rust/demo-worker", "rust/tools/api-snapshot", "rust/tools/fast-claim-stress"]
+members = [
+  "rust",
+  "rust/demo-worker",
+  "rust/tools/api-snapshot",
+  "rust/tools/connection-budget-probe",
+  "rust/tools/fast-claim-stress",
+]
 resolver = "2"

@@ -166,9 +166,10 @@ WORKHORSE_DATABASE_URL=postgres://user:password@localhost/workhorse_dev pnpm rus
 
 ### Current state
 
-The workspace in the repository-root `Cargo.toml` holds four crates: `rust/` builds the `workhorse`
-package, and `rust/demo-worker`, `rust/tools/api-snapshot`, and `rust/tools/fast-claim-stress` stay
-unpublished. `workhorse` is the one crate ADR 0074 publishes.
+The workspace in the repository-root `Cargo.toml` holds five crates: `rust/` builds the `workhorse`
+package, and `rust/demo-worker`, `rust/tools/api-snapshot`, `rust/tools/connection-budget-probe`,
+and `rust/tools/fast-claim-stress` stay unpublished. `workhorse` is the one crate ADR 0074
+publishes.
 
 - `Queue` in `src/queue.rs` and `Admin` in `src/admin.rs` are the ADR 0074 clients.
 - `Worker` in `src/worker/` claims, runs, heartbeats, and settles tasks, and drains within a grace

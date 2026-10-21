@@ -17,11 +17,13 @@ import { readPins, verifyTools } from "./verify-toolchain.js";
  * then runs the check once. The exit status of the check is the exit status of this script, so a
  * staticcheck finding, a govulncheck finding (exit 3), and a test failure fail the step at once.
  *
- *   tsx scripts/run-go-check.ts tool <package>@<version> [arguments...]
- *   tsx scripts/run-go-check.ts test [arguments...]
+ *   tsx scripts/run-go-check.ts [--module <directory>] tool <package>@<version> [arguments...]
+ *   tsx scripts/run-go-check.ts [--module <directory>] test [arguments...]
  *
- * The `tool` form installs the tool into a temporary `GOBIN` and runs the installed binary in `go/`.
- * The `test` form runs `go test` in `go/`. Both forms download the modules of `go/go.sum` first.
+ * The `tool` form installs the tool into a temporary `GOBIN` and runs the installed binary in the
+ * module directory. The `test` form runs `go test` there. Both forms download the modules of the
+ * module's `go.sum` first. The module directory is `go/` unless `--module` names another one,
+ * relative to the repository root.
  *
  * The vulnerability database read of govulncheck is part of its analysis, so it runs once with no
  * retry, as before.
@@ -77,14 +79,9 @@ export async function downloadThenCheck(
   return await runOnce(check);
 }
 
-const goDirectory = path.join(repositoryRoot, "go");
-
-const moduleDownload: GoDownload = {
-  label: "go mod download",
-  command: "go",
-  args: ["mod", "download"],
-  cwd: goDirectory,
-};
+function moduleDownload(goDirectory: string): GoDownload {
+  return { label: "go mod download", command: "go", args: ["mod", "download"], cwd: goDirectory };
+}
 
 /** The file name of the binary that `go install <package>@<version>` writes. */
 export function toolBinary(tool: string): string {
@@ -96,13 +93,17 @@ export function toolBinary(tool: string): string {
   return process.platform === "win32" ? `${name}.exe` : name;
 }
 
-async function runTool(tool: string, args: readonly string[]): Promise<number> {
+async function runTool(
+  goDirectory: string,
+  tool: string,
+  args: readonly string[],
+): Promise<number> {
   const binary = toolBinary(tool);
   const gobin = await mkdtemp(path.join(tmpdir(), "workhorse-go-tool-"));
   try {
     return await downloadThenCheck(
       [
-        moduleDownload,
+        moduleDownload(goDirectory),
         {
           label: `go install ${tool}`,
           command: "go",
@@ -128,14 +129,22 @@ async function main(argv: readonly string[]): Promise<number> {
     console.error(refusals.join("\n\n"));
     return 2;
   }
-  const [form, ...rest] = argv;
+  let goDirectory = path.join(repositoryRoot, "go");
+  let remaining = argv;
+  if (remaining[0] === "--module") {
+    const module = remaining[1];
+    if (module === undefined) throw new Error("run-go-check --module needs a directory");
+    goDirectory = path.join(repositoryRoot, module);
+    remaining = remaining.slice(2);
+  }
+  const [form, ...rest] = remaining;
   if (form === "tool") {
     const [tool, ...args] = rest;
     if (tool === undefined) throw new Error("run-go-check tool needs <package>@<version>");
-    return await runTool(tool, args);
+    return await runTool(goDirectory, tool, args);
   }
   if (form === "test") {
-    return await downloadThenCheck([moduleDownload], {
+    return await downloadThenCheck([moduleDownload(goDirectory)], {
       command: "go",
       args: ["test", ...rest],
       cwd: goDirectory,

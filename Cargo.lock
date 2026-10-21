@@ -2900,6 +2900,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "workhorse-connection-budget-probe"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "workhorse",
+]
+
+[[package]]
 name = "workhorse-demo-worker"
 version = "0.0.0"
 dependencies = [

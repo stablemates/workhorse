@@ -39,3 +39,6 @@ include("examples")
 
 // The cross-SDK scenario programs (SM-1469), one `main` for each scenario. It is never published.
 include("examples:programs")
+
+// The JVM probe of the connection budget benchmark (SM-1566). It is never published.
+include("connection-budget-probe")
