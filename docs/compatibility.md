@@ -76,8 +76,8 @@ release gate does. [ADR 0083](decisions/0083-run-each-language-suite-once-per-ch
 this split.
 
 The JVM SDK has three modules: the `workhorse` core, `workhorse-kotlin`, and
-`workhorse-spring-boot-starter`. They are not published yet, so this page gives no install command
-for Gradle or Maven. Every module compiles with `--release` set to the Java floor. A local build
+`workhorse-spring-boot-starter`. Maven Central serves them. The [JVM artifacts](#jvm-artifacts)
+section gives the Gradle and Maven coordinates. Every module compiles with `--release` set to the Java floor. A local build
 uses the JDK that `mise.toml` pins. Each JVM CI job uses the Java release of its matrix entry. Pull
 requests and pushes run the JVM suite on the Java floor and on the newest tested Java release,
 against the newest PostgreSQL. The weekly schedule runs every tested Java release against every
@@ -437,8 +437,8 @@ The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK
 range. SQL protocol 5 and schema version 73 are their compatibility boundary instead. Their version numbers
 still match the npm packages, because every line releases from one commit.
 
-Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, and RubyGems from
-one source commit. The current release is `0.9.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
+Maven Central from one source commit. The current release is `0.9.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -475,9 +475,10 @@ for the version, provided so a Python or Go developer with no Node.js toolchain 
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
 run `workhorse schema install` or `workhorse schema migrate` instead.
 
-The GitHub release becomes public only after the crates.io and RubyGems jobs succeed. A crate or gem
-whose version does not match the tag skips publication, and its job still succeeds, so the release
-still appears. A failed crate or gem publication ends the run before the release exists.
+The GitHub release becomes public only after the `crates-io`, `rubygems`, and `maven-central` jobs
+succeed. A crate, gem, or JVM artifact whose version does not match the tag skips publication, and
+its job still succeeds, so the release still appears. A failed crate, gem, or Maven Central
+publication ends the run before the release exists.
 
 The asset is reachable at
 `https://github.com/stablemates/workhorse/releases/download/vX.Y.Z/schema.sql`. `support.json`
@@ -488,8 +489,8 @@ the first release that carries one is `v0.1.0`.
 
 Each line carries its own tag on that one commit, because npm, PyPI, and the Go module proxy have
 separate build and publication identities. The Go module proxy also resolves a subdirectory module
-only from a `go/`-prefixed tag. The crate and the gem publish from the TypeScript `vX.Y.Z` tag, so
-five registries share three tags.
+only from a `go/`-prefixed tag. The crate, the gem, and the JVM artifacts publish from the
+TypeScript `vX.Y.Z` tag, so six registries share three tags.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records that the tags name
 one commit and one version number.
 
@@ -655,11 +656,10 @@ and changes nothing. The last 0.x minor carries the final schema change before t
 the command anyway is the point: the procedure is the same one every other release uses. See
 `docs/schema-lifecycle.md`.
 
-The ten npm packages, the Python distribution, the Go module, the Rust crate, and the Ruby gem
-publish 1.0.0 from one source commit as one release train
+All six lines publish 1.0.0 from one source commit as one release train
 ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)). A line that
 cannot clear the parity bar slips the train rather than being left behind. That synchronisation
-happens once; afterwards the five version lines float again as they do today.
+happens once; afterwards the six version lines float again as they do today.
 
 At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
@@ -796,8 +796,9 @@ for the distribution being published.
 
 ### Release train
 
-Every release publishes the same version to npm, PyPI, the Go module proxy, crates.io, and RubyGems
-from one source commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
+Every release publishes the same version from one source commit, in one controlled window, in a
+fixed order. The registries are npm, PyPI, the Go module proxy, crates.io, RubyGems, and Maven
+Central. Dates go into the changelogs before the
 candidate is cut, and a slipped date means a new candidate. The candidate commit is a commit on
 `main`, and every tag of the train points to it, so every tag names the candidate commit. Other
 commits can land on `main` during the release. Thus the maintainer must create each tag on the
@@ -807,8 +808,8 @@ requires that run to succeed.
 
 The Rust crate and the Ruby gem have no tag of their own. Each rides the npm `v*` tag and publishes
 after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe. The three JVM artifacts
-ride the same tag. Their stage is ready, and their first publish waits for the maintainer steps of
-[JVM artifacts](#jvm-artifacts).
+ride the same tag and publish to Maven Central after npm, as [JVM artifacts](#jvm-artifacts)
+describes.
 
 1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
    `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
@@ -842,9 +843,10 @@ ride the same tag. Their stage is ready, and their first publish waits for the m
    `@stablemates/workhorse-dashboard-contract` precedes `@stablemates/workhorse`, and the dashboard
    server precedes the dashboard facade.
    [ADR 0085](decisions/0085-publish-npm-packages-in-dependency-order.md) records this order. Every
-   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem.
-   Each version is verified on its registry before the train continues. The run creates the public
-   GitHub release last, after both of those jobs succeed.
+   package's provenance is verified. The same run then publishes the Rust crate and the Ruby gem,
+   and uploads the three JVM artifacts to Maven Central. Each version is verified on its registry
+   before the train continues. The run creates the public GitHub release last, after the
+   `crates-io`, `rubygems`, and `maven-central` jobs succeed.
 4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
    verified through the public module proxy.
 
@@ -853,9 +855,11 @@ of the exact public version in a clean environment. It then runs a minimal enque
 test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
 the remaining stages stay blocked, and the fix ships as a new candidate.
 
-The release check stops a candidate that leaves one line behind. In `release.yml`, the crate and the
-gem skip publication when their version does not match the tag, and the run still succeeds. So the
-check must refuse the candidate before the first registry receives it. `pnpm release:check <npm|python|go>
+The release check stops a candidate that leaves one line behind. In `release.yml`, the crate, the
+gem, and the JVM artifacts skip publication when their version does not match the tag, and the run
+still succeeds. So the check must refuse the candidate before the first registry receives it. The
+release check reads no secret. If a `maven-central` secret is missing, the JVM artifacts also skip
+publication after npm publishes, and the run still succeeds. `pnpm release:check <npm|python|go>
 <tag>` runs the same checks for each tag. `pnpm npm:release-check`, `pnpm python:release-check`, and
 `pnpm go:release-check` call it first. It fails, and lists each problem, if one of these is true:
 
@@ -877,7 +881,7 @@ check must refuse the candidate before the first registry receives it. `pnpm rel
 The Python files and `python/CHANGELOG.md` use the PEP 440 spelling of a prerelease, and the other
 files use the SemVer spelling. The check changes no publication step of a workflow.
 
-`pnpm release:verify <python|npm|crate|go> X.Y.Z` holds the version checks as exact commands and
+`pnpm release:verify <python|npm|crate|go|maven> X.Y.Z` holds the version checks as exact commands and
 the output each must print. After each stage publishes, the handoff runs that stage's target
 instead of restating commands. Each target installs the public version into a fresh scratch
 directory:
@@ -921,7 +925,8 @@ A published version is never reused. An ordinary defect stays available and rece
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
 retracts the Go version as appropriate, and yanks the crates.io and RubyGems versions. Removal does not make prior
-public access reversible.
+public access reversible. Maven Central never deletes a published version, so a defective JVM
+version stays available. A higher fixed version replaces it, and a published advisory names it.
 [`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
 receive fixes.
 
@@ -1112,8 +1117,8 @@ The JVM SDK publishes three artifacts to Maven Central from `jvm/`: `run.workhor
 `run.workhorse:workhorse-kotlin`, and `run.workhorse:workhorse-spring-boot-starter`
 ([ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
 The three always carry one version. Like the crate and the gem, they have no tag of their own and
-publish from the npm `v*` tag. The stage is ready, but no version is published yet. The first
-publish waits for the maintainer steps at the end of this section.
+publish from the npm `v*` tag. The first version that Maven Central serves is `0.9.0`. The
+maintainer steps at the end of this section came before that first publish.
 
 A Gradle build adds the core with `implementation("run.workhorse:workhorse:0.9.0")`. A Maven
 build adds
@@ -1177,7 +1182,7 @@ therefore ends the run before the GitHub release exists.
 [Recover from a failed Maven Central upload](#recover-from-a-failed-maven-central-upload) states
 what to do then.
 
-A maintainer must do these steps before the first publish. SM-1384 records them. Nothing in this
+A maintainer did these steps before the first publish, and SM-1384 records them. Nothing in this
 repository performs them.
 
 1. Verify the namespace `run.workhorse` in the Central Portal with a DNS TXT record on the domain
@@ -1214,9 +1219,8 @@ The Ruby gem and the JVM artifacts publish from `v*`, which both rulesets alread
 them ever moves to a different tag prefix, add that prefix to both rulesets in the same change.
 
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
-require workflow approval. The protected `npm`, `pypi`, `crates-io`, and `rubygems` environments
-require review, and all four prevent administrator bypass. The `maven-central` environment must
-have the same protection before the maintainer adds its secrets.
+require workflow approval. The protected `npm`, `pypi`, `crates-io`, `rubygems`, and
+`maven-central` environments require review, and all five prevent administrator bypass.
 
 ### Publication credentials
 
@@ -1301,7 +1305,7 @@ npm's constraint: npm would still accept the packages that did not publish at th
 Completing a partial train from the same commit is not an allowed recovery. `pnpm npm:publish`
 refuses to resume a version the registry partly holds, and no other path publishes npm packages.
 [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
-the five registries, so every package moves, not only the ones that failed. The packages that did
+the six registries, so every package moves, not only the ones that failed. The packages that did
 publish stay published, because removal is unavailable and would break anyone who installed them.
 Deprecate each with `npm deprecate <name>@<version>` so an installer is pointed at the version that
 replaces it.
