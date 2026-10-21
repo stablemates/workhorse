@@ -36,6 +36,29 @@ adds.
   connection is replaced at once. The first round on the replacement has the full round bound: a
   round that gets the replacement during its bound sends nothing, and a regular round then runs at
   once.
+- **The shared heartbeat and listener no longer have two connections out after a slow return.**
+  Before this release, the heartbeat let a connection go, and then gave it back to the pool. A new
+  reservation could start a second checkout while that return still ran. The listener did the
+  same with a connection that arrived after its last subscriber left. On a small pool, the second
+  connection could take the last free connection from ordinary statements. Now one checkout thread
+  owns each heartbeat connection until the pool has it back, and the listener keeps its checkout
+  until the return ends. A new reservation or subscription waits for that return, within the
+  startup budget (SM-1580).
+- **A claim of an ended run no longer uses the heartbeat reservation of a later run.** Before this
+  release, a claim that waited for a connection read the reservation of the latest run. The run
+  could stop, and the same worker could start again. The old claim could then claim tasks that no
+  handler ran, and their leases had to expire. Now each claim and each fused completion reads the
+  claim gate of the run that started it. That gate closes when its run ends.
+- A claim statement that passed the claim gate holds the heartbeat reservation of its run until its
+  result arrives. This is also true after the stop gave up its wait for the statement. The stop
+  time does not change.
+- A fused claim that returns after its run stopped its wait for claims starts no handler. Before
+  this release, such a claim could start a handler after the drain of its run ended. Now its tasks
+  keep their leases until the leases expire, as the tasks of an abandoned ordinary claim do.
+- The failure of an attempt stops only the run that admitted it. Before this release, an attempt
+  that outlived its run could fail during a later run of the same worker, and stop that later run.
+- A registry response applies only to the run that sent it. Each run starts with no operator pause
+  and no registration, so a late response of an ended run cannot pause a later run.
 
 ### Behavior changes
 

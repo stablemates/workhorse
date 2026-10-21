@@ -1664,10 +1664,11 @@ Each bounded round does these steps, all before one deadline:
    In Rust, the keeper of the shared connection starts the replacement when the failed round ends,
    and a round waits for it until its own deadline. Ruby holds its connection between rounds, and
    takes a new one in its loop before the next round waits for its slot. JVM holds its connection
-   between rounds. When a failed round closed or aborted it, JVM starts a replacement on a checkout
-   thread at once. A JVM round waits for that checkout only until its own deadline. A round that
-   gets the replacement during its bound sends nothing on it. A regular round then runs at once on
-   the replacement, with a full bound, whatever the intervals of the leases are by then.
+   between rounds. When a failed round closed or aborted it, the JVM checkout thread gives it back
+   to the pool, and then starts the replacement at once. A JVM round waits for that checkout only
+   until its own deadline. A round that gets the replacement during its bound sends nothing on it.
+   A regular round then runs at once on the replacement, with a full bound, whatever the intervals
+   of the leases are by then.
 3. Sends `BEGIN`.
 4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
    as its own statement, so that both values apply to the statements after it.
@@ -1864,7 +1865,7 @@ time:
 | Python     | when the failed round ends, in `_replace_heartbeat_connection`, on its thread   | the `timeout` of a psycopg pool (30 s by default); none for asyncpg |
 | Rust       | when the failed round ends, in the keeper task of `shared::HeartbeatConnection` | one round bound                                                     |
 | Ruby       | in the loop of the heartbeat thread, before the next round waits for its slot   | the checkout timeout of the connection pool                         |
-| JVM        | when the failed round ends, in `Heartbeat.discard`, on a checkout thread        | one round bound; the open itself has the `getConnection` timeout    |
+| JVM        | after the failed round, once its connection is back, on the checkout thread     | one round bound; the open itself has the `getConnection` timeout    |
 
 In TypeScript, Go, Python, and Rust, the open does not hold the scheduler. The next round starts at
 its slot. If the replacement is not ready, the round waits for it (TypeScript, Go, and Rust) or

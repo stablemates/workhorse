@@ -233,7 +233,9 @@ class HeartbeatDatabaseTest {
 
   /**
    * A source over {@code source} that counts checkouts and records the backend PID of each. Once
-   * {@link #hold} is true, a checkout waits until {@link #open} counts down.
+   * {@link #hold} is true, a checkout waits until {@link #open} counts down. Each checkout runs
+   * {@link #onCheckout} after it counts. Once {@link #holdClose} is true, the next close counts
+   * down {@link #closing}, and then waits until {@link #closeOpen} counts down.
    */
   private static final class Gated {
     final AtomicInteger checkouts = new AtomicInteger();
@@ -242,6 +244,10 @@ class HeartbeatDatabaseTest {
     final List<Integer> backends = new CopyOnWriteArrayList<>();
     final AtomicBoolean hold = new AtomicBoolean();
     final CountDownLatch open = new CountDownLatch(1);
+    volatile Runnable onCheckout = () -> {};
+    final AtomicBoolean holdClose = new AtomicBoolean();
+    final CountDownLatch closing = new CountDownLatch(1);
+    final CountDownLatch closeOpen = new CountDownLatch(1);
 
     DataSource over(DataSource source) {
       return (DataSource)
@@ -253,6 +259,7 @@ class HeartbeatDatabaseTest {
                   return Watched.invoke(method, source, arguments);
                 }
                 checkouts.incrementAndGet();
+                onCheckout.run();
                 if (hold.get()) {
                   waiting.incrementAndGet();
                   try {
@@ -270,6 +277,11 @@ class HeartbeatDatabaseTest {
                         Connection.class.getClassLoader(),
                         new Class<?>[] {Connection.class},
                         (inner, call, values) -> {
+                          if (call.getName().equals("close")
+                              && holdClose.compareAndSet(true, false)) {
+                            closing.countDown();
+                            closeOpen.await(30, TimeUnit.SECONDS);
+                          }
                           if (call.getName().equals("close") && closed.compareAndSet(false, true)) {
                             openConnections.decrementAndGet();
                           }
@@ -570,6 +582,77 @@ class HeartbeatDatabaseTest {
     waitUntil("the checkout got its connection", () -> gated.backends.size() == 1);
     waitUntil("the late connection went back to the pool", () -> gated.openConnections.get() == 0);
     assertEquals(1, gated.checkouts.get(), "nothing needed a second checkout");
+  }
+
+  /**
+   * SM-1580: the last reservation closes, and the heartbeat lets its connection go. The pool takes
+   * that connection back slowly. A new reservation waits for the return, so the heartbeat never has
+   * two connections out.
+   */
+  @Test
+  void waitsForTheReturnOfTheLastConnectionBeforeTheNextCheckout() throws Exception {
+    Gated gated = new Gated();
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat.Reservation first = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
+    try {
+      assertTrue(
+          first.await(System.nanoTime() + TimeUnit.SECONDS.toNanos(20), () -> false),
+          "the first reservation gets the connection");
+      gated.holdClose.set(true);
+    } finally {
+      first.close();
+    }
+    assertTrue(gated.closing.await(20, TimeUnit.SECONDS), "the return of the connection waits");
+    assertTheNextCheckoutWaitsForTheReturn(gated, heartbeat);
+  }
+
+  /**
+   * SM-1580: a checkout gives its connection after the last reservation closed, so nothing needs
+   * it. The pool takes that connection back slowly. A new reservation waits for the return, so the
+   * heartbeat never has two connections out.
+   */
+  @Test
+  void waitsForTheReturnOfAnUnwantedConnectionBeforeTheNextCheckout() throws Exception {
+    Gated gated = new Gated();
+    gated.hold.set(true);
+    Heartbeat heartbeat = new Heartbeat(gated.over(dataSource), true);
+    Heartbeat.Reservation first = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
+    try {
+      waitUntil("the checkout waits", () -> gated.waiting.get() == 1);
+      gated.holdClose.set(true);
+    } finally {
+      first.close();
+    }
+    gated.open.countDown();
+    assertTrue(gated.closing.await(20, TimeUnit.SECONDS), "the return of the connection waits");
+    assertTheNextCheckoutWaitsForTheReturn(gated, heartbeat);
+  }
+
+  /**
+   * Reserves the connection while the return of the previous one waits on {@link Gated#closeOpen}.
+   * The reservation decides at once whether it starts a checkout: a new checkout runs {@link
+   * Gated#onCheckout}, and a wait for the return runs {@link Heartbeat#onReturnPending}.
+   */
+  private static void assertTheNextCheckoutWaitsForTheReturn(Gated gated, Heartbeat heartbeat)
+      throws Exception {
+    CountDownLatch decided = new CountDownLatch(1);
+    heartbeat.onReturnPending = decided::countDown;
+    gated.onCheckout = decided::countDown;
+    Heartbeat.Reservation next = heartbeat.reserve(TimeUnit.SECONDS.toNanos(1), () -> {});
+    try {
+      assertTrue(decided.await(20, TimeUnit.SECONDS), "the new reservation decided");
+      assertEquals(1, gated.checkouts.get(), "no second checkout starts while the return runs");
+      gated.closeOpen.countDown();
+      assertTrue(
+          next.await(System.nanoTime() + TimeUnit.SECONDS.toNanos(20), () -> false),
+          "the new reservation gets the next connection after the return");
+      assertEquals(2, gated.checkouts.get(), "the next connection is the second checkout");
+      assertEquals(1, gated.openConnections.get(), "one heartbeat connection is out");
+    } finally {
+      gated.closeOpen.countDown();
+      next.close();
+    }
+    waitUntil("the connection went back to the pool", () -> gated.openConnections.get() == 0);
   }
 
   /**

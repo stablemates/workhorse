@@ -58,11 +58,6 @@ final class Checkout {
     return result;
   }
 
-  /** Closes the connection of {@code checkout} when it arrives, or at once if it is there. */
-  static void abandon(CompletableFuture<Connection> checkout) {
-    var unused = checkout.thenAccept(Checkout::closeQuietly);
-  }
-
   /** Closes {@code connection}, and ignores a failure: the pool replaces a broken connection. */
   static void closeQuietly(@Nullable Connection connection) {
     if (connection == null) {

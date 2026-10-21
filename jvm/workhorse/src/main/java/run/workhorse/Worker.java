@@ -159,8 +159,8 @@ public final class Worker implements AutoCloseable {
   private final boolean sharedHeartbeats;
 
   /**
-   * The heartbeat reservation of the latest run, or {@code null} before the first run. A worker
-   * claims no new task while its heartbeat holds no connection.
+   * The heartbeat reservation of the latest run, or {@code null} before the first run. Only {@link
+   * #heartbeatConnected} reads it, for tests. A claim reads the reservation of its own run.
    */
   private volatile Heartbeat.@Nullable Reservation heartbeatReservation;
 
@@ -222,8 +222,8 @@ public final class Worker implements AutoCloseable {
   private volatile long lastRegistryAt = NEVER;
 
   /**
-   * Counts the calls of {@link #stop}. A failed run also changes {@link #stopVersion}, so only this
-   * count tells an explicit stop apart.
+   * Counts the calls of {@link #stop}. It tells an explicit stop apart from a run that ended on its
+   * own, for example after a failure.
    */
   private final AtomicLong stops = new AtomicLong();
 
@@ -238,6 +238,10 @@ public final class Worker implements AutoCloseable {
    */
   private final AtomicReference<@Nullable Thread> registryWrite = new AtomicReference<>();
 
+  /**
+   * Orders the registry writes, and guards the registry state of a run: {@link #generation}, {@link
+   * #registered}, and {@link #remotelyPaused} change together under it.
+   */
   private final ReentrantLock registryLock = new ReentrantLock();
 
   /**
@@ -246,6 +250,21 @@ public final class Worker implements AutoCloseable {
    * null} in production, and no public API sets it.
    */
   volatile @Nullable Runnable beforeDeadlineReset;
+
+  /**
+   * A test hook that runs once a run has its generation and its cleared registry state, before the
+   * run reserves its heartbeat connection. A test uses it to release a registry response of an
+   * earlier run only after the later run exists. It is {@code null} in production, and no public
+   * API sets it.
+   */
+  volatile @Nullable Runnable afterRunStarted;
+
+  /**
+   * A test hook that runs when a run ends while a claim statement of the run still holds a permit,
+   * so the run's reservation stays open until that statement settles. It is {@code null} in
+   * production, and no public API sets it.
+   */
+  volatile @Nullable Runnable onReservationKeptForClaims;
 
   /**
    * A test hook that receives each {@code complete_many_and_claim_v1} statement that PostgreSQL
@@ -561,8 +580,17 @@ public final class Worker implements AutoCloseable {
     }
   }
 
+  /** Whether {@link #stop} was called after {@code version} was read. */
   private boolean stopRequested(long version) {
     return stopVersion.get() != version;
+  }
+
+  /**
+   * Whether {@code run} must stop: {@link #stop} was called after the run read its version, or an
+   * attempt of the run failed ({@link #stopRun}).
+   */
+  private boolean stopRequested(RunState run) {
+    return run.failed || stopRequested(run.version);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -575,10 +603,39 @@ public final class Worker implements AutoCloseable {
     final List<Throwable> maintenanceErrors = new CopyOnWriteArrayList<>();
     final ConcurrentLinkedQueue<ClaimResult> results = new ConcurrentLinkedQueue<>();
 
-    /** False once the stop abandons claims in flight. A late claim then releases its slots. */
+    /**
+     * False once the dispatch loop stops its wait for the claims in flight, at the end of the run's
+     * claims. A claim of the run that returns later, ordinary or fused, is abandoned: it releases
+     * its slots, and its tasks do not run. It changes under the state lock.
+     */
     final AtomicBoolean claimsOpen = new AtomicBoolean(true);
 
     final long generation;
+
+    /**
+     * True once an attempt of this run failed. It ends this run only ({@link #stopRequested}), so a
+     * failure of an attempt that outlived its run cannot stop a later run.
+     */
+    volatile boolean failed;
+
+    /**
+     * The heartbeat reservation of this run, or {@code null} until the run has it. The claim gate
+     * of the run reads it ({@link #gateOpen}), so a claim or a completion of this run never reads
+     * the reservation of a later run.
+     */
+    volatile Heartbeat.@Nullable Reservation reservation;
+
+    /** Guards {@link #claimPermits} and the change of {@link #ended}. */
+    final ReentrantLock permitLock = new ReentrantLock();
+
+    /**
+     * The claim statements of this run, ordinary or fused, that passed the claim gate and have not
+     * settled. Each holds the reservation open. It changes under {@link #permitLock}.
+     */
+    int claimPermits;
+
+    /** True once the run gave up its reservation ({@link #endReservation}). */
+    volatile boolean ended;
 
     // The dispatch progress of this run. Each field changes under the state lock, because
     // fast-tier completions read and change it too.
@@ -603,6 +660,105 @@ public final class Worker implements AutoCloseable {
     RunState(long version, long generation) {
       this.version = version;
       this.generation = generation;
+    }
+
+    /**
+     * The claim gate of the run: whether a claim of the run, ordinary or fused, can go out now. It
+     * is open while the run has not ended, the stop has not abandoned its claims, and its own
+     * heartbeat reservation holds a usable connection.
+     */
+    boolean gateOpen() {
+      Heartbeat.Reservation held = reservation;
+      return !ended && claimsOpen.get() && held != null && held.connected();
+    }
+
+    /**
+     * Takes a claim permit when the claim gate is open, and returns whether it did. The check and
+     * the permit are one step, so a run that ends after the check keeps its reservation until the
+     * claim settles.
+     */
+    boolean acquireClaimPermit() {
+      permitLock.lock();
+      try {
+        if (!gateOpen()) {
+          return false;
+        }
+        claimPermits++;
+        return true;
+      } finally {
+        permitLock.unlock();
+      }
+    }
+
+    /** Gives back a claim permit. The last permit of an ended run closes its reservation. */
+    void releaseClaimPermit() {
+      Heartbeat.Reservation close = null;
+      permitLock.lock();
+      try {
+        claimPermits--;
+        if (ended && claimPermits == 0) {
+          close = reservation;
+        }
+      } finally {
+        permitLock.unlock();
+      }
+      if (close != null) {
+        close.close();
+      }
+    }
+
+    /**
+     * Ends the run's hold on its reservation, and closes the gate. With no claim permit active, the
+     * reservation closes now. Otherwise the last permit closes it when its statement settles, and
+     * this method returns {@code true}. Nothing waits for that, so the stop time does not change.
+     */
+    boolean endReservation() {
+      Heartbeat.Reservation close;
+      permitLock.lock();
+      try {
+        ended = true;
+        if (claimPermits > 0) {
+          return true;
+        }
+        close = reservation;
+      } finally {
+        permitLock.unlock();
+      }
+      if (close != null) {
+        close.close();
+      }
+      return false;
+    }
+  }
+
+  /**
+   * The claim permit of one claim statement of a run. The first {@link #admit} takes a permit when
+   * the run's claim gate is open. A resend after a deadlock reads the gate again, and keeps the
+   * permit. {@link #release} gives the permit back once the statement settled, so the run's
+   * reservation stays held from the gate check until the result arrives.
+   */
+  private static final class ClaimPermit {
+    private final RunState run;
+    private boolean held;
+
+    ClaimPermit(RunState run) {
+      this.run = run;
+    }
+
+    /** Whether the statement can claim now. */
+    boolean admit() {
+      if (!held) {
+        held = run.acquireClaimPermit();
+        return held;
+      }
+      return run.gateOpen();
+    }
+
+    void release() {
+      if (held) {
+        held = false;
+        run.releaseClaimPermit();
+      }
     }
   }
 
@@ -740,6 +896,29 @@ public final class Worker implements AutoCloseable {
     }
   }
 
+  /**
+   * Starts the state of a new run. Under {@link #registryLock}, it moves the generation on and
+   * clears the registry state of the earlier run. A registry response applies under the same lock,
+   * and only to the generation that sent it, so a late response of an earlier run cannot change the
+   * state of this run.
+   */
+  private RunState startRun(long version) {
+    RunState run;
+    registryLock.lock();
+    try {
+      run = new RunState(version, generation.incrementAndGet());
+      registered.set(false);
+      remotelyPaused.set(false);
+    } finally {
+      registryLock.unlock();
+    }
+    Runnable hook = afterRunStarted;
+    if (hook != null) {
+      hook.run();
+    }
+    return run;
+  }
+
   private boolean runLoopOnce(boolean continuous, long version) {
     if (!stopRequested(version)) {
       Runnable hook = beforeDeadlineReset;
@@ -748,7 +927,7 @@ public final class Worker implements AutoCloseable {
       }
       stopDeadline.set(NEVER);
     }
-    RunState run = new RunState(version, generation.incrementAndGet());
+    RunState run = startRun(version);
     // ADR 0071 rule 3: within one startup budget, the worker reserves the heartbeat connection,
     // and then borrows one ordinary connection for the compatibility check. The heartbeat
     // connection comes first, so the listener and the claims cannot take the last connections of
@@ -797,14 +976,13 @@ public final class Worker implements AutoCloseable {
         if (listener != null) {
           listener.close(System.nanoTime());
         }
-        reservation.close();
+        run.endReservation();
       }
     }
     if (!ready) {
       return false;
     }
     instanceId = UUID.randomUUID();
-    registered.set(false);
     draining = false;
     boolean claimedAny;
     int abandoned;
@@ -819,7 +997,7 @@ public final class Worker implements AutoCloseable {
           "Worker started",
           Map.of(
               "workhorse.worker.concurrency", concurrency, "workhorse.worker.queues", queueNames));
-      if (continuous && !stopRequested(version)) {
+      if (continuous && !stopRequested(run)) {
         // ADR 0078: a long-running worker starts its first claim beside its startup maintenance.
         startMaintenance(run);
       }
@@ -845,9 +1023,16 @@ public final class Worker implements AutoCloseable {
             "draining registration");
         abandoned = drain(run.deadline, end);
       } finally {
-        // The drain has ended, so no handler of this run renews a lease any more. The heartbeat
-        // gives its connection back to the pool when no other worker on the DataSource runs.
-        reservation.close();
+        // The drain has ended, so no handler of this run renews a lease any more. A claim statement
+        // that passed the gate before the stop abandoned it keeps the reservation until its result
+        // arrives. The heartbeat gives its connection back to the pool when no other worker on the
+        // DataSource runs.
+        if (run.endReservation()) {
+          Runnable hook = onReservationKeptForClaims;
+          if (hook != null) {
+            hook.run();
+          }
+        }
       }
       // The deregistration waits for the draining registration, so a late registration cannot
       // recreate the row of a stopped worker. It ends with the total stop time, so a full pool
@@ -910,7 +1095,7 @@ public final class Worker implements AutoCloseable {
         } finally {
           stateLock.unlock();
         }
-        if (stopRequested(run.version)
+        if (stopRequested(run)
             || !run.errors.isEmpty()
             || claimError != null
             || !run.maintenanceErrors.isEmpty()) {
@@ -952,7 +1137,7 @@ public final class Worker implements AutoCloseable {
           }
           continue;
         }
-        if (!heartbeatConnected()) {
+        if (!claimGateOpen(run)) {
           // The claim gate is closed. A pass of runOnce ends here, so it does not wait for the
           // database. A long run waits for the replacement connection, whose arrival wakes this
           // loop, and its maintenance still runs.
@@ -960,7 +1145,7 @@ public final class Worker implements AutoCloseable {
             break;
           }
           startMaintenance(run);
-        } else if (planClaim(inFlight) != null) {
+        } else if (planClaim(inFlight, run) != null) {
           if (continuous) {
             startMaintenance(run);
           } else {
@@ -970,7 +1155,7 @@ public final class Worker implements AutoCloseable {
           }
           ClaimPlan plan;
           long wakeVersion = wake.version();
-          while ((plan = reserveClaim(inFlight)) != null) {
+          while ((plan = reserveClaim(inFlight, run)) != null) {
             inFlight++;
             startClaim(plan, wakeVersion, empty > 0, run);
           }
@@ -1004,7 +1189,7 @@ public final class Worker implements AutoCloseable {
                 "workhorse.worker.claims_abandoned",
                 "Claims still in flight at the shutdown deadline were abandoned",
                 Map.of("workhorse.worker.claims", inFlight));
-            run.claimsOpen.set(false);
+            closeClaims(run);
             releaseLateClaims(run);
             break;
           }
@@ -1017,6 +1202,9 @@ public final class Worker implements AutoCloseable {
         inFlight--;
         settleClaim(result, run);
       }
+      // The claim wait has ended. A fused claim of this run that returns later is abandoned as an
+      // ordinary claim is, so no handler of this run starts after its drain.
+      closeClaims(run);
     }
     stateLock.lock();
     try {
@@ -1081,13 +1269,14 @@ public final class Worker implements AutoCloseable {
         heartbeat.reserve(TimeUnit.MILLISECONDS.toNanos(heartbeatMs), this::wakeDispatcher);
     BooleanSupplier stopped = stopDeadlinePassed(run);
     if (reservation.await(deadline, stopped)) {
+      run.reservation = reservation;
       heartbeatReservation = reservation;
       return reservation;
     }
     Throwable failure = reservation.lastFailure();
     reservation.close();
     // A stopping worker does not report a start failure.
-    if (stopRequested(run.version)) {
+    if (stopRequested(run)) {
       if (stopped.getAsBoolean()) {
         logStopStep("heartbeat reservation");
       }
@@ -1136,7 +1325,7 @@ public final class Worker implements AutoCloseable {
         return;
       }
     }
-    if (!listener.isListening() && !stopRequested(run.version)) {
+    if (!listener.isListening() && !stopRequested(run)) {
       log(
           System.Logger.Level.WARNING,
           "workhorse.worker.polling_only",
@@ -1196,7 +1385,7 @@ public final class Worker implements AutoCloseable {
         }
         long remaining = deadline - System.nanoTime();
         if (remaining <= 0) {
-          if (stopRequested(run.version)) {
+          if (stopRequested(run)) {
             return false;
           }
           throw new WorkhorseException(
@@ -1227,19 +1416,30 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
-   * Whether the heartbeat holds its connection, so it can renew a new lease. While it holds none,
-   * the worker starts no claim, and the installed replacement wakes the dispatch loop. A test reads
-   * it to know that the claim gate is closed.
+   * Whether the heartbeat holds its connection for the latest run, so it can renew a new lease. A
+   * test reads it to know that the claim gate is closed.
    */
   boolean heartbeatConnected() {
     Heartbeat.Reservation reservation = heartbeatReservation;
     return reservation == null || reservation.connected();
   }
 
-  private @Nullable ClaimPlan planClaim(int inFlight) {
+  /**
+   * The claim gate of {@code run}: whether a claim of the run, ordinary or fused, can go out now.
+   * It is open while the run's own heartbeat reservation holds a usable connection, the run has not
+   * ended, and the stop has not abandoned the run's claims. While the gate is closed, the run
+   * starts no claim, and the installed replacement wakes the dispatch loop. A claim or a completion
+   * that outlives its run thus never claims with the reservation of a later run. A statement that
+   * passed the gate holds a {@link ClaimPermit} until it settles.
+   */
+  private static boolean claimGateOpen(RunState run) {
+    return run.gateOpen();
+  }
+
+  private @Nullable ClaimPlan planClaim(int inFlight, RunState run) {
     stateLock.lock();
     try {
-      return claimPlan(inFlight);
+      return claimPlan(inFlight, run);
     } finally {
       stateLock.unlock();
     }
@@ -1249,10 +1449,10 @@ public final class Worker implements AutoCloseable {
    * Plans the next plain claim and reserves its slots under one lock, so a fused completion cannot
    * reserve the same free slots in between.
    */
-  private @Nullable ClaimPlan reserveClaim(int inFlight) {
+  private @Nullable ClaimPlan reserveClaim(int inFlight, RunState run) {
     stateLock.lock();
     try {
-      ClaimPlan plan = claimPlan(inFlight);
+      ClaimPlan plan = claimPlan(inFlight, run);
       if (plan != null) {
         slots.reservedTotal += plan.limit;
         if (plan.cohort == WHOLE) {
@@ -1284,9 +1484,9 @@ public final class Worker implements AutoCloseable {
    * on the full tier, a claim takes every free slot of the worker. Otherwise one claim at a time
    * leaves, for the roomiest cohort. The caller holds {@link #stateLock}.
    */
-  private @Nullable ClaimPlan claimPlan(int inFlight) {
+  private @Nullable ClaimPlan claimPlan(int inFlight, RunState run) {
     int free = slots.free();
-    if (free <= 0 || !heartbeatConnected()) {
+    if (free <= 0 || !claimGateOpen(run)) {
       return null;
     }
     if (cohorts == 1 || !fullTierUntil.isEmpty()) {
@@ -1382,6 +1582,14 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
+   * The attempts that the worker admitted and that have not ended, of every run. A test reads it to
+   * know that an attempt that outlived its run has ended.
+   */
+  int activeAttempts() {
+    return active.size();
+  }
+
+  /**
    * The dispatch passes that saw a pause. After one such pass, the loop starts no claim until the
    * pause ends. So a test that waits for one more pass and then for {@link #claimsInFlight} to
    * reach zero knows that no claim can take a task that it enqueues next (SM-1547).
@@ -1423,14 +1631,16 @@ public final class Worker implements AutoCloseable {
                   Thread.sleep(
                       ThreadLocalRandom.current().nextLong(NOTIFICATION_CLAIM_DELAY_MS + 1));
                 }
-                // A worker paused or stopped during the delay sends no claim, and nor does a worker
-                // whose heartbeat lost its connection.
+                // A worker paused or stopped during the delay sends no claim, and nor does a run
+                // whose claim gate closed.
                 boolean withdrawn =
-                    (delayed && (stopRequested(run.version) || isPaused()))
-                        || !heartbeatConnected();
+                    (delayed && (stopRequested(run) || isPaused())) || !claimGateOpen(run);
                 if (!withdrawn) {
                   claimAcrossQueues(
-                      plan.limit, claimed, plan.cohort == WHOLE ? plan.limit : plan.cohortLimit);
+                      run,
+                      plan.limit,
+                      claimed,
+                      plan.cohort == WHOLE ? plan.limit : plan.cohortLimit);
                 }
               } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
@@ -1452,23 +1662,21 @@ public final class Worker implements AutoCloseable {
    * claimed} as each queue answers, so a later queue's error keeps the leases already taken.
    * Fast-tier queues together give at most {@code fastLimit} tasks, the free slots of one cohort.
    */
-  private void claimAcrossQueues(int limit, List<Claimed> claimed, int fastLimit) {
+  private void claimAcrossQueues(RunState run, int limit, List<Claimed> claimed, int fastLimit) {
     int size = queueNames.size();
     int start = (int) Math.floorMod(nextQueueIndex.getAndIncrement(), (long) size);
     // The claim gate is read again before each queue, so a lost heartbeat connection stops the
     // claims of the remaining queues.
-    for (int offset = 0;
-        offset < size && claimed.size() < limit && heartbeatConnected();
-        offset++) {
+    for (int offset = 0; offset < size && claimed.size() < limit && claimGateOpen(run); offset++) {
       String name = queueNames.get((start + offset) % size);
       int free = limit - claimed.size();
-      telemetry.claim(name, () -> claim(name, free, fastLimit - claimed.size(), claimed));
+      telemetry.claim(name, () -> claim(run, name, free, fastLimit - claimed.size(), claimed));
     }
   }
 
-  private void claim(String name, int limit, int fastLimit, List<Claimed> claimed) {
+  private void claim(RunState run, String name, int limit, int fastLimit, List<Claimed> claimed) {
     long startedAt = System.nanoTime();
-    List<Row> fast = claimFast(name, limit, fastLimit, startedAt);
+    List<Row> fast = claimFast(run, name, limit, fastLimit, startedAt);
     List<Claimed> tasks = new ArrayList<>();
     if (fast != null) {
       for (Row row : fast) {
@@ -1477,19 +1685,26 @@ public final class Worker implements AutoCloseable {
     } else {
       TierRead tier = new TierRead(name);
       // The claim gate is read again on the borrowed connection, just before the claim goes out,
-      // because the heartbeat can lose its connection while the borrow waits for the pool.
-      List<Row> rows =
-          withConnection(
-              connection ->
-                  heartbeatConnected()
-                      ? Sql.rows(
-                          connection,
-                          SqlCatalogue.CLAIM_MANY_V1,
-                          name,
-                          workerId,
-                          Integer.toString(limit),
-                          Long.toString(leaseMs))
-                      : List.of());
+      // because the heartbeat can lose its connection, or the run can end, while the borrow waits
+      // for the pool.
+      ClaimPermit permit = new ClaimPermit(run);
+      List<Row> rows;
+      try {
+        rows =
+            withConnection(
+                connection ->
+                    permit.admit()
+                        ? Sql.rows(
+                            connection,
+                            SqlCatalogue.CLAIM_MANY_V1,
+                            name,
+                            workerId,
+                            Integer.toString(limit),
+                            Long.toString(leaseMs))
+                        : List.of());
+      } finally {
+        permit.release();
+      }
       for (Row row : rows) {
         tasks.add(claimed(row, name, startedAt, tier::fast, false));
       }
@@ -1531,7 +1746,8 @@ public final class Worker implements AutoCloseable {
    * fast claim is {@code complete_many_and_claim_v1} with no completions. A full-tier queue rejects
    * it, and the worker then claims that queue through {@code claim_many_v1} until the next probe.
    */
-  private @Nullable List<Row> claimFast(String name, int limit, int fastLimit, long sentAt) {
+  private @Nullable List<Row> claimFast(
+      RunState run, String name, int limit, int fastLimit, long sentAt) {
     stateLock.lock();
     try {
       Long until = fullTierUntil.get(name);
@@ -1547,8 +1763,10 @@ public final class Worker implements AutoCloseable {
     }
     List<Row> rows;
     // The claim gate is read on the borrowed connection before each attempt, a resend after a
-    // deadlock too. A worker whose heartbeat lost its connection in the meantime sends nothing.
+    // deadlock too. A run whose heartbeat lost its connection, or that ended, in the meantime sends
+    // nothing.
     AtomicBoolean withdrawn = new AtomicBoolean();
+    ClaimPermit permit = new ClaimPermit(run);
     try {
       rows =
           withConnection(
@@ -1557,7 +1775,7 @@ public final class Worker implements AutoCloseable {
                       connection,
                       SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
                       () -> {
-                        if (!heartbeatConnected()) {
+                        if (!permit.admit()) {
                           withdrawn.set(true);
                           return null;
                         }
@@ -1574,6 +1792,8 @@ public final class Worker implements AutoCloseable {
     } catch (FastTierUnsupportedException fullTier) {
       markFullTier(name, sentAt);
       return null;
+    } finally {
+      permit.release();
     }
     if (withdrawn.get()) {
       return List.of();
@@ -1664,6 +1884,20 @@ public final class Worker implements AutoCloseable {
   }
 
   /**
+   * Ends the claims of {@code run}. The flag changes under {@link #stateLock}, so a fused result
+   * that {@link #settleCompletionClaim} settles under that lock either admits its tasks before the
+   * drain starts, or admits none.
+   */
+  private void closeClaims(RunState run) {
+    stateLock.lock();
+    try {
+      run.claimsOpen.set(false);
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  /**
    * Gives back the slots of claims that returned after the stop abandoned them. Their tasks do not
    * run: their leases expire, and recovery returns them to the queue. Each result is polled once,
    * so the claim thread and the dispatch loop never release the same slots twice.
@@ -1692,7 +1926,7 @@ public final class Worker implements AutoCloseable {
    * the moment the run sees it.
    */
   private long stopDeadline(RunState run) {
-    if (!stopRequested(run.version)) {
+    if (!stopRequested(run)) {
       return NEVER;
     }
     stopDeadline.compareAndSet(NEVER, System.nanoTime() + shutdownGraceNanos);
@@ -1970,8 +2204,18 @@ public final class Worker implements AutoCloseable {
       return;
     }
     boolean paused = !rows.isEmpty() && "t".equals(rows.get(0).text("paused"));
-    boolean changed = remotelyPaused.getAndSet(paused) != paused;
-    registered.set(true);
+    boolean changed;
+    registryLock.lock();
+    try {
+      // A response that arrives after a later run started belongs to its own run, which ended.
+      if (generation.get() != run) {
+        return;
+      }
+      changed = remotelyPaused.getAndSet(paused) != paused;
+      registered.set(true);
+    } finally {
+      registryLock.unlock();
+    }
     if (changed) {
       log(
           System.Logger.Level.INFO,
@@ -1983,8 +2227,13 @@ public final class Worker implements AutoCloseable {
   }
 
   private void deregister(long run) {
-    if (generation.get() != run || !registered.getAndSet(false)) {
-      return;
+    registryLock.lock();
+    try {
+      if (generation.get() != run || !registered.getAndSet(false)) {
+        return;
+      }
+    } finally {
+      registryLock.unlock();
     }
     try {
       withConnection(
@@ -2314,7 +2563,7 @@ public final class Worker implements AutoCloseable {
       active.remove(task);
       releaseSlot(task);
       run.errors.add(error);
-      stopVersion.incrementAndGet();
+      stopRun(run);
     }
   }
 
@@ -2346,12 +2595,22 @@ public final class Worker implements AutoCloseable {
       // Another attempt owns the task, so this attempt has nothing left to write.
     } catch (Throwable error) {
       run.errors.add(error);
-      stopVersion.incrementAndGet();
+      stopRun(run);
     } finally {
       active.remove(task);
       releaseSlot(task);
       wake.signal();
     }
+  }
+
+  /**
+   * Ends {@code run} after a failure of one of its attempts. The request marks that run only, and
+   * does not change {@link #stopVersion}, which consecutive runs can share. An attempt that
+   * outlived its run, and fails later, thus marks a run that already ended, and changes nothing.
+   */
+  private void stopRun(RunState run) {
+    run.failed = true;
+    wakeDispatcher();
   }
 
   private void execute(Active task) {
@@ -2673,6 +2932,14 @@ public final class Worker implements AutoCloseable {
     final ClaimedTask task;
     final String encoded;
     final int limit;
+
+    /**
+     * The claim permit of this completion's fused claim, for the run of the attempt. The claim gate
+     * of that run decides whether this completion claims, and the permit is held while its
+     * statement runs.
+     */
+    final ClaimPermit permit;
+
     final CountDownLatch done = new CountDownLatch(1);
     volatile boolean accepted;
     volatile List<Claimed> claimed = List.of();
@@ -2680,13 +2947,17 @@ public final class Worker implements AutoCloseable {
     volatile @Nullable Throwable error;
     volatile boolean lead;
 
-    /** True when the claim gate set the claim limit of the statement to 0 before it went out. */
+    /**
+     * True when the claim gate of the attempt's run withheld this completion's claim before the
+     * statement went out.
+     */
     volatile boolean withheld;
 
-    PendingCompletion(ClaimedTask task, String encoded, int limit) {
+    PendingCompletion(ClaimedTask task, RunState run, String encoded, int limit) {
       this.task = task;
       this.encoded = encoded;
       this.limit = limit;
+      this.permit = new ClaimPermit(run);
     }
 
     void await() {
@@ -2715,7 +2986,8 @@ public final class Worker implements AutoCloseable {
   private boolean completeFast(Active task, String encoded) {
     ClaimedTask claimed = task.claimed.task;
     CompletionClaim reservation = reserveCompletionClaim(task);
-    PendingCompletion pending = new PendingCompletion(claimed, encoded, reservation.limit);
+    PendingCompletion pending =
+        new PendingCompletion(claimed, task.run, encoded, reservation.limit);
     try {
       sendBatchedCompletion(pending, new CompletionKey(claimed.queue(), reservation.cohort));
     } finally {
@@ -2747,12 +3019,12 @@ public final class Worker implements AutoCloseable {
     try {
       CompletionClaim idle = new CompletionClaim(0, cohort, wake.version());
       if (!run.open
-          || stopRequested(run.version)
+          || stopRequested(run)
           || !run.errors.isEmpty()
           || isPaused()
           || run.claimError != null
           || run.emptyWait != null
-          || !heartbeatConnected()) {
+          || !claimGateOpen(run)) {
         return idle;
       }
       int limit = Math.min(slots.free(), slots.cohortFree(cohort)) + 1;
@@ -2774,15 +3046,23 @@ public final class Worker implements AutoCloseable {
   /**
    * Releases a fused claim's reservation and starts the tasks it claimed in its cohort. {@code
    * claimed} is {@code null} when the completion failed, or when the claim gate withheld its claim.
+   * A result that returns after the claims of its run ended is abandoned, as an ordinary claim is:
+   * its tasks do not run, their leases expire, and recovery returns them to the queue.
    */
   private void settleCompletionClaim(
-      Active task, CompletionClaim reservation, @Nullable List<Claimed> claimed) {
+      Active task, CompletionClaim reservation, @Nullable List<Claimed> returned) {
     if (reservation.limit == 0) {
       return;
     }
     RunState run = task.run;
+    int abandoned = 0;
     stateLock.lock();
     try {
+      List<Claimed> claimed = returned;
+      if (claimed != null && !run.claimsOpen.get()) {
+        abandoned = claimed.size();
+        claimed = null;
+      }
       slots.reservedTotal -= reservation.limit;
       slots.reserved[reservation.cohort] -= reservation.limit;
       // A claimed task took over this handler's slot. Without one, the slot stays this handler's
@@ -2816,6 +3096,13 @@ public final class Worker implements AutoCloseable {
       }
     } finally {
       stateLock.unlock();
+    }
+    if (abandoned > 0) {
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.worker.claims_abandoned",
+          "Claims still in flight at the shutdown deadline were abandoned",
+          Map.of("workhorse.worker.claims", 1));
     }
     wake.signal();
   }
@@ -2939,9 +3226,10 @@ public final class Worker implements AutoCloseable {
     long sentAt = System.nanoTime();
     List<Row> rows;
     // The claim limit is read on the borrowed connection before each attempt, a resend after a
-    // deadlock too. The heartbeat can lose its connection while this chunk waits behind another
-    // batch or for the pool. The statement then still settles the completions, with a claim limit
-    // of 0.
+    // deadlock too. Each completion claims only while the claim gate of its own run is open. The
+    // heartbeat can lose its connection, or a run can end, while this chunk waits behind another
+    // batch or for the pool. The statement then still settles every completion, and claims only
+    // for those whose gate is open, with a claim limit of 0 when none is.
     AtomicInteger sentLimit = new AtomicInteger(claimLimit);
     try {
       rows =
@@ -2951,7 +3239,13 @@ public final class Worker implements AutoCloseable {
                       connection,
                       SqlCatalogue.COMPLETE_MANY_AND_CLAIM_V1,
                       () -> {
-                        int limit = heartbeatConnected() ? claimLimit : 0;
+                        int limit = 0;
+                        for (PendingCompletion member : chunk) {
+                          member.withheld = member.limit > 0 && !member.permit.admit();
+                          if (!member.withheld) {
+                            limit += member.limit;
+                          }
+                        }
                         sentLimit.set(limit);
                         return new @Nullable Object[] {
                           workerId,
@@ -2969,6 +3263,11 @@ public final class Worker implements AutoCloseable {
         member.fullTier = true;
       }
       return;
+    } finally {
+      // The statement settled, so each fused claim of the chunk gives back its permit.
+      for (PendingCompletion member : chunk) {
+        member.permit.release();
+      }
     }
     markFastTier(queueName);
     // Only the first row carries the accepted completions. A statement that claims nothing still
@@ -2989,13 +3288,12 @@ public final class Worker implements AutoCloseable {
       telemetry.claimed(queueName, sentAt, claimed.stream().map(task -> task.task).toList(), false);
     }
     reportFused(chunk.size(), limitSent, claimed.size());
-    // Claimed tasks go to the completions in order, each up to the slots it reserved.
+    // Claimed tasks go to the completions in order, each up to the slots it reserved. A claim that
+    // the gate withheld gets no task, and proves nothing about the queue.
     int offset = 0;
     for (PendingCompletion member : chunk) {
       member.accepted = accepted.contains(member.task.id());
-      // A claim that the gate withheld proves nothing about the queue.
-      member.withheld = limitSent == 0 && member.limit > 0;
-      int end = Math.min(claimed.size(), offset + member.limit);
+      int end = Math.min(claimed.size(), offset + (member.withheld ? 0 : member.limit));
       member.claimed = List.copyOf(claimed.subList(offset, end));
       offset = end;
     }
