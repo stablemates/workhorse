@@ -112,9 +112,9 @@ This distribution provides synchronous Psycopg and asynchronous Psycopg or async
 workers. Application clients use caller-owned connections and transactions. Workers take a
 caller-owned pool: `Worker` takes a Psycopg `ConnectionPool`, `AsyncWorker.from_psycopg` takes a
 Psycopg `AsyncConnectionPool`, and `AsyncWorker.from_asyncpg` takes an asyncpg `Pool`. A worker
-borrows a pool connection for each claim and lifecycle statement and returns it afterwards. It also
-reserves its own heartbeat and listener connections from that pool, so
-[size the pool for them](https://workhorse.run/docs/pgbouncer#budget-the-connections-that-each-worker-holds). Close the pool
+borrows a pool connection for each claim and lifecycle statement and returns it afterwards. Every
+worker on one pool also shares one heartbeat connection and one listener connection from that pool,
+so [size the pool for them](https://workhorse.run/docs/pgbouncer#budget-the-connections-that-each-worker-holds). Close the pool
 after `run` returns; the worker never closes it. The package never installs or migrates the shared
 PostgreSQL schema.
 

@@ -37,6 +37,7 @@ from workhorse import (
     StaleLeaseError,
     Worker,
 )
+import workhorse.worker as worker_module
 from workhorse._statements import SQL_STATEMENTS, STATEMENTS, DriverStatement
 from workhorse._drivers import PooledSyncExecutor, SyncExecutor
 
@@ -495,8 +496,7 @@ def execute_lease_loss_fixture(
     # finds the recovered task and reports the lease as stale. If a full lease passes first, the
     # worker's lease watchdog ends the attempt with the same error and writes nothing.
     recovery_ended = Event()
-    open_heartbeat_executor = worker._heartbeat_executor_factory
-    assert open_heartbeat_executor is not None
+    open_heartbeat_executor = worker_module._psycopg_pool_heartbeat_executor_factory(worker_pool)
 
     def open_held_heartbeat_executor() -> tuple[Any, Callable[[], None]]:
         executor, close = open_heartbeat_executor()
@@ -696,7 +696,7 @@ def execute_poll_cadence_fixture(
         )
         # A listening worker waits the poll interval without doubling, because a notification
         # wakes it for new work. The fixture pins the polling backoff, so the worker polls only.
-        worker._notification_connection_factory = None  # type: ignore[assignment]
+        worker._listens = False
         worker.handle(fixture["taskType"], lambda _payload, _context: handled.set())
         running = Thread(target=worker.run)
         running.start()

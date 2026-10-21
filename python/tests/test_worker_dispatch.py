@@ -298,7 +298,7 @@ def scripted_worker(
     )
     worker._compatibility.assert_compatible = lambda: None  # type: ignore[method-assign]
     # No listener, so the empty-claim wait follows the poll interval.
-    worker._notification_connection_factory = None  # type: ignore[assignment]
+    worker._listens = False
     return worker.handle(HANDLED, lambda _payload, _context: None)
 
 

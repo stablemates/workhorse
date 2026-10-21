@@ -13,7 +13,7 @@ def exit_process(_payload: object, _context: object) -> None:
     sys.exit(int(exit_code))
 
 
-with ConnectionPool(database_url, min_size=3, max_size=3) as pool:
+with ConnectionPool(database_url, min_size=3, max_size=3, kwargs={"autocommit": True}) as pool:
     Worker(
         pool,
         worker_id="python-exiting-worker",

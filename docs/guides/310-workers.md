@@ -204,8 +204,8 @@ due tasks to `ready`, notifies each affected queue separately. [Recovery](020-le
 does the same. Thus, tasks on one queue do not wake the workers of another queue. A notification
 wakes the claim loop only. It does not change the timing of maintenance or registration.
 
-TypeScript, Go, and Ruby workers that share a database pool also share one listener connection. A
-Python, Rust, Java, or Kotlin worker holds its own.
+TypeScript, Go, Ruby, and Python workers that share a database pool also share one listener
+connection. A Rust, Java, or Kotlin worker holds its own.
 
 <details>
 <summary>Reference: polling cadence</summary>
@@ -661,8 +661,8 @@ async with asyncpg.create_pool(database_url) as worker_pool:
 1. During the run, the worker borrows a pool connection for each claim and lifecycle statement and
    returns it afterwards.
 2. For the whole run, the worker also
-   [reserves its own heartbeat and listener connections](390-connection-pooling.md#budget-the-connections-that-each-worker-holds)
-   from that pool. Size the pool for them.
+   [shares one heartbeat connection and one listener connection](390-connection-pooling.md#budget-the-connections-that-each-worker-holds)
+   with every other worker on that pool. Size the pool for them.
 3. When `run` returns, the worker leaves the pool open. Then the `async with` block closes it.
 
 Thus, close the pool only after `run` returns. The worker never closes the pool it was given.

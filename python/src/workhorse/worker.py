@@ -13,16 +13,19 @@ from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import islice
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 from uuid import uuid4
 
+from psycopg_pool import PoolTimeout as _PoolTimeout
+
 from ._checkpoint_input import checkpoint_input_fingerprint as _checkpoint_input_fingerprint
 from ._compatibility import (
     CachedCompatibilityCheck as _CachedCompatibilityCheck,
     SyncRowExecutor as _SyncRowExecutor,
+    assert_sync_compatible as _assert_sync_compatible,
 )
 from ._contracts import (
     apply_contract as _apply_contract,
@@ -34,7 +37,9 @@ from ._drivers import (
     PsycopgConnection as _PsycopgConnection,
     PsycopgPool as _PsycopgPool,
     Row as _Row,
+    StatementCheck as _StatementCheck,
     SyncExecutor as _SyncExecutor,
+    pool_connection as _psycopg_pool_connection,
 )
 from ._external_waits import (
     encode_wait_value as _encode_wait_value,
@@ -53,8 +58,21 @@ from ._heartbeat_round import (
     heartbeat_round_bound_ms as _heartbeat_round_bound_ms,
 )
 from ._notifications import (
-    NotificationConnectionFactory as _NotificationConnectionFactory,
-    TaskNotificationListener as _TaskNotificationListener,
+    NotificationSubscription as _NotificationSubscription,
+    SharedTaskNotificationListener as _SharedTaskNotificationListener,
+)
+from ._pool_hub import (
+    CLEANUP_SECONDS as _CLEANUP_SECONDS,
+    LISTENER_ACQUIRE_SECONDS as _LISTENER_ACQUIRE_SECONDS,
+    SYNC_HUBS as _SYNC_HUBS,
+    HeartbeatReservation as _HeartbeatReservation,
+    ListenerSubscription as _ListenerSubscription,
+    PoolConnectionLease as _PoolConnectionLease,
+    PoolHub as _PoolHub,
+    ReservationSubscription as _ReservationSubscription,
+    connection_budget_ms as _connection_budget_ms,
+    pool_label as _pool_label,
+    require_pool as _require_pool,
 )
 from ._protocol import serialize_child_request as _serialize_child_request
 from ._statements import (
@@ -141,6 +159,9 @@ else:
 
 # Opens the heartbeat executor and returns it with the callable that closes it.
 _HeartbeatExecutorFactory = Callable[[], tuple[_SyncRowExecutor, Callable[[], None]]]
+# Attaches the worker to the hub of its pool for one run, and returns the hub with the callable that
+# detaches it.
+_HubSource = Callable[[], tuple["_PoolHub | None", Callable[[], None]]]
 
 # A round with less time than this left fails before it sends its heartbeat. At this size every
 # budget of _round_timeouts is at least 1 ms, and the budgets still fit in the time left.
@@ -256,23 +277,9 @@ class _ServerBoundedExecutor:
         return _HeartbeatRoundExpired(message)
 
 
-def _discard_round_connection(executor: object) -> None:
-    """Close the driver connection under `executor`, so its pool can only discard it."""
-    discard = getattr(executor, "discard", None)
-    if callable(discard):
-        discard()
-        return
-    connection = getattr(executor, "connection", None)
-    if isinstance(connection, _PoolConnectionLease):
-        connection.discard()
-        return
-    close = getattr(connection, "close", None)
-    if callable(close):
-        close()
-
-
 class _HeartbeatRound:
-    """One heartbeat round on the dedicated connection. The first of finish and abandon wins."""
+    """One heartbeat round on the shared heartbeat connection. The first of finish and abandon
+    wins."""
 
     def __init__(self, deadline: float) -> None:
         self.deadline = deadline
@@ -376,7 +383,7 @@ class _DispatchSlots:
     concurrency: int
     refill_batch: int
     cohort_capacity: list[int]
-    listener: _TaskNotificationListener | None
+    listener: _ListenerSubscription | None
     cohort_active: list[int]
     cohort_handed_over: list[int]
     cohort_reserved: list[int]
@@ -442,6 +449,26 @@ class _PendingCompletion:
     # The queue left the fast tier, so this completion goes through complete_v1 instead.
     full_tier: bool = False
     error: BaseException | None = None
+
+
+class _ClaimGateClosed(Exception):
+    """The claim gate closed after a claim borrowed its connection, so the claim sent nothing."""
+
+
+class _CheckedExecutor:
+    """Run `check` before each statement of an executor that borrows no connection itself."""
+
+    def __init__(self, executor: _SyncRowExecutor, check: _StatementCheck) -> None:
+        self._executor = executor
+        self._check = check
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._executor, name)
+
+    def rows(
+        self, statement: _DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Mapping[str, object]]:
+        return self._executor.rows(statement, self._check(parameters))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1511,25 +1538,39 @@ class Worker:
         self._remotely_paused = False
         self._stopping = False
         self._stop_version = 0
+        # The end of the stop budget, fixed by the first stop of a run (ADR 0071, rule 8).
+        self._stop_deadline: float | None = None
         self._heartbeat_lock = Lock()
         self._heartbeat_members: dict[str, _HeartbeatMember] = {}
         self._heartbeat_thread: Thread | None = None
         self._heartbeat_wake = Event()
-        # Heartbeats get their own connection when one is configured, so a slow handler statement
-        # on the shared connection cannot hold a lease renewal back.
-        self._heartbeat_executor_factory = _heartbeat_executor_factory or (
-            None if shared_heartbeats else _psycopg_pool_heartbeat_executor_factory(pool)
-        )
-        self._heartbeat_connection_lock = Lock()
-        self._heartbeat_connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
-        # Counts the cleanups of the slot. A round that started before a cleanup closes its
-        # connection instead of putting it back, because nothing would close it later.
-        self._heartbeat_generation = 0
-        # True while a replacement connection that a failed round started is still opening.
-        self._heartbeat_replacing = False
-        self._notification_connection_factory: _NotificationConnectionFactory | None = (
-            _psycopg_pool_notification_factory(pool)
-        )
+        # Without the opt-out, heartbeat rounds run on the heartbeat connection that every worker
+        # on the pool shares, so a slow handler statement cannot hold a lease renewal back.
+        self._dedicated_heartbeats = not shared_heartbeats
+        # A private source of heartbeat connections. Tests set it; the worker then reserves its
+        # connections from it and shares them with no other worker.
+        self._heartbeat_executor_factory = _heartbeat_executor_factory
+        self._private_reservation: tuple[_HeartbeatExecutorFactory, _HeartbeatReservation] | None
+        self._private_reservation = None
+        # The heartbeat reservation of the active run. A worker claims no task while it is not
+        # ready (ADR 0071, rule 6).
+        self._reservation: _HeartbeatReservation | None = None
+        # Counts the starts and the ends of runs. A claim keeps the generation of the run that
+        # started it, so it sends nothing once that run released its reservation.
+        self._run_generation = 0
+        # The end of the cleanup window after the drain. AsyncWorker spends it on the listener.
+        self._cleanup_deadline: float | None = None
+        # The registration statement in flight. A refresh waits for it until its deadline, and a
+        # refresh that finds it still running skips, so stalled statements never pile up.
+        self._registration_call: Future[list[_Row]] | None = None
+        # The startup budget and the stop budget: max(heartbeat_ms, 5 s) (ADR 0071, rules 3 and 8).
+        self._connection_budget_seconds = _connection_budget_ms(self.heartbeat_ms) / 1000
+        self._hub_source: _HubSource = self._attach_sync_hub
+        # False when the caller listens for notifications itself, as AsyncWorker does.
+        self._listens = True
+        # Called once the run reserved its heartbeat connection and checked compatibility. An
+        # AsyncWorker run subscribes to the shared listener here.
+        self._on_connections_ready: Callable[[], None] | None = None
 
     def _register_heartbeat(
         self,
@@ -1628,7 +1669,7 @@ class Worker:
                 # lease window in it, so it never renews a lease that the worker already gave up.
                 deadline = min(deadline, next_at, *(member.lease_ends_at() for member in members))
                 if (
-                    self._heartbeat_executor_factory is not None
+                    self._dedicated_heartbeats
                     and (deadline - sent_at) * 1000 < _BUSY_RETRY_MINIMUM_MS
                 ):
                     # A bounded retry with this little time would fail before its heartbeat. The
@@ -1712,18 +1753,18 @@ class Worker:
     def _heartbeat_rows(
         self, parameters: Sequence[object], deadline: float
     ) -> list[Mapping[str, object]]:
-        if self._heartbeat_executor_factory is None:
+        if not self._dedicated_heartbeats:
             return _fenced_write_rows(self._executor, _STATEMENTS.heartbeat_many, parameters)
-        # One deadline bounds the whole round on the dedicated connection: the checkout and the
+        reservation = self._reservation
+        if reservation is None:
+            raise _HeartbeatRoundExpired("the worker holds no heartbeat reservation")
+        # One deadline bounds the whole round on the shared connection: the wait for it and the
         # transaction. The round runs on its own thread, so this thread stops waiting at the
         # deadline even when the driver does not.
         heartbeat_round = _HeartbeatRound(deadline)
-        # Read before the thread starts, so a cleanup that runs first is always seen.
-        with self._heartbeat_connection_lock:
-            generation = self._heartbeat_generation
         Thread(
             target=self._run_heartbeat_round,
-            args=(heartbeat_round, parameters, generation),
+            args=(heartbeat_round, parameters, reservation),
             name="workhorse-heartbeat-round",
             daemon=True,
         ).start()
@@ -1736,16 +1777,22 @@ class Worker:
             return heartbeat_round.result.result()
 
     def _run_heartbeat_round(
-        self, heartbeat_round: _HeartbeatRound, parameters: Sequence[object], generation: int
+        self,
+        heartbeat_round: _HeartbeatRound,
+        parameters: Sequence[object],
+        reservation: _HeartbeatReservation,
     ) -> None:
-        factory = cast(_HeartbeatExecutorFactory, self._heartbeat_executor_factory)
         try:
-            # The round takes the connection out of the slot, so a later round never shares it.
-            with self._heartbeat_connection_lock:
-                connection, self._heartbeat_connection = self._heartbeat_connection, None
+            # The round takes the shared connection for itself, so no other round uses it meanwhile.
+            # Rounds of the workers on one pool thus run one after another.
+            # A round needs at least a quarter of its time to send its statements. With less, it
+            # skips cleanly rather than expire during a statement and discard the connection
+            # that every worker on the pool shares.
+            minimum = max(0.0, heartbeat_round.deadline - monotonic()) / 4
+            connection = reservation.take(heartbeat_round.deadline, minimum)
             if connection is None:
-                connection = factory()
-            executor, close = connection
+                raise _HeartbeatRoundExpiredCleanly("no heartbeat connection was free in time")
+            executor, _close = connection
             try:
                 rows = _fenced_write_rows(
                     _ServerBoundedExecutor(executor, heartbeat_round.deadline),
@@ -1755,96 +1802,24 @@ class Worker:
             except _HeartbeatRoundExpiredCleanly as error:
                 # No statement of the round runs on the server, so the next round can use the
                 # connection. The round still failed and renews nothing.
-                leftover = self._keep_heartbeat_connection(connection, generation)
+                reservation.put_back(connection)
                 heartbeat_round.finish()
                 heartbeat_round.result.set_exception(error)
-                if leftover is not None:
-                    with suppress(Exception):
-                        leftover[1]()
                 return
             except BaseException:
-                # Reconnect on the next beat rather than reuse a connection in an unknown state.
-                # Closing the driver connection first ends any open transaction on the server, so
-                # the pool cannot commit it when the connection goes back.
-                with suppress(Exception):
-                    _discard_round_connection(executor)
-                with suppress(Exception):
-                    close()
+                # The reservation replaces the connection at once rather than reuse it in an
+                # unknown state. Closing the driver connection first ends any open transaction on
+                # the server, so the pool cannot commit it when the connection goes back.
+                reservation.lose(connection)
                 raise
-            if not heartbeat_round.finish():
-                # The heartbeat thread stopped waiting, so nothing counts this renewal.
-                with suppress(Exception):
-                    close()
-                self._replace_heartbeat_connection(generation)
-                return
-            leftover = self._keep_heartbeat_connection(connection, generation)
-            # The result goes first, so a close that blocks cannot hold the heartbeat thread.
-            heartbeat_round.result.set_result(rows)
-            if leftover is not None:
-                with suppress(Exception):
-                    leftover[1]()
+            # When the heartbeat thread stopped waiting, nothing counts this renewal. The result
+            # goes first, so a close that blocks cannot hold the heartbeat thread.
+            if heartbeat_round.finish():
+                heartbeat_round.result.set_result(rows)
+            reservation.put_back(connection)
         except BaseException as error:
             heartbeat_round.finish()
             heartbeat_round.result.set_exception(error)
-            self._replace_heartbeat_connection(generation)
-
-    def _keep_heartbeat_connection(
-        self, connection: tuple[_SyncRowExecutor, Callable[[], None]], generation: int
-    ) -> tuple[_SyncRowExecutor, Callable[[], None]] | None:
-        """Put the connection of a round back into the slot for the next round.
-
-        It returns the connection when the slot is full or a cleanup ran after the round started.
-        The caller then closes it.
-        """
-        with self._heartbeat_connection_lock:
-            if self._heartbeat_connection is None and self._heartbeat_generation == generation:
-                self._heartbeat_connection = connection
-                return None
-        return connection
-
-    def _replace_heartbeat_connection(self, generation: int) -> None:
-        """Open the connection for the next round after a round discarded its connection.
-
-        Opening it here starts the connect before the next round. Rounds start on a fixed
-        schedule, so the next round can start soon after a failed round ends. With a short
-        interval, a connect inside each deadline could then fail every later round.
-        """
-        factory = cast(_HeartbeatExecutorFactory, self._heartbeat_executor_factory)
-        with self._heartbeat_connection_lock:
-            # One replacement opens at a time, so a pool that cannot lend one gets one wait.
-            if (
-                self._heartbeat_replacing
-                or self._heartbeat_connection is not None
-                or self._heartbeat_generation != generation
-            ):
-                return
-            self._heartbeat_replacing = True
-        connection: tuple[_SyncRowExecutor, Callable[[], None]] | None = None
-        try:
-            connection = factory()
-        except Exception:
-            # The next round connects again inside its own deadline.
-            return
-        finally:
-            with self._heartbeat_connection_lock:
-                self._heartbeat_replacing = False
-                if (
-                    connection is not None
-                    and self._heartbeat_connection is None
-                    and self._heartbeat_generation == generation
-                ):
-                    self._heartbeat_connection, connection = connection, None
-        if connection is not None:
-            with suppress(Exception):
-                connection[1]()
-
-    def _close_heartbeat_connection(self) -> None:
-        with self._heartbeat_connection_lock:
-            self._heartbeat_generation += 1
-            connection, self._heartbeat_connection = self._heartbeat_connection, None
-        if connection is not None:
-            with suppress(Exception):
-                connection[1]()
 
     def _expire_owned_task(self, task: ClaimedTask, parent_context: object) -> object:
         expiration = _require_lifecycle_row(
@@ -2140,6 +2115,8 @@ class Worker:
         with self._state_lock:
             self._stop_version += 1
             self._stopping = True
+            if self._stop_deadline is None:
+                self._stop_deadline = monotonic() + self._connection_budget_seconds
             active_slots = len(self._active_threads)
         _emit_log(
             "INFO",
@@ -2152,6 +2129,13 @@ class Worker:
             },
         )
         self._wake_dispatcher()
+
+    def _stop_deadline_from_now(self) -> float:
+        """The end of the stop budget: from the first stop, or from now when no stop came."""
+        with self._state_lock:
+            if self._stop_deadline is None:
+                self._stop_deadline = monotonic() + self._connection_budget_seconds
+            return self._stop_deadline
 
     def _report_fatal_error(self, error: BaseException) -> None:
         """Report the run's first fatal error when it is observed, before the drain waits.
@@ -2181,15 +2165,192 @@ class Worker:
         with self._state_lock:
             return self._stopping or self._locally_paused or self._remotely_paused
 
+    def _attach_sync_hub(self) -> tuple[_PoolHub | None, Callable[[], None]]:
+        """Attach to the hub of this worker's psycopg pool: the shared listener and heartbeat."""
+        hub = _SYNC_HUBS.attach(self._pool, _psycopg_pool_hub)
+        return hub, lambda: _SYNC_HUBS.detach(hub)
+
+    def _heartbeat_reservation(self, hub: _PoolHub | None) -> _HeartbeatReservation | None:
+        """The heartbeat reservation of this run, or None with the opt-out."""
+        if not self._dedicated_heartbeats:
+            return None
+        factory = self._heartbeat_executor_factory
+        if factory is None:
+            if hub is None:
+                raise RuntimeError("Worker has no pool hub for its heartbeat connection")
+            return hub.heartbeat
+        # A private factory gets a private reservation, kept while the factory stays the same.
+        if self._private_reservation is None or self._private_reservation[0] is not factory:
+            self._private_reservation = (
+                factory,
+                _HeartbeatReservation(lambda _timeout: factory()),
+            )
+        return self._private_reservation[1]
+
+    def _executor_within(self, seconds: float) -> _SyncRowExecutor:
+        """The worker's executor, with each wait for a pool connection bounded by `seconds`."""
+        within = getattr(self._executor, "within", None)
+        return within(max(0.001, seconds)) if callable(within) else self._executor
+
+    def _gated_executor(self, check: _StatementCheck) -> _SyncRowExecutor:
+        """The worker's executor, which runs `check` after it borrows each connection.
+
+        The claim gate must be read after the borrow: the heartbeat connection can be lost while
+        a claim waits for a connection (ADR 0071, rule 6). A deadlock resend borrows again, so it
+        runs the check again.
+        """
+        checked = getattr(self._executor, "checked", None)
+        if callable(checked):
+            return cast(_SyncRowExecutor, checked(check))
+        return _CheckedExecutor(self._executor, check)
+
+    def _claim_executor(self, generation: int | None = None) -> _SyncRowExecutor:
+        """The executor of a plain claim. It sends nothing while the claim gate is closed.
+
+        `generation` is the run that started the claim. Without it, the current run counts.
+        """
+        if not self._dedicated_heartbeats:
+            return self._executor
+        if generation is None:
+            generation = self._current_generation()
+
+        def check(parameters: Sequence[object]) -> Sequence[object]:
+            if not self._heartbeat_ready(generation):
+                raise _ClaimGateClosed("the pool holds no usable heartbeat connection")
+            return parameters
+
+        return self._gated_executor(check)
+
+    def _current_generation(self) -> int:
+        with self._state_lock:
+            return self._run_generation
+
+    def _heartbeat_ready(self, generation: int | None = None) -> bool:
+        """True while the run may claim (ADR 0071, rule 6).
+
+        With dedicated heartbeats, the run must still hold its reservation, the reservation must
+        hold a usable connection, and `generation`, when given, must be the current run. A run
+        that released its reservation keeps the gate closed for every claim it started.
+        """
+        if not self._dedicated_heartbeats:
+            return True
+        with self._state_lock:
+            reservation = self._reservation
+            current = self._run_generation
+        if reservation is None or (generation is not None and generation != current):
+            return False
+        return reservation.ready()
+
+    def _call_by[T](self, deadline: float, operation: Callable[[], T], name: str) -> T:
+        """Run `operation` on its own thread, and wait for it until `deadline`.
+
+        A driver call can wait longer than a pool timeout, for example on a stalled statement.
+        So the caller stops waiting at the deadline and raises TimeoutError. The late call keeps
+        its own connection and gives it back when it ends. Each caller starts one such thread.
+        """
+        outcome: Future[T] = Future()
+
+        def run() -> None:
+            try:
+                outcome.set_result(operation())
+            except BaseException as error:
+                outcome.set_exception(error)
+
+        Thread(target=run, name=f"workhorse-{name}", daemon=True).start()
+        try:
+            return outcome.result(max(0.0, deadline - monotonic()))
+        except FutureTimeoutError:
+            raise TimeoutError(f"{name} did not finish by its deadline") from None
+
+    def _start_connections(
+        self,
+    ) -> tuple[_PoolHub | None, Callable[[], None], _ReservationSubscription | None]:
+        """Attach to the pool's hub, reserve the heartbeat connection, and check compatibility.
+
+        ADR 0071, rule 3: within the startup budget, the worker first reserves the shared
+        heartbeat connection, then borrows one ordinary connection for the compatibility query.
+        If either step fails, the worker refuses to start. With the opt-out, only the
+        compatibility query runs, under the pool's own timeout.
+        """
+        deadline = monotonic() + self._connection_budget_seconds
+        hub, detach = self._hub_source()
+        subscription: _ReservationSubscription | None = None
+        try:
+            reservation = self._heartbeat_reservation(hub)
+            if reservation is None:
+                self._compatibility.assert_compatible()
+                return hub, detach, None
+            subscription = reservation.subscribe(self.heartbeat_ms, self._wake_dispatcher)
+            if not reservation.wait_ready(deadline):
+                raise TimeoutError(
+                    self._startup_failure("reserve its heartbeat connection")
+                ) from reservation.last_error
+            # Every startup borrows one ordinary connection and runs the query, so it proves the
+            # headroom of the pool now. One deadline bounds the borrow, the query, and the return.
+            try:
+                self._call_by(
+                    deadline,
+                    lambda: _assert_sync_compatible(self._executor_within(deadline - monotonic())),
+                    "compatibility-check",
+                )
+            except (TimeoutError, _PoolTimeout) as error:
+                raise TimeoutError(
+                    self._startup_failure("borrow a connection for the compatibility check")
+                ) from error
+            with self._state_lock:
+                self._run_generation += 1
+                self._reservation = reservation
+            return hub, detach, subscription
+        except BaseException:
+            if subscription is not None:
+                subscription.close()
+            detach()
+            raise
+
+    def _startup_failure(self, step: str) -> str:
+        return (
+            f"Worker could not {step} from pool {_pool_label(self._pool)} within its startup "
+            f"budget of {round(self._connection_budget_seconds * 1000)} ms. Grow the pool, or set "
+            "shared_heartbeats=True to opt out."
+        )
+
     def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
-        self._compatibility.assert_compatible()
+        with self._state_lock:
+            self._cleanup_deadline = None
+        hub, detach_hub, reservation_subscription = self._start_connections()
+        try:
+            on_connections_ready = self._on_connections_ready
+            if on_connections_ready is not None:
+                on_connections_ready()
+            return self._run_started_loop(
+                hub, continuous=continuous, requested_stop_version=requested_stop_version
+            )
+        finally:
+            self._end_connections(reservation_subscription)
+            detach_hub()
+
+    def _end_connections(self, subscription: _ReservationSubscription | None) -> None:
+        """Release the run's reservation. Every claim of this run then finds the gate closed."""
+        with self._state_lock:
+            self._run_generation += 1
+            self._reservation = None
+        if subscription is not None:
+            subscription.close()
+
+    def _run_started_loop(
+        self, hub: _PoolHub | None, *, continuous: bool, requested_stop_version: int
+    ) -> bool:
         self._instance_id = str(uuid4())
         self._registered = False
         with self._state_lock:
             self._stopping = self._stop_version != requested_stop_version
+            if not self._stopping:
+                self._stop_deadline = None
             self._run_errors.clear()
             self._fatal_error_reported = False
-        listener = self._start_notification_listener() if continuous else None
+        listener = self._start_notification_listener(hub) if continuous else None
+        # Every claim of this run keeps this generation through its last statement.
+        run_generation = self._current_generation()
         self._refresh_registration(force=True)
         _emit_log(
             "INFO",
@@ -2305,6 +2466,7 @@ class Worker:
                     wake_version,
                     delayed,
                     results,
+                    run_generation,
                 ),
                 name=f"workhorse-claim-{claim_id}",
                 daemon=True,
@@ -2312,6 +2474,10 @@ class Worker:
 
         def next_claim() -> tuple[int, int | None, int] | None:
             """Plan the next plain claim: its limit, its cohort, and its slots in that cohort."""
+            if not self._heartbeat_ready():
+                # No claim without a usable heartbeat reservation. The reservation wakes the
+                # dispatcher when its replacement connection arrives.
+                return None
             with self._state_lock:
                 free = slots.free_slots(len(self._active_threads))
                 if free <= 0:
@@ -2332,6 +2498,9 @@ class Worker:
 
         with self._state_lock:
             stopping_at_start = self._stopping
+        # Fixed when the loop stops starting claims. Claims in flight, the maintenance thread,
+        # and the draining registration refresh spend from it (ADR 0071, rule 8).
+        stop_deadline: float | None = None
         if continuous and not stopping_at_start:
             maintenance = Thread(
                 target=run_maintenance,
@@ -2393,27 +2562,42 @@ class Worker:
                     self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
             finally:
                 # Completions stop claiming with the loop. Tasks an in-flight claim returns hold
-                # leases, so they run before the drain.
+                # leases, so they run before the drain. A claim that has not returned by the stop
+                # deadline is left behind: a task it claims later stays leased until recovery.
+                stop_deadline = self._stop_deadline_from_now()
                 with self._state_lock:
                     slots.open = False
                 while claims:
-                    settle(results.get())
+                    try:
+                        outcome = results.get(timeout=max(0.0, stop_deadline - monotonic()))
+                    except Empty:
+                        break
+                    settle(outcome)
         except BaseException as error:
             # The loop's own failure, such as a registration write, reaches the drain below.
             self._report_fatal_error(error)
             raise
         finally:
+            if stop_deadline is None:
+                stop_deadline = self._stop_deadline_from_now()
             maintenance_stopped.set()
             if maintenance is not None:
-                maintenance.join()
+                # A pass that waits for a pool connection keeps its thread. Its next pass does
+                # not start, because the stop event is set.
+                maintenance.join(max(0.0, stop_deadline - monotonic()))
             if listener is not None:
                 listener.close()
-            self._refresh_registration(force=True, draining=True)
+            self._refresh_registration(force=True, draining=True, deadline=stop_deadline)
             self._drain_active_threads()
-            self._close_heartbeat_connection()
-            self._deregister()
+            # One cleanup window after the drain. Deregistration spends from it, and AsyncWorker
+            # spends the rest on the release of the shared listener.
+            cleanup_deadline = monotonic() + _CLEANUP_SECONDS
+            with self._state_lock:
+                self._cleanup_deadline = cleanup_deadline
+            self._deregister(deadline=cleanup_deadline)
             with self._state_lock:
                 self._stopping = False
+                self._stop_deadline = None
                 self._dispatch_slots = None
                 errors = list(self._run_errors)
                 self._run_errors.clear()
@@ -2470,8 +2654,14 @@ class Worker:
         wake_version: int,
         delayed: bool,
         results: SimpleQueue[_ClaimOutcome],
+        generation: int | None = None,
     ) -> None:
-        """Run one dispatch claim on its own thread and report the outcome to the run loop."""
+        """Run one dispatch claim on its own thread and report the outcome to the run loop.
+
+        `generation` is the run that started the claim, the current run without it.
+        """
+        if generation is None:
+            generation = self._current_generation()
         claimed: list[tuple[ClaimedTask, float]] = []
         outcome = _ClaimOutcome(claim_id, limit, wake_version, None)
         try:
@@ -2480,8 +2670,12 @@ class Worker:
                 sleep(random.uniform(0, _NOTIFICATION_CLAIM_DELAY_SECONDS))
                 if self._claims_halted():
                     return
-            self._claim_across_queues(limit, claimed, fast_limit)
+            self._claim_across_queues(limit, claimed, fast_limit, generation)
             outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed))
+        except _ClaimGateClosed:
+            # The gate closed while the claim waited for its connection. A claim that leased
+            # nothing does not count as empty: the reservation wakes dispatch when it is ready.
+            outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed) or None)
         except BaseException as error:
             outcome = _ClaimOutcome(claim_id, limit, wake_version, tuple(claimed), error)
         finally:
@@ -2493,6 +2687,7 @@ class Worker:
         limit: int,
         claimed: list[tuple[ClaimedTask, float]],
         fast_limit: int | None = None,
+        generation: int | None = None,
     ) -> None:
         """Claim up to limit tasks, checking each queue at most once in rotation order.
 
@@ -2516,10 +2711,11 @@ class Worker:
                     limit - len(claimed),
                     claim_started_at,
                     fast_limit - len(claimed),
+                    generation,
                 )
                 if rows is None:
                     claim_span.set_attribute("workhorse.queue.tier", "full")
-                    rows = self._executor.rows(
+                    rows = self._claim_executor(generation).rows(
                         _STATEMENTS.claim_many,
                         (queue_name, self.worker_id, limit - len(claimed), self.lease_ms),
                     )
@@ -2546,7 +2742,12 @@ class Worker:
                 claimed.append((task, claim_started_at))
 
     def _claim_queue(
-        self, queue_name: str, limit: int, sent_at: float, fast_limit: int | None = None
+        self,
+        queue_name: str,
+        limit: int,
+        sent_at: float,
+        fast_limit: int | None = None,
+        generation: int | None = None,
     ) -> list[_Row] | None:
         """Claim through the fast-tier path, or return None when the queue is full-tier.
 
@@ -2562,7 +2763,7 @@ class Worker:
             return []
         try:
             rows = _fenced_write_rows(
-                self._executor,
+                self._claim_executor(generation),
                 _STATEMENTS.complete_many_and_claim,
                 (self.worker_id, [], [], [], queue_name, fast_limit, self.lease_ms),
             )
@@ -2620,10 +2821,13 @@ class Worker:
         """Set aside the slots a completion's fused claim may fill (ADR 0076, rules 12 and 13).
 
         The claim asks for the free slots of the task's cohort plus the slot the task leaves. It
-        claims nothing while the worker stops, pauses, or waits after an empty claim, and it waits
+        claims nothing while the worker stops, pauses, waits after an empty claim, or holds no
+        usable heartbeat reservation, and it waits
         for the cohort's refill batch while another claim for the cohort is in flight.
         """
         running = current_thread()
+        # Without a usable heartbeat reservation the completion claims nothing (ADR 0071, rule 6).
+        heartbeat_ready = self._heartbeat_ready()
         with self._state_lock:
             slots = self._dispatch_slots
             wake_version = self._dispatch_wake_version
@@ -2631,7 +2835,8 @@ class Worker:
                 return _CompletionClaim(0, 0, wake_version)
             cohort = slots.thread_cohorts.get(running, 0)
             if (
-                not slots.open
+                not heartbeat_ready
+                or not slots.open
                 or self._stopping
                 or self._run_errors
                 or self._locally_paused
@@ -2778,10 +2983,24 @@ class Worker:
             self.lease_ms,
         )
         sent_at = monotonic()
+        # The claim limit each attempt sent. A completion that waited behind another batch, or
+        # for its connection, reads the claim gate again after the borrow. With the gate closed,
+        # it settles its tasks and claims nothing (ADR 0071, rule 6).
+        sent_limit = [claim_limit]
+        generation = self._current_generation()
+
+        def gate_the_claim(sent: Sequence[object]) -> Sequence[object]:
+            limit = claim_limit if self._heartbeat_ready(generation) else 0
+            sent_limit[0] = limit
+            return (*sent[:5], limit, *sent[6:])
+
+        executor = (
+            self._gated_executor(gate_the_claim)
+            if claim_limit > 0 and self._dedicated_heartbeats
+            else self._executor
+        )
         try:
-            rows = _fenced_write_rows(
-                self._executor, _STATEMENTS.complete_many_and_claim, parameters
-            )
+            rows = _fenced_write_rows(executor, _STATEMENTS.complete_many_and_claim, parameters)
         except Exception as error:
             if not isinstance(_translate_database_error(error), FastTierUnsupportedError):
                 raise
@@ -2802,7 +3021,7 @@ class Worker:
             self._full_tier_until.pop(queue_name, None)
             self._fast_tier_queues.add(queue_name)
             self._fast_task_ids.update(task.id for task in claimed_tasks)
-        if claim_limit > 0:
+        if sent_limit[0] > 0:
             _record_claim(queue_name, (monotonic() - sent_at) * 1_000, claimed_tasks)
         for task in claimed_tasks:
             _emit_log(
@@ -2991,41 +3210,60 @@ class Worker:
                 )
         return True
 
-    def _refresh_registration(self, *, force: bool = False, draining: bool = False) -> None:
+    def _refresh_registration(
+        self, *, force: bool = False, draining: bool = False, deadline: float | None = None
+    ) -> None:
+        """Refresh the registry row.
+
+        The wait for the pool connection and for the whole statement ends at ``deadline``, or one
+        connection budget after the refresh started without it, and never after the stop
+        deadline. So a full pool or a stalled statement cannot hold the dispatch loop or a stop.
+        With no time left, the refresh is skipped. A failed refresh is reported, and the next one
+        retries.
+        """
         if self.registry_interval_ms == 0:
             return
+        start = monotonic()
+        end = start + self._connection_budget_seconds if deadline is None else deadline
+        with self._state_lock:
+            stop_deadline = self._stop_deadline
+        if stop_deadline is not None:
+            end = min(end, stop_deadline)
+        if end - start <= 0:
+            return
+        executor = self._executor_within(end - start)
         now = monotonic()
         if not force and now - self._last_registry_refresh_at < self.registry_interval_ms / 1_000:
             return
         self._last_registry_refresh_at = now
         with self._state_lock:
             active_slots = len(self._active_threads)
+        parameters = (
+            self.worker_id,
+            self._instance_id,
+            self._hostname,
+            os.getpid(),
+            list(self.queues),
+            list(self.schedule_namespaces),
+            self.concurrency,
+            self.lease_ms,
+            self.heartbeat_ms,
+            self.poll_ms,
+            self.maintenance_interval_ms,
+            self.maintenance_routine_poll_ms,
+            self.registry_interval_ms,
+            active_slots,
+            draining,
+            _PROTOCOL_VERSION,
+            _SDK_LANGUAGE,
+            _WORKHORSE_VERSION,
+        )
+
+        def send() -> list[_Row]:
+            return list(executor.rows(_STATEMENTS.register_worker, parameters))
+
         try:
-            row = _require_lifecycle_row(
-                self._executor.rows(
-                    _STATEMENTS.register_worker,
-                    (
-                        self.worker_id,
-                        self._instance_id,
-                        self._hostname,
-                        os.getpid(),
-                        list(self.queues),
-                        list(self.schedule_namespaces),
-                        self.concurrency,
-                        self.lease_ms,
-                        self.heartbeat_ms,
-                        self.poll_ms,
-                        self.maintenance_interval_ms,
-                        self.maintenance_routine_poll_ms,
-                        self.registry_interval_ms,
-                        active_slots,
-                        draining,
-                        _PROTOCOL_VERSION,
-                        _SDK_LANGUAGE,
-                        _WORKHORSE_VERSION,
-                    ),
-                )
-            )
+            row = _require_lifecycle_row(self._registration_rows(send, end))
             paused = row["paused"] is True
         except Exception as error:
             _emit_log(
@@ -3064,15 +3302,48 @@ class Worker:
             )
             self._wake_dispatcher()
 
-    def _deregister(self) -> None:
+    def _registration_rows(self, send: Callable[[], list[_Row]], end: float) -> list[_Row]:
+        """Send one registration statement on its own thread, and wait for it until `end`.
+
+        A registration statement that stalls must not hold the dispatch loop or a stop. `end` is
+        never later than the stop deadline: it is at most one connection budget after the refresh
+        started, and a stop that comes later fixes its deadline one budget after itself. One
+        statement at most is in flight, so a refresh that finds the last one still running skips.
+        """
+        with self._state_lock:
+            running = self._registration_call
+            if running is not None and not running.done():
+                raise TimeoutError("an earlier registration refresh still runs")
+            call: Future[list[_Row]] = Future()
+            self._registration_call = call
+
+        def run() -> None:
+            try:
+                call.set_result(send())
+            except BaseException as error:
+                call.set_exception(error)
+
+        Thread(target=run, name="workhorse-registration", daemon=True).start()
+        try:
+            return call.result(max(0.0, end - monotonic()))
+        except FutureTimeoutError:
+            raise TimeoutError("the registration refresh did not finish by its deadline") from None
+
+    def _deregister(self, *, deadline: float) -> None:
+        """Remove the registry row. The worker waits for it until ``deadline``."""
         if not self._registered:
             return
         self._registered = False
+        executor = self._executor_within(deadline - monotonic())
         with suppress(Exception):
-            self._executor.rows(_STATEMENTS.deregister_worker, (self.worker_id,))
+            self._call_by(
+                deadline,
+                lambda: executor.rows(_STATEMENTS.deregister_worker, (self.worker_id,)),
+                "deregistration",
+            )
 
     def _dispatch_wait_seconds(
-        self, listener: _TaskNotificationListener | None, consecutive_empty_claims: int = 0
+        self, listener: _ListenerSubscription | None, consecutive_empty_claims: int = 0
     ) -> float:
         listening = self._notification_listening.is_set() or (
             listener is not None and listener.is_listening()
@@ -3100,18 +3371,16 @@ class Worker:
         else:
             self._notification_listening.clear()
 
-    def _start_notification_listener(self) -> _TaskNotificationListener | None:
-        if self._notification_connection_factory is None:
+    def _start_notification_listener(
+        self, hub: _PoolHub | None
+    ) -> _NotificationSubscription | None:
+        """Subscribe to the listener that every worker on the pool shares (ADR 0071, rule 1)."""
+        if not self._listens or hub is None:
             return None
-        listener = _TaskNotificationListener(
-            self._notification_connection_factory,
-            self.queues,
-            self._wake_from_notification,
-            self._on_notification_error,
-            None,
+        listener = cast(_SharedTaskNotificationListener, hub.listener)
+        return listener.subscribe(
+            self.queues, self._wake_from_notification, self._on_notification_error
         )
-        listener.start()
-        return listener
 
     def _admit_claimed_task(
         self, task: ClaimedTask, claim_sent_at: float, cohort: int | None
@@ -3786,53 +4055,20 @@ def _wait_record(task_id: str, row: _Row, *, name: str | None = None) -> TaskWai
     )
 
 
-class _PoolConnectionLease:
-    def __init__(self, context: Any, connection: Any) -> None:
-        self._context = context
-        self._connection = connection
-        self._returned = False
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._connection, name)
-
-    def close(self) -> None:
-        if self._returned:
-            return
-        self._returned = True
-        self._context.__exit__(None, None, None)
-
-    def discard(self) -> None:
-        """Close the driver connection, then return it, so the pool can only discard it.
-
-        A normal return commits an open transaction, so a connection in an unknown state must
-        not take that path.
-        """
-        try:
-            self._connection.close()
-        finally:
-            self.close()
+def _psycopg_pool_heartbeat_executor_factory(
+    pool: _PsycopgPool,
+) -> Callable[[float | None], tuple[_SyncRowExecutor, Callable[[], None]]]:
+    """Open heartbeat executors from `pool`. A timeout in seconds bounds the wait for each."""
+    return _psycopg_heartbeat_acquire(lambda: pool)
 
 
-def _pool_connection(pool: _PsycopgPool) -> _PoolConnectionLease:
-    context = pool.connection()
-    connection = context.__enter__()
-    return _PoolConnectionLease(context, connection)
-
-
-def _psycopg_pool_notification_factory(pool: _PsycopgPool) -> _NotificationConnectionFactory:
-    def open_connection() -> _SyncConnection:
-        connection = _pool_connection(pool)
-        if getattr(connection, "autocommit", False) is not True:
-            connection.close()
-            raise ValueError("Notification connection must be in autocommit mode")
-        return cast(_SyncConnection, connection)
-
-    return open_connection
-
-
-def _psycopg_pool_heartbeat_executor_factory(pool: _PsycopgPool) -> _HeartbeatExecutorFactory:
-    def open_heartbeat_executor() -> tuple[_SyncRowExecutor, Callable[[], None]]:
-        connection = _pool_connection(pool)
+def _psycopg_heartbeat_acquire(
+    pool_ref: Callable[[], _PsycopgPool | None],
+) -> Callable[[float | None], tuple[_SyncRowExecutor, Callable[[], None]]]:
+    def open_heartbeat_executor(
+        timeout: float | None = None,
+    ) -> tuple[_SyncRowExecutor, Callable[[], None]]:
+        connection = _pool_connection(_require_pool(pool_ref), timeout)
         if getattr(connection, "autocommit", False) is not True:
             connection.close()
             raise ValueError("Heartbeat connection must be in autocommit mode")
@@ -3842,6 +4078,29 @@ def _psycopg_pool_heartbeat_executor_factory(pool: _PsycopgPool) -> _HeartbeatEx
         return executor, connection.close
 
     return open_heartbeat_executor
+
+
+def _pool_connection(pool: _PsycopgPool, timeout: float | None = None) -> _PoolConnectionLease:
+    context = _psycopg_pool_connection(pool, timeout)
+    connection = context.__enter__()
+    return _PoolConnectionLease(context, connection)
+
+
+def _psycopg_pool_hub(pool_ref: Callable[[], _PsycopgPool | None]) -> _PoolHub:
+    """The hub of a psycopg pool: one listener thread and one heartbeat reservation."""
+
+    def open_listener_connection() -> _SyncConnection:
+        connection = _pool_connection(_require_pool(pool_ref), _LISTENER_ACQUIRE_SECONDS)
+        if getattr(connection, "autocommit", False) is not True:
+            connection.close()
+            raise ValueError("Notification connection must be in autocommit mode")
+        return cast(_SyncConnection, connection)
+
+    return _PoolHub(
+        _pool_label(pool_ref()),
+        _SharedTaskNotificationListener(open_listener_connection),
+        _HeartbeatReservation(_psycopg_heartbeat_acquire(pool_ref)),
+    )
 
 
 def _require_lifecycle_row(rows: list[_Row]) -> _Row:

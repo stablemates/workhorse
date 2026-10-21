@@ -19,6 +19,10 @@ class HeldCore:
         self.stops = 0
 
     def _hold(self) -> None:
+        # The real core subscribes the async listener once its startup succeeded.
+        on_connections_ready = getattr(self, "_on_connections_ready", None)
+        if on_connections_ready is not None:
+            on_connections_ready()
         self.started.set()
         assert self.release.wait(10), "the test never released the core"
         self.exited.set()
@@ -33,6 +37,9 @@ class HeldCore:
     def stop(self) -> None:
         self.stops += 1
 
+    queues = ("default",)
+    _connection_budget_seconds = 5.0
+
     def _set_notification_listening(self, listening: bool) -> None:
         pass
 
@@ -45,7 +52,7 @@ class IdlePool:
 
     max_size = 3
 
-    async def acquire(self) -> Any:
+    async def acquire(self, *, timeout: float | None = None) -> Any:  # noqa: ASYNC109, ARG002
         await asyncio.Event().wait()
 
 
@@ -77,7 +84,7 @@ class HeldReleasePool:
         self.gate = asyncio.Event()
         self.released = False
 
-    async def acquire(self) -> ListeningConnection:
+    async def acquire(self, *, timeout: float | None = None) -> ListeningConnection:  # noqa: ASYNC109, ARG002
         self.acquired.set()
         return self.connection
 

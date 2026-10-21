@@ -8,6 +8,58 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Workers on one pool share one listener and one heartbeat connection
+
+Before this change, each Python worker took its own listener connection and its own heartbeat
+connection from its pool. Several workers on one pool could hold every connection of the pool.
+Claims then waited for a connection, and workers without a heartbeat connection could not renew
+their leases. A stop with a full pool waited for the pool timeout, and an asyncpg acquisition had
+no timeout.
+
+Now every worker on one pool object shares one listener connection and one heartbeat connection,
+as ADR 0071 requires (SM-1571). Each of the three pool types is its own domain: the psycopg
+`ConnectionPool`, the psycopg `AsyncConnectionPool`, and the `asyncpg.Pool`. The worker keys the
+shared connections by the pool object and holds only a weak reference to the pool. The shared
+connections close when the last worker on the pool stops.
+
+- **Startup.** Within max(`heartbeat_ms`, 5 s), a worker first reserves the shared heartbeat
+  connection. Then it borrows one connection for the compatibility check. If either step does not
+  finish in time, the worker raises `TimeoutError`, and the error names the pool, the budget, and
+  `shared_heartbeats=True`.
+- **No claim without a heartbeat connection.** While the pool holds no usable heartbeat connection,
+  a worker claims no task, and a completion claims no next task. The worker reads this again after
+  each claim borrows its connection, because the heartbeat connection can be lost during that wait.
+  The worker opens the replacement at once and retries with a backoff of at most `heartbeat_ms`.
+  When the replacement is ready, the worker claims again at once.
+- **Fair heartbeat rounds.** The rounds of the workers on one pool take the shared heartbeat
+  connection in arrival order. A round with less than a quarter of its time left skips, so it cannot
+  expire during a statement and lose the connection for every worker.
+- **Every start checks the pool.** Each run, also a later run of the same worker, borrows one
+  connection for the compatibility query. One deadline bounds the reservation, the query, and the
+  return of the connection.
+- **Event loop.** An async worker must run on the event loop of its pool. A worker on another event
+  loop raises `RuntimeError` and does not start, also before the first worker of a pool and after
+  its last worker stopped.
+- **Bounded waits.** Every asyncpg `acquire()` of a worker now has a timeout: 30 s for an ordinary
+  statement, and less where a budget applies. A registration refresh waits at most
+  max(`heartbeat_ms`, 5 s) for a connection.
+- **Stop.** The first `stop()` fixes a stop deadline, max(`heartbeat_ms`, 5 s) later. Claims in
+  flight, the maintenance thread, and the draining registration refresh end at that deadline.
+  After the drain, deregistration waits at most 1 s for a connection. The handler drain still has
+  no bound in the worker; `run_worker_process` bounds it with `shutdown_timeout_ms`. A claim that
+  the deadline leaves behind can hold a lease until recovery takes the task.
+
+**Behavior change: a startup reservation failure now ends the run.** Before this change, a worker
+took its heartbeat connection only when its first task ran, and a failed reservation did not stop
+the run. Now `run()` and `run_once()` raise if the worker cannot reserve the heartbeat connection
+within its startup budget. A transient failure at startup can thus end a run that earlier
+continued. A pool whose connections do not use `autocommit=True` now makes the worker refuse to
+start at once, because the heartbeat connection requires autocommit. To keep the earlier behavior
+on a small pool, set `shared_heartbeats=True`. The floor of 3 connections for each pool does not
+change.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

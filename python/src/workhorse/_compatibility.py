@@ -52,11 +52,12 @@ class CachedCompatibilityCheck:
         self._checked = False
         self._error: Exception | None = None
 
-    def assert_compatible(self) -> None:
+    def assert_compatible(self, executor: SyncRowExecutor | None = None) -> None:
+        """Check compatibility once. ``executor`` replaces the worker's executor for this query."""
         with self._lock:
             if not self._checked:
                 try:
-                    assert_sync_compatible(self._executor)
+                    assert_sync_compatible(executor or self._executor)
                 except ProtocolCompatibilityError as error:
                     self._error = error
                 self._checked = True

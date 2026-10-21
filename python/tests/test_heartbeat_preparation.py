@@ -11,6 +11,7 @@ speed of the host.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from threading import Thread
@@ -19,7 +20,9 @@ from typing import Any
 import asyncpg
 import psycopg
 import pytest
+from reservations import reserve
 
+import workhorse._pool_hub as pool_hub_module
 import workhorse.worker as worker_module
 from workhorse._drivers import AsyncpgExecutor, AsyncPsycopgExecutor, SyncExecutor
 from workhorse._heartbeat_round import ROUND_TIMEOUTS
@@ -169,6 +172,8 @@ class AsyncpgConnection:
 def server(monkeypatch: pytest.MonkeyPatch) -> Server:
     server = Server()
     monkeypatch.setattr(worker_module, "monotonic", server.monotonic)
+    # The heartbeat reservation compares the round deadline with the same clock.
+    monkeypatch.setattr(pool_hub_module, "monotonic", server.monotonic)
     return server
 
 
@@ -410,17 +415,21 @@ class _Pool:
 
 def run_round(worker: worker_module.Worker, deadline: float) -> Any:
     heartbeat_round = worker_module._HeartbeatRound(deadline)
-    worker._run_heartbeat_round(heartbeat_round, ("worker", "[]"), worker._heartbeat_generation)
+    reservation = worker._reservation
+    assert reservation is not None
+    worker._run_heartbeat_round(heartbeat_round, ("worker", "[]"), reservation)
     return heartbeat_round.result
 
 
 def bounded_worker(connections: Connections) -> worker_module.Worker:
-    return worker_module.Worker(
+    worker = worker_module.Worker(
         _Pool(),
         queue="heartbeat-expiry",
         worker_id="heartbeat-expiry-worker",
         _heartbeat_executor_factory=connections.open,
     )
+    reserve(worker)
+    return worker
 
 
 def test_a_round_that_expires_before_its_heartbeat_keeps_the_connection(server: Server) -> None:
@@ -458,6 +467,10 @@ def test_a_round_whose_begin_runs_past_the_deadline_discards_the_connection(
 
     assert not isinstance(expired.exception(), worker_module._HeartbeatRoundExpiredCleanly)
     assert isinstance(expired.exception(), worker_module._HeartbeatRoundExpired)
+    # The reservation opens the replacement at once, on its own thread.
+    deadline = time.monotonic() + 5
+    while len(connections.opened) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
     first, replacement = connections.opened
     # The worker closed the connection under the open transaction, and opened its replacement.
     assert first.closed and connections.returned == [first]

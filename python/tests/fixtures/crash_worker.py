@@ -16,7 +16,7 @@ def block_forever(_payload: object, _context: object) -> None:
     Event().wait()
 
 
-with ConnectionPool(database_url, min_size=3, max_size=3) as pool:
+with ConnectionPool(database_url, min_size=3, max_size=3, kwargs={"autocommit": True}) as pool:
     Worker(
         pool,
         worker_id="python-crash-worker",
