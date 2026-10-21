@@ -8,6 +8,14 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Dependencies
+
+- The repository now builds and checks the module with go1.26.10, because advisory GO-2026-6809 in
+  `crypto/x509` is fixed there. The module still declares `go 1.25.0`, so the supported floor stays
+  Go 1.25. If you build on Go 1.26.x, use go1.26.10 or newer (SM-1567).
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.
