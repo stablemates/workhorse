@@ -98,8 +98,8 @@ describe("heartbeat schedule", () => {
     const id = await queue.enqueue("margin", {}, { queue: "heartbeat-schedule-margin" });
     const reserve = queue[workerHeartbeatReservation].bind(queue);
     let rounds: Round[] = [];
-    vi.spyOn(queue, workerHeartbeatReservation).mockImplementation(() => {
-      const channel = reserve();
+    vi.spyOn(queue, workerHeartbeatReservation).mockImplementation((intervalMs) => {
+      const channel = reserve(intervalMs);
       if (channel !== undefined) rounds = recordRounds(channel);
       return channel;
     });

@@ -129,7 +129,12 @@ function reservingQueue(
   const { queue, completed } = fakeQueue(task, async () => "accepted");
   const rounds: ChannelRound[] = [];
   const channel = {
+    pool: "the test pool",
     reserve: vi.fn<() => void>(),
+    usable: () => true,
+    onReady: () => () => undefined,
+    ready: async () => true,
+    checkReadiness: async () => undefined,
     heartbeatMany: vi.fn<WorkerHeartbeatChannel["heartbeatMany"]>(
       async (tasks, _workerId, _leaseMs, timeoutMs) => {
         const index = rounds.push({ startedAt: performance.now(), timeoutMs }) - 1;

@@ -147,9 +147,15 @@ import {
   workerWaitsRead,
   type WorkerHeartbeatChannel,
 } from "./worker-internal.js";
-import { heartbeatReservationProblem, holdHeartbeatConnection } from "./heartbeat-connection.js";
+import {
+  describePool,
+  heartbeatReservationProblem,
+  holdHeartbeatConnection,
+} from "./heartbeat-connection.js";
 import { statementPoolCapacity } from "./connection-pool.js";
-import { FastTierUnsupportedError } from "./errors.js";
+import { FastTierUnsupportedError, SchemaCompatibilityError } from "./errors.js";
+import { assertSchemaCompatible } from "./schema.js";
+import { monotonicNow } from "./timers.js";
 import { queryFencedWrite } from "./queue/fenced-write.js";
 import type {
   TaskGroup,
@@ -931,11 +937,36 @@ export class Queue {
     return statementPoolCapacity(this.database);
   }
 
-  [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined {
-    const connection = holdHeartbeatConnection(this.database);
+  [workerHeartbeatReservation](heartbeatMs: number): WorkerHeartbeatChannel | undefined {
+    const connection = holdHeartbeatConnection(this.database, heartbeatMs);
     if (connection === undefined) return undefined;
     return {
+      pool: describePool(this.database),
       reserve: () => connection.reserve(),
+      usable: () => connection.usable(),
+      onReady: (listener) => connection.onReady(listener),
+      ready: (timeoutMs, signal) => connection.ready(timeoutMs, signal),
+      async checkReadiness(timeoutMs, signal) {
+        const deadline = monotonicNow() + timeoutMs;
+        if (!(await connection.ready(timeoutMs, signal))) {
+          return signal?.aborted === true
+            ? { step: "stopped" }
+            : { step: "heartbeat", reason: "timeout" };
+        }
+        let borrowed: Awaited<ReturnType<typeof connection.borrow>>;
+        try {
+          borrowed = await connection.borrow(deadline - monotonicNow(), signal, (client) =>
+            assertSchemaCompatible(client),
+          );
+        } catch (error) {
+          // A schema verdict is not a connection budget problem, so it reaches the caller as is.
+          if (error instanceof SchemaCompatibilityError) throw error;
+          return { step: "ordinary", reason: "error", cause: error };
+        }
+        if (borrowed === "aborted") return { step: "stopped" };
+        if (borrowed === "timeout") return { step: "ordinary", reason: "timeout" };
+        return undefined;
+      },
       heartbeatMany: (tasks, workerId, leaseMs, timeoutMs) =>
         connection.run(
           (client) => this.forDatabase(client).heartbeatMany(tasks, workerId, leaseMs),

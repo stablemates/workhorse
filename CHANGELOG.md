@@ -18,6 +18,58 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### A worker waits for its heartbeat connection before it claims
+
+Before this change, a TypeScript worker started the reservation of its dedicated heartbeat
+connection and did not wait for it. If the pool could not lend that connection, the worker still
+claimed tasks, and it could not renew their leases. If the connection failed later, the worker
+continued to claim (SM-1575, ADR 0071).
+
+These rules apply to a worker that uses the dedicated heartbeat connection. Nothing changes under
+`sharedHeartbeats: true` or with a custom `WorkerQueueApi`.
+
+- `Worker.run()` waits for the heartbeat connection for `max(heartbeatMs, 5 s)`. Then it borrows
+  one more connection from the pool, runs the schema compatibility query on it, and returns it at
+  once. If a step fails in that time, `run()` rejects. The error names the pool, the time, and the
+  opt-out `sharedHeartbeats: true`. A schema that the worker does not support rejects with
+  `SchemaCompatibilityError`.
+- `runOnce()` waits for the heartbeat connection for the same time before it claims. If the
+  connection does not arrive, `runOnce()` rejects and claims nothing.
+- While the heartbeat connection is lost, the worker claims no task. A fast-tier completion then
+  claims nothing. The worker reads this state again after a claim gets its pooled connection,
+  immediately before each attempt, so a claim that waited for a connection during the loss does not
+  run. The worker's claim statements therefore borrow a client with `connect()` from the pool of the
+  heartbeat connection, and run on it. On a node-postgres `Pool`, this is what `pool.query()` does
+  internally, but code that wraps `pool.query()` no longer sees these statements. On an ORM adapter,
+  they run on the attached pool, not through the ORM. Instrumentation of `Client.query()` still sees
+  them. A failed heartbeat round does not stop claims. The worker asks the pool for a
+  replacement at once, and tries again with a backoff of at most `heartbeatMs`, also while no task
+  runs. When the replacement arrives, claims start at once.
+- The startup time also bounds the compatibility query. `stop()` ends the startup waits of `run()`
+  and the wait of `runOnce()` at once.
+- A connect that arrives after its wait ended has one owner. The next wait on the pool takes it, so
+  repeated timeouts do not queue more connects in the pool.
+- After its handlers and its claims in flight end, `run()` resolves within `max(heartbeatMs, 5 s)`,
+  also when the pool lends no connection.
+- A later `run()` or `runOnce()` of the same worker waits until every stop-path statement of the
+  ended run has settled, within `max(heartbeatMs, 5 s)`. If one has not settled, it refuses to
+  start. Before this change, a late deregistration of the ended run could delete the registry row
+  and the pause state of the new run. Each `run()` now writes its first registration at once.
+- A heartbeat connection that the worker destroys keeps its error listener until the connection
+  ends. Before this change, a late PostgreSQL error on that connection, such as `25P03`
+  (idle-in-transaction timeout), reached pg-pool. A pool without an `error` listener then ended the
+  process.
+
+**Behaviour change.** A worker that cannot reserve its heartbeat connection within the startup time
+now ends its run. Before this change, the run continued. A pool that is still warming up does not
+cause this, because the worker tries again within the startup time.
+
+The declarations of the package-internal `WorkerHeartbeatChannel` gain readiness members. The
+package does not export that type or the symbol that returns it, so application code does not
+change.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

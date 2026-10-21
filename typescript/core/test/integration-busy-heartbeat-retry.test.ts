@@ -60,8 +60,8 @@ function interceptRounds(
 /** The reserved channel the worker takes, wrapped by `wrap` when the worker reserves it. */
 function onReservedChannel(wrap: (channel: { heartbeatMany: HeartbeatMany }) => void): void {
   const reserve = queue[workerHeartbeatReservation].bind(queue);
-  vi.spyOn(queue, workerHeartbeatReservation).mockImplementation(() => {
-    const channel = reserve();
+  vi.spyOn(queue, workerHeartbeatReservation).mockImplementation((intervalMs) => {
+    const channel = reserve(intervalMs);
     if (channel !== undefined) wrap(channel as unknown as { heartbeatMany: HeartbeatMany });
     return channel;
   });

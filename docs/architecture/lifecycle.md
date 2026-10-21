@@ -1329,12 +1329,12 @@ Reservation requirements:
 
 Every worker on one pool shares the reservation. Like the listener, the reservation has the pool
 object as its key. The last holder that closes it returns the client to the pool. Closing does not
-wait for a connect that is still pending behind an exhausted pool. If a client arrives later, the
-reservation releases it.
+wait for a connect that is still pending behind an exhausted pool. The connect stays parked: the
+next hold on the pool adopts it, and otherwise the reservation releases the client when it arrives.
 
-- `Worker.run()` takes a hold before its first maintenance pass and keeps it until the run ends.
-- `runOnce()` takes one when the first attempt registers its lease, before the handler starts, and
-  closes it with the last lease.
+- `Worker.run()` takes a hold before its startup readiness check and keeps it until the run ends.
+- `runOnce()` takes a hold before it claims. It closes the hold with the last lease, or at the end
+  of the pass if the pass claimed nothing.
 
 `heartbeatRoundMs` bounds each round on the reservation, as [Heartbeat round
 deadline](#heartbeat-round-deadline) describes. It is at most `heartbeatMs`, and up to 50 ms it
@@ -1352,6 +1352,94 @@ listener of its own. Without this listener, the error would end the process.
 
 The reservation keeps no session state. Its round timeouts are transaction-local
 (`set_config(..., true)`), so the reservation is safe under transaction pooling.
+
+A connection that the reservation destroys keeps the reservation's `error` listener until the
+client emits `end`. The release also removes the `error` listener that pg-pool adds to a client that
+it removes from the pool. A round that ends inside its transaction leaves PostgreSQL to end that
+transaction. Thus a FATAL error can arrive after the release, for example `25P03` for the
+idle-in-transaction timeout of the round. Without these two steps, pg-pool emits that error on the
+pool, and an application without a pool `error` listener ends.
+
+#### Heartbeat readiness
+
+The rules in this section apply to a TypeScript worker that uses the reserved heartbeat connection.
+They do not apply under `sharedHeartbeats`, or to a custom `WorkerQueueApi` that is not a `Queue`
+(ADR 0071, rules 3 to 8).
+
+**Startup readiness check.** The startup budget is `max(heartbeatMs, 5,000)` ms
+(`heartbeatStartupBudgetMs`). Within this budget, `Worker.run()` does these steps before its first
+registration:
+
+1. It waits until the reservation holds a connection.
+2. It borrows one more connection from the same pool. It runs `assertSchemaCompatible` on that
+   connection, and returns the connection at once.
+
+The budget covers the query as well as the connect. If the query is still running at the end of
+the budget, the worker destroys the borrowed connection. If a step does not finish within the
+budget, or the query fails, `run()` rejects. The error names the pool and its `options.max`, the
+budget, and the opt-out `sharedHeartbeats: true`. A `SchemaCompatibilityError` reaches the caller
+unchanged. If `stop()` is called or the signal of the run aborts during the check, the check ends at
+once and `run()` resolves. The same applies to the first registration write after the check. The
+listener stays best effort and is not part of the check. The worker starts it after the check, so a
+listener connection whose `LISTEN` stalls takes no time from the budget.
+
+A connect that arrives after its wait ended has one owner. For each pool, Workhorse parks at most
+one late reservation connect, and one late ordinary connect for each borrow that stopped waiting.
+The next wait on that pool takes the oldest parked connect instead of a new one, so repeated
+timeouts do not queue more connects in the pool. When a connect settles, one handler decides its
+outcome: the borrow that waits at that moment receives it, and otherwise the connection goes back to
+the pool. A borrow that stops waiting after it received its connection returns that connection
+itself.
+
+**Claim gate.** The reservation is usable while it holds a connection. It also stays usable while a
+replacement that a failed round started is pending, because a failed renewal is not a loss of
+readiness. The reservation is not usable before its first connect, after a connect fails, and after
+its connection fails between rounds. While it is not usable:
+
+- the dispatch loop starts no claim, and a claim pass stops before its next queue;
+- a claim statement that is already on its way does not run;
+- a fast-tier completion runs with a claim limit of 0, so it settles its task and claims nothing;
+- `runOnce()` waits for the reservation for the startup budget, then rejects without a claim. If
+  `stop()` is called during the wait, `runOnce()` resolves `false`.
+
+A busy lease does not close the gate.
+
+The gate can close while a claim waits for a pooled connection, or while a fast-tier completion
+waits for its batch. Thus the worker reads the gate again immediately before each attempt of
+`claim_v1`, `claim_many_v1`, and `complete_many_and_claim_v1`, a deadlock resend included. The
+worker calls the public claim and completion methods of its queue inside `withClaimGate`, and the
+queue sends each claim statement through `claimDatabase`. So a wrapper of these methods still sees
+every call. The queue borrows the connection itself, from the pool that the reservation comes
+from (`connectionPoolOf`), and reads the gate after the borrow. A node-postgres `Pool` and an ORM
+adapter both borrow inside their own `query()`, so neither could read the gate after its borrow. On
+an adapter, the claim statements of such a worker thus run on the attached pool, not through the
+ORM. If the gate is closed, a pure claim does not run. A fused completion that completes tasks runs
+with a claim limit of 0. A claim statement that PostgreSQL has already received still
+completes, and its tasks run.
+
+**Replacement.** A connection that fails between rounds is replaced at once. After a failed
+connect, the reservation tries again after `100 × 2^n` ms, where n counts the failures. The delay is
+capped at the shortest `heartbeatMs` of the workers that hold the reservation. The retry runs also
+when no lease is registered. When a replacement arrives after a loss, each worker on the pool wakes
+its dispatch loop, and claims start without the wait for the next poll.
+
+**Stop time.** After the dispatch loop of `run()` ends, the unwind window starts. It is
+`max(heartbeatMs, 5,000)` ms. These waits of `run()` end by the end of the window: an in-flight
+maintenance pass or registration write, the close of the reservation, the close of the listener,
+and the deregistration. A wait that passes the window continues without the worker, and the worker
+ignores its result. A late maintenance pass or registration write then neither loops again nor
+fails a later run. The total stop time of `run()` is thus the time the handlers and the claims in
+flight take to end, plus at most the unwind window. A claim in flight is not cut short, because the
+tasks it claims hold leases.
+
+A wait that passes the window still belongs to the ended run. Before a later `run()` or `runOnce()`
+of the same worker registers, it waits until every stop-path statement of the ended run has
+settled, within the startup budget. If one has not settled, the later call refuses to start and
+writes nothing. `deregister_worker_v1` deletes by worker ID only, so a late deregistration would
+otherwise delete the row and the pause state of the later run. Each `run()` writes its first
+registration at once, also within the registry interval of the ended run. In `runWorkerProcess`, the shutdown grace is `shutdownTimeoutMs`, 25,000
+ms by default. At the grace, the process exits with code 1, so every wait on its stop path ends by
+the grace.
 
 The Go, Python, and Rust drivers report a lost connection only on the next statement. That statement
 fails the round and discards the connection. Their heartbeat connections work as follows:

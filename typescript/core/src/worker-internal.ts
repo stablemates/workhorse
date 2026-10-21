@@ -32,9 +32,31 @@ export interface WorkerCompletionPreparation {
  */
 export const workerHeartbeatReservation = Symbol("workhorse.worker.heartbeat-reservation");
 
+/** Why a startup readiness check failed. A schema verdict throws instead. */
+export type WorkerReadinessFailure =
+  | { step: "heartbeat" | "ordinary"; reason: "timeout" | "error"; cause?: unknown }
+  | { step: "stopped" };
+
 export interface WorkerHeartbeatChannel {
   /** Take the connection now, ahead of any handler that could exhaust the pool. */
   reserve(): void;
+  /** Whether claims may take leases that this channel renews (ADR 0071 rule 6). */
+  usable(): boolean;
+  /** Call `listener` each time the channel becomes usable after a loss. */
+  onReady(listener: () => void): () => void;
+  /**
+   * The startup readiness check of ADR 0071 rule 3, within `timeoutMs`: wait for the reserved
+   * connection, then borrow one ordinary connection, run the compatibility query on it, and
+   * return it at once. Resolves undefined when both steps pass.
+   */
+  checkReadiness(
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<WorkerReadinessFailure | undefined>;
+  /** Wait up to `timeoutMs` for the channel to become usable. */
+  ready(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  /** A short description of the pool, as a refusal names it. */
+  readonly pool: string;
   heartbeatMany(
     tasks: readonly ClaimedTask[],
     workerId: string,
@@ -45,7 +67,7 @@ export interface WorkerHeartbeatChannel {
 }
 
 export interface WorkerHeartbeatReservation {
-  [workerHeartbeatReservation](): WorkerHeartbeatChannel | undefined;
+  [workerHeartbeatReservation](heartbeatMs: number): WorkerHeartbeatChannel | undefined;
   [workerHeartbeatReservationProblem](): string | undefined;
 }
 

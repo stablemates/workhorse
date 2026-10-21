@@ -1,3 +1,4 @@
+import { claimDatabase } from "../heartbeat-connection.js";
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { queryFencedWrite } from "./fenced-write.js";
 import { expectOneRow, FastTierUnsupportedError, fastTierRejection } from "../errors.js";
@@ -261,11 +262,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
       // claim_v1 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
-      const result = await this.context.database.query<ClaimRow>(SQL_STATEMENTS["claim_v1"], [
-        queueName,
-        workerId,
-        options.leaseMs ?? 30_000,
-      ]);
+      const result = await claimDatabase(this.context.database).query<ClaimRow>(
+        SQL_STATEMENTS["claim_v1"],
+        [queueName, workerId, options.leaseMs ?? 30_000],
+      );
       const row = result.rows[0];
       const task = row ? this.claimedTask<TPayload>(row, queueName) : null;
       this.recordClaims(span, task ? [task] : [], queueName, workerId, startedAt);
@@ -281,12 +281,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      const result = await this.context.database.query<ClaimRow>(SQL_STATEMENTS["claim_many_v1"], [
-        queueName,
-        workerId,
-        limit,
-        options.leaseMs ?? 30_000,
-      ]);
+      const result = await claimDatabase(this.context.database).query<ClaimRow>(
+        SQL_STATEMENTS["claim_many_v1"],
+        [queueName, workerId, limit, options.leaseMs ?? 30_000],
+      );
       const tasks = result.rows.map((row) => this.claimedTask<TPayload>(row, queueName));
       this.recordClaims(span, tasks, queueName, workerId, startedAt);
       return tasks;
@@ -669,7 +667,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     // The fused claim gives up a lock wait before it can deadlock (SM-934). If PostgreSQL still
     // rolls this statement back with 40P01, nothing in it committed, so it is sent again.
     const result = await queryFencedWrite<CompletionClaimRow>(
-      this.context.database,
+      claimDatabase(this.context.database),
       SQL_STATEMENTS["complete_many_and_claim_v1"],
       parameters,
     ).catch((error: unknown) => {
