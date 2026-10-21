@@ -105,9 +105,9 @@ PgCat. Except in Rust, it also counts against the client pool.
 - Every Workhorse advisory lock is transaction-scoped: `pg_advisory_xact_lock`,
   `pg_try_advisory_xact_lock`, and `pg_advisory_xact_lock_shared`. This includes the
   schema-migration lock.
-- The Rust worker opens its listener with `notifications::listen` from
-  `WorkerOptions::listen_config`, outside the pool. The other languages take the listener connection
-  from the pool.
+- The Rust workers on one pool share one listener. `notifications::listen` opens its connection
+  from `WorkerOptions::listen_config`, outside the pool. The other languages take the listener
+  connection from the pool.
 - Python workers on one pool object share one listener connection and one heartbeat connection.
 
 More detail: [Overview: Advisory locks](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#advisory-locks) and [Overview: Connection budgets per language](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#connection-budgets-per-language).

@@ -309,7 +309,7 @@ async fn record(worker: &Inner, statement: &str, batch_id: Uuid, tasks: &[(Uuid,
     }
     let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
         [&batch_id, &ids, &attempts, &fences, &worker.worker_id];
-    if let Err(error) = fenced_rows(&worker.pool, statement, &params).await {
+    if let Err(error) = fenced_rows(&worker.statements(), statement, &params).await {
         tracing::debug!(error = %error, "batch membership was not recorded");
     }
 }
@@ -409,7 +409,13 @@ mod tests {
             fast_tier: false,
         };
         let token = CancellationToken::default();
-        let context = HandlerContext::new(Arc::new(task), token, pool(), "worker".into());
+        let context = HandlerContext::new(
+            Arc::new(task),
+            token,
+            pool(),
+            Duration::from_secs(5),
+            "worker".into(),
+        );
         let joined = Arc::clone(coordinator).join(payload, context);
         tokio::spawn(async move { joined.await.unwrap() })
     }
@@ -543,7 +549,13 @@ mod tests {
             claim_sent_at: Instant::now(),
             fast_tier: false,
         };
-        HandlerContext::new(Arc::new(task), CancellationToken::default(), pool(), "worker".into())
+        HandlerContext::new(
+            Arc::new(task),
+            CancellationToken::default(),
+            pool(),
+            Duration::from_secs(5),
+            "worker".into(),
+        )
     }
 
     fn options() -> BatchOptions {

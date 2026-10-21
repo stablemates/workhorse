@@ -170,17 +170,18 @@ The source of the listener connection depends on the language:
   connection for all the workers.
 - Python workers on one pool object share one listener. The listener holds one pool connection for
   all the workers.
-- A Rust worker opens its own listener connection outside the pool, from its `listen_config`.
+- Rust workers on one pool share one listener. It opens its connection outside the pool, from
+  the `listen_config` of the workers, so all the workers on one pool must give the same
+  `listen_config`.
 - Java and Kotlin workers on one `DataSource` object share one listener. The listener holds one
   connection from the `DataSource` for all the workers.
 
 If a TypeScript or Go pool is too small to give a connection to the listener, the worker polls and
 does not listen.
 
-The heartbeat connection follows the same rule. TypeScript, Go, and Ruby workers on one pool share
-one heartbeat connection. Python workers on one pool object share one heartbeat connection too.
-Each Rust worker takes its own heartbeat connection from the pool. Java and Kotlin workers on one
-`DataSource` object share one heartbeat connection.
+The heartbeat connection follows the same rule. TypeScript, Go, Ruby, and Rust workers on one pool
+share one heartbeat connection. Python workers on one pool object share one heartbeat connection
+too. Java and Kotlin workers on one `DataSource` object share one heartbeat connection.
 
 Behind a pooler that cannot deliver notifications, the listener connection delivers nothing. But
 the connection still counts against the client limit of the pooler. In each language except Rust,
@@ -193,9 +194,9 @@ from the pool. Handlers cannot use these reserved connections.
 - **TypeScript, Go, or Ruby.** The workers hold one listener and one heartbeat connection. 18
   connections remain for claims and handlers.
 - **Python.** The workers hold one listener and one heartbeat connection. 18 connections remain.
-- **Rust.** The workers hold four heartbeat connections in the pool. 16 connections remain. The
-  four listener connections are outside the pool, so the server or the pooler must accept four
-  more clients.
+- **Rust.** The workers hold one heartbeat connection in the pool. 19 connections remain. The
+  listener connection is outside the pool, so the server or the pooler must accept one more
+  client.
 - **Java or Kotlin.** The workers hold one listener and one heartbeat connection. 18 connections
   remain.
 
@@ -207,14 +208,14 @@ from the pool. Handlers cannot use these reserved connections.
 <details>
 <summary>Reference: connections each language holds</summary>
 
-| Language   | Listener connection                                                                                                                                   | Heartbeat connection                                                         |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| TypeScript | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped when `options.max` is 1 or less.                                           | One shared heartbeat connection per pool.                                    |
-| Go         | One `taskNotificationHub` per `*pgxpool.Pool`. Polls instead when `MaxConns` is below 2.                                                              | One shared heartbeat connection per pool, held by `holdHeartbeatConnection`. |
-| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                     | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs.  |
-| Python     | One per pool object, holding one pool connection. The psycopg sync pool, the psycopg async pool, and the asyncpg pool never share.                    | One per pool object, held while any worker on the pool runs.                 |
-| Rust       | One per worker, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per worker, from the pool.                                               |
-| JVM        | One `Listener.shared(dataSource)` per `DataSource` object, holding one connection while any worker runs.                                              | One per `DataSource` object, held while any worker or attempt runs.          |
+| Language   | Listener connection                                                                                                                                          | Heartbeat connection                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| TypeScript | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped when `options.max` is 1 or less.                                                  | One shared heartbeat connection per pool.                                    |
+| Go         | One `taskNotificationHub` per `*pgxpool.Pool`. Polls instead when `MaxConns` is below 2.                                                                     | One shared heartbeat connection per pool, held by `holdHeartbeatConnection`. |
+| Ruby       | One `Worker::Listener.shared(pool)` per pool object, holding one pool connection.                                                                            | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs.  |
+| Python     | One per pool object, holding one pool connection. The psycopg sync pool, the psycopg async pool, and the asyncpg pool never share.                           | One per pool object, held while any worker on the pool runs.                 |
+| Rust       | One per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per pool identity, from the pool.                                        |
+| JVM        | One `Listener.shared(dataSource)` per `DataSource` object, holding one connection while any worker runs.                                                     | One per `DataSource` object, held while any worker or attempt runs.          |
 
 TypeScript and Go key both shared connections by the pool object. The JVM keys both by the
 `DataSource` object, by reference identity, so a wrapper of a pool has its own two connections.
@@ -226,9 +227,9 @@ More detail: [Overview: Connection budgets per language](https://github.com/stab
 ## Keep a dedicated heartbeat connection
 
 A heartbeat renews the lease of a running task. A worker sends its heartbeats on a dedicated
-connection, so busy handlers cannot delay them. TypeScript, Go, and Ruby workers on one pool share
-this connection. Python workers on one pool object share it too. Java and Kotlin workers on one
-`DataSource` object share it.
+connection, so busy handlers cannot delay them. TypeScript, Go, Ruby, and Rust workers on one pool
+share this connection. Python workers on one pool object share it too. Java and Kotlin workers on
+one `DataSource` object share it.
 
 **Example.** A worker with concurrency 8 shares a pool with its handlers. Each handler holds a
 pooled connection for a slow report query. Suppose that the heartbeat uses the same pool.
@@ -302,6 +303,11 @@ A fast-tier completion then settles its task and claims nothing. The worker read
 has its connection, so a connection lost meanwhile also stops the claim. The heartbeat asks the pool
 for a new connection at once, and waits at most one interval between failed attempts. When the new
 connection is ready, the worker claims at once. A rejected or busy lease does not stop claims.
+
+**Refusal at Rust startup.** A Rust `run` also returns an error if its startup budget ends before
+the shared heartbeat connection is present, or before one more pooled connection runs the
+compatibility check. The budget is the larger of the heartbeat interval and 5 s. The error names the
+pool, the budget, and the opt-out.
 
 | Language   | Opt-out             |
 | ---------- | ------------------- |

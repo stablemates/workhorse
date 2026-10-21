@@ -300,10 +300,10 @@ impl HandlerContext {
                 Some(contract) => Option::clone(contract),
                 None => {
                     let loaded = match version {
-                        None => load_contract(self.pool(), &child.task_type).await?,
+                        None => load_contract(&self.pool(), &child.task_type).await?,
                         Some(None) => None,
                         Some(Some(version)) => {
-                            load_contract_version(self.pool(), &child.task_type, Some(version))
+                            load_contract_version(&self.pool(), &child.task_type, Some(version))
                                 .await?
                         }
                     };

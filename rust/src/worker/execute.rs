@@ -84,6 +84,7 @@ impl Inner {
             Arc::clone(&task),
             token.clone(),
             self.pool.clone(),
+            self.statement_checkout(),
             self.worker_id.clone(),
         );
         let future = AssertUnwindSafe(handler(task.payload.clone(), context.clone()))
@@ -233,7 +234,7 @@ impl Inner {
         let budget = Instant::now() + EXPIRATION_BUDGET;
         loop {
             let rows = fenced_rows(
-                &self.pool,
+                &self.statements(),
                 sql::EXPIRE_OWNED_TELEMETRY_V1,
                 &[&task.id, &self.worker_id, &task.fence_token],
             )
@@ -273,7 +274,7 @@ impl Inner {
 
     async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
         let rows = fenced_rows(
-            &self.pool,
+            &self.statements(),
             sql::ACKNOWLEDGE_CANCEL_V1,
             &[&task.id, &self.worker_id, &task.fence_token],
         )
@@ -288,7 +289,7 @@ impl Inner {
     /// Explains a rejected settlement: a cancellation or expiration that won, or a lost lease.
     async fn reconcile(&self, task: &ClaimedTask, operation: Operation) -> Result<Outcome, Error> {
         let rows = fenced_rows(
-            &self.pool,
+            &self.statements(),
             sql::ACKNOWLEDGE_CANCEL_V1,
             &[&task.id, &self.worker_id, &task.fence_token],
         )
@@ -360,7 +361,7 @@ impl Inner {
 
     async fn complete_full(&self, task: &ClaimedTask, result: &Value) -> Result<bool, Error> {
         let rows = fenced_rows(
-            &self.pool,
+            &self.statements(),
             sql::COMPLETE_V1,
             &[&task.id, &self.worker_id, &task.fence_token, result],
         )
@@ -437,7 +438,7 @@ impl Inner {
         version: &str,
     ) -> Result<Arc<crate::contracts::ContractSchema>, Error> {
         let rows = self
-            .pool
+            .statements()
             .rows(sql::GET_CONTRACT_DEFINITION_V1, &[&task.task_type, &Some(version)])
             .await?;
         let [row] = rows.as_slice() else {
@@ -467,7 +468,7 @@ impl Inner {
             );
         }
         let rows = fenced_rows(
-            &self.pool,
+            &self.statements(),
             sql::RELEASE_OWNED_V1,
             &[&task.id, &self.worker_id, &task.fence_token],
         )
@@ -522,7 +523,7 @@ impl Inner {
                 .map(millis_i32)
         };
         let rows = fenced_rows(
-            &self.pool,
+            &self.statements(),
             sql::FAIL_V1,
             &[&task.id, &self.worker_id, &task.fence_token, &envelope, &delay],
         )

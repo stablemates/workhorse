@@ -11,8 +11,9 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::{lock, millis_i32, sql, ClaimedTask, Inner};
+use super::{lock, millis_i32, sql, ClaimedTask, Inner, RunGate};
 use crate::fenced_write::fenced_rows;
+use crate::queue::BoundedPool;
 use crate::Error;
 
 /// The most completions, and the most claimed tasks, in one statement.
@@ -29,11 +30,21 @@ struct Entry {
     reply: oneshot::Sender<Answer>,
 }
 
-/// Completions waiting for the next statement, keyed by queue and cohort.
+/// The claim gate of the run that submitted a batch, by address, so two runs never share one.
+type RunKey = usize;
+
+/// Completions waiting for the next statement, keyed by queue, cohort, and run. Each batch keeps the
+/// gate of its run, so a batch that outlives its run claims nothing.
 #[derive(Default)]
 pub(super) struct Batcher {
-    pending: Mutex<HashMap<(String, usize), Vec<Entry>>>,
+    pending: Mutex<HashMap<BatchKey, Batch>>,
 }
+
+/// The queue, the cohort, and the run of a batch.
+type BatchKey = (String, usize, RunKey);
+
+/// The gate of the run that submitted a batch, and its completions.
+type Batch = (Option<Arc<RunGate>>, Vec<Entry>);
 
 impl Inner {
     /// Completes a fast-tier attempt and claims up to `limit` tasks from its queue, sharing one
@@ -53,10 +64,12 @@ impl Inner {
             limit: limit.min(MAX_BATCH),
             reply,
         };
-        let key = (task.queue.clone(), cohort);
+        let gate = self.run_gate();
+        let run = gate.as_ref().map_or(0, |gate| Arc::as_ptr(gate) as usize);
+        let key = (task.queue.clone(), cohort, run);
         let first = {
             let mut pending = lock(&self.completions.pending);
-            let entries = pending.entry(key.clone()).or_default();
+            let (_, entries) = pending.entry(key.clone()).or_insert_with(|| (gate, Vec::new()));
             entries.push(entry);
             entries.len() == 1
         };
@@ -65,8 +78,9 @@ impl Inner {
             tokio::spawn(async move {
                 // Completions that finish before this task runs again join its statement.
                 tokio::task::yield_now().await;
-                let entries = lock(&inner.completions.pending).remove(&key).unwrap_or_default();
-                inner.flush(&key.0, entries).await;
+                let (gate, entries) =
+                    lock(&inner.completions.pending).remove(&key).unwrap_or_default();
+                inner.flush(&key.0, gate.as_deref(), entries).await;
             });
         }
         answer
@@ -75,7 +89,7 @@ impl Inner {
     }
 
     /// Sends the entries in statements of at most 100 completions that claim at most 100 tasks.
-    async fn flush(&self, queue: &str, entries: Vec<Entry>) {
+    async fn flush(&self, queue: &str, gate: Option<&RunGate>, entries: Vec<Entry>) {
         let mut chunks: Vec<(Vec<Entry>, usize)> = Vec::new();
         for entry in entries {
             match chunks.last_mut() {
@@ -92,17 +106,23 @@ impl Inner {
             }
         }
         futures_util::future::join_all(
-            chunks.into_iter().map(|(chunk, limit)| self.flush_chunk(queue, chunk, limit)),
+            chunks.into_iter().map(|(chunk, limit)| self.flush_chunk(queue, gate, chunk, limit)),
         )
         .await;
     }
 
-    async fn flush_chunk(&self, queue: &str, mut chunk: Vec<Entry>, limit: usize) {
+    async fn flush_chunk(
+        &self,
+        queue: &str,
+        gate: Option<&RunGate>,
+        mut chunk: Vec<Entry>,
+        limit: usize,
+    ) {
         // Concurrent statements then delete their runtime rows in one order.
         chunk.sort_unstable_by_key(|entry| entry.id);
         // The fused claim gives up a lock wait before it can deadlock (SM-934). If PostgreSQL
         // still rolls the chunk back as a deadlock victim, fenced_rows sends it again.
-        match self.send_chunk(queue, &chunk, limit).await {
+        match self.send_chunk(queue, gate, &chunk, limit).await {
             Ok((accepted, claimed)) => {
                 let mut claimed = claimed.into_iter();
                 for entry in chunk {
@@ -121,6 +141,7 @@ impl Inner {
     async fn send_chunk(
         &self,
         queue: &str,
+        gate: Option<&RunGate>,
         chunk: &[Entry],
         limit: usize,
     ) -> Result<(Vec<Uuid>, Vec<ClaimedTask>), Error> {
@@ -128,21 +149,28 @@ impl Inner {
         let fences: Vec<i64> = chunk.iter().map(|entry| entry.fence).collect();
         let results: Vec<Value> = chunk.iter().map(|entry| entry.result.clone()).collect();
         let sent_at = Instant::now();
-        let rows = fenced_rows(
-            &self.pool,
-            sql::COMPLETE_MANY_AND_CLAIM_V1,
-            &[
-                &self.worker_id,
-                &ids,
-                &fences,
-                &results,
-                &queue,
-                &(limit as i32),
-                &millis_i32(self.options.lease_duration),
-            ],
-        )
-        .await
-        .map_err(Error::translate_fast_tier)?;
+        let statement = (queue, ids.as_slice(), fences.as_slice(), results.as_slice());
+        // Only an attempt that can claim asks the gate, and it asks the gate of the run that
+        // submitted the batch, after its checkout. A completion that waited while the heartbeat
+        // connection went, or while its run ended, then settles and claims nothing (ADR 0071,
+        // rule 6). The gate never stops the settlement itself.
+        let mut limit = limit;
+        let mut rows = None;
+        if limit > 0 {
+            let allowed = || gate.and_then(RunGate::permit);
+            let gated = self.statements().gated(&allowed);
+            let sent = self.send_completions(&gated, statement, limit).await;
+            if gated.refused() {
+                limit = 0;
+            } else {
+                rows = Some(sent);
+            }
+        }
+        let rows = match rows {
+            Some(rows) => rows,
+            None => self.send_completions(&self.statements(), statement, 0).await,
+        };
+        let rows = rows.map_err(Error::translate_fast_tier)?;
         // The first row carries every accepted id; a stale fence leaves its task out of it.
         let accepted = match rows.first() {
             Some(row) => row.try_get::<_, Option<Vec<Uuid>>>("accepted")?.unwrap_or_default(),
@@ -160,5 +188,28 @@ impl Inner {
             self.claimed_tasks(&rows_claimed, queue, sent_at, true, &mut claimed)?;
         }
         Ok((accepted, claimed))
+    }
+
+    /// Sends `complete_many_and_claim_v1` for one chunk through `executor`, claiming up to `limit`.
+    async fn send_completions(
+        &self,
+        executor: &BoundedPool<'_>,
+        (queue, ids, fences, results): (&str, &[Uuid], &[i64], &[Value]),
+        limit: usize,
+    ) -> Result<Vec<tokio_postgres::Row>, Error> {
+        fenced_rows(
+            executor,
+            sql::COMPLETE_MANY_AND_CLAIM_V1,
+            &[
+                &self.worker_id,
+                &ids,
+                &fences,
+                &results,
+                &queue,
+                &(limit as i32),
+                &millis_i32(self.options.lease_duration),
+            ],
+        )
+        .await
     }
 }

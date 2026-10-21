@@ -10,7 +10,13 @@ mod handler;
 mod heartbeat;
 mod notifications;
 mod process;
+mod shared;
 mod value_size;
+
+/// The scratch databases of the integration tests, for the unit tests that need PostgreSQL.
+#[cfg(test)]
+#[path = "../../tests/support/mod.rs"]
+mod scratch;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -21,7 +27,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
 use serde_json::Value;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{timeout_at, Instant};
 use tokio_util::sync::CancellationToken as StopToken;
@@ -34,7 +40,7 @@ pub use process::run_worker_process;
 
 use crate::contracts::ContractSchema;
 use crate::fenced_write::fenced_rows;
-use crate::queue::exactly_one;
+use crate::queue::{exactly_one, BoundedPool};
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
 use crate::HandlerContext;
@@ -67,6 +73,10 @@ pub const UNWIND_WINDOW: Duration = Duration::from_millis(250);
 pub const CLEANUP_WINDOW: Duration = Duration::from_secs(1);
 /// The heartbeat connection plus one claim and one settlement.
 const MIN_DEDICATED_POOL: usize = 3;
+/// The startup budget is the larger of the heartbeat interval and this floor (ADR 0071, rule 3).
+const STARTUP_FLOOR: Duration = Duration::from_secs(5);
+/// A worker statement waits for a pooled connection for the larger of the lease and this floor.
+const CHECKOUT_FLOOR: Duration = Duration::from_secs(5);
 /// How long a worker claims a queue that rejected a fast claim through `claim_many_v1` before
 /// probing it again. A queue can change tier only while it holds no live tasks (ADR 0077).
 const TIER_PROBE_INTERVAL: Duration = Duration::from_secs(30);
@@ -156,9 +166,12 @@ pub struct WorkerOptions {
     pub shutdown_grace_period: Duration,
     /// Never opens the `LISTEN` connection.
     pub polling_only: bool,
-    /// Sends heartbeat rounds through the shared pool instead of a reserved connection.
+    /// Sends heartbeat rounds through the shared pool instead of a reserved connection. Without
+    /// it, all workers on clones of one pool share one reserved heartbeat connection.
     pub shared_heartbeats: bool,
-    /// The connection the notification listener opens. Without it the worker polls.
+    /// The connection the notification listener opens, outside the pool. Without it the worker
+    /// polls. All workers on clones of one pool share one listener, so a worker whose value
+    /// differs from that of a running worker on the same pool refuses to start.
     pub listen_config: Option<tokio_postgres::Config>,
     pub on_registration_error: Option<RegistrationErrorHook>,
     pub retry_delay: Option<RetryDelay>,
@@ -345,6 +358,47 @@ pub(crate) struct Inner {
     /// Queues whose last claim answered on the fast tier.
     fast_tier_queues: Mutex<HashSet<String>>,
     completions: completion::Batcher,
+    /// The shared connections of the pool identity, while a run holds them.
+    subscription: Mutex<Option<shared::Subscription>>,
+    /// The claim gate of the current run.
+    run_gate: Mutex<Option<Arc<RunGate>>>,
+    /// Registry statements of an ended run that outlived its stop deadline. The next run waits
+    /// for them before it registers, so they cannot change that run.
+    late: Mutex<Vec<JoinHandle<()>>>,
+}
+
+/// The claim gate of one run. It holds the shared heartbeat connection of that run, and it closes
+/// for good when the run ends. A statement keeps the gate of the run that started it, so a
+/// statement that outlives its run claims nothing, also after a later run opens its own gate.
+pub(super) struct RunGate {
+    open: AtomicBool,
+    heartbeat: Option<Arc<shared::HeartbeatConnection>>,
+}
+
+impl RunGate {
+    /// Whether a claim can start now.
+    fn is_open(&self) -> bool {
+        self.open.load(Ordering::SeqCst)
+            && self.heartbeat.as_ref().is_none_or(|heartbeat| heartbeat.ready())
+    }
+
+    /// A permit for one claim statement, if the gate is open. With the dedicated heartbeat
+    /// connection, the permit keeps the reservation valid until the statement ends.
+    pub(super) fn permit(&self) -> Option<crate::queue::GatePermit> {
+        if !self.open.load(Ordering::SeqCst) {
+            return None;
+        }
+        match &self.heartbeat {
+            None => Some(Box::new(())),
+            Some(heartbeat) => {
+                heartbeat.claim_permit().map(|permit| Box::new(permit) as crate::queue::GatePermit)
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.open.store(false, Ordering::SeqCst);
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -379,7 +433,7 @@ impl Drop for ActiveSlot {
 }
 
 /// What one `run` or `run_once` owns beyond its own future: the run permit, the background loops,
-/// the heartbeat loop, the registry row and the reserved heartbeat connection.
+/// the heartbeat loop, the registry row and the subscription to the shared connections.
 ///
 /// Startup and teardown each run as one task on the runtime the scope opened on, so cancelling the
 /// run future, even inside [`RunScope::start`] or [`RunScope::close`], cannot skip a step.
@@ -390,9 +444,15 @@ struct RunScope {
     inner: Arc<Inner>,
     runtime: tokio::runtime::Handle,
     permit: Option<OwnedSemaphorePermit>,
-    starting: Option<JoinHandle<Result<(), Error>>>,
+    starting: Option<JoinHandle<Result<bool, Error>>>,
     background: StopToken,
     loops: Vec<JoinHandle<()>>,
+    /// The registry loop. Teardown never aborts it, because its statement could still change the
+    /// registry row after the run ended.
+    registry: Option<JoinHandle<()>>,
+    /// The draining registry refresh. The scope holds it before the run waits for it, so a dropped
+    /// run hands it to teardown.
+    refresh: Option<JoinHandle<()>>,
 }
 
 impl RunScope {
@@ -404,16 +464,20 @@ impl RunScope {
             starting: None,
             background: StopToken::new(),
             loops: Vec::new(),
+            registry: None,
+            refresh: None,
         }
     }
 
-    /// Starts the worker in a task the scope owns.
+    /// Starts the worker in a task the scope owns. Returns `Ok(false)` when teardown began first.
     ///
     /// PostgreSQL may still execute an initial registration the dropped run already sent, so
-    /// teardown waits for it to answer before it deregisters.
-    async fn start(&mut self) -> Result<(), Error> {
-        let inner = Arc::clone(&self.inner);
-        let starting = self.starting.insert(self.runtime.spawn(async move { inner.start().await }));
+    /// teardown waits for it to answer before it deregisters. Teardown stops the waits of startup,
+    /// and the startup budget bounds them, so that wait is short.
+    async fn start(&mut self, wake: Option<Arc<Notify>>) -> Result<bool, Error> {
+        let (inner, stop) = (Arc::clone(&self.inner), self.background.clone());
+        let starting =
+            self.starting.insert(self.runtime.spawn(async move { inner.start(stop, wake).await }));
         let started = starting.await;
         self.starting = None;
         // Nothing aborts the startup task, so it ends only by returning or panicking.
@@ -422,8 +486,10 @@ impl RunScope {
 
     /// Waits for the teardown, which keeps running if this future is dropped.
     ///
-    /// With a `cleanup` deadline, teardown aborts a loop that outlives it and stops waiting for a
-    /// heartbeat round in flight, which then releases its connection itself.
+    /// With a `cleanup` deadline, every wait of teardown ends by it. Teardown aborts a loop that
+    /// outlives it and stops waiting for a heartbeat round in flight, which then releases its
+    /// connection itself. A startup, a registry refresh, or a deregistration that outlives it keeps
+    /// running as a late statement of the worker, which the next run waits for.
     async fn close(mut self, cleanup: Option<Instant>) {
         if let Some(teardown) = self.teardown(cleanup) {
             let _ = teardown.await;
@@ -435,17 +501,34 @@ impl RunScope {
         self.background.cancel();
         // Every execution has ended or is being dropped, so no renewal is still owed.
         self.inner.abandon_heartbeats();
+        // A statement of this run that outlives it claims nothing from here on.
+        self.inner.end_run();
         let (inner, starting) = (Arc::clone(&self.inner), self.starting.take());
         let loops = std::mem::take(&mut self.loops);
+        let registry = self.registry.take();
+        let refresh = self.refresh.take();
         Some(self.runtime.spawn(async move {
-            if let Some(starting) = starting {
-                let _ = starting.await;
+            // The startup can still be in its first registration, which teardown cannot stop.
+            if let Some(mut starting) = starting {
+                if !until(cleanup, &mut starting).await {
+                    tracing::warn!(workhorse.worker.id = %inner.worker_id, "the first registration outlived the shutdown cleanup window");
+                    inner.own_late(tokio::spawn(async move {
+                        let _ = starting.await;
+                    }));
+                }
+            }
+            for mut statement in [registry, refresh].into_iter().flatten() {
+                if !until(cleanup, &mut statement).await {
+                    tracing::warn!(workhorse.worker.id = %inner.worker_id, "a registry refresh outlived the shutdown cleanup window");
+                    inner.own_late(statement);
+                }
             }
             for running in loops {
                 join_until(running, cleanup).await;
             }
             // A round in flight finishes before its connection can go back to the pool, so the
-            // loop is never aborted: one that outlives the deadline releases the connection itself.
+            // loop is never aborted: one that outlives the deadline returns the connection itself
+            // when it is the last user.
             if let Some(heartbeats) = inner.heartbeat_loop() {
                 match cleanup {
                     Some(cleanup) => drop(timeout_at(cleanup, heartbeats).await),
@@ -459,8 +542,11 @@ impl RunScope {
 }
 
 impl Drop for RunScope {
+    /// A dropped run gets one cleanup window too. A registry statement that outlives it stays owned
+    /// by the worker, so the next run waits for it within its startup budget, not for the run
+    /// permit without a limit.
     fn drop(&mut self) {
-        self.teardown(None);
+        self.teardown(Some(Instant::now() + CLEANUP_WINDOW));
     }
 }
 
@@ -523,6 +609,9 @@ impl Worker {
             fast_tier_queues: Mutex::default(),
             completions: completion::Batcher::default(),
             contracts: Mutex::default(),
+            subscription: Mutex::default(),
+            run_gate: Mutex::default(),
+            late: Mutex::default(),
         })))
     }
 
@@ -560,6 +649,12 @@ impl Worker {
 
     /// Claims and executes until `shutdown` resolves, then drains within the grace period.
     ///
+    /// Startup has a budget: the larger of the heartbeat interval and 5 s. Within it, the shared
+    /// heartbeat connection of the pool must be present, unless `shared_heartbeats` is set, and
+    /// one more pooled connection must run the schema compatibility check. Otherwise `run`
+    /// returns an error that names the pool, the budget, and the opt-out. A `shutdown` that
+    /// resolves during startup ends the run with `Ok`.
+    ///
     /// The grace period starts when the worker observes `shutdown`. Claims in flight, the draining
     /// registration refresh, and running handlers all finish within it. Handlers still running
     /// when grace ends see [`crate::CancelReason::Shutdown`] and get a short unwind window. Any
@@ -568,7 +663,9 @@ impl Worker {
     /// at most a short cleanup window past the grace period.
     ///
     /// Dropping the future instead abandons every task it owns at once: renewals stop and the
-    /// leases expire. The worker deregisters in the background, and its next run waits for that.
+    /// leases expire. The worker deregisters after the run, and its next run waits for that within
+    /// its startup budget. If a registry statement of the dropped run still runs at the end of that
+    /// budget, the next run refuses to start.
     pub async fn run<F: Future<Output = ()> + Send>(&self, shutdown: F) -> Result<(), Error> {
         let inner = &self.0;
         tokio::pin!(shutdown);
@@ -577,16 +674,25 @@ impl Worker {
             () = &mut shutdown => return Ok(()),
         };
         let mut scope = RunScope::new(inner, permit);
-        scope.start().await?;
-
         let wake = Arc::new(Notify::new());
+        // Startup observes the shutdown signal: teardown stops its waits.
+        let started = tokio::select! {
+            started = scope.start(Some(Arc::clone(&wake))) => started,
+            () = &mut shutdown => Ok(false),
+        };
+        if !matches!(started, Ok(true)) {
+            // One cleanup window covers the whole teardown, the release of the shared connections
+            // included.
+            scope.close(Some(Instant::now() + CLEANUP_WINDOW)).await;
+            return started.map(drop);
+        }
+
         let registry_wake = Arc::new(Notify::new());
-        let listening = Arc::new(AtomicBool::new(false));
+        let listening = inner.listening();
         let maintenance_stop = scope.background.child_token();
-        scope.loops.push(tokio::spawn(
+        scope.registry = Some(tokio::spawn(
             Arc::clone(inner).registry_loop(Arc::clone(&registry_wake), scope.background.clone()),
         ));
-        scope.loops.extend(inner.spawn_listener(&wake, &listening, &scope.background));
         // Maintenance goes last, so the drain below can stop it before the other loops.
         scope
             .loops
@@ -599,6 +705,7 @@ impl Worker {
             inner: Arc::clone(inner),
             shutdown: shutdown_token.clone(),
             listening,
+            readiness: inner.heartbeat_connection().map(|heartbeat| heartbeat.readiness()),
         });
         let deadline = dispatch::dispatch(
             &dispatcher,
@@ -612,8 +719,18 @@ impl Worker {
         .await;
 
         inner.draining.store(true, Ordering::SeqCst);
-        if timeout_at(deadline, inner.refresh_registration()).await.is_err() {
+        // The scope holds the refresh before the run waits for it, so a dropped run cannot detach it.
+        let refresh = scope.refresh.insert(tokio::spawn({
+            let inner = Arc::clone(inner);
+            async move { inner.refresh_registration().await }
+        }));
+        if timeout_at(deadline, refresh).await.is_ok() {
+            scope.refresh = None;
+        } else {
             tracing::warn!(workhorse.worker.id = %inner.worker_id, "draining registration refresh outlived the shutdown grace period");
+            if let Some(refresh) = scope.refresh.take() {
+                inner.own_late(refresh);
+            }
         }
         maintenance_stop.cancel();
         // The handle stays in the scope until it resolves, so a drop here still joins it.
@@ -658,7 +775,11 @@ impl Worker {
             .await
             .map_err(|_| Error::invalid("worker is closed"))?;
         let mut scope = RunScope::new(inner, permit);
-        scope.start().await?;
+        let started = scope.start(None).await;
+        if !matches!(started, Ok(true)) {
+            scope.close(None).await;
+            return started;
+        }
         let result = async {
             if inner.paused.load(Ordering::SeqCst) {
                 return Ok(false);
@@ -684,6 +805,8 @@ struct WorkerDispatch {
     inner: Arc<Inner>,
     shutdown: StopToken,
     listening: Arc<AtomicBool>,
+    /// Changes when the shared heartbeat connection comes or goes. `None` with `shared_heartbeats`.
+    readiness: Option<watch::Receiver<bool>>,
 }
 
 impl dispatch::Dispatch for WorkerDispatch {
@@ -715,6 +838,14 @@ impl dispatch::Dispatch for WorkerDispatch {
 
     fn poll_delay(&self, consecutive_empty: u32) -> Duration {
         self.inner.poll_delay(consecutive_empty, self.listening.load(Ordering::SeqCst))
+    }
+
+    fn claims_allowed(&self) -> bool {
+        self.inner.claims_allowed()
+    }
+
+    fn readiness(&self) -> Option<watch::Receiver<bool>> {
+        self.readiness.clone()
     }
 
     fn claim(
@@ -771,6 +902,18 @@ async fn drain(
     }
 }
 
+/// Waits for `future` until `deadline`, and returns whether it ended in time. Without a deadline,
+/// it waits for the end.
+pub(super) async fn until<F: Future>(deadline: Option<Instant>, future: F) -> bool {
+    match deadline {
+        Some(deadline) => timeout_at(deadline, future).await.is_ok(),
+        None => {
+            future.await;
+            true
+        }
+    }
+}
+
 /// Waits for a background loop to stop until `deadline`, then aborts it.
 async fn join_until(mut task: tokio::task::JoinHandle<()>, deadline: Option<Instant>) {
     let Some(deadline) = deadline else {
@@ -813,41 +956,243 @@ impl Inner {
         });
     }
 
-    /// Reserves the heartbeat connection, checks the schema and registers a fresh instance.
-    async fn start(&self) -> Result<(), Error> {
-        self.reserve_heartbeat_connection().await;
-        if let Err(error) = crate::compatibility::assert_schema_compatible(&self.pool).await {
-            self.release_heartbeat_connection(None).await;
-            return Err(error);
+    /// Starts one run, and returns `Ok(false)` when `stop` fires first.
+    ///
+    /// The run joins the shared connections of its pool identity. Then, within the startup budget
+    /// and in this order, the shared heartbeat connection must be present, and one ordinary pooled
+    /// connection must run the compatibility check (ADR 0071, rule 3). If either step fails, the
+    /// worker refuses to start. Last, the run registers a fresh instance.
+    async fn start(&self, stop: StopToken, wake: Option<Arc<Notify>>) -> Result<bool, Error> {
+        let budget = self.startup_budget();
+        let deadline = Instant::now() + budget;
+        let listen = wake.filter(|_| self.listener_expected).and_then(|wake| {
+            Some(shared::Listen {
+                config: self.options.listen_config.clone()?,
+                queues: self.options.queues.clone(),
+                wake,
+            })
+        });
+        let request = self.request(deadline, listen);
+        let Some(subscription) = shared::subscribe(&self.pool, request, deadline, &stop).await?
+        else {
+            return Ok(false);
+        };
+        let heartbeat = subscription.heartbeat().cloned();
+        // Teardown releases the subscription, with the stop deadline of the run, also when a later
+        // step of startup fails.
+        *lock(&self.subscription) = Some(subscription);
+        *lock(&self.run_gate) =
+            Some(Arc::new(RunGate { open: AtomicBool::new(true), heartbeat: heartbeat.clone() }));
+        if !self.ready_within(heartbeat, deadline, budget, &stop).await? {
+            return Ok(false);
+        }
+        if !self.late_settled(deadline, budget, &stop).await? {
+            return Ok(false);
         }
         *lock(&self.instance) = Uuid::new_v4();
         self.registered.store(false, Ordering::SeqCst);
         self.draining.store(false, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
         self.refresh_registration().await;
-        Ok(())
+        Ok(true)
     }
 
-    /// Deregisters the worker and releases the heartbeat connection, giving up at `deadline`.
-    async fn stop(&self, deadline: Option<Instant>) {
-        if self.registered.swap(false, Ordering::SeqCst) {
-            let deregister =
-                async { self.pool.rows(sql::DEREGISTER_WORKER_V1, &[&self.worker_id]).await };
-            let result = match deadline {
-                Some(deadline) => timeout_at(deadline, deregister).await.ok(),
-                None => Some(deregister.await),
+    fn request(
+        &self,
+        startup_deadline: Instant,
+        listen: Option<shared::Listen>,
+    ) -> shared::Request {
+        shared::Request {
+            dedicated: !self.options.shared_heartbeats,
+            interval: self.heartbeat_interval,
+            startup_deadline,
+            listen,
+        }
+    }
+
+    /// The startup budget: the larger of the heartbeat interval and 5 s.
+    fn startup_budget(&self) -> Duration {
+        self.heartbeat_interval.max(STARTUP_FLOOR)
+    }
+
+    /// Waits until `deadline` for the shared heartbeat connection, then runs the compatibility
+    /// check on one ordinary connection, which goes back to the pool at once.
+    async fn ready_within(
+        &self,
+        heartbeat: Option<Arc<shared::HeartbeatConnection>>,
+        deadline: Instant,
+        budget: Duration,
+        stop: &StopToken,
+    ) -> Result<bool, Error> {
+        if let Some(heartbeat) = heartbeat {
+            tokio::select! {
+                () = stop.cancelled() => return Ok(false),
+                ready = timeout_at(deadline, heartbeat.wait_ready()) => if ready.is_err() {
+                    return Err(self.startup_error("could not reserve its heartbeat connection", budget));
+                },
+            }
+        }
+        let checkout = BoundedPool::new(&self.pool, budget);
+        let check = crate::compatibility::assert_schema_compatible(&checkout);
+        tokio::select! {
+            () = stop.cancelled() => Ok(false),
+            checked = timeout_at(deadline, check) => match checked {
+                Ok(checked) => checked.map(|()| true),
+                Err(_) => Err(self.startup_error(
+                    "could not run the compatibility check on a pooled connection",
+                    budget,
+                )),
+            },
+        }
+    }
+
+    /// The refusal of a startup step that did not finish within the startup budget. It names the
+    /// pool, the budget, and the opt-out.
+    fn startup_error(&self, step: &str, budget: Duration) -> Error {
+        let status = self.pool.status();
+        let opt_out = if self.options.shared_heartbeats {
+            ""
+        } else {
+            "; the workers on one pool need one heartbeat connection and at least one more connection (set shared_heartbeats to opt out of the heartbeat connection)"
+        };
+        Error::invalid(format!(
+            "worker {step} within the startup budget of {budget:?}: the pool has max size {}, {} connections, {} available, and {} waiting{opt_out}",
+            status.max_size, status.size, status.available, status.waiting
+        ))
+    }
+
+    /// Waits until `deadline` for the late statements of the previous run. Returns `Ok(false)`
+    /// when `stop` fires first, and refuses to start if a statement is still running at the end.
+    async fn late_settled(
+        &self,
+        deadline: Instant,
+        budget: Duration,
+        stop: &StopToken,
+    ) -> Result<bool, Error> {
+        loop {
+            let Some(mut late) = lock(&self.late).pop() else { return Ok(true) };
+            let ended = tokio::select! {
+                () = stop.cancelled() => None,
+                ended = timeout_at(deadline, &mut late) => Some(ended.is_ok()),
             };
-            match result {
-                Some(Ok(_)) => {}
-                Some(Err(error)) => {
-                    tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker deregistration failed");
+            match ended {
+                Some(true) => {}
+                Some(false) => {
+                    lock(&self.late).push(late);
+                    return Err(Error::invalid(format!(
+                        "worker could not start within the startup budget of {budget:?}: a registry statement of its previous run has not ended"
+                    )));
                 }
                 None => {
-                    tracing::warn!(workhorse.worker.id = %self.worker_id, "worker deregistration outlived the shutdown cleanup window");
+                    lock(&self.late).push(late);
+                    return Ok(false);
                 }
             }
         }
-        self.release_heartbeat_connection(deadline).await;
+    }
+
+    /// Keeps a registry statement of an ended run, so the next run waits for it.
+    fn own_late(&self, statement: JoinHandle<()>) {
+        lock(&self.late).push(statement);
+    }
+
+    /// Closes the claim gate of the current run for good.
+    fn end_run(&self) {
+        if let Some(gate) = lock(&self.run_gate).take() {
+            gate.close();
+        }
+    }
+
+    /// The claim gate of the current run, if one runs.
+    fn run_gate(&self) -> Option<Arc<RunGate>> {
+        lock(&self.run_gate).clone()
+    }
+
+    /// Deregisters the worker after the late statements of this run, and leaves the shared
+    /// connections. Each wait ends by `deadline`. A deregistration that outlives it keeps running
+    /// as a late statement.
+    async fn stop(self: &Arc<Self>, deadline: Option<Instant>) {
+        let earlier = std::mem::take(&mut *lock(&self.late));
+        let mut deregister = tokio::spawn({
+            let inner = Arc::clone(self);
+            async move {
+                // A late registration of this run ends first, so the deregistration comes last.
+                for statement in earlier {
+                    let _ = statement.await;
+                }
+                if !inner.registered.swap(false, Ordering::SeqCst) {
+                    return;
+                }
+                let statements = inner.statements();
+                if let Err(error) =
+                    statements.rows(sql::DEREGISTER_WORKER_V1, &[&inner.worker_id]).await
+                {
+                    tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "worker deregistration failed");
+                }
+            }
+        });
+        if !until(deadline, &mut deregister).await {
+            tracing::warn!(workhorse.worker.id = %self.worker_id, "worker deregistration outlived the shutdown cleanup window");
+            self.own_late(deregister);
+        }
+        self.release_subscription(deadline).await;
+    }
+
+    /// Leaves the shared connections. The last user closes each one, waiting until `deadline`.
+    async fn release_subscription(&self, deadline: Option<Instant>) {
+        let subscription = lock(&self.subscription).take();
+        if let Some(subscription) = subscription {
+            subscription.release(deadline).await;
+        }
+    }
+
+    /// The shared heartbeat connection of this run. `None` with `shared_heartbeats` or between runs.
+    fn heartbeat_connection(&self) -> Option<Arc<shared::HeartbeatConnection>> {
+        lock(&self.subscription).as_ref()?.heartbeat().cloned()
+    }
+
+    /// Whether the worker may claim a task now. A worker with the dedicated heartbeat connection
+    /// claims nothing, ordinary or fused, while its pool identity holds no connection (ADR 0071,
+    /// rule 6). No run claims after it ends.
+    fn claims_allowed(&self) -> bool {
+        self.run_gate().is_some_and(|gate| gate.is_open())
+    }
+
+    /// Whether the shared listener of the pool identity is connected.
+    fn listening(&self) -> Arc<AtomicBool> {
+        let listening = lock(&self.subscription).as_ref().and_then(shared::Subscription::listening);
+        if listening.is_none() && !self.options.polling_only && !self.listener_expected {
+            tracing::warn!(workhorse.worker.id = %self.worker_id, "PostgreSQL notification listener unavailable; worker is using polling");
+        }
+        listening.unwrap_or_default()
+    }
+
+    /// The pool, with a checkout that waits at most for the larger of the lease and 5 s.
+    fn statements(&self) -> BoundedPool<'_> {
+        BoundedPool::new(&self.pool, self.statement_checkout())
+    }
+
+    /// The longest wait of a checkout for a worker or context statement.
+    fn statement_checkout(&self) -> Duration {
+        self.options.lease_duration.max(CHECKOUT_FLOOR)
+    }
+
+    /// Joins the shared connections and waits for the heartbeat connection, as a run does.
+    #[cfg(test)]
+    pub(super) async fn reserve_for_test(&self) {
+        let deadline = Instant::now() + self.startup_budget();
+        let request = self.request(deadline, None);
+        let subscription = shared::subscribe(&self.pool, request, deadline, &StopToken::new())
+            .await
+            .unwrap()
+            .unwrap();
+        let heartbeat = subscription.heartbeat().cloned();
+        *lock(&self.subscription) = Some(subscription);
+        *lock(&self.run_gate) =
+            Some(Arc::new(RunGate { open: AtomicBool::new(true), heartbeat: heartbeat.clone() }));
+        if let Some(heartbeat) = heartbeat {
+            heartbeat.wait_ready().await;
+        }
     }
 
     fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration {
@@ -863,29 +1208,6 @@ impl Inner {
             }
         }
         delay.mul_f64(0.9 + 0.2 * random_fraction()).max(Duration::from_millis(1))
-    }
-
-    fn spawn_listener(
-        &self,
-        wake: &Arc<Notify>,
-        listening: &Arc<AtomicBool>,
-        stop: &StopToken,
-    ) -> Option<tokio::task::JoinHandle<()>> {
-        if self.options.polling_only {
-            return None;
-        }
-        if !self.listener_expected {
-            tracing::warn!(workhorse.worker.id = %self.worker_id, "PostgreSQL notification listener unavailable; worker is using polling");
-            return None;
-        }
-        let config = self.options.listen_config.clone()?;
-        Some(tokio::spawn(notifications::listen(
-            config,
-            self.options.queues.clone(),
-            Arc::clone(wake),
-            Arc::clone(listening),
-            stop.clone(),
-        )))
     }
 
     async fn registry_loop(self: Arc<Self>, wake: Arc<Notify>, stop: StopToken) {
@@ -941,7 +1263,7 @@ impl Inner {
         let active = i32::try_from(self.active.load(Ordering::SeqCst)).unwrap_or(i32::MAX);
         let draining = self.draining.load(Ordering::SeqCst);
         let rows = self
-            .pool
+            .statements()
             .rows(
                 sql::REGISTER_WORKER_V1,
                 &[
@@ -991,7 +1313,7 @@ impl Inner {
 
     /// Promotes and recovers tasks, fires due schedules, and runs the routine pass when due.
     async fn run_maintenance(&self) -> Result<(), Error> {
-        let rows = self.pool.rows(sql::TICK_V1, &[&PROMOTE_LIMIT, &RECOVER_LIMIT]).await?;
+        let rows = self.statements().rows(sql::TICK_V1, &[&PROMOTE_LIMIT, &RECOVER_LIMIT]).await?;
         if rows.is_empty() {
             return Err(Error::invalid("PostgreSQL returned an invalid maintenance result"));
         }
@@ -1037,7 +1359,7 @@ impl Inner {
             let catchup = self.options.schedule_catchup_limit;
             let interval =
                 i64::try_from(self.options.maintenance_interval.as_millis()).unwrap_or(i64::MAX);
-            self.pool
+            self.statements()
                 .rows(
                     sql::FIRE_DUE_SCHEDULES_V2,
                     &[
@@ -1060,7 +1382,7 @@ impl Inner {
             due
         };
         if due {
-            self.pool.rows(sql::RUN_MAINTENANCE_V1, &[&Utc::now()]).await?;
+            self.statements().rows(sql::RUN_MAINTENANCE_V1, &[&Utc::now()]).await?;
         }
         Ok(())
     }
@@ -1070,20 +1392,27 @@ impl Inner {
     ///
     /// Tasks claimed before an error are returned with it, so the caller still owns them.
     async fn claim(&self, limit: usize, fast_limit: usize) -> (Vec<ClaimedTask>, Option<Error>) {
+        // The claim keeps the gate of the run that started it.
+        let Some(gate) = self.run_gate() else { return (Vec::new(), None) };
         let queues = &self.options.queues;
         let mut tasks = Vec::new();
         let lease = millis_i32(self.options.lease_duration);
         for _ in 0..queues.len() {
             let remaining = limit - tasks.len();
-            if remaining == 0 {
+            // A claim that the gate closed during returns what it already leased. Each statement
+            // also reads the gate again after its checkout.
+            if remaining == 0 || !gate.is_open() {
                 break;
             }
             let queue = &queues[self.next_queue.fetch_add(1, Ordering::SeqCst) % queues.len()];
             let sent_at = Instant::now();
             let fast_remaining = fast_limit.saturating_sub(tasks.len());
-            let claimed = self.claim_queue(queue, remaining, fast_remaining, lease, sent_at).await;
+            let claimed =
+                self.claim_queue(&gate, queue, remaining, fast_remaining, lease, sent_at).await;
             let (rows, fast_tier) = match claimed {
-                Ok(claimed) => claimed,
+                Ok(Some(claimed)) => claimed,
+                // The gate closed while the claim waited for its connection. That is no failure.
+                Ok(None) => break,
                 Err(error) => return (tasks, Some(error)),
             };
             if let Err(error) = self.claimed_tasks(&rows, queue, sent_at, fast_tier, &mut tasks) {
@@ -1153,28 +1482,32 @@ impl Inner {
     }
 
     /// Claims one queue through the fast-tier path, or through `claim_many_v1` when the queue is
-    /// full-tier, and reports which path answered.
+    /// full-tier, and reports which path answered. Returns `None` when the claim gate closed
+    /// before a claim statement went out.
     ///
     /// The fast claim is `complete_many_and_claim_v1` with no completions, and claims at most
     /// `fast_limit`. A full-tier queue rejects it, and the worker then claims that queue through
     /// `claim_many_v1` until the next probe.
     async fn claim_queue(
         &self,
+        gate: &RunGate,
         queue: &str,
         limit: usize,
         fast_limit: usize,
         lease: i32,
         sent_at: Instant,
-    ) -> Result<(Vec<tokio_postgres::Row>, bool), Error> {
+    ) -> Result<Option<(Vec<tokio_postgres::Row>, bool)>, Error> {
+        let allowed = || gate.permit();
         let probe_due =
             lock(&self.full_tier_until).get(queue).is_none_or(|until| sent_at >= *until);
         if probe_due {
             if fast_limit == 0 {
-                return Ok((Vec::new(), true));
+                return Ok(Some((Vec::new(), true)));
             }
             let fast_limit = limit.min(fast_limit) as i32;
+            let gated = self.statements().gated(&allowed);
             let claimed = fenced_rows(
-                &self.pool,
+                &gated,
                 sql::COMPLETE_MANY_AND_CLAIM_V1,
                 &[
                     &self.worker_id,
@@ -1188,6 +1521,9 @@ impl Inner {
             )
             .await
             .map_err(Error::translate_fast_tier);
+            if gated.refused() {
+                return Ok(None);
+            }
             match claimed {
                 Ok(rows) => {
                     self.record_tier(queue, true, sent_at);
@@ -1199,16 +1535,19 @@ impl Inner {
                             claimed.push(row);
                         }
                     }
-                    return Ok((claimed, true));
+                    return Ok(Some((claimed, true)));
                 }
                 Err(Error::FastTierUnsupported { .. }) => self.record_tier(queue, false, sent_at),
                 Err(error) => return Err(error),
             }
         }
         let limit = limit as i32;
-        let rows =
-            self.pool.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]).await?;
-        Ok((rows, false))
+        let gated = self.statements().gated(&allowed);
+        let rows = gated.rows(sql::CLAIM_MANY_V1, &[&queue, &self.worker_id, &limit, &lease]).await;
+        if gated.refused() {
+            return Ok(None);
+        }
+        Ok(Some((rows?, false)))
     }
 }
 
