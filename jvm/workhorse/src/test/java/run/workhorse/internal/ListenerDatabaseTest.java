@@ -38,10 +38,12 @@ import run.workhorse.testing.ScratchDatabase;
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class ListenerDatabaseTest {
   /**
-   * Gives scratch connections, and counts the open ones. It equals every other counting source, as
-   * a pool configuration object can, so a registry that uses {@code equals} merges two of them.
+   * Gives scratch connections, and counts the checkouts and the open connections. It equals every
+   * other counting source, as a pool configuration object can, so a registry that uses {@code
+   * equals} merges two of them.
    */
   private static final class Counted implements DataSource {
+    final AtomicInteger checkouts = new AtomicInteger();
     final AtomicInteger open = new AtomicInteger();
     final List<Integer> backends = new CopyOnWriteArrayList<>();
     final AtomicInteger waiting = new AtomicInteger();
@@ -49,8 +51,22 @@ class ListenerDatabaseTest {
     /** While it has not counted down, each checkout waits for it. */
     volatile CountDownLatch gate = new CountDownLatch(0);
 
+    /** Runs at the start of each checkout, after it counts. */
+    volatile Runnable onCheckout = () -> {};
+
+    /**
+     * Once true, the next close counts down {@link #closing}, and then waits until {@link
+     * #closeOpen} counts down.
+     */
+    final AtomicBoolean holdClose = new AtomicBoolean();
+
+    final CountDownLatch closing = new CountDownLatch(1);
+    final CountDownLatch closeOpen = new CountDownLatch(1);
+
     @Override
     public Connection getConnection() throws SQLException {
+      checkouts.incrementAndGet();
+      onCheckout.run();
       CountDownLatch current = gate;
       if (current.getCount() > 0) {
         waiting.incrementAndGet();
@@ -72,6 +88,10 @@ class ListenerDatabaseTest {
               Connection.class.getClassLoader(),
               new Class<?>[] {Connection.class},
               (proxy, method, arguments) -> {
+                if (method.getName().equals("close") && holdClose.compareAndSet(true, false)) {
+                  closing.countDown();
+                  closeOpen.await(30, TimeUnit.SECONDS);
+                }
                 if (method.getName().equals("close") && closed.compareAndSet(false, true)) {
                   open.decrementAndGet();
                 }
@@ -288,5 +308,48 @@ class ListenerDatabaseTest {
     // A negative check: a second checkout would open a second connection in this time.
     Thread.sleep(200);
     assertEquals(1, source.backends.size(), "the pool opened one connection");
+  }
+
+  /**
+   * SM-1580: a checkout gives its connection after the last subscriber left, and the pool takes it
+   * back slowly. A new subscriber's listener thread waits for that return, so the pool never holds
+   * two listener connections.
+   */
+  @Test
+  void waitsForTheReturnOfAnOrphanedConnectionBeforeTheNextCheckout() throws Exception {
+    Counted source = new Counted();
+    CountDownLatch release = new CountDownLatch(1);
+    source.gate = release;
+    Listener listener = Listener.shared(source);
+    Listener.Subscription first =
+        listener.subscribe(List.of("jvm-listener-return"), () -> {}, error -> {});
+    try {
+      waitUntil("the listener checkout waits", () -> source.waiting.get() == 1);
+      first.close();
+      source.holdClose.set(true);
+    } finally {
+      release.countDown();
+    }
+    assertTrue(source.closing.await(20, TimeUnit.SECONDS), "the orphaned return waits");
+
+    // The new listener thread decides whether it starts a checkout: a new checkout runs
+    // onCheckout, and a wait for the return runs onReturnPending.
+    CountDownLatch decided = new CountDownLatch(1);
+    listener.onReturnPending = decided::countDown;
+    source.onCheckout = decided::countDown;
+    Listener.Subscription second =
+        listener.subscribe(List.of("jvm-listener-return"), () -> {}, error -> {});
+    try {
+      assertTrue(decided.await(20, TimeUnit.SECONDS), "the new listener thread decided");
+      assertEquals(1, source.checkouts.get(), "no second checkout starts while the return runs");
+      source.closeOpen.countDown();
+      waitUntil("the new subscriber listens", second::isListening);
+      assertEquals(2, source.checkouts.get(), "the listener checked out once after the return");
+      assertEquals(1, source.open.get(), "one listener connection is out");
+    } finally {
+      source.closeOpen.countDown();
+      second.close();
+    }
+    waitUntil("the connection went back to the pool", () -> source.open.get() == 0);
   }
 }

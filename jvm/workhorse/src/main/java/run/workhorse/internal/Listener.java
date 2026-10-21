@@ -104,7 +104,9 @@ public final class Listener {
    * The checkout that has not given a thread its connection yet, or {@code null}. A pass or a
    * thread that stops leaves it for the next one, so stops and restarts never add a second
    * checkout. It changes under {@link #lock}, and its owner is settled there once: a thread adopts
-   * the connection, or {@link #orphaned} gives it back to the pool when no subscriber is left.
+   * the connection, or {@link #giveBack} gives it back to the pool when no subscriber is left. A
+   * checkout that goes back stays here until the pool has the connection, so a new subscriber waits
+   * for that return and does not start a second checkout.
    */
   private @Nullable Pending pending;
 
@@ -112,10 +114,22 @@ public final class Listener {
   private static final class Pending {
     final CompletableFuture<Connection> result;
 
+    /** Completes when the connection is back in the pool. */
+    final CompletableFuture<@Nullable Void> returned = new CompletableFuture<>();
+
+    /** True once the checkout goes back to the pool. It changes under {@link #lock}. */
+    boolean returning;
+
     Pending(CompletableFuture<Connection> result) {
       this.result = result;
     }
   }
+
+  /**
+   * Runs when a listener thread waits for the return of an earlier checkout, on that thread, or
+   * {@code null}. A test uses it to know that the thread does not start a second checkout.
+   */
+  volatile @Nullable Runnable onReturnPending;
 
   private Listener(DataSource dataSource) {
     this.dataSource = dataSource;
@@ -130,8 +144,9 @@ public final class Listener {
    * Wakes {@code onWake} for each notification that names one of {@code queues} or every queue, and
    * gives each connection failure to {@code onError}. The first subscriber starts the thread. It
    * never waits: a thread that still stops, perhaps on a stalled connection, sees the new
-   * subscriber once that connection is back in the pool, and listens again. So a pool never holds
-   * two listener connections, and the worker polls meanwhile.
+   * subscriber once that connection is back in the pool, and listens again. A new thread also waits
+   * for a connection that still goes back to the pool after it arrived with no subscriber. So a
+   * pool never holds two listener connections, and the worker polls meanwhile.
    */
   public Subscription subscribe(List<String> queues, Runnable onWake, Consumer<Throwable> onError) {
     Subscription subscription = new Subscription(queues, onWake, onError);
@@ -228,6 +243,8 @@ public final class Listener {
     }
     while (true) {
       listenUntil(current);
+      boolean exit = false;
+      Pending left = null;
       lock.lock();
       try {
         // Nothing interrupts the thread, but an interrupted thread could not wait, so it ends. The
@@ -236,20 +253,28 @@ public final class Listener {
           if (Thread.currentThread().equals(thread)) {
             thread = null;
           }
-          // A checkout that ended while this thread waited out its backoff has no owner yet.
-          Pending left = pending;
-          if (left != null && left.result.isDone()) {
-            pending = null;
-            Checkout.abandon(left.result);
+          // A checkout that ended while this thread waited out its backoff has no owner yet. This
+          // thread gives it back, and a new subscriber waits for that return.
+          Pending ended = pending;
+          if (ended != null && ended.result.isDone() && !ended.returning) {
+            ended.returning = true;
+            left = ended;
           }
-          return;
+          exit = true;
+        } else {
+          if (current.getCount() == 0) {
+            stop = new CountDownLatch(1);
+          }
+          current = stop;
         }
-        if (current.getCount() == 0) {
-          stop = new CountDownLatch(1);
-        }
-        current = stop;
       } finally {
         lock.unlock();
+      }
+      if (exit) {
+        if (left != null) {
+          giveBack(left);
+        }
+        return;
       }
     }
   }
@@ -286,30 +311,41 @@ public final class Listener {
   /**
    * A connection from the pool, or {@code null} when {@code stop} counts down first. The checkout
    * runs on its own thread, so a full pool cannot hold a stop for the timeout of the pool. A
-   * stopped pass leaves the checkout for the next pass ({@link #pending}).
+   * stopped pass leaves the checkout for the next pass ({@link #pending}). A checkout that still
+   * goes back to the pool keeps its place, so this thread waits for that return, and then starts
+   * its own checkout.
    */
   private @Nullable Connection checkout(CountDownLatch stop) throws SQLException {
-    Pending current;
-    lock.lock();
-    try {
-      current = pending;
-      if (current == null) {
-        Pending created = new Pending(Checkout.start(dataSource, "workhorse-listener-checkout"));
-        pending = created;
-        current = created;
-        var unused =
-            created.result.whenComplete((connection, error) -> orphaned(created, connection));
-      }
-    } finally {
-      lock.unlock();
-    }
     while (stop.getCount() > 0) {
+      Pending current;
+      lock.lock();
+      try {
+        current = pending;
+        if (current == null) {
+          Pending created = new Pending(Checkout.start(dataSource, "workhorse-listener-checkout"));
+          pending = created;
+          current = created;
+          var unused = created.result.whenComplete((connection, error) -> orphaned(created));
+        }
+      } finally {
+        lock.unlock();
+      }
+      if (isReturning(current)) {
+        Runnable hook = onReturnPending;
+        if (hook != null) {
+          hook.run();
+        }
+        if (!await(current.returned, stop)) {
+          return null;
+        }
+        continue;
+      }
+      if (!await(current.result, stop)) {
+        return null;
+      }
       Connection connection;
       try {
-        connection = current.result.get(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-      } catch (TimeoutException waiting) {
-        // The stop check runs once each read timeout.
-        continue;
+        connection = current.result.get();
       } catch (ExecutionException failed) {
         adopt(current);
         Throwable cause = failed.getCause();
@@ -322,20 +358,56 @@ public final class Listener {
         throw new SQLException("The listener could not check out a connection", cause);
       } catch (InterruptedException interrupted) {
         Thread.currentThread().interrupt();
-        break;
+        return null;
       }
-      // The connection is this thread's only when the checkout is still pending: otherwise it
-      // ended with no subscriber, and orphaned gave the connection back to the pool.
-      return adopt(current) ? connection : null;
+      // The connection is this thread's only when the checkout is still pending and does not go
+      // back: otherwise it ended with no subscriber, and its return comes first.
+      if (adopt(current)) {
+        return connection;
+      }
     }
     return null;
   }
 
-  /** Takes {@code checkout} as the thread's own, and returns whether it was still pending. */
+  /**
+   * Waits until {@code future} completes, and returns {@code true}, or returns {@code false} when
+   * {@code stop} counts down first or the thread is interrupted. It checks {@code stop} once each
+   * read timeout.
+   */
+  private static boolean await(CompletableFuture<?> future, CountDownLatch stop) {
+    while (stop.getCount() > 0) {
+      try {
+        future.get(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        return true;
+      } catch (TimeoutException waiting) {
+        // The stop check runs once each read timeout.
+      } catch (ExecutionException failed) {
+        return true;
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private boolean isReturning(Pending checkout) {
+    lock.lock();
+    try {
+      return checkout.returning;
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * Takes {@code checkout} as the thread's own, and returns whether it was still pending and did
+   * not go back to the pool.
+   */
   private boolean adopt(Pending checkout) {
     lock.lock();
     try {
-      if (pending != checkout) {
+      if (pending != checkout || checkout.returning) {
         return false;
       }
       pending = null;
@@ -350,19 +422,38 @@ public final class Listener {
    * subscriber left. Otherwise the checkout stays pending, and the thread of a subscriber adopts
    * it.
    */
-  private void orphaned(Pending checkout, @Nullable Connection connection) {
-    boolean close = false;
+  private void orphaned(Pending checkout) {
     lock.lock();
     try {
-      if (pending == checkout && subscribers.isEmpty()) {
-        pending = null;
-        close = true;
+      if (pending != checkout || checkout.returning || !subscribers.isEmpty()) {
+        return;
       }
+      checkout.returning = true;
     } finally {
       lock.unlock();
     }
-    if (close) {
-      Checkout.closeQuietly(connection);
+    giveBack(checkout);
+  }
+
+  /**
+   * Gives the connection of {@code checkout}, which ended, back to the pool, and then frees the
+   * checkout's place. Only the caller that set {@link Pending#returning} calls it, without {@link
+   * #lock}.
+   */
+  private void giveBack(Pending checkout) {
+    try {
+      Checkout.closeQuietly(
+          checkout.result.isCompletedExceptionally() ? null : checkout.result.join());
+    } finally {
+      lock.lock();
+      try {
+        if (pending == checkout) {
+          pending = null;
+        }
+      } finally {
+        lock.unlock();
+      }
+      checkout.returned.complete(null);
     }
   }
 

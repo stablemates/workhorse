@@ -2777,17 +2777,25 @@ default.
   left during the wait. The round schedule continues from that round.
 - **Recovery.** A failed checkout runs again after a backoff that starts at 100 milliseconds,
   doubles, and stops at the shortest heartbeat interval of the workers and attempts. Recovery runs
-  also while no attempt runs. The checkout thread owns each connection that it gets. It installs
-  the connection, or gives it back to the pool when no worker and no attempt needs it, or when the
-  heartbeat already holds one. Thus waits that time out do not add checkouts or threads. In the
-  same way, the shared listener keeps one pending checkout across its restarts, and gives a
-  connection that arrives with no subscriber back to the pool. A worker reuses a readiness check
+  also while no attempt runs. The checkout thread owns each connection that it gets, from the
+  checkout until the pool has it back. It installs the connection, or gives it back to the pool
+  when no worker and no attempt needs it. When the heartbeat lets the installed connection go, the
+  checkout thread gives it back, and checks out the next one only after that return ends. Thus
+  waits that time out do not add checkouts or threads, and a new reservation waits for a late
+  return within its startup budget. In the same way, the shared listener keeps one pending checkout
+  across its restarts, and gives a connection that arrives with no subscriber back to the pool. That
+  checkout keeps its place until the return ends, so a new subscriber's listener waits for it and
+  does not start a second checkout. A worker reuses a readiness check
   that still waits for the pool.
-- **Claims.** While the heartbeat holds no connection, the worker starts no claim of any kind. The
-  worker reads the gate when it plans a claim, and again on the borrowed connection just before each
-  attempt goes out, a resend after a deadlock too. So a claim that waited for the pool, or a
-  completion that waited behind another batch, sends no claim after the heartbeat lost its
-  connection. A fast-tier completion still sends its fused statement, with a claim limit of 0, so
+- **Claims.** While the heartbeat holds no connection, the worker starts no claim of any kind. Each
+  run has its own claim gate. The gate is open while the run's own reservation holds a usable
+  connection. The gate closes when the run ends, or when the stop abandons the run's claims. Thus a
+  claim or a completion that outlives its run never claims with the reservation of a later run.
+  The worker reads the gate when it plans a claim. It reads the gate again on the borrowed
+  connection just before each attempt goes out, a resend after a deadlock too. So a claim that
+  waited for the pool, or a completion that waited behind another batch, sends no claim after the
+  heartbeat lost its connection. A statement that passes the gate holds a claim permit of its run
+  until it settles. A fast-tier completion still sends its fused statement, with a claim limit of 0, so
   it settles its task and claims nothing. Its reserved slots go back, and the queue does not count
   as empty. A failed renewal or a round that a row lock holds does not close this
   gate. The installed replacement wakes the dispatch loop at once, so claims do not wait for a poll.
@@ -2816,6 +2824,8 @@ run continues.
   runs, including the drain.
 - `pause()` and `resume()` change a local pause. `isPaused()` is also true while an operator pause
   holds. The worker reads the operator pause from `register_worker_v1` at each registry refresh.
+  Each run starts with no operator pause and no registration. A registry response applies only to
+  the run that sent it, so a late response of an ended run does not change a later run.
 
 The worker registers with `sdk_language` `java`, for Java and Kotlin alike. It reads `sdk_version`
 from the resource `run/workhorse/version.properties` in its jar, which the build writes with the
@@ -2826,7 +2836,10 @@ ends the run, and `run` throws it. This includes an `Error` from the pass. A reg
 
 After `stop()`, the worker shuts down in this order:
 
-1. It claims nothing new. It runs the tasks of claims already in flight.
+1. It claims nothing new. It runs the tasks of claims already in flight. It waits for those claims
+   until the shutdown deadline, and for at least the unwind window. A claim that returns after
+   this wait does not run its tasks. This applies to an ordinary claim and to the fused claim of a
+   completion. Their leases expire, and recovery returns the tasks to the queue.
 2. It gives up its listener subscription. The shared listener gives its connection back to the pool
    when the last worker on the `DataSource` leaves.
 3. It waits up to `shutdownGrace` for running handlers.
@@ -2838,8 +2851,11 @@ After `stop()`, the worker shuts down in this order:
    that the caller's `executor` never started goes back to its queue through `release_owned_v1`,
    which charges no attempt. That task does not count as an abandoned handler. If a release fails,
    the worker logs `workhorse.task.release_failed`, and the lease expires.
-7. It gives up its heartbeat reservation. The shared heartbeat gives its connection back to the
-   pool when the last worker on the `DataSource` leaves and no attempt needs it.
+7. It gives up its heartbeat reservation. A claim statement of the run that passed the claim gate
+   before the stop holds a permit until its result arrives. While a permit is active, the
+   reservation stays held, and the last permit gives it up. The stop does not wait for that. The
+   shared heartbeat gives its connection back to the pool when the last worker on the `DataSource`
+   leaves and no attempt needs it.
 8. It deregisters the worker.
 9. `run` throws `ShutdownIncompleteException` if it abandoned a handler. `abandoned()` is the count.
 

@@ -31,9 +31,11 @@ import run.workhorse.ConnectionSource;
  * its own heartbeat, which borrows a connection for each round instead.
  *
  * <p>A dedicated heartbeat checks out its connection, and each replacement, on one checkout thread
- * at a time. A round waits for that checkout only inside its own bound, so the timeout of the pool
- * never delays a renewal past the bound. A round without a connection fails, the checkout goes on
- * with a capped backoff, and the lease watchdog bounds the loss.
+ * at a time. That thread owns each connection from its checkout until the pool has it back, so a
+ * late return always ends before the next checkout starts. A round waits for that checkout only
+ * inside its own bound, so the timeout of the pool never delays a renewal past the bound. A round
+ * without a connection fails, the checkout goes on with a capped backoff, and the lease watchdog
+ * bounds the loss.
  */
 public final class Heartbeat {
   /** The most leases one {@code heartbeat_many_v2} call renews. */
@@ -144,16 +146,27 @@ public final class Heartbeat {
   private final List<Reservation> reservations = new ArrayList<>();
 
   /**
-   * The held connection, or {@code null}. A checkout installs it, and only the heartbeat thread
-   * sends rounds on it or discards it. It changes under {@link #lock}.
+   * The held connection, or {@code null}. The checkout thread installs it. Only the heartbeat
+   * thread sends rounds on it, and only the heartbeat thread lets it go, after which the checkout
+   * thread gives it back to the pool. It changes under {@link #lock}.
    */
   private @Nullable Held held;
 
   /** Mirrors {@code held != null}, so a worker reads it without the lock. */
   private volatile boolean connected;
 
-  /** Whether a checkout of the held connection runs. It changes under {@link #lock}. */
+  /**
+   * Whether the checkout thread runs. From the checkout until the return of each connection, the
+   * thread keeps this true, so no second checkout starts while a connection is still out. It
+   * changes under {@link #lock}.
+   */
   private boolean checkingOut;
+
+  /**
+   * Whether the checkout thread gives a connection back to the pool now. It changes under {@link
+   * #lock}.
+   */
+  private boolean returning;
 
   /**
    * The failure of a checkout since the latest installed connection, or {@code null}. It changes
@@ -191,6 +204,13 @@ public final class Heartbeat {
    * heartbeat thread, or {@code null}. A test uses it to see which round got the connection.
    */
   volatile @Nullable Runnable onConnectionInRound;
+
+  /**
+   * Runs when a reservation or a member needs a connection while the checkout thread still gives
+   * the previous one back, on the caller's thread with {@link #lock} held, or {@code null}. A test
+   * uses it to know that the new checkout waits for that return.
+   */
+  volatile @Nullable Runnable onReturnPending;
 
   /**
    * The number of rounds that this heartbeat started, regular rounds and busy retries. Only the
@@ -282,18 +302,23 @@ public final class Heartbeat {
     private final long intervalNanos;
     private final Runnable onConnected;
 
+    /** True once {@link #close} ran. A closed reservation is never connected. */
+    private volatile boolean closed;
+
     private Reservation(long intervalNanos, Runnable onConnected) {
       this.intervalNanos = intervalNanos;
       this.onConnected = onConnected;
     }
 
     /**
-     * Whether the heartbeat holds a usable connection now. A failed renewal on a connection that
-     * stays open, and a round that a row lock holds, keep it connected. Only a lost connection
-     * clears it, until the replacement arrives.
+     * Whether the heartbeat holds a usable connection now for this open reservation. A failed
+     * renewal on a connection that stays open, and a round that a row lock holds, keep it
+     * connected. A lost connection clears it until the replacement arrives. After {@link #close},
+     * it is always false, so work that the reservation's run started cannot use the connection of a
+     * later reservation.
      */
     public boolean connected() {
-      return !holdsConnection || connected;
+      return !closed && (!holdsConnection || connected);
     }
 
     /**
@@ -330,6 +355,7 @@ public final class Heartbeat {
 
     @Override
     public void close() {
+      closed = true;
       lock.lock();
       try {
         if (reservations.remove(this)) {
@@ -423,10 +449,18 @@ public final class Heartbeat {
 
   /**
    * Starts the checkout thread, unless one runs, the heartbeat holds its connection, or nothing
-   * needs one. The caller holds {@link #lock}.
+   * needs one. A checkout thread that still gives a connection back checks out the next one when
+   * that return ends. The caller holds {@link #lock}.
    */
   private void startCheckoutLocked() {
-    if (!holdsConnection || held != null || checkingOut || !wantedLocked()) {
+    if (!holdsConnection || held != null || !wantedLocked()) {
+      return;
+    }
+    if (checkingOut) {
+      Runnable hook = onReturnPending;
+      if (returning && hook != null) {
+        hook.run();
+      }
       return;
     }
     checkingOut = true;
@@ -438,11 +472,13 @@ public final class Heartbeat {
    * until its own deadline. A failed checkout runs again after a backoff that doubles from 100 ms
    * up to {@link #retryCapLocked}.
    *
-   * <p>The thread is the one owner of each connection that it gets. It installs the connection, or
-   * gives it back to the pool when nothing needs it or the heartbeat already holds one. The thread
-   * ends when it installs a connection or when nothing needs one. So the heartbeat runs at most one
-   * checkout at a time, however many waits time out. The installed connection wakes every
-   * reservation.
+   * <p>The thread is the one owner of each connection that it gets, from the checkout until the
+   * pool has it back. It installs the connection when something needs it, and waits until the
+   * heartbeat thread lets it go. It then gives the connection back to the pool, and checks out the
+   * next one if something still needs it. A connection that nothing needs when it arrives goes back
+   * at once. The thread ends when nothing needs a connection and no return is in progress. So the
+   * heartbeat has at most one connection out at a time, however many waits time out, and a new
+   * reservation waits for a late return. The installed connection wakes every reservation.
    */
   private void checkOut() {
     long backoff = RETRY_NANOS;
@@ -464,13 +500,12 @@ public final class Heartbeat {
       }
       Held extra = null;
       List<Runnable> wake = new ArrayList<>();
-      boolean done;
+      boolean done = false;
       lock.lock();
       try {
         if (installed != null) {
-          done = true;
-          checkingOut = false;
-          if (held == null && wantedLocked()) {
+          // Only this thread installs a connection, and it checks out only while none is held.
+          if (wantedLocked()) {
             held = installed;
             connected = true;
             checkoutFailure = null;
@@ -479,6 +514,7 @@ public final class Heartbeat {
             }
           } else {
             extra = installed;
+            returning = true;
           }
           changed.signalAll();
         } else {
@@ -501,7 +537,6 @@ public final class Heartbeat {
       } finally {
         lock.unlock();
       }
-      closeQuietly(extra);
       for (Runnable callback : wake) {
         try {
           callback.run();
@@ -512,6 +547,43 @@ public final class Heartbeat {
       if (done) {
         return;
       }
+      if (installed == null) {
+        continue;
+      }
+      if (extra == null) {
+        extra = awaitRelease(installed);
+      }
+      closeQuietly(extra);
+      backoff = RETRY_NANOS;
+      lock.lock();
+      try {
+        returning = false;
+        changed.signalAll();
+        if (!wantedLocked()) {
+          checkingOut = false;
+          return;
+        }
+      } finally {
+        lock.unlock();
+      }
+    }
+  }
+
+  /**
+   * Waits until the heartbeat thread lets {@code installed} go, and returns it. Only the heartbeat
+   * thread sends rounds on the held connection, so it is free once the heartbeat no longer holds
+   * it. The checkout thread then owns the return.
+   */
+  private Held awaitRelease(Held installed) {
+    lock.lock();
+    try {
+      while (held == installed) {
+        changed.awaitUninterruptibly();
+      }
+      returning = true;
+      return installed;
+    } finally {
+      lock.unlock();
     }
   }
 
@@ -519,8 +591,9 @@ public final class Heartbeat {
    * Acts on the connection of a failed round. A failed renewal on a connection that stays open
    * keeps the connection, because its rollback ended the round's transaction. Thus a statement
    * error does not close the claim gate of the workers. A closed or aborted connection is
-   * discarded, and its replacement checkout starts at once. A round that got no connection discards
-   * nothing, so a connection that a checkout installed after the round's deadline stays.
+   * discarded: the checkout thread gives it back to the pool, and then starts the replacement
+   * checkout at once. A round that got no connection discards nothing, so a connection that a
+   * checkout installed after the round's deadline stays.
    */
   private void discard() {
     Held failed = sent;
@@ -535,11 +608,10 @@ public final class Heartbeat {
       }
       held = null;
       connected = false;
-      startCheckoutLocked();
+      changed.signalAll();
     } finally {
       lock.unlock();
     }
-    closeQuietly(failed);
   }
 
   private static void closeQuietly(@Nullable Held connection) {
@@ -555,9 +627,10 @@ public final class Heartbeat {
 
   /**
    * Runs rounds while members are registered. Without members, a dedicated heartbeat keeps its
-   * connection while a reservation is open, and replaces a discarded one. The thread ends, and the
-   * connection goes back to the pool, when no member and no reservation is left. A register or a
-   * reserve that races the end starts a new thread.
+   * connection while a reservation is open, and replaces a discarded one. The thread ends, and lets
+   * the connection go, when no member and no reservation is left. The checkout thread then gives
+   * the connection back to the pool. A register or a reserve that races the end starts a new
+   * thread, whose connection waits for that return.
    *
    * <p>A dedicated round that fails keeps a connection that stays open, and discards a closed or
    * aborted one ({@link #discard}). The replacement checkout then starts at once: rounds waits for
@@ -587,14 +660,13 @@ public final class Heartbeat {
     boolean idle = true;
     while (true) {
       boolean exit = false;
-      Held release = null;
       lock.lock();
       try {
         while (members.isEmpty()) {
           idle = true;
           if (reservations.isEmpty()) {
             exit = true;
-            release = exitLocked();
+            exitLocked();
             break;
           }
           // A reservation without members keeps its connection, and recovers a lost one.
@@ -608,12 +680,11 @@ public final class Heartbeat {
         }
       } catch (InterruptedException interrupted) {
         exit = true;
-        release = exitLocked();
+        exitLocked();
       } finally {
         lock.unlock();
       }
       if (exit) {
-        closeQuietly(release);
         return;
       }
       if (idle) {
@@ -634,17 +705,17 @@ public final class Heartbeat {
   }
 
   /**
-   * Ends the heartbeat thread, and returns the held connection, which the caller gives back to the
-   * pool after it releases {@link #lock}. The caller holds {@link #lock}.
+   * Ends the heartbeat thread, and lets the held connection go. The checkout thread gives it back
+   * to the pool, and a new reservation waits until that return ends. The caller holds {@link
+   * #lock}.
    */
-  private @Nullable Held exitLocked() {
+  private void exitLocked() {
     if (Thread.currentThread().equals(thread)) {
       thread = null;
     }
-    Held previous = held;
     held = null;
     connected = false;
-    return previous;
+    changed.signalAll();
   }
 
   /**
