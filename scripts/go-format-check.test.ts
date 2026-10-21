@@ -32,11 +32,16 @@ async function declaredScript(): Promise<string> {
   return command.slice(wrapperPrefix.length, -1);
 }
 
-/** Run the declared script with the real gofmt against a `go` directory holding one file. */
+/**
+ * Run the declared script with the real gofmt against a `go` directory holding one file. The
+ * script also names the Go probe module of the connection budget benchmark, so the checkout holds
+ * that directory, empty.
+ */
 async function checkGoSource(source: string): Promise<{ exitCode: number; output: string }> {
   const checkout = await mkdtemp(join(tmpdir(), "workhorse-gofmt-check-"));
   temporaryDirectories.push(checkout);
   await mkdir(join(checkout, "go"));
+  await mkdir(join(checkout, "benchmarks", "connection-budget", "go-probe"), { recursive: true });
   await writeFile(join(checkout, "go", "a.go"), source);
   const script = await declaredScript();
   return new Promise((resolvePromise) => {

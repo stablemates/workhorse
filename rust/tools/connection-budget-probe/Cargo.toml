@@ -1,0 +1,13 @@
+[package]
+name = "workhorse-connection-budget-probe"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+description = "Runs several Rust workers on one pool for the manual connection budget benchmark (SM-1566)."
+
+[dependencies]
+workhorse = { path = "../.." }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+serde_json = "1"

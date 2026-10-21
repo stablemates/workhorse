@@ -112,6 +112,9 @@ Each program has a `main` method and reads a JDBC URL from `WORKHORSE_DATABASE_U
 worker reads `DATABASE_URL_PRIMARY`. Its tests start each program in a child JVM against
 PostgreSQL. It is not an artifact and is never published.
 
+`jvm/connection-budget-probe/` holds the JVM probe of the connection budget benchmark. The
+benchmark driver starts it with `java` for each cell. It is not an artifact and is never published.
+
 ## Package boundary
 
 The core is the named Java module `run.workhorse`. Every package is `@NullMarked`, so
