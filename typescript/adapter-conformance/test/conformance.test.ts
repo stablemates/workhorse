@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import {
   createKnexAdapter,
   KnexQueryError,
@@ -47,20 +46,7 @@ import { Pool, type QueryResult, type QueryResultRow } from "pg";
 import { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDatabaseTestHarness } from "../../core/test/support/db.js";
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client") as {
-  PrismaClient: new (options: unknown) => {
-    $disconnect(): Promise<void>;
-    $transaction<T>(
-      run: (
-        transaction: PrismaExecutor & {
-          $executeRawUnsafe(statement: string, ...values: unknown[]): Promise<unknown>;
-        },
-      ) => Promise<T>,
-    ): Promise<T>;
-  } & PrismaExecutor;
-};
+import { prismaMajors } from "./support/prisma.js";
 
 const statement = "SELECT $1::text AS task_id, $2::int AS attempt";
 // Every lexical context in which `$N` is text rather than a parameter, around one real parameter.
@@ -152,11 +138,40 @@ const queryableProviders: QueryableProvider[] = [
     },
   },
   {
-    name: "Prisma",
+    name: "Prisma6",
     QueryError: PrismaQueryError,
     error: Object.assign(new Error("raw query failed for secret@example.com"), {
       code: "P2010",
       meta: { code: "P1001" },
+    }),
+    expectedCode: "P1001",
+    queryable(execute, pool) {
+      const executor: PrismaExecutor = {
+        $queryRawUnsafe: async <T = unknown>(text: string, ...parameters: unknown[]) =>
+          (await execute(text, parameters)) as T,
+      };
+      return prismaQueryable(executor, pool);
+    },
+    adapter(execute, close) {
+      const executor: PrismaExecutor = {
+        $queryRawUnsafe: async <T = unknown>(text: string, ...parameters: unknown[]) =>
+          (await execute(text, parameters)) as T,
+      };
+      const adapter = createPrismaAdapter(executor, { close }) as WorkhorseAdapter<unknown>;
+      return { adapter, transaction: executor };
+    },
+  },
+  {
+    name: "Prisma7",
+    QueryError: PrismaQueryError,
+    error: Object.assign(new Error("raw query failed for secret@example.com"), {
+      code: "P2010",
+      // Prisma 7 nests the driver adapter's error under `meta`, with its SQLSTATE and DETAIL.
+      meta: {
+        driverAdapterError: Object.assign(new Error("postgres"), {
+          cause: { kind: "postgres", code: "P1001", message: "conflict", detail: "{}" },
+        }),
+      },
     }),
     expectedCode: "P1001",
     queryable(execute, pool) {
@@ -343,10 +358,10 @@ const kyselyAdapter = createKyselyAdapter(kyselyDatabase, {
 });
 const knexDatabase = knex({ client: "pg", connection: databaseUrl, pool: { min: 0, max: 2 } });
 const knexAdapter = createKnexAdapter(knexDatabase, { pool, close: () => knexDatabase.destroy() });
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
-const prismaAdapter = createPrismaAdapter(prisma, {
-  pool,
-  close: () => prisma.$disconnect(),
+const prismaProviders = prismaMajors.map((major) => {
+  const client = major.createClient(databaseUrl);
+  const adapter = createPrismaAdapter(client, { pool, close: () => client.$disconnect() });
+  return { name: major.name, client, adapter };
 });
 const typeOrmDatabase = new DataSource({
   type: "postgres",
@@ -390,20 +405,20 @@ const integrationProviders: IntegrationProvider[] = [
         await run(drizzleAdapter.forTransaction(transaction));
       }),
   },
-  {
-    name: "Prisma",
+  ...prismaProviders.map(({ name, client, adapter }): IntegrationProvider => ({
+    name,
     errorType: PrismaQueryError,
-    adapter: prismaAdapter as WorkhorseAdapter<unknown>,
+    adapter: adapter as WorkhorseAdapter<unknown>,
     transaction: (value, run) =>
-      prisma.$transaction(async (transaction) => {
+      client.$transaction(async (transaction) => {
         await transaction.$executeRawUnsafe(
           "INSERT INTO public.adapter_conformance (provider, value) VALUES ($1, $2)",
-          "Prisma",
+          name,
           value,
         );
-        await run(prismaAdapter.forTransaction(transaction));
+        await run(adapter.forTransaction(transaction));
       }),
-  },
+  })),
   {
     name: "TypeORM",
     errorType: TypeOrmQueryError,

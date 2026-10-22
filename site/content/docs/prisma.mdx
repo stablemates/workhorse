@@ -12,7 +12,7 @@ Also, a row can commit and its task can be lost.
 
 ## Check the requirements
 
-- Prisma Client 6.
+- Prisma Client 6 or 7.
 - PostgreSQL as the Prisma data source.
 - The Workhorse schema in the database. [Installation](/docs/installation) tells you how to install
   it.
@@ -32,6 +32,21 @@ import { PrismaClient } from "@prisma/client";
 import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 
 const prisma = new PrismaClient();
+const workhorse = createPrismaAdapter(prisma);
+```
+
+Prisma 7 requires a driver adapter in the `PrismaClient` constructor. For PostgreSQL, install
+`@prisma/adapter-pg` and give the adapter your connection string. Prisma 7 also reads the
+connection URL for Prisma Migrate from `prisma.config.ts`, not from `schema.prisma`.
+
+```ts
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "@prisma/client";
+import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 const workhorse = createPrismaAdapter(prisma);
 ```
 
@@ -96,8 +111,12 @@ export default defineWorkerProcess({
 });
 ```
 
+This example uses the Prisma 6 constructor. On Prisma 7, create `database` with a driver adapter,
+as [Create the adapter](#create-the-adapter) shows.
+
 Start the process with `workhorse worker --config <compiled file>`. If `workhorse init` finds
-Prisma, it writes this file for you. [Worker processes](/docs/worker-processes) tells you more.
+Prisma, it writes this file for you, in the Prisma 6 form. [Worker processes](/docs/worker-processes)
+tells you more.
 
 If you cannot give a pool, set `sharedHeartbeats` on the worker. The worker then sends heartbeats
 through Prisma and polls for new tasks.
@@ -125,6 +144,8 @@ conflicts, such as an idempotency conflict, keep their own error classes.
 
 - `PrismaQueryError` extends `QueryError`. It does not copy parameter values into its message.
 - The code search prefers `meta.code` over the outer raw-query code of Prisma, such as `P2010`.
+- On Prisma 7, the code search follows `meta.driverAdapterError` to the PostgreSQL error that the
+  driver adapter reported.
 
 More detail: [Overview: Prisma and TypeORM queryables](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#prisma-and-typeorm-queryables).
 
@@ -143,8 +164,9 @@ Workhorse tools.
 ## Run the integration tests
 
 This integration is **verified**. Continuous integration runs the Workhorse adapter conformance
-suite against Prisma on every change. The suite opens real transactions in PostgreSQL. The
-[integrations list](/docs/integrations) shows the Prisma version that the tests use.
+suite against Prisma 6 and Prisma 7 on every change. The suite opens real transactions in
+PostgreSQL. The [integrations list](/docs/integrations) shows the Prisma 7 version that the tests
+use.
 
 To run the suite in this repository, use this command:
 

@@ -1,14 +1,9 @@
-import { createRequire } from "node:module";
 import { createKnexAdapter, KnexQueryError } from "@stablemates/workhorse-knex";
 import knex from "knex";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter, DrizzleQueryError } from "@stablemates/workhorse-drizzle";
 import { createKyselyAdapter, KyselyQueryError } from "@stablemates/workhorse-kysely";
-import {
-  createPrismaAdapter,
-  PrismaQueryError,
-  type PrismaExecutor,
-} from "@stablemates/workhorse-prisma";
+import { createPrismaAdapter, PrismaQueryError } from "@stablemates/workhorse-prisma";
 import { createTypeOrmAdapter, TypeOrmQueryError } from "@stablemates/workhorse-typeorm";
 import type { Queue, WorkhorseAdapter } from "@stablemates/workhorse";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -18,20 +13,7 @@ import { Pool } from "pg";
 import { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDatabaseTestHarness } from "../../core/test/support/db.js";
-
-const require = createRequire(import.meta.url);
-const { PrismaClient } = require("@prisma/client") as {
-  PrismaClient: new (options: unknown) => {
-    $disconnect(): Promise<void>;
-    $transaction<T>(
-      run: (
-        transaction: PrismaExecutor & {
-          $executeRawUnsafe(statement: string, ...values: unknown[]): Promise<unknown>;
-        },
-      ) => Promise<T>,
-    ): Promise<T>;
-  } & PrismaExecutor;
-};
+import { type PrismaMajor, prismaMajors } from "./support/prisma.js";
 
 const database = createDatabaseTestHarness(import.meta.url, {
   max: 4,
@@ -103,10 +85,8 @@ function createDrizzleResources(max: number): LifecycleResources {
   };
 }
 
-function createPrismaResources(): LifecycleResources {
-  const url = new URL(databaseUrl);
-  url.searchParams.set("connection_limit", "1");
-  const prisma = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+function createPrismaResources(major: PrismaMajor): LifecycleResources {
+  const prisma = major.createClient(databaseUrl, 1);
   const adapter = createPrismaAdapter(prisma, {
     close: () => prisma.$disconnect(),
   }) as WorkhorseAdapter<unknown>;
@@ -118,7 +98,7 @@ function createPrismaResources(): LifecycleResources {
       prisma.$transaction(async (transaction) => {
         await transaction.$executeRawUnsafe(
           "INSERT INTO public.lifecycle_probe (provider, value) VALUES ($1, $2)",
-          "Prisma",
+          major.name,
           value,
         );
         await run(adapter.forTransaction(transaction), () =>
@@ -230,7 +210,11 @@ const providers: LifecycleProvider[] = [
   // for a running worker, so its pool holds one more connection than the strictly single-session
   // providers below.
   { name: "Drizzle", errorType: DrizzleQueryError, create: () => createDrizzleResources(2) },
-  { name: "Prisma", errorType: PrismaQueryError, create: createPrismaResources },
+  ...prismaMajors.map((major) => ({
+    name: major.name,
+    errorType: PrismaQueryError,
+    create: () => createPrismaResources(major),
+  })),
   { name: "TypeORM", errorType: TypeOrmQueryError, create: createTypeOrmResources },
   { name: "Kysely", errorType: KyselyQueryError, create: createKyselyResources },
 ];

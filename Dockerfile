@@ -88,8 +88,9 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 WORKDIR /workhorse
 # Install from the manifests alone, so the layer survives any commit that changes no dependency.
 # Copying the whole checkout first reran the install on every commit (SM-858). Every workspace
-# package.json belongs in this list, which scripts/docker-install-layer.test.ts checks. The Prisma
-# schema is here because that package's `prepare` script runs `prisma generate` during install.
+# package.json belongs in this list, which scripts/docker-install-layer.test.ts checks. The two Prisma
+# schemas are here because the `prepare` scripts of their packages run `prisma generate` during
+# install. typescript/prisma generates the Prisma 6 client, and adapter-conformance the Prisma 7 one.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY dashboard/app/package.json dashboard/app/
 COPY site/package.json site/
@@ -106,6 +107,7 @@ COPY typescript/otel/package.json typescript/otel/
 COPY typescript/prisma/package.json typescript/prisma/
 COPY typescript/typeorm/package.json typescript/typeorm/
 COPY typescript/prisma/prisma/schema.prisma typescript/prisma/prisma/
+COPY typescript/adapter-conformance/prisma/schema.prisma typescript/adapter-conformance/prisma/
 RUN pnpm install --frozen-lockfile
 COPY . .
 # Links the sources the first install did not have. It downloads nothing.

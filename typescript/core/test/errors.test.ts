@@ -129,6 +129,58 @@ describe("databaseErrorDetails", () => {
   });
 });
 
+// A typed conflict reads only the SQLSTATE and the DETAIL payloads, so every ORM shape that
+// carries one PostgreSQL error must give both walkers the same two values.
+describe("ORM error shapes", () => {
+  const detail = '{"conflictingFields":["payload"]}';
+  const pgError = () => Object.assign(new Error("conflict"), { code: "P1001", detail });
+  const shapes: Record<string, unknown> = {
+    "node-postgres": pgError(),
+    "TypeORM driverError": { message: "query failed", driverError: pgError() },
+    "Prisma 6 meta": {
+      code: "P2010",
+      meta: { code: "P1001", message: "conflict" },
+      cause: pgError(),
+    },
+    "Prisma 7 driver adapter": {
+      code: "P2010",
+      meta: {
+        driverAdapterError: Object.assign(new Error("postgres"), {
+          cause: {
+            originalCode: "P1001",
+            originalMessage: "conflict",
+            kind: "postgres",
+            code: "P1001",
+            detail,
+          },
+        }),
+      },
+    },
+  };
+
+  it.each(Object.entries(shapes))("reads the SQLSTATE and DETAIL through %s", (_, error) => {
+    expect(databaseErrorCode(new AdapterError(error))).toBe("P1001");
+    expect(databaseErrorDetails(new AdapterError(error))).toContain(detail);
+  });
+
+  it("reads a Prisma 7 originalCode when the driver adapter gives no code", () => {
+    const error = {
+      code: "P2010",
+      meta: {
+        driverAdapterError: {
+          cause: { originalCode: "42P01", kind: "TableDoesNotExist", table: "missing" },
+        },
+      },
+    };
+    expect(databaseErrorCode(error)).toBe("42P01");
+  });
+
+  it("never lets originalCode override a present code", () => {
+    expect(databaseErrorCode({ code: "23505", originalCode: "42P01" })).toBe("23505");
+    expect(databaseErrorCode({ code: "N/A", originalCode: "42P01" })).toBeUndefined();
+  });
+});
+
 describe("expectOneRow", () => {
   it("returns the single row", () => {
     expect(expectOneRow({ rows: [{ count: 3 }] }, "workhorse.promote_v1")).toEqual({ count: 3 });

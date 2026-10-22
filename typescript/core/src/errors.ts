@@ -8,9 +8,10 @@
  * SQLSTATE or a `DETAIL` payload means walking a chain someone else built.
  *
  * `databaseErrorCode()` and `databaseErrorDetails()` are the only two walkers. They are
- * breadth-first over `cause`, `driverError`, and `meta`, bounded in both visit count and cycle
- * exposure, because the ORM packages nest those keys in different orders and a cyclic `cause`
- * is a real shape a driver can produce.
+ * breadth-first over `cause`, `driverError`, `meta`, and `driverAdapterError`, bounded in both
+ * visit count and cycle exposure, because the ORM packages nest those keys in different orders
+ * and a cyclic `cause` is a real shape a driver can produce. Prisma 7 hangs its driver adapter's
+ * error off `meta.driverAdapterError`, and that error's `cause` carries the SQLSTATE.
  */
 
 /** Longest wrapper chain either walker inspects before giving up. */
@@ -20,7 +21,7 @@ const MAX_ERROR_WRAPPERS = 16;
 const SQLSTATE_PATTERN = /^[0-9A-Z]{5}$/;
 
 /** Keys an ORM uses to hang the underlying driver error off its own wrapper. */
-const WRAPPER_KEYS = ["cause", "driverError", "meta"] as const;
+const WRAPPER_KEYS = ["cause", "driverError", "meta", "driverAdapterError"] as const;
 
 /**
  * Base class for every error Workhorse throws on purpose.
@@ -68,12 +69,15 @@ function* wrappedErrors(error: unknown): Generator<Record<string, unknown>> {
  * Workhorse SQLSTATE such as `P1001` would otherwise match the wrong error. Prisma keeps the real
  * SQLSTATE on `meta`, which this walker visits, and a nested match wins because a P-code is only
  * returned once nothing else in the chain supplied one.
+ *
+ * A Prisma 7 driver adapter reports most SQLSTATEs as `originalCode` and has no `code`, so the
+ * walker reads `originalCode` only when an object has no `code`.
  */
 export function databaseErrorCode(error: unknown): string | undefined {
   let prismaCode: string | undefined;
 
   for (const wrapper of wrappedErrors(error)) {
-    const code = wrapper.code;
+    const code = "code" in wrapper ? wrapper.code : wrapper.originalCode;
     if (typeof code !== "string" || !SQLSTATE_PATTERN.test(code)) continue;
     if (/^P\d{4}$/.test(code) && wrapper.meta !== undefined) prismaCode ??= code;
     else return code;

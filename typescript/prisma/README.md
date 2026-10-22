@@ -13,12 +13,16 @@ The Prisma ORM provider for enqueuing Workhorse tasks through Prisma transaction
 npm install @stablemates/workhorse @stablemates/workhorse-prisma @prisma/client
 ```
 
+The adapter supports Prisma Client 6 and 7. Prisma 7 requires a driver adapter, such as
+`@prisma/adapter-pg`, in the `PrismaClient` constructor.
+
 ## Enqueue in a transaction
 
 ```ts
 import { PrismaClient } from "@prisma/client";
 import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 
+// On Prisma 7: new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 const prisma = new PrismaClient();
 const workhorse = createPrismaAdapter(prisma, { close: () => prisma.$disconnect() });
 
@@ -36,7 +40,8 @@ A process that runs workers passes a `pg` pool as `pool`. Workers take their hea
 `LISTEN/NOTIFY` connections from it, and refuse to start without it unless `sharedHeartbeats` is
 set. Database errors
 become `PrismaQueryError`, with the original error in `cause` and a nested PostgreSQL code copied to
-`code` when Prisma exposes one.
+`code` when Prisma exposes one. On Prisma 7, the code comes from the error that the driver adapter
+reported.
 
 ## Next
 
