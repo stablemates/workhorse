@@ -49,6 +49,11 @@ subprojects {
     options.encoding = "UTF-8"
     // The named core module requires PgJDBC, which is an automatic module.
     options.compilerArgs.addAll(listOf("-Xlint:all,-requires-automatic", "-Werror"))
+    // A lint run compiles each source set in full, as a fresh CI checkout does. An incremental
+    // compile reads the unchanged classes from bytecode, and javac writes the type annotations of a
+    // compact record constructor's parameters as field annotations. NullAway then reads
+    // `Map<String, @Nullable Object>` as `Map<String, Object>` and reports a false error (SM-1591).
+    if (lint) options.isIncremental = false
     options.errorprone {
       enabled.set(lint)
       excludedPaths = ".*/internal/SqlCatalogue\\.java"
