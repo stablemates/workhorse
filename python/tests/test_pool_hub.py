@@ -549,6 +549,85 @@ def test_a_configuration_error_at_runtime_keeps_the_acquirer_retrying() -> None:
     subscription.close()
 
 
+class _RecordedWaits(threading.Condition):
+    """A condition that records the timeout of each wait of the acquirer thread, and returns at
+    once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: list[float] = []
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if threading.current_thread().name != "workhorse-heartbeat-acquire":
+            return super().wait(timeout)
+        assert timeout is not None
+        self.timeouts.append(timeout)
+        return super().wait(0)
+
+
+@pytest.mark.parametrize(
+    ("factor", "expected"),
+    [
+        (1.1, [0.11, 0.22, 0.44, 0.88, 1.0, 1.0]),
+        (0.9, [0.09, 0.18, 0.36, 0.72, 0.9, 0.9]),
+    ],
+)
+def test_no_replacement_wait_is_longer_than_the_heartbeat_interval(
+    monkeypatch: pytest.MonkeyPatch, factor: float, expected: list[float]
+) -> None:
+    """SM-1584: the cap applies after the random factor (ADR 0071, rule 6)."""
+    monkeypatch.setattr(pool_hub_module.random, "uniform", lambda _low, _high: factor)
+    attempts = 0
+    ready = threading.Event()
+
+    def acquire(_timeout: float) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= len(expected):
+            raise TimeoutError("the pool lent nothing")
+        return object(), lambda: None
+
+    reservation = HeartbeatReservation(acquire)
+    waits = _RecordedWaits()
+    reservation._condition = waits
+    subscription = reservation.subscribe(1_000, ready.set)
+    assert ready.wait(5), "the acquirer never got the connection"
+    subscription.close()
+
+    assert waits.timeouts == pytest.approx(expected)
+
+
+def test_a_replacement_wait_uses_the_interval_of_a_worker_that_joined_during_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SM-1584: the cap is the shortest interval of the subscribers when the wait starts."""
+    monkeypatch.setattr(pool_hub_module.random, "uniform", lambda _low, _high: 1.0)
+    attempts = 0
+    ready = threading.Event()
+    joined: list[Any] = []
+
+    def acquire(_timeout: float) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 6:
+            # The backoff reached the 1,000 ms cap. A worker with a 100 ms interval joins.
+            joined.append(reservation.subscribe(100, lambda: None))
+        if attempts <= 7:
+            raise TimeoutError("the pool lent nothing")
+        return object(), lambda: None
+
+    reservation = HeartbeatReservation(acquire)
+    waits = _RecordedWaits()
+    reservation._condition = waits
+    subscription = reservation.subscribe(1_000, ready.set)
+    assert ready.wait(5), "the acquirer never got the connection"
+    subscription.close()
+    for late in joined:
+        late.close()
+
+    assert waits.timeouts == pytest.approx([0.1, 0.2, 0.4, 0.8, 1.0, 0.1, 0.1])
+
+
 class _ListeningConnection:
     """A listener connection for both drivers: psycopg async and asyncpg."""
 

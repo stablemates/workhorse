@@ -615,8 +615,6 @@ class HeartbeatReservation:
                     if not self._needs_connection():
                         return
                     timeout = self._attempt_seconds()
-                    # The backoff never exceeds the shortest interval of the subscribers.
-                    cap = min(s.heartbeat_ms for s in self._subscribers.values()) / 1000
                 connection: HeartbeatConnection | None = None
                 try:
                     connection = self._acquire(timeout)
@@ -643,7 +641,11 @@ class HeartbeatReservation:
                 with self._condition:
                     if not self._needs_connection():
                         return
-                    self._condition.wait(backoff * random.uniform(0.9, 1.1))
+                    # No wait exceeds the shortest interval of the subscribers (ADR 0071, rule 6).
+                    # The cap counts a worker that joined during the attempt, and it applies after
+                    # the random factor, so the jitter stays below it.
+                    cap = min(s.heartbeat_ms for s in self._subscribers.values()) / 1000
+                    self._condition.wait(min(cap, backoff * random.uniform(0.9, 1.1)))
                 backoff = min(cap, backoff * 2)
         finally:
             with self._condition:

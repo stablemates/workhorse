@@ -287,7 +287,8 @@ busy lease does not close the gate.
 
 **Replacement.** The heartbeat asks for a replacement at once, also when no task runs. It retries
 after a backoff that grows to at most the heartbeat interval. Python multiplies each wait by a
-random factor from 0.9 to 1.1. When the replacement is ready, the workers claim at once.
+random factor from 0.9 to 1.1, and then applies the cap. When the replacement is ready, the workers
+claim at once.
 
 | Language   | Refusal of a small pool                         | Refusal at startup                   | Opt-out                                                    |
 | ---------- | ----------------------------------------------- | ------------------------------------ | ---------------------------------------------------------- |

@@ -32,9 +32,9 @@ on the pool stops, the shared connections go back to the pool.
   a worker claims no task, and a completion claims no next task. The worker reads this again after
   each claim borrows its connection, because the heartbeat connection can be lost during that wait.
   The worker opens the replacement at once. It retries after a backoff that starts at 100 ms and
-  doubles up to `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, so one wait
-  can reach 1.1 times `heartbeat_ms`. When the replacement is ready, the worker claims again at
-  once.
+  doubles up to `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, and then the
+  worker caps the wait at `heartbeat_ms` (SM-1584). Thus no wait is longer than `heartbeat_ms`.
+  When the replacement is ready, the worker claims again at once.
 - **Fair heartbeat rounds.** The rounds of the workers on one pool take the shared heartbeat
   connection in arrival order. A round with less than a quarter of its time left skips, so it cannot
   expire during a statement and lose the connection for every worker.
