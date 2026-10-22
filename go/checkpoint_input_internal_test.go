@@ -215,14 +215,37 @@ func TestOverlappingCheckpointCallsCompareTheirInputs(t *testing.T) {
 			joined <- checkpointResult{value, err}
 		}()
 	}
-	// Let both calls join the call in flight. A call that starts after the save reads the stored
-	// row, which gives the same result, so a slow start cannot make the test fail.
-	time.Sleep(100 * time.Millisecond)
+	// Release the operation only after both calls found the entry, so each one joins the call in
+	// flight and none reads the stored row. The conflicting call above also found the entry, so
+	// the count is three.
+	awaitJoiners(t, handler, "charge-card", 3)
 	close(release)
 	for _, result := range []<-chan checkpointResult{initiator, joined, joined} {
 		outcome := awaitDuplicate(t, result)
 		if outcome.err != nil || outcome.value != "charged" {
 			t.Fatalf("a call returned %v, %v; want the shared result", outcome.value, outcome.err)
 		}
+	}
+}
+
+// awaitJoiners waits until count duplicate calls, including a refused one, found the in-flight
+// entry of name.
+func awaitJoiners(t *testing.T, handler *HandlerContext, name string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		handler.checkpoint.Lock()
+		joiners := 0
+		if pending := handler.checkpoints[name]; pending != nil {
+			joiners = pending.joiners
+		}
+		handler.checkpoint.Unlock()
+		if joiners >= count {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d calls joined checkpoint %s, want %d", joiners, name, count)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
