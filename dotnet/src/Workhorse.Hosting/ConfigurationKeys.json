@@ -1,0 +1,27 @@
+{
+  "description": "Each Workhorse:* configuration key that Workhorse.Hosting binds, with its type and default (ADR 0107, \"Hosting and dependency injection\"). A TimeSpan default uses the invariant \"c\" format. The API snapshot reads this file.",
+  "keys": [
+    { "key": "Workhorse:DataSourceKey", "type": "string?", "default": null },
+    { "key": "Workhorse:Queue:DefaultQueue", "type": "string", "default": "default" },
+    { "key": "Workhorse:Worker:Cohorts", "type": "int", "default": 0 },
+    { "key": "Workhorse:Worker:Concurrency", "type": "int", "default": 1 },
+    { "key": "Workhorse:Worker:DisableRegistry", "type": "bool", "default": false },
+    { "key": "Workhorse:Worker:Heartbeat", "type": "TimeSpan?", "default": null },
+    { "key": "Workhorse:Worker:Lease", "type": "TimeSpan", "default": "00:00:30" },
+    { "key": "Workhorse:Worker:MaintenanceInterval", "type": "TimeSpan", "default": "00:00:01" },
+    {
+      "key": "Workhorse:Worker:MaintenanceRoutineInterval",
+      "type": "TimeSpan",
+      "default": "00:01:00"
+    },
+    { "key": "Workhorse:Worker:PollInterval", "type": "TimeSpan?", "default": null },
+    { "key": "Workhorse:Worker:PollingOnly", "type": "bool", "default": false },
+    { "key": "Workhorse:Worker:Queues", "type": "string[]", "default": ["default"] },
+    { "key": "Workhorse:Worker:RegistryInterval", "type": "TimeSpan", "default": "00:00:05" },
+    { "key": "Workhorse:Worker:ScheduleCatchupLimit", "type": "int", "default": 100 },
+    { "key": "Workhorse:Worker:ScheduleNamespaces", "type": "string[]", "default": [] },
+    { "key": "Workhorse:Worker:SharedHeartbeats", "type": "bool", "default": false },
+    { "key": "Workhorse:Worker:ShutdownGrace", "type": "TimeSpan", "default": "00:00:25" },
+    { "key": "Workhorse:Worker:WorkerId", "type": "string?", "default": null }
+  ]
+}
