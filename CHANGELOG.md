@@ -20,6 +20,18 @@ upgrade steps.
 
 ## Unreleased
 
+### A checkpoint input fingerprint does not depend on earlier JSON parses
+
+Before this change, `checkpointInputFingerprint` wrote the input with `JSON.stringify` and read it
+again with `JSON.parse`. On Node 24 and 26, `JSON.parse` can read an escaped object key as a key that
+an earlier parse made (nodejs/node#63785). If a process first took the fingerprint of
+`{ orderId: 7, "\\": 1 }`, the input `{ orderId: 7, '"': 1 }` then got the same fingerprint. Thus a
+replay could miss an input conflict, or report a conflict for the same input (SM-1272).
+
+`checkpointInputFingerprint` still writes the input with `JSON.stringify`. It now reads that text
+with its own reader, not with `JSON.parse`. Each fingerprint that was correct does not change, and
+each input that was refused is still refused.
+
 ### The Prisma adapter supports Prisma 7
 
 Before this change, `@stablemates/workhorse-prisma` declared `@prisma/client >=6 <7`. A project on

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { checkpointInputFingerprint } from "../src/index.js";
 import type { Json } from "../src/types.js";
@@ -65,7 +66,7 @@ describe("checkpointInputFingerprint", () => {
   });
 
   it("checks a boxed Number as it checks the primitive", () => {
-    // JSON.stringify gives a boxed Number to the replacer as an object, then writes its value.
+    // As in JSON.stringify, a boxed Number gives its value, so the same checks apply to it.
     expect(() => checkpointInputFingerprint([boxed(2 ** 53)])).toThrow(/at most 2\^53 - 1/);
     expect(() =>
       checkpointInputFingerprint({ toJSON: () => boxed(2 ** 53) } as unknown as Json),
@@ -77,4 +78,65 @@ describe("checkpointInputFingerprint", () => {
       checkpointInputFingerprint([9_007_199_254_740_991]),
     );
   });
+
+  it("applies the JSON.stringify rules for toJSON, boxed values, and dropped members", () => {
+    const input = {
+      at: new Date(Date.UTC(2026, 9, 22)),
+      flags: [new Boolean(false), new String("x"), undefined, () => 1, Symbol("s")],
+      skipped: undefined,
+      handler: () => 1,
+      money: { toJSON: (key: string) => ({ key, cents: 5 }) },
+    } as unknown as Json;
+    expect(checkpointInputFingerprint(input)).toBe(
+      sha256(
+        '{"at":"2026-10-22T00:00:00.000Z","flags":[false,"x",null,null,null],' +
+          '"money":{"cents":5,"key":"money"}}',
+      ),
+    );
+  });
+
+  it("reads each member once, in the order of JSON.stringify", () => {
+    let reads = 0;
+    const input = {
+      get b() {
+        return ++reads;
+      },
+      get a() {
+        return ++reads;
+      },
+    } as unknown as Json;
+    expect(checkpointInputFingerprint(input)).toBe(sha256('{"a":2,"b":1}'));
+    const callable = Object.assign(() => 0, { toJSON: () => 7 });
+    expect(checkpointInputFingerprint({ a: callable } as unknown as Json)).toBe(sha256('{"a":7}'));
+  });
+
+  it("rejects a cycle and a BigInt", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(() => checkpointInputFingerprint(cycle as Json)).toThrow(TypeError);
+    expect(() => checkpointInputFingerprint({ id: 1n } as unknown as Json)).toThrow(TypeError);
+    // The same object can occur twice when it does not contain itself.
+    const shared = { a: 1 };
+    expect(checkpointInputFingerprint([shared, shared])).toBe(
+      checkpointInputFingerprint([{ a: 1 }, { a: 1 }]),
+    );
+  });
+
+  it("reads each escaped key after a key that ends in a backslash", () => {
+    // JSON.parse in V8 13.6 and 14.6 can read such a key as the earlier backslash key when the
+    // object shape expects one next key (nodejs/node#63785). The walk does not parse JSON.
+    JSON.parse('{"sm1272Order":7,"\\\\":1}');
+    for (const key of ['"', "\n", "\u0001", "/"]) {
+      const input = { sm1272Order: 7, [key]: 1 };
+      expect(checkpointInputFingerprint(input)).toBe(sha256(canonicalText(key)));
+    }
+  });
 });
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function canonicalText(key: string): string {
+  return `{${JSON.stringify(key)}:1,"sm1272Order":7}`;
+}

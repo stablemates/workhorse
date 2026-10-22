@@ -45,7 +45,7 @@ function canonicalJson(input: Json): string {
     return nested;
   });
   if (encoded === undefined) throw new TypeError("Checkpoint input must be JSON serializable");
-  return canonical(JSON.parse(encoded) as unknown);
+  return canonicalText(encoded);
 }
 
 // JSON.stringify gives a boxed Number to the replacer as an object, then writes its value. The
@@ -59,17 +59,83 @@ function unboxedNumber(value: unknown): unknown {
   }
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    // The default sort compares UTF-16 code units, which is the order RFC 8785 requires.
-    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-    const keys = Object.keys(record).sort();
-    const members = keys.map(
-      (key) => `${JSON.stringify(wellFormed(key))}:${canonical(record[key])}`,
-    );
-    return `{${members.join(",")}}`;
-  }
-  return JSON.stringify(typeof value === "string" ? wellFormed(value) : value);
+// This reads the JSON.stringify output and writes its canonical form. It does not use JSON.parse,
+// because JSON.parse in V8 13.6 and 14.6 (Node 24 and 26) can read an escaped key as a key that an
+// earlier parse made (nodejs/node#63785). Then one input could have two fingerprints. The text is
+// always JSON.stringify output, so it has no whitespace and no duplicate keys.
+function canonicalText(text: string): string {
+  let index = 0;
+
+  const readString = (): string => {
+    let decoded = "";
+    let start = ++index;
+    for (;;) {
+      const char = text[index];
+      if (char === '"') break;
+      if (char !== "\\") {
+        index++;
+        continue;
+      }
+      decoded += text.slice(start, index);
+      const escape = text[index + 1] as string;
+      if (escape === "u") {
+        decoded += String.fromCharCode(Number.parseInt(text.slice(index + 2, index + 6), 16));
+        index += 6;
+      } else {
+        decoded += ESCAPED[escape];
+        index += 2;
+      }
+      start = index;
+    }
+    decoded += text.slice(start, index++);
+    return wellFormed(decoded);
+  };
+
+  const readValue = (): string => {
+    const char = text[index];
+    if (char === "[") {
+      const items: string[] = [];
+      if (text[++index] === "]") index++;
+      else {
+        do items.push(readValue());
+        while (text[index++] === ",");
+      }
+      return `[${items.join(",")}]`;
+    }
+    if (char === "{") {
+      const members: Array<[string, string]> = [];
+      if (text[++index] === "}") index++;
+      else {
+        do {
+          const key = readString();
+          index++;
+          members.push([key, readValue()]);
+        } while (text[index++] === ",");
+      }
+      // The < operator compares UTF-16 code units, which is the order RFC 8785 requires.
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      members.sort(([left], [right]) => (left < right ? -1 : 1));
+      return `{${members.map(([key, value]) => `${JSON.stringify(key)}:${value}`).join(",")}}`;
+    }
+    if (char === '"') return JSON.stringify(readString());
+    const start = index;
+    while (index < text.length && !",]}".includes(text[index] as string)) index++;
+    const token = text.slice(start, index);
+    return token === "true" || token === "false" || token === "null"
+      ? token
+      : JSON.stringify(Number(token));
+  };
+
+  return readValue();
 }
+
+const ESCAPED: Record<string, string> = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
