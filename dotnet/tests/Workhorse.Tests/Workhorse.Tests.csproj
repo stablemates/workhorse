@@ -29,6 +29,9 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
+    <!-- The hosting tests run a Generic Host, and the EF Core tests use the Npgsql provider. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>

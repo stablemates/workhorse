@@ -10,4 +10,12 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Each Workhorse:* key with its type and default. The API snapshot (SM-1626) reads it. -->
+    <EmbeddedResource Include="ConfigurationKeys.json" LogicalName="Workhorse.Hosting.ConfigurationKeys.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Only the test project sees the internals. No shipped assembly does (ADR 0107). -->
+    <InternalsVisibleTo Include="Workhorse.Tests" />
+  </ItemGroup>
 </Project>

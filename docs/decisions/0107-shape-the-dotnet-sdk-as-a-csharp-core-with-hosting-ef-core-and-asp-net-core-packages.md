@@ -1341,3 +1341,21 @@ This amendment changes the rule for `Admin`:
    element of kind `JsonValueKind.Null`.
 
 `Queue` and `Worker` keep the rule of the Values and durations section.
+
+## Amendment: the attempt scope ends before the settlement (2026-10-22)
+
+The Hosting and dependency injection section says that the worker disposes the attempt's
+`AsyncServiceScope` after the settlement. SM-1622 registers each handler service through the
+public `Worker.Handle` method. That method gives the hosting package no point after the
+settlement.
+
+This amendment changes the order:
+
+1. For each attempt, `Workhorse.Hosting` creates an `AsyncServiceScope` and resolves the handler in
+   it.
+2. The package disposes the scope when the handler's task completes. The worker then writes the
+   settlement.
+
+The settlement uses the worker's own connection and no scoped service. So a handler sees no
+difference. A hook in the core that disposes the scope after the settlement was rejected. It adds
+public surface to the core, and it has no observable effect.
