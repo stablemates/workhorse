@@ -114,9 +114,9 @@ PgBouncer in session mode:
   worker polls and logs one warning at start. This worker also has no pool for a heartbeat
   connection, so it needs `sharedHeartbeats`. The heartbeat section below explains this option.
 - With `sharedHeartbeats`, the listener can hold the only connection of a small pool. Thus the
-  worker starts the listener only when it knows the maximum size of the pool, and that size is at
-  least 2. If the worker does not know the pool's maximum size, or the size is 1, the worker polls
-  and logs one warning.
+  worker starts the listener only when it knows the maximum size of the pool. The pool must be able
+  to lend the listener a connection and still keep one for other work. In other cases, the worker
+  polls and logs one warning.
 
 <details>
 <summary>Reference: listener behavior and polling</summary>
@@ -154,9 +154,18 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 - The size comes from the pool, or from the caller on the JVM: `poolMaxSize(int)` in Java,
   `poolMaxSize` in Kotlin, and `workhorse.worker.pool-max-size` in the Spring starter.
 - No worker probes the pool for its size.
-- Otherwise the worker polls and logs `workhorse.worker.polling_only` once for each run. The record
-  carries `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`.
-- The Go worker polls when `MaxConns` is below 2. The Rust listener is outside the pool.
+- Otherwise the worker polls and logs one warning for each run. In TypeScript, Python, Ruby, and
+  the JVM, the warning is `workhorse.worker.polling_only`. Its record carries
+  `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`.
+- Go and Rust log their own warnings. These warnings do not carry `workhorse.worker.pool_max_size`.
+- The Go worker polls when `MaxConns` is below 2. It logs "PostgreSQL notification listener requires
+  at least two pool connections; worker is using polling" with no attributes.
+- The Rust listener is outside the pool. If the Rust worker expects no listener, for example because
+  `max_size` is below 2, it polls. It logs "PostgreSQL notification listener unavailable; worker is
+  using polling" with `workhorse.worker.id` only.
+- These two Go and Rust warnings do not apply to deliberate polling. With `PollingOnly`, the Go
+  worker logs "PostgreSQL notification listener disabled; worker is using polling" instead. With
+  `polling_only`, the Rust worker logs no listener warning.
 
 **Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
 jitter. An explicit `pollMs` replaces that base.
@@ -275,9 +284,10 @@ option `SharedHeartbeats`. Python, Rust, and Ruby name it `shared_heartbeats`. J
 `sharedHeartbeats(true)`, and Kotlin `sharedHeartbeats = true`. The heartbeat connection runs only
 self-contained statements, so it works in every pool mode.
 
-With `sharedHeartbeats`, the pool can be smaller, so the listener needs a pool of known size. If the
-worker does not know the pool's maximum size, or the size is 1, the worker polls and logs one
-warning. A Java `DataSource` does not state its size, so a JVM worker with `sharedHeartbeats(true)`
+With `sharedHeartbeats`, the pool can be smaller, so the listener needs a pool of known size. In
+some cases, the worker polls and logs one warning. One case is a pool whose maximum size the worker
+does not know. The other case is a pool that has no connection for other work while the listener
+holds one. A Java `DataSource` does not state its size, so a JVM worker with `sharedHeartbeats(true)`
 polls unless you declare the size with `poolMaxSize`. The worker trusts that value. If you make the
 pool smaller than the declared size, the listener can hold the last connection again.
 

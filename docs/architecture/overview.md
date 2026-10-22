@@ -359,11 +359,26 @@ registration, claims, and handler statements could not borrow one (SM-1585).
 
 Thus, under the opt-out, a worker starts a listener in the pool only when it knows a pool maximum
 size of at least 2. The size comes from the report of the pool or from a declaration by the caller.
-No worker probes the pool for its size. If the size is unknown or below 2, the worker polls. Each
-run then logs `workhorse.worker.polling_only` once, at warn severity, with the body "Worker has no
-notification listener and dispatches by polling". The record carries `workhorse.worker.id`,
-`workhorse.worker.queues`, and `workhorse.worker.pool_max_size`. That attribute is the size that the
-worker found, or `unknown`.
+No worker probes the pool for its size. If the size is unknown or below 2, the worker polls.
+
+In TypeScript, Python, Ruby, and the JVM, each such run then logs `workhorse.worker.polling_only`
+once, at warn severity, with the body "Worker has no notification listener and dispatches by
+polling". The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
+`workhorse.worker.pool_max_size`. That attribute is the size that the worker found, or `unknown`.
+
+Go and Rust log their own warnings, once for each run. These warnings do not carry
+`workhorse.worker.pool_max_size`:
+
+- Go: if `MaxConns` is below 2, `Worker.Run` logs "PostgreSQL notification listener requires at
+  least two pool connections; worker is using polling" at warn level, with no attributes.
+- Rust: if the worker expects no listener, for example because `max_size` is below 2, the run logs
+  "PostgreSQL notification listener unavailable; worker is using polling" at warn level. The event
+  carries `workhorse.worker.id` only.
+
+These two warnings do not apply to deliberate polling. If `PollingOnly` is set, the Go worker logs
+"PostgreSQL notification listener disabled; worker is using polling" at warn level instead. Its
+check of `PollingOnly` comes before its check of `MaxConns`. If `polling_only` is set, the Rust
+worker expects no listener and logs no listener warning.
 
 | Language   | Source of the size                                                                                                                                        | Without a known size                                                                        |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
