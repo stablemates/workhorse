@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDatabaseTestHarness } from "./support/db.js";
 
@@ -168,20 +167,38 @@ describe("scan cost bounds", () => {
     });
 
     it("recovers a lease skipped by a spaced tick on a later tick within one interval", async () => {
-      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: 1_000 });
+      // The spaced tick must start within half the interval of the first scan. A loaded host can
+      // delay it by seconds. Thus the interval is long, and the test moves the scan time back
+      // instead of waiting for it.
+      const intervalMs = 60_000;
+      await registerWorker("scan-cost-worker", { maintenanceIntervalMs: intervalMs });
       await tick();
-      const scannedAt = Date.now();
       const spaced = await expireLeaseAndTick("bounded-");
 
-      // A worker at this interval ticks again within 1,000 ms. Half of it has passed by then.
-      await sleep(Math.max(0, scannedAt + 600 - Date.now()));
+      // A worker at this interval ticks again within one interval. 0.6 of it has passed by then.
+      const moved = await database.pool.query<{ scanned_at: Date }>(
+        `UPDATE workhorse.maintenance_state
+            SET lease_recovery_started_at = clock_timestamp() - $1 * interval '1 millisecond'
+          WHERE routine_name = 'tick'
+          RETURNING lease_recovery_started_at AS scanned_at`,
+        [intervalMs * 0.6],
+      );
       const recovered = (await tick()).find((row) => row.phase === "recover")!.rows_affected;
       const state = await database.pool.query<{ state: string }>(
         "SELECT state FROM workhorse.task_runtime WHERE task_id = md5('bounded-1')::uuid",
       );
+      const rescanned = await database.pool.query<{ scanned_at: Date }>(
+        `SELECT lease_recovery_started_at AS scanned_at FROM workhorse.maintenance_state
+          WHERE routine_name = 'tick'`,
+      );
 
       expect(spaced).toEqual({ recovered: 0, state: "active" });
-      expect(Date.now() - scannedAt).toBeLessThan(1_000);
+      // The database clock measures the gap to the scan the recovering tick recorded. The gap
+      // exceeds 0.6 of the interval only by the test's own delay, and the test times out before
+      // that delay reaches the other 0.4.
+      const gapMs = rescanned.rows[0]!.scanned_at.getTime() - moved.rows[0]!.scanned_at.getTime();
+      expect(gapMs).toBeGreaterThanOrEqual(intervalMs * 0.6);
+      expect(gapMs).toBeLessThan(intervalMs);
       expect({ recovered, state: state.rows[0]!.state }).toEqual({ recovered: 1, state: "ready" });
     });
 
