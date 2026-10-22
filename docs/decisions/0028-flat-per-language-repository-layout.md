@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-15
+- **Amended by:** [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the package
+  versions of every language share one version)
 - **Related:** [ADR 0023](0023-language-sdks-and-http-boundaries.md), [ADR 0027](0027-keep-versioned-dashboard-views.md)
 
 ## Context

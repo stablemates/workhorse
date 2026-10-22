@@ -3,22 +3,24 @@ import { Diagram, MONO, SANS, type Theme } from "./diagram-svg.js";
 /**
  * The diagram of `site/content/docs/releases.mdx`. It uses the names of that page.
  *
- * "Upgrade to the current line to get a fix": the location of the defect decides which lines get a
- * new release. A defect in the SQL schema or in the protocol that the SDKs share gives each line
- * the fix in one release train. A defect in one SDK gives only that line a new release. The fix
- * ships only on the highest published minor release of the current major, with no backports.
+ * "Upgrade to the current line to get a fix": each fix ships in a release train, and the location of
+ * the defect decides which lines change. A defect in the SQL schema or in the protocol that the SDKs
+ * share gives each line the fix. A defect in one SDK gives that line the fix, and each other line
+ * publishes the same version with no change (ADR 0106). The fix ships only on the highest published
+ * minor release of the current major, with no backports.
  *
  * Check each fact against its source before you change a label.
  */
 
 type Kind = "focal" | "backend" | "store" | "external";
 
-const title = "The location of the defect decides which lines get a new release";
+const title = "The location of the defect decides which lines change in a release train";
 const description =
-  "If the defect is in the SQL schema or in the protocol that the SDKs share, the npm packages, " +
-  "Python, Go, Rust, Ruby, and JVM lines each get the fix in one release train. If the defect is in " +
-  "one SDK, for example Python, only that line gets a new release. Each fix ships only on the highest " +
-  "published minor release of the current major.";
+  "Each fix ships in a release train that publishes the npm packages, Python, Go, Rust, Ruby, and " +
+  "JVM lines at one version. If the defect is in the SQL schema or in the protocol that the SDKs " +
+  "share, each line gets the fix. If the defect is in one SDK, for example Python, that line gets " +
+  "the fix. Each other line publishes the same version with no change. Each fix ships only on " +
+  "the highest published minor release of the current major.";
 
 const lines = ["npm packages", "Python", "Go", "Rust", "Ruby", "JVM"] as const;
 
@@ -50,7 +52,7 @@ export const releaseLines = {
     });
     const right = x(lines.length - 1) + WIDTH;
     d.divider(LEFT, right, 52);
-    d.zone(LEFT - 8, 64, right - LEFT + 16, 80, "ONE RELEASE TRAIN · ONE COMMIT");
+    d.zone(LEFT - 8, 64, right - LEFT + 16, rows.length * 88 - 8, "ONE RELEASE TRAIN · ONE COMMIT");
     rows.forEach(([label, released], row) => {
       const y = 88 + row * 88;
       d.rows(
@@ -64,9 +66,9 @@ export const releaseLines = {
       );
       released.forEach((isReleased, col) => {
         if (isReleased) {
-          d.box(x(col), y, WIDTH, 44, "backend", "new release", undefined, 11);
+          d.box(x(col), y, WIDTH, 44, "backend", "fix", undefined, 11);
         } else {
-          d.rows(x(col) + WIDTH / 2, y + 26, [["no change", 9, "soft", MONO, 400]]);
+          d.rows(x(col) + WIDTH / 2, y + 26, [["version only", 9, "soft", MONO, 400]]);
         }
       });
     });
@@ -91,7 +93,7 @@ export const releaseLines = {
 
 const events: readonly (readonly [label: string, kind: Kind, name: string, sub: string])[] = [
   ["schema", "focal", "release train", "each line, from one commit"],
-  ["one SDK", "backend", "only that line", "the other lines do not change"],
+  ["one SDK", "backend", "fix in that line", "other lines: same version, no change"],
   ["upgrade", "store", "the current line", "no backports"],
 ];
 

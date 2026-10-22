@@ -5,6 +5,8 @@
 - **Amends:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0059](0059-assemble-the-1-0-0-specification.md)
+- **Amended by:** [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the lines stay in
+  lockstep after 1.0.0)
 - **Related:** [ADR 0075](0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   SM-904,
