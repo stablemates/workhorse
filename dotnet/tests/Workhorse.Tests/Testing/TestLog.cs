@@ -26,7 +26,16 @@ internal sealed class TestLog : ILoggerFactory, ILoggerProvider, ILogger
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         var line = $"{DateTime.UtcNow:HH:mm:ss.fff} {logLevel} {eventId.Name}: {formatter(state, exception)}{(exception is null ? "" : $" ({exception.GetType().Name}: {exception.Message})")}";
-        TestContext.Current.TestOutputHelper?.WriteLine(line);
+        try
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(line);
+        }
+        catch (InvalidOperationException)
+        {
+            // The heartbeat and the listener run on shared dedicated threads, which keep the test
+            // context of the test that started them. After that test ends, its output refuses a line.
+        }
+
         if (ToStandardError)
         {
             Console.Error.WriteLine(line);
