@@ -292,6 +292,10 @@
       "arguments": ["text"],
       "returns": "boolean"
     },
+    "deregister_worker_v2": {
+      "arguments": ["text", "uuid"],
+      "returns": "boolean"
+    },
     "enqueue_many_v1": {
       "arguments": ["jsonb"],
       "returns": "table",

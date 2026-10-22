@@ -408,6 +408,7 @@ describe("schema installation", () => {
     expect(versioned.rows).toEqual([
       { name: "create_child_v2" },
       { name: "create_single_child_v2" },
+      { name: "deregister_worker_v2" },
       { name: "fire_due_schedules_v2" },
       { name: "heartbeat_many_v2" },
       { name: "heartbeat_v2" },
@@ -615,6 +616,10 @@ describe("schema installation", () => {
       {
         version: 75,
         description: "add the dashboard retention preview function",
+      },
+      {
+        version: 76,
+        description: "fence the worker deregistration by instance",
       },
     ]);
 

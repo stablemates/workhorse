@@ -538,6 +538,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "add the dashboard retention preview function",
     kind: "additive",
   },
+  {
+    fromVersion: 75,
+    toVersion: 76,
+    file: "0077-fence-the-worker-deregistration-by-instance.sql",
+    description: "fence the worker deregistration by instance",
+    kind: "additive",
+  },
 ];
 
 /**

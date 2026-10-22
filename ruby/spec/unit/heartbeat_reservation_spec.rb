@@ -417,9 +417,9 @@ RSpec.describe "Worker heartbeat reservation" do
     let(:stall) { Concurrent::Event.new }
     let(:stalling) { Concurrent::AtomicBoolean.new(true) }
     let(:deleted) { Concurrent::Event.new }
-    # Answers register_worker_v1 and deregister_worker_v1 as PostgreSQL does: one row for each
-    # worker ID, and a deletion by worker ID only. The first deletion waits for +stall+, and sets
-    # +deleted+ once it has deleted.
+    # Answers register_worker_v1 and deregister_worker_v2 as PostgreSQL does: one row for each
+    # worker ID, and a deletion only while the row names the instance of the caller. The first
+    # deletion waits for +stall+, and sets +deleted+ once it has deleted.
     let(:registry_pool) do
       rows = registry
       gate = stall
@@ -428,10 +428,10 @@ RSpec.describe "Worker heartbeat reservation" do
       FakeLendingPool.new do |sql, params|
         case sql
         when W::SqlCatalogue::REGISTER_WORKER_V1 then rows[params[0]] = params[1]
-        when W::SqlCatalogue::DEREGISTER_WORKER_V1
+        when W::SqlCatalogue::DEREGISTER_WORKER_V2
           stalled = first.make_false
           gate.wait(10) if stalled
-          rows.delete(params[0])
+          rows.delete_pair(params[0], params[1])
           done.set if stalled
         end
         []
@@ -583,7 +583,7 @@ RSpec.describe "Worker heartbeat reservation" do
   it "ends the stop within the grace and the unwind window when a registration statement hangs" do
     stall = Concurrent::Event.new
     hanging = FakeLendingPool.new do |sql, _params|
-      stall.wait(10) if sql == W::SqlCatalogue::DEREGISTER_WORKER_V1
+      stall.wait(10) if sql == W::SqlCatalogue::DEREGISTER_WORKER_V2
       []
     end
     subject = W::Worker.new(hanging, queues: ["default"], polling_only: true, poll_interval: 0.01, heartbeat: 0.1,
@@ -595,7 +595,7 @@ RSpec.describe "Worker heartbeat reservation" do
     expect(runner.join(5)).not_to be_nil
     # The grace is 0.2 s and the unwind window 0.25 s. The hanging statement waits up to 10 s.
     expect(monotonic - stopped).to be < 1
-    expect(hanging.statements.map(&:first)).to include(W::SqlCatalogue::DEREGISTER_WORKER_V1)
+    expect(hanging.statements.map(&:first)).to include(W::SqlCatalogue::DEREGISTER_WORKER_V2)
   ensure
     stall&.set
   end

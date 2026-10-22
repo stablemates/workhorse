@@ -3381,7 +3381,9 @@ no rows for an unregistered worker.
 
 The flag is scoped to a process incarnation. Each worker lifecycle start announces a fresh
 `instance_id`. `register_worker_v1` keeps the pause and request evidence only while that instance
-keeps refreshing. A new instance of the same worker id clears them.
+keeps refreshing. A new instance of the same worker id clears them. A TypeScript `Worker` announces a
+new instance at each `run()`, and `runOnce()` keeps the instance of the last run. The other SDKs
+announce a new instance at each run and each one-shot run.
 
 Without that column, PostgreSQL could not tell a routine heartbeat from a restart. The flag would
 then be either indefinitely sticky or cleared by the next heartbeat of the worker itself. For a
@@ -3400,7 +3402,12 @@ refresh, and a handler already executing runs to completion.
 
 #### Deregistration and pruning
 
-- Graceful shutdown calls `deregister_worker_v1`.
+- Graceful shutdown calls `deregister_worker_v2` with the worker ID and the `instance_id` of the run
+  that stops. It deletes the row only while the row still names that instance, and it returns
+  whether it deleted a row. A late deregistration of an ended run thus cannot delete the row, or the
+  pause state, of a later run of the same worker ID.
+- `deregister_worker_v1` deletes the row by worker ID only. It stays unchanged for released SDKs. A
+  late `deregister_worker_v1` call can still delete the row of a later run.
 - A killed worker stops refreshing. Its status shows as offline after its registration becomes
   stale.
 - `run_maintenance_v1` calls the bounded `prune_worker_registry_v1` with a one-minute maximum age.

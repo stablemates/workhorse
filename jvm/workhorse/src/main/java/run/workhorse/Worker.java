@@ -1062,7 +1062,9 @@ public final class Worker implements AutoCloseable {
       // The deregistration waits for the draining registration, so a late registration cannot
       // recreate the row of a stopped worker. It ends with the total stop time, so a full pool
       // cannot hold the stop longer. A deregistration that comes later still runs.
-      joinUntil(registryStep(() -> deregister(run.generation)), end, "deregistration");
+      UUID stoppedInstance = instanceId;
+      joinUntil(
+          registryStep(() -> deregister(run.generation, stoppedInstance)), end, "deregistration");
       log(
           System.Logger.Level.INFO,
           "workhorse.worker.stopped",
@@ -2272,7 +2274,11 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  private void deregister(long run) {
+  /**
+   * Deletes the registry row of the run with {@code instance}. deregister_worker_v2 keeps the row
+   * when a later run of this worker ID has replaced it.
+   */
+  private void deregister(long run, UUID instance) {
     registryLock.lock();
     try {
       if (generation.get() != run || !registered.getAndSet(false)) {
@@ -2286,7 +2292,11 @@ public final class Worker implements AutoCloseable {
           connection ->
               generation.get() != run
                   ? null
-                  : Sql.rows(connection, SqlCatalogue.DEREGISTER_WORKER_V1, workerId));
+                  : Sql.rows(
+                      connection,
+                      SqlCatalogue.DEREGISTER_WORKER_V2,
+                      workerId,
+                      instance.toString()));
     } catch (RuntimeException ignored) {
       // The registry expires a worker that stops reporting.
     }

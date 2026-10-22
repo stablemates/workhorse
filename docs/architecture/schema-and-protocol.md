@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 75 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 76 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 75 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 76 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0076`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0077`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 75.
+- An installed version below the baseline 6 or above the current 76.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -139,9 +139,10 @@ sure that each language uses the protocol in the same way.
 ### Manifest and compatibility fixture
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
-schema versions 75 and newer inside the major line, and client protocol 5 only. Schema version 75
-is the floor because it adds `dashboard_retention_preview_v1`, which every SDK catalogue names. Before
-that, schema version 73 was the floor because it adds `heartbeat_v2`, which every SDK catalogue
+schema versions 76 and newer inside the major line, and client protocol 5 only. Schema version 76
+is the floor because it adds `deregister_worker_v2`, which every SDK catalogue names. Before that,
+schema version 75 was the floor because it adds `dashboard_retention_preview_v1`, which every SDK
+catalogue also names. Before that, schema version 73 was the floor because it adds `heartbeat_v2`, which every SDK catalogue
 also names. Schema version 74
 does not raise the floor: it lets `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a
 fast-tier queue, and no SDK statement changes. Schema version 72
@@ -232,7 +233,7 @@ executor that only counts empty polls fails on every run instead of once under l
 All six SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.
 Schema version 54 reserves that override for terminal failure, even when
 `current_attempt < max_attempts`. Earlier schemas read the terminal override as an immediate retry.
-Thus workers require schema version 54 or newer. The current floor, 75, includes it.
+Thus workers require schema version 54 or newer. The current floor, 76, includes it.
 
 Both `fail_v1` and `fast_fail_v1` keep the current attempt and write the usual failed outcome and
 history. The ownership, cancellation, deadline, and execution-timeout checks still occur before the
@@ -635,7 +636,7 @@ Every non-empty Python mutation first runs
 `SELECT version FROM workhorse.schema_version ORDER BY version`. `Queue` and `AsyncQueue` enqueue
 through a cached check for each queue instead. Thus a warm enqueue sends only `enqueue_many_v1`.
 
-`python/src/workhorse/_protocol.py` accepts schema version 75 or newer and client protocol 5. Before
+`python/src/workhorse/_protocol.py` accepts schema version 76 or newer and client protocol 5. Before
 the mutating statement, it refuses an unreadable, missing, older, or newer schema.
 
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS`, with explicit Psycopg and
@@ -867,7 +868,7 @@ subscribes and when a round loses the connection. It also runs when no task is a
 | Bridge call of an async worker with a bound                  | The bound itself, with no extra wait              |
 | Ordinary asyncpg statement                                   | 30 s                                              |
 | Claims in flight, maintenance, draining refresh after a stop | The stop deadline                                 |
-| `deregister_worker_v1` after the drain                       | 1,000 ms                                          |
+| `deregister_worker_v2` after the drain                       | 1,000 ms                                          |
 
 A registration statement runs on its own thread, and the worker waits for it until its bound. One
 statement at most is in flight. A refresh that finds the previous statement still running skips,
@@ -884,7 +885,7 @@ call. A loop that ends without a stop fixes it when it ends. These waits end at 
 
 The handler drain has no bound in the worker. `run_worker_process` bounds it with
 `shutdown_timeout_ms`. After the drain, one cleanup window of 1,000 ms starts.
-`deregister_worker_v1` spends from it, and an `AsyncWorker` run spends the rest on the release of
+`deregister_worker_v2` spends from it, and an `AsyncWorker` run spends the rest on the release of
 the shared listener. A wait on the stop path does not start a new budget.
 
 #### Ownership statuses and expiration
@@ -1621,7 +1622,7 @@ The same deadline cancels each shutdown statement that waits for a pooled connec
 - a fused completion claim;
 - the draining registration refresh.
 
-A claim the deadline cancels leaves any lease it committed to expire. `deregister_worker_v1` then
+A claim the deadline cancels leaves any lease it committed to expire. `deregister_worker_v2` then
 gets at most 1,000 milliseconds, so handlers that hold every pool connection cannot keep `Run` from
 returning. It also stops at the stop deadline: the grace period plus the 250 millisecond unwind
 window, from the start of the stop. `Run` waits for the listener to stop only until the same
@@ -1974,9 +1975,10 @@ starts a budget of its own:
 
 Thus the stop path takes at most `shutdown_grace` plus the unwind window.
 
-`deregister_worker_v1` deletes the registry row by worker ID only. A late deregistration could thus
-delete the row of a later run of the same worker, and its operator pause state with it. So the next
-`run` or `run_once` of that worker first waits for every stop statement of the previous run
+`deregister_worker_v2` deletes the registry row only while the row names the instance of the run
+that stops. A late registration write of an ended run could still replace the row of a later run of
+the same worker, and its operator pause state with it. So the next `run` or `run_once` of that
+worker first waits for every stop statement of the previous run
 (`Worker#await_previous_stop`). The wait uses the startup budget of the new run. If a statement still
 runs when the budget ends, the run raises `WorkerStartupError` before it changes any state. A stop
 during this wait ends the run at once, without an error, and the old statement keeps running.
@@ -2467,7 +2469,7 @@ in flight, the draining `register_worker_v1` refresh, and running handlers all u
 #### Cleanup window
 
 These steps share a cleanup window: the stop of the registry loop and the listener, then
-`deregister_worker_v1` and the release of the reserved heartbeat connection. That window ends 1
+`deregister_worker_v2` and the release of the reserved heartbeat connection. That window ends 1
 second after the later of the deadline and the end of the drain.
 
 - At that point, `run` aborts a loop that still runs. It logs a deregistration that has not

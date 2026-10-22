@@ -10,8 +10,8 @@ module Stablemates
       CLIENT_PROTOCOL_VERSION = 5
       MINIMUM_PROTOCOL_VERSION = 5
       MAXIMUM_PROTOCOL_VERSION = 5
-      MINIMUM_SCHEMA_VERSION = 75
-      MAXIMUM_SCHEMA_VERSION = 75
+      MINIMUM_SCHEMA_VERSION = 76
+      MAXIMUM_SCHEMA_VERSION = 76
       # PostgreSQL's atomic enqueue batch limit.
       MAX_ENQUEUE_BATCH_SIZE = 1000
       DEFAULT_TASK_VALUE_MAX_BYTES = 1048576
@@ -54,6 +54,9 @@ module Stablemates
 
       # `deregister_worker_v1` (internal)
       DEREGISTER_WORKER_V1 = 'SELECT workhorse.deregister_worker_v1($1::text) AS deregistered'
+
+      # `deregister_worker_v2` (internal)
+      DEREGISTER_WORKER_V2 = 'SELECT workhorse.deregister_worker_v2($1::text, $2::uuid) AS deregistered'
 
       # `enqueue_many_v1` (protocol)
       ENQUEUE_MANY_V1 = 'SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal'

@@ -438,7 +438,7 @@ rest are optional TypeScript packages.
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK declare no TypeScript peer
-range. SQL protocol 5 and schema version 75 are their compatibility boundary instead. Their version numbers
+range. SQL protocol 5 and schema version 76 are their compatibility boundary instead. Their version numbers
 still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
@@ -1379,30 +1379,40 @@ until a scenario has a recorded live artifact, no performance claim is made for 
 ## Upgrade from 0.9.x to the next release
 
 The next release lets a producer throttle an enqueue into a fast-tier queue. Its dashboard hosts
-read the retention preview through the new `dashboard_retention_preview_v1`, so the schema floor
-rises. The upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+read the retention preview through the new `dashboard_retention_preview_v1`. Its workers deregister
+through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
+deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0076 and leaves the schema at
-   version 75.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0077 and leaves the schema at
+   version 76.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
 error:
 
-| Migration                                               | Schema version | Changes                                                                          |
-| ------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
-| `0075-allow-throttle-on-fast-tier-queues.sql`           | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue |
-| `0076-add-the-dashboard-retention-preview-function.sql` | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document   |
+| Migration                                               | Schema version | Changes                                                                                  |
+| ------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
+| `0075-allow-throttle-on-fast-tier-queues.sql`           | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue         |
+| `0076-add-the-dashboard-retention-preview-function.sql` | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document           |
+| `0077-fence-the-worker-deregistration-by-instance.sql`  | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller |
 
-The SDK schema floor rises from 73 to 75. Every SDK statement catalogue names
-`dashboard_retention_preview_v1`, which schema version 75 adds. If the schema is below version
-75, a new worker refuses to start. A new SDK refuses each mutation, and a new dashboard host refuses
-each request. Thus the migrations must run before the first new process starts.
+The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
+`dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
+schema version 76 adds. If the schema is below version 76, a new worker refuses to start. A new SDK
+refuses each mutation, and a new dashboard host refuses each request. Thus the migrations must run
+before the first new process starts.
 
-A 0.9 process keeps working on schema version 75. Its dashboard host still sends its own retention
-preview statement, which reads tables that the migrations do not change. Every process gets the
-throttle behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier
-queue still raises the fast-tier error with the feature `throttle`.
+A 0.9 process keeps working on schema version 76. Its dashboard host still sends its own retention
+preview statement, which reads tables that the migrations do not change. Its worker still sends
+`deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
+behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still
+raises the fast-tier error with the feature `throttle`.
+
+While the fleet is mixed, the deregistration fence stops only a late deregistration that a new
+process sends. A 0.9 process and a new process can use the same worker ID. Then a late
+`deregister_worker_v1` call of the 0.9 process can still delete the row of the new run. The fence
+is complete when no 0.9 worker runs. Each SDK keeps its own guard for one release. The guard stops
+a late statement of an earlier run in the same process from changing the row of a later run.
 
 ## Upgrade from 0.8.x to 0.9.0
 

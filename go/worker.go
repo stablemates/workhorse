@@ -1541,9 +1541,16 @@ func (worker *Worker) deregister(ctx context.Context, executor Executor) {
 		return
 	}
 	// A worker that cannot deregister in time ages out of the fleet view on its heartbeat window.
+	// deregister_worker_v2 deletes the row only while it names the instance of this run, so a late
+	// call cannot delete the row of a later run.
 	deregisterContext, cancel := context.WithTimeout(ctx, deregistrationTimeout)
 	defer cancel()
-	_, _ = executor.Query(deregisterContext, internalStatementRegistry[deregisterWorkerStatementName], worker.workerID)
+	_, _ = executor.Query(
+		deregisterContext,
+		internalStatementRegistry[deregisterWorkerStatementName],
+		worker.workerID,
+		worker.instanceID,
+	)
 }
 
 func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {

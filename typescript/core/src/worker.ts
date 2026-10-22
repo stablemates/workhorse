@@ -421,7 +421,7 @@ export interface WorkerQueueApi {
     evaluationWindowMs: number,
   ): Promise<void>;
   registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
-  deregisterWorker(workerId: string): Promise<boolean>;
+  deregisterWorker(workerId: string, instanceId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
 }
 
@@ -632,21 +632,24 @@ export class Worker {
   private lastTickAt = Number.NEGATIVE_INFINITY;
   private lastMaintenanceRoutinePollAt = Number.NEGATIVE_INFINITY;
   /**
-   * Identifies this Worker instance to the durable registry.
+   * Identifies the current run of this Worker to the durable registry.
    *
-   * Generated once per object, so every restart or replacement of a worker id arrives as a new
+   * Each run() generates a new one, so every restart or replacement of a worker id arrives as a new
    * incarnation. That is what lets PostgreSQL scope an operator pause to a running process instead
-   * of leaving it attached to a name that a later deployment will reuse.
+   * of leaving it attached to a name that a later deployment will reuse. deregister_worker_v2 also
+   * deletes the row only while it names this instance, so a late deregistration of an ended run
+   * cannot delete the row of a later run.
    */
-  private readonly instanceId = randomUUID();
+  private instanceId = randomUUID();
   private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
   private registered = false;
   private pendingStopRegistrationRefresh: Promise<void> | undefined;
   // The first registration write of the current run(), which stop() can stop waiting for.
   private pendingStartupRegistration: Promise<void> | undefined;
   // Settles when every stop-path statement of the ended runs has settled. A later run waits for it
-  // before it registers, because deregister_worker_v1 deletes by worker ID only: a late
-  // deregistration would delete the row, and the pause state, of the later run.
+  // before it registers. deregister_worker_v2 fences the deregistration by instance, but a late
+  // registration write of an ended run could still replace the row of the later run. Released SDKs
+  // also call deregister_worker_v1, which deletes by worker ID only.
   private previousRunSettled: Promise<unknown> | undefined;
   private loggedRegistrationState:
     | { activeSlots: number; draining: boolean; paused: boolean }
@@ -1878,6 +1881,8 @@ export class Worker {
 
   /** Best-effort removal of this worker's registration once its loop has stopped. */
   private async deregister(): Promise<void> {
+    // The instance of the run that stops. A later run replaces this.instanceId.
+    const instanceId = this.instanceId;
     const startup = this.pendingStartupRegistration;
     this.pendingStartupRegistration = undefined;
     await startup?.catch(() => undefined);
@@ -1892,7 +1897,7 @@ export class Worker {
     this.registered = false;
     this.loggedRegistrationState = undefined;
     try {
-      await this.queue.deregisterWorker(this.workerId);
+      await this.queue.deregisterWorker(this.workerId, instanceId);
     } catch {
       // A worker that cannot deregister ages out of the fleet view on its heartbeat window.
     }
@@ -2011,6 +2016,7 @@ export class Worker {
     const runFailure = await (async () => {
       if (shouldStop()) return;
       if (!(await this.settlePreviousRun(stopSignal)) || shouldStop()) return;
+      this.instanceId = randomUUID();
       if (channel !== undefined) {
         const failure = await channel.checkReadiness(this.startupBudgetMs, stopSignal);
         if (failure?.step === "stopped" || shouldStop()) return;

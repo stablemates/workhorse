@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 75;
-  public static final int MAXIMUM_SCHEMA_VERSION = 75;
+  public static final int MINIMUM_SCHEMA_VERSION = 76;
+  public static final int MAXIMUM_SCHEMA_VERSION = 76;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -180,6 +180,14 @@ public final class SqlCatalogue {
           "SELECT workhorse.deregister_worker_v1(?::text) AS deregistered",
           1,
           new int[] {1});
+
+  /** {@code deregister_worker_v2} (internal). */
+  public static final Statement DEREGISTER_WORKER_V2 =
+      new Statement(
+          "deregister_worker_v2",
+          "SELECT workhorse.deregister_worker_v2(?::text, ?::uuid) AS deregistered",
+          2,
+          new int[] {1, 2});
 
   /** {@code enqueue_many_v1} (protocol). */
   public static final Statement ENQUEUE_MANY_V1 =
@@ -1365,6 +1373,7 @@ public final class SqlCatalogue {
           DASHBOARD_HUMAN_WAIT_V1,
           DASHBOARD_SIGNAL_WAIT_V1,
           DEREGISTER_WORKER_V1,
+          DEREGISTER_WORKER_V2,
           ENQUEUE_MANY_V1,
           EXPIRE_OWNED_TELEMETRY_V1,
           FAIL_V1,

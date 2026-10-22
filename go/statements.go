@@ -103,7 +103,7 @@ const (
 	tickStatementName                    = "tick_v1"
 	runMaintenanceStatementName          = "run_maintenance_v1"
 	registerWorkerStatementName          = "register_worker_v1"
-	deregisterWorkerStatementName        = "deregister_worker_v1"
+	deregisterWorkerStatementName        = "deregister_worker_v2"
 	fireDueSchedulesStatementName        = "fire_due_schedules_v2"
 	defaultScheduleTimezone              = "UTC"
 	claimManyStatementName               = "claim_many_v1"

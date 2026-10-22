@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 75;
-export const MINIMUM_SCHEMA_VERSION = 75;
-export const MAXIMUM_SCHEMA_VERSION = 75;
+export const WORKHORSE_SCHEMA_VERSION = 76;
+export const MINIMUM_SCHEMA_VERSION = 76;
+export const MAXIMUM_SCHEMA_VERSION = 76;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -34,6 +34,7 @@ export const SQL_STATEMENTS = {
   dashboard_signal_wait_v1:
     "SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer",
   deregister_worker_v1: "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
+  deregister_worker_v2: "SELECT workhorse.deregister_worker_v2($1::text, $2::uuid) AS deregistered",
   enqueue_many_v1:
     "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
   expire_owned_telemetry_v1:

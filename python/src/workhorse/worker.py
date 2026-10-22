@@ -3334,15 +3334,20 @@ class Worker:
             raise TimeoutError("the registration refresh did not finish by its deadline") from None
 
     def _deregister(self, *, deadline: float) -> None:
-        """Remove the registry row. The worker waits for it until ``deadline``."""
+        """Remove the registry row of this run. The worker waits for it until ``deadline``.
+
+        ``deregister_worker_v2`` deletes the row only while it names the instance of this run, so a
+        late call cannot delete the row of a later run.
+        """
         if not self._registered:
             return
         self._registered = False
+        instance_id = self._instance_id
         executor = self._executor_within(deadline - monotonic())
         with suppress(Exception):
             self._call_by(
                 deadline,
-                lambda: executor.rows(_STATEMENTS.deregister_worker, (self.worker_id,)),
+                lambda: executor.rows(_STATEMENTS.deregister_worker, (self.worker_id, instance_id)),
                 "deregistration",
             )
 

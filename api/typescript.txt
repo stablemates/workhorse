@@ -3625,7 +3625,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 75;
+const MAXIMUM_SCHEMA_VERSION = 76;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3703,7 +3703,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 5;
 
-const MINIMUM_SCHEMA_VERSION = 75;
+const MINIMUM_SCHEMA_VERSION = 76;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -3935,8 +3935,14 @@ class Queue {
   registerWorker(registration: WorkerRegistration): Promise<{
     paused: boolean;
   }>;
-  /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
-  deregisterWorker(workerId: string): Promise<boolean>;
+  /**
+  * Remove one worker registration. A killed worker instead ages out of the fleet view.
+  *
+  * If `instanceId` is given, the row is removed only while it still names that instance, so a late
+  * call for an ended run cannot remove the row of a later run. Without `instanceId`, the call is not
+  * fenced: it removes the row by worker ID only, also when a later run registered that row.
+  */
+  deregisterWorker(workerId: string, instanceId?: string): Promise<boolean>;
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
   tick(options?: {
@@ -5348,7 +5354,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 75;
+const WORKHORSE_SCHEMA_VERSION = 76;
 
 const WORKHORSE_VERSION = "0.9.0";
 
@@ -5389,11 +5395,13 @@ class Worker {
   /** Slot cohorts for fast-tier dispatch. One cohort keeps every slot in one group. */
   readonly cohorts: number;
   /**
-  * Identifies this Worker instance to the durable registry.
+  * Identifies the current run of this Worker to the durable registry.
   *
-  * Generated once per object, so every restart or replacement of a worker id arrives as a new
+  * Each run() generates a new one, so every restart or replacement of a worker id arrives as a new
   * incarnation. That is what lets PostgreSQL scope an operator pause to a running process instead
-  * of leaving it attached to a name that a later deployment will reuse.
+  * of leaving it attached to a name that a later deployment will reuse. deregister_worker_v2 also
+  * deletes the row only while it names this instance, so a late deregistration of an ended run
+  * cannot delete the row of a later run.
   */
   /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
   constructor(queue: WorkerQueueApi | Queue, options?: WorkerOptions);
@@ -5673,7 +5681,7 @@ interface WorkerQueueApi {
   registerWorker(registration: WorkerRegistration): Promise<{
     paused: boolean;
   }>;
-  deregisterWorker(workerId: string): Promise<boolean>;
+  deregisterWorker(workerId: string, instanceId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
 }
 

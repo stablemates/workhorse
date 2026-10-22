@@ -98,6 +98,24 @@ Every SDK statement catalogue names the new function, so the SDK compatibility f
 schema 73 to 75. Run `workhorse schema migrate` before the first process of this release starts.
 A 0.9 process keeps working on schema 75. The migration changes no stored data.
 
+### A late worker deregistration cannot delete the row of a later run
+
+Before this change, a worker that stopped sent `deregister_worker_v1`, which deletes the registry
+row by worker ID only. If the stop path was slow and the same worker ID started again, the late
+deregistration could delete the row of the new run and its operator pause state. Each SDK guarded
+against this in its own code (SM-1589). Migration
+0077 (`0077-fence-the-worker-deregistration-by-instance.sql`) moves the schema to version 76 and
+adds `deregister_worker_v2`. It deletes the row only while the row names the instance of the run
+that stops. `deregister_worker_v1` does not change.
+
+`Worker` now calls `deregister_worker_v2` with the instance of the run that stops.
+
+Each SDK keeps its guard for this release: a new run still waits for the stop statements of the
+previous run, or it refuses to start. Every SDK statement catalogue names the new function, so the
+SDK compatibility floor rises from schema 75 to 76. Run `workhorse schema migrate` before the first
+process of this release starts. A 0.9 process keeps working on schema 76. The migration changes no
+stored data.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

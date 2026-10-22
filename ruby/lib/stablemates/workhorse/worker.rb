@@ -463,8 +463,9 @@ module Stablemates
       end
 
       # Waits until every stop statement of the previous run of this worker has ended, at most
-      # until +deadline+. deregister_worker_v1 deletes by worker ID, so a late deregistration would
-      # delete the registry row of this run, and its operator pause state with it. If a statement
+      # until +deadline+. deregister_worker_v2 deletes only the row of its own run, but a late
+      # registration write of the previous run would still replace the registry row of this run, and
+      # its operator pause state with it. If a statement
       # still runs at +deadline+, the start raises WorkerStartupError before this run changes any
       # state. Thus a statement of an ended run never overlaps a later run. A stop issued after
       # +version+ ends this wait within STARTUP_STOP_CHECK and returns :stopped. The old threads
@@ -532,7 +533,8 @@ module Stablemates
           abandoned = drain(handlers, stop_deadline, final_deadline)
           # A handler's completion may admit tasks until the drain ends, so the slots outlive it.
           @state_lock.synchronize { @dispatch_slots = nil }
-          within(final_deadline, "workhorse-deregistration") { deregister }
+          instance_id = @instance_id
+          within(final_deadline, "workhorse-deregistration") { deregister(instance_id) }
           log(:info, "workhorse.worker.stopped", "Worker stopped",
             "workhorse.worker.active_slots" => abandoned, "workhorse.worker.queues" => @queues)
         end
@@ -1325,10 +1327,12 @@ module Stablemates
         wake_dispatcher
       end
 
-      def deregister
+      # Deletes the registry row of the run with +instance_id+. deregister_worker_v2 keeps the row
+      # when a later run of this worker ID has replaced it.
+      def deregister(instance_id)
         return unless @registered.make_false
 
-        @executor.rows(SqlCatalogue::DEREGISTER_WORKER_V1, [@worker_id])
+        @executor.rows(SqlCatalogue::DEREGISTER_WORKER_V2, [@worker_id, instance_id])
       rescue
         nil
       end

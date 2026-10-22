@@ -594,7 +594,7 @@ window and its source in `settings.shutdown`:
 | SDK variant                                     | Unwind window | Source                                                                    |
 | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------- |
 | `typescript`                                    | 0 ms          | `runWorkerProcess` exits at `shutdownTimeoutMs`                           |
-| `go`                                            | 2,250 ms      | a 250 ms unwind, `deregister_worker_v1` and `UNLISTEN` for 1,000 ms each  |
+| `go`                                            | 2,250 ms      | a 250 ms unwind, `deregister_worker_v2` and `UNLISTEN` for 1,000 ms each  |
 | `ruby`                                          | 250 ms        | the unwind window, `UNWIND_WINDOW`                                        |
 | `python-sync`, `python-async`, `python-asyncpg` | 0 ms          | `run_worker_process` exits at `shutdown_timeout_ms`                       |
 | `rust`                                          | 1,250 ms      | `UNWIND_WINDOW`, then `CLEANUP_WINDOW`, which ends 1 s after the deadline |
