@@ -56,6 +56,14 @@ public final class WorkerTelemetry {
   private static final ThreadLocal<@Nullable Pass> PASSES = new ThreadLocal<>();
   private static final ThreadLocal<@Nullable TelemetrySpan> CLAIMS = new ThreadLocal<>();
 
+  /**
+   * The bounded {@code workhorse.handler.outcome} of a worker {@code Outcome} constant, as the
+   * handler metrics and the TypeScript {@code workhorse.task.execution_finished} log name it.
+   */
+  public static String metricOutcome(@Nullable String outcome) {
+    return outcome == null ? "unknown" : METRIC_OUTCOMES.getOrDefault(outcome, "unknown");
+  }
+
   /** The worker telemetry on {@code telemetry}. */
   public WorkerTelemetry(Telemetry telemetry) {
     this.telemetry = telemetry;
@@ -273,6 +281,36 @@ public final class WorkerTelemetry {
     }
   }
 
+  /**
+   * Emits one worker log event to OpenTelemetry. {@code System.Logger} levels map to the TypeScript
+   * severities: {@code TRACE} and {@code DEBUG} to debug, {@code INFO} to info, and {@code WARNING}
+   * and {@code ERROR} to warn.
+   */
+  public void log(
+      System.Logger.Level level,
+      String event,
+      String body,
+      Map<String, ? extends @Nullable Object> attributes) {
+    Telemetry.Severity severity =
+        switch (level) {
+          case ALL, TRACE, DEBUG -> Telemetry.Severity.DEBUG;
+          case INFO -> Telemetry.Severity.INFO;
+          case WARNING, ERROR, OFF -> Telemetry.Severity.WARN;
+        };
+    telemetry.log(severity, event, body, attributes);
+  }
+
+  /**
+   * Records how much later than {@code cadenceMs} a maintenance {@code loop} runs, from the {@code
+   * elapsedNanos} since its last run, as the TypeScript worker records it.
+   */
+  public void maintenanceDrift(long elapsedNanos, long cadenceMs, String loop) {
+    telemetry.record(
+        Instrument.MAINTENANCE_DRIFT,
+        Math.max(0, elapsedNanos / 1e6 - cadenceMs),
+        Map.of(Names.MAINTENANCE_LOOP, loop));
+  }
+
   /** Records one fired schedule occurrence from a {@code fire_due_schedules_v2} row. */
   public void scheduleFired(Row row, Instant now) {
     if (row.text("task_id") == null) {
@@ -383,8 +421,7 @@ public final class WorkerTelemetry {
      */
     public void finish(@Nullable String outcome) {
       try {
-        String metricOutcome =
-            outcome == null ? "unknown" : METRIC_OUTCOMES.getOrDefault(outcome, "unknown");
+        String metricOutcome = metricOutcome(outcome);
         String spanValue = spanOutcome;
         if (spanValue == null) {
           spanValue =

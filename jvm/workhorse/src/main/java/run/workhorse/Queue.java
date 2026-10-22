@@ -723,6 +723,14 @@ public final class Queue {
     if ("conflict".equals(row.text("status"))) {
       throw new SignalIdempotencyConflictException(taskId, name);
     }
+    processed(
+        "workhorse.task.signal_processed",
+        "Task signal processed",
+        taskId,
+        Names.SIGNAL_NAME,
+        name,
+        Names.SIGNAL_STATUS,
+        row.text("status"));
     return new SignalDeliveryResult(
         Rows.constant(SignalStatus.class, "send_signal", row.requiredText("status")),
         taskId,
@@ -789,6 +797,14 @@ public final class Queue {
     if ("conflict".equals(row.text("status"))) {
       throw new HumanWaitIdempotencyConflictException(taskId, name);
     }
+    processed(
+        "workhorse.task.human_wait_processed",
+        "Human wait completion processed",
+        taskId,
+        Names.HUMAN_WAIT_NAME,
+        name,
+        Names.HUMAN_WAIT_STATUS,
+        row.text("status"));
     return new HumanWaitCompletionResult(
         Rows.constant(HumanWaitStatus.class, "complete_human_wait", row.requiredText("status")),
         taskId,
@@ -828,6 +844,25 @@ public final class Queue {
           label + " requested by must contain between 1 and 200 characters");
     }
     return document;
+  }
+
+  /**
+   * Emits the info log record of one external delivery, as the TypeScript queue does. The queue
+   * writes it only to OpenTelemetry. It never carries the payload or the idempotency key.
+   */
+  private void processed(
+      String event,
+      String body,
+      UUID taskId,
+      String nameKey,
+      String name,
+      String statusKey,
+      @Nullable String status) {
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put(Names.TASK_ID, taskId.toString());
+    attributes.put(nameKey, name);
+    attributes.put(statusKey, status);
+    telemetry.log(Telemetry.Severity.INFO, event, body, attributes);
   }
 
   /** PostgreSQL's queue health snapshot over the last day. */

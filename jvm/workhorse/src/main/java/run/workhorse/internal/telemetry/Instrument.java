@@ -2,7 +2,8 @@ package run.workhorse.internal.telemetry;
 
 /**
  * The instruments the Java SDK records, with the kind, unit, and description of {@code
- * api/telemetry.txt}. The counterpart of Ruby's {@code Telemetry::INSTRUMENTS}.
+ * api/telemetry.txt}. Ruby's {@code Telemetry::INSTRUMENTS} plus {@code
+ * workhorse.maintenance.drift}.
  */
 public enum Instrument {
   TASKS_CLAIMED(
@@ -75,7 +76,12 @@ public enum Instrument {
       "workhorse.maintenance.duration",
       Kind.HISTOGRAM,
       "ms",
-      "Workhorse maintenance phase duration");
+      "Workhorse maintenance phase duration"),
+  MAINTENANCE_DRIFT(
+      "workhorse.maintenance.drift",
+      Kind.HISTOGRAM,
+      "ms",
+      "Delay beyond a worker maintenance loop's configured cadence");
 
   /** How an instrument records. {@code api/telemetry.txt} prints both counter kinds as counter. */
   public enum Kind {

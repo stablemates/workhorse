@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -204,6 +205,9 @@ public final class Worker implements AutoCloseable {
   private final AtomicBoolean remotelyPaused = new AtomicBoolean();
   private final AtomicBoolean notified = new AtomicBoolean();
   private final AtomicBoolean registered = new AtomicBoolean();
+  // The active slots, draining, and pause state of the last `workhorse.worker.registered` log.
+  // `registryLock` guards it.
+  private @Nullable List<Object> loggedRegistration;
   private final AtomicLong nextQueueIndex = new AtomicLong();
 
   /** The claims started and not yet answered. Tests read it through {@link #claimsInFlight}. */
@@ -365,6 +369,9 @@ public final class Worker implements AutoCloseable {
       }
     }
     this.coordinators = Map.copyOf(batches);
+    for (Map.Entry<String, Registration> entry : new TreeMap<>(handlers).entrySet()) {
+      logRegistered(entry.getKey(), entry.getValue().batchOptions);
+    }
     this.queue =
         new Queue(
             connections,
@@ -510,7 +517,8 @@ public final class Worker implements AutoCloseable {
         System.Logger.Level.INFO,
         "workhorse.worker.stop_requested",
         "Worker stop requested",
-        Map.of("workhorse.worker.active_slots", active.size()));
+        Map.of(
+            "workhorse.worker.queues", queueNames, "workhorse.worker.active_slots", active.size()));
     wakeDispatcher();
   }
 
@@ -555,14 +563,22 @@ public final class Worker implements AutoCloseable {
   /** Starts no claim until {@link #resume}. Running handlers continue. */
   public void pause() {
     locallyPaused.set(true);
-    log(System.Logger.Level.INFO, "workhorse.worker.paused", "Worker paused locally", Map.of());
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.worker.paused",
+        "Worker paused locally",
+        Map.of("workhorse.worker.queues", queueNames));
     wakeDispatcher();
   }
 
   /** Ends a local pause. An operator's remote pause stays. */
   public void resume() {
     locallyPaused.set(false);
-    log(System.Logger.Level.INFO, "workhorse.worker.resumed", "Worker resumed locally", Map.of());
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.worker.resumed",
+        "Worker resumed locally",
+        Map.of("workhorse.worker.queues", queueNames));
     wakeDispatcher();
   }
 
@@ -1069,7 +1085,8 @@ public final class Worker implements AutoCloseable {
           System.Logger.Level.INFO,
           "workhorse.worker.stopped",
           "Worker stopped",
-          Map.of("workhorse.worker.active_slots", abandoned));
+          Map.of(
+              "workhorse.worker.queues", queueNames, "workhorse.worker.active_slots", abandoned));
     }
     if (abandoned > 0) {
       throw new ShutdownIncompleteException(abandoned);
@@ -2242,7 +2259,7 @@ public final class Worker implements AutoCloseable {
           System.Logger.Level.INFO,
           "workhorse.worker.registration_failed",
           "Worker registration failed",
-          Map.of("error.type", error.getClass().getName()));
+          Map.of("workhorse.worker.queues", queueNames, "error.type", error.getClass().getName()));
       if (onRegistrationError != null) {
         onRegistrationError.accept(error);
       }
@@ -2253,6 +2270,7 @@ public final class Worker implements AutoCloseable {
     }
     boolean paused = !rows.isEmpty() && "t".equals(rows.get(0).text("paused"));
     boolean changed;
+    List<Object> loggedState;
     registryLock.lock();
     try {
       // A response that arrives after a later run started belongs to its own run, which ended.
@@ -2261,15 +2279,34 @@ public final class Worker implements AutoCloseable {
       }
       changed = remotelyPaused.getAndSet(paused) != paused;
       registered.set(true);
+      // As the TypeScript worker, log the first registration of a run and each change of state.
+      List<Object> state = List.of(slots, stopping, paused);
+      loggedState = state.equals(loggedRegistration) ? null : state;
+      if (loggedState != null) {
+        loggedRegistration = state;
+      }
     } finally {
       registryLock.unlock();
+    }
+    if (loggedState != null) {
+      Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+      attributes.put("workhorse.worker.queues", queueNames);
+      attributes.put("workhorse.worker.concurrency", concurrency);
+      attributes.put("workhorse.worker.active_slots", slots);
+      attributes.put("workhorse.worker.draining", stopping);
+      attributes.put("workhorse.worker.paused", paused);
+      log(
+          System.Logger.Level.DEBUG,
+          "workhorse.worker.registered",
+          "Worker registration changed",
+          attributes);
     }
     if (changed) {
       log(
           System.Logger.Level.INFO,
           paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
           paused ? "Worker paused remotely" : "Worker resumed remotely",
-          Map.of());
+          Map.of("workhorse.worker.queues", queueNames));
       wakeDispatcher();
     }
   }
@@ -2284,21 +2321,32 @@ public final class Worker implements AutoCloseable {
       if (generation.get() != run || !registered.getAndSet(false)) {
         return;
       }
+      loggedRegistration = null;
     } finally {
       registryLock.unlock();
     }
+    List<Row> rows;
     try {
-      withConnection(
-          connection ->
-              generation.get() != run
-                  ? null
-                  : Sql.rows(
-                      connection,
-                      SqlCatalogue.DEREGISTER_WORKER_V2,
-                      workerId,
-                      instance.toString()));
+      rows =
+          withConnection(
+              connection ->
+                  generation.get() != run
+                      ? null
+                      : Sql.rows(
+                          connection,
+                          SqlCatalogue.DEREGISTER_WORKER_V2,
+                          workerId,
+                          instance.toString()));
     } catch (RuntimeException ignored) {
       // The registry expires a worker that stops reporting.
+      return;
+    }
+    if (rows != null && !rows.isEmpty()) {
+      log(
+          System.Logger.Level.DEBUG,
+          "workhorse.worker.deregistered",
+          "Worker deregistered",
+          Map.of("workhorse.worker.deregistered", "t".equals(rows.get(0).text("deregistered"))));
     }
   }
 
@@ -2315,6 +2363,13 @@ public final class Worker implements AutoCloseable {
     long routine = lastRoutineAt.get();
     boolean routineDue =
         routine == NEVER || now - routine >= TimeUnit.MILLISECONDS.toNanos(routineMs);
+    // The first pass of a loop has no earlier run, so it records no drift.
+    if (last != NEVER) {
+      telemetry.maintenanceDrift(now - last, maintenanceMs, "tick");
+    }
+    if (routineDue && routine != NEVER) {
+      telemetry.maintenanceDrift(now - routine, routineMs, "background_routines");
+    }
     telemetry.maintenance(
         () ->
             withConnection(
@@ -2674,8 +2729,10 @@ public final class Worker implements AutoCloseable {
     Registration registration = handlers.get(claimed.type());
     Arbiter arbiter = new Arbiter();
     Map<String, @Nullable Object> attributes = taskAttributes(claimed);
-    log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
+    long startedAt = System.nanoTime();
     WorkerTelemetry.Execution execution = telemetry.execute(claimed);
+    // The handler logs run inside the handler span, so they carry its trace.
+    log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
     try {
       if (registration == null) {
         log(
@@ -2692,26 +2749,27 @@ public final class Worker implements AutoCloseable {
       throw error;
     } finally {
       Outcome outcome = arbiter.reportedOutcome();
-      execution.finish(outcome == null ? null : outcome.name());
-      Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
-      finished.put("workhorse.handler.outcome", outcomeLabel(outcome));
-      log(
-          System.Logger.Level.INFO,
-          "workhorse.task.execution_finished",
-          "Task execution finished",
-          finished);
+      try {
+        Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
+        finished.put(
+            "workhorse.handler.outcome",
+            WorkerTelemetry.metricOutcome(outcome == null ? null : outcome.name()));
+        log(
+            System.Logger.Level.INFO,
+            "workhorse.task.execution_finished",
+            "Task execution finished",
+            finished);
+        Map<String, @Nullable Object> duration = new LinkedHashMap<>(attributes);
+        duration.put("workhorse.handler.duration_ms", (System.nanoTime() - startedAt) / 1e6);
+        log(
+            System.Logger.Level.DEBUG,
+            "workhorse.handler.finished",
+            "Task handler finished",
+            duration);
+      } finally {
+        execution.finish(outcome == null ? null : outcome.name());
+      }
     }
-  }
-
-  /** The outcome label of the execution log. Both suspensions read as {@code suspended}. */
-  private static String outcomeLabel(@Nullable Outcome outcome) {
-    if (outcome == null) {
-      return "unknown";
-    }
-    return switch (outcome) {
-      case SUSPENDED_FOR_WAIT, SUSPENDED_FOR_CHILD -> "suspended";
-      default -> outcome.name().toLowerCase(java.util.Locale.ROOT);
-    };
   }
 
   private void runHandler(Active task, Registration registration, Arbiter arbiter) {
@@ -3935,7 +3993,7 @@ public final class Worker implements AutoCloseable {
       log(
           System.Logger.Level.WARNING,
           "workhorse.handler.signal_swallowed",
-          "Task handler swallowed its suspension signal",
+          "Task handler swallowed its abort signal",
           attributes);
     }
     return true;
@@ -4150,6 +4208,21 @@ public final class Worker implements AutoCloseable {
   // ---------------------------------------------------------------------------------------------
   // Support
 
+  /** Logs one handler of the builder, as the TypeScript {@code handle} and {@code handleBatch}. */
+  private void logRegistered(String taskType, @Nullable BatchOptions batch) {
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put("workhorse.task.type", taskType);
+    if (batch != null) {
+      attributes.put("workhorse.handler.batch.max_size", batch.maxSize());
+      attributes.put("workhorse.handler.batch.linger_ms", batch.linger().toMillis());
+    }
+    log(
+        System.Logger.Level.DEBUG,
+        "workhorse.handler.registered",
+        batch == null ? "Task handler registered" : "Batch task handler registered",
+        attributes);
+  }
+
   Map<String, @Nullable Object> taskAttributes(ClaimedTask task) {
     Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
     attributes.put("workhorse.queue.name", task.queue());
@@ -4159,15 +4232,22 @@ public final class Worker implements AutoCloseable {
     return attributes;
   }
 
+  /**
+   * Writes one log event to {@code System.Logger} and, when its name is a TypeScript event name, to
+   * OpenTelemetry. Both carry {@code workhorse.worker.id}.
+   */
   void log(System.Logger.Level level, String event, String body, Map<String, ?> attributes) {
+    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
+    fields.put("workhorse.worker.id", workerId);
+    fields.putAll(attributes);
+    telemetry.log(level, event, body, fields);
     if (!logger.isLoggable(level)) {
       return;
     }
-    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
-    fields.put("event.name", event);
-    fields.put("workhorse.worker.id", workerId);
-    fields.putAll(attributes);
-    logger.log(level, body + " " + fields);
+    Map<String, @Nullable Object> logged = new LinkedHashMap<>();
+    logged.put("event.name", event);
+    logged.putAll(fields);
+    logger.log(level, body + " " + logged);
   }
 
   /** Logs the error that ended a run of {@link #start} without a stop, with its stack trace. */
