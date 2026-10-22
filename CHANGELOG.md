@@ -20,6 +20,15 @@ upgrade steps.
 
 ## Unreleased
 
+### The Go release script reuses the main CI run of the candidate
+
+Before this change, `scripts/release-go.sh` always ran the full `pnpm check`, which repeats every
+SDK suite that the main CI run of the candidate already passed (SM-1564).
+
+- If the candidate has a successful `CI` push run on `main` for its exact SHA, the script prints
+  the run URL and runs only the Go checks. Otherwise it runs the full `pnpm check`, as before.
+- Every refusal of the script stays.
+
 ### One protocol fixture holds the checkpoint fingerprint vectors
 
 Before this change, each SDK test kept its own copy of the checkpoint input fingerprint vectors. No

@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -68,15 +77,93 @@ async function pushTag(checkout: string, tag: string, commit: string, annotated 
   await git(checkout, "tag", "--delete", tag);
 }
 
+/**
+ * Stand-ins for `gh` and `pnpm` that come first on `PATH`, so the script reaches no GitHub API and
+ * runs no check. Each one appends its arguments to a log. The `gh` stand-in prints the lines of
+ * `runs` as `gh api --jq` prints them, or exits 1 when `runs` is `"fail"`.
+ */
+async function stubTools(runs: string[] | "fail"): Promise<{
+  env: NodeJS.ProcessEnv;
+  calls: () => Promise<{ gh: string[]; pnpm: string[] }>;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "workhorse-release-go-tools-"));
+  temporaryDirectories.push(directory);
+  const ghLog = join(directory, "gh.log");
+  const pnpmLog = join(directory, "pnpm.log");
+  const runsFile = join(directory, "runs.tsv");
+  await writeFile(runsFile, runs === "fail" ? "" : runs.map((line) => `${line}\n`).join(""));
+  const ghBody =
+    runs === "fail" ? 'echo "gh: HTTP 502" >&2\nexit 1\n' : `cat ${JSON.stringify(runsFile)}\n`;
+  await writeFile(
+    join(directory, "gh"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(ghLog)}\n${ghBody}`,
+  );
+  await writeFile(
+    join(directory, "pnpm"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(pnpmLog)}\n`,
+  );
+  await chmod(join(directory, "gh"), 0o755);
+  await chmod(join(directory, "pnpm"), 0o755);
+  return {
+    env: { ...gitEnvironment, PATH: `${directory}:${process.env.PATH ?? ""}` },
+    calls: async () => ({ gh: await logLines(ghLog), pnpm: await logLines(pnpmLog) }),
+  };
+}
+
+async function logLines(path: string): Promise<string[]> {
+  const text = await readFile(path, "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line !== "");
+}
+
+/** One line of `gh api --jq` output for a run of the CI workflow. */
+function ciRun(
+  commit: string,
+  conclusion: string,
+  {
+    branch = "main",
+    event = "push",
+    id = 7,
+    repository = "stablemates/workhorse",
+  }: { branch?: string; event?: string; id?: number; repository?: string } = {},
+): string {
+  return [
+    commit,
+    branch,
+    event,
+    ".github/workflows/ci.yml",
+    "completed",
+    conclusion,
+    `https://github.com/${repository}/actions/runs/${id}`,
+  ].join("\t");
+}
+
+const githubOrigin = "https://github.com/stablemates/workhorse.git";
+const forkOrigin = "https://github.com/someone/workhorse.git";
+
+/**
+ * A scratch release whose npm and Python tags on origin point to the candidate. Its origin URL names
+ * a GitHub repository, and `url.<path>.insteadOf` sends every fetch and push to the scratch origin.
+ */
+async function gateCandidate(): Promise<{ checkout: string; candidate: string }> {
+  const scratch = await scratchRelease();
+  await pushTag(scratch.checkout, "v1.2.3", scratch.candidate);
+  await pushTag(scratch.checkout, "python/v1.2.3", scratch.candidate);
+  const origin = await git(scratch.checkout, "config", "--get", "remote.origin.url");
+  await git(scratch.checkout, "config", `url.${origin}.insteadOf`, githubOrigin);
+  await git(scratch.checkout, "remote", "set-url", "origin", githubOrigin);
+  return scratch;
+}
+
 async function releaseGo(
   checkout: string,
   version: string,
+  env: NodeJS.ProcessEnv = gitEnvironment,
 ): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolvePromise) => {
     execFile(
       "sh",
       ["scripts/release-go.sh", version],
-      { cwd: checkout, env: gitEnvironment },
+      { cwd: checkout, env },
       (error, stdout, stderr) => {
         const code = error && typeof error.code === "number" ? error.code : error ? -1 : 0;
         resolvePromise({ exitCode: code, output: `${stdout}${stderr}` });
@@ -169,6 +256,154 @@ describe.skipIf(!onPosix)("scripts/release-go.sh", () => {
     expect(result.output).toMatch(
       /Refusing to release HEAD [0-9a-f]{40}: cannot fetch main from origin\./,
     );
+  });
+
+  describe("release gate", () => {
+    const fullCheck = ["go:release-check 1.2.3", "db:reset:test", "db:reset:test-packed", "check"];
+    const goChecks = ["go:release-check 1.2.3", "db:reset:test", "go:test", "go:vuln"];
+
+    it("reuses a successful main CI push run of HEAD and runs only the Go checks", async () => {
+      const { checkout, candidate } = await gateCandidate();
+      const tools = await stubTools([ciRun(candidate, "success", { id: 42 })]);
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain(
+        `HEAD ${candidate} passed the main CI run https://github.com/stablemates/workhorse/actions/runs/42.`,
+      );
+      const calls = await tools.calls();
+      expect(calls.pnpm).toEqual(goChecks);
+      expect(calls.gh).toHaveLength(1);
+      expect(calls.gh[0]).toContain(
+        "api --hostname github.com --method GET repos/stablemates/workhorse/actions/workflows/ci.yml/runs",
+      );
+      expect(calls.gh[0]).toContain(`head_sha=${candidate}`);
+      expect(await git(checkout, "ls-remote", "origin", "refs/tags/go/v1.2.3")).not.toBe("");
+    });
+
+    it("runs the full check when GitHub has no CI run for HEAD", async () => {
+      const { checkout, candidate } = await gateCandidate();
+      const tools = await stubTools([]);
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain(
+        `No successful main CI run for HEAD ${candidate}. Running the full pnpm check.`,
+      );
+      expect((await tools.calls()).pnpm).toEqual(fullCheck);
+    });
+
+    it.each([
+      ["a successful run of another commit", (other: string) => ciRun(other, "success")],
+      ["a canceled run of HEAD", (_: string, head: string) => ciRun(head, "cancelled")],
+      ["a failed run of HEAD", (_: string, head: string) => ciRun(head, "failure")],
+      [
+        "a successful pull request run of HEAD",
+        (_: string, head: string) => ciRun(head, "success", { event: "pull_request" }),
+      ],
+      [
+        "a successful run of HEAD on another branch",
+        (_: string, head: string) => ciRun(head, "success", { branch: "feature" }),
+      ],
+      [
+        "a successful run of HEAD in another repository",
+        (_: string, head: string) => ciRun(head, "success", { repository: "someone/workhorse" }),
+      ],
+    ])("runs the full check when GitHub returns only %s", async (_, line) => {
+      const { checkout, candidate } = await gateCandidate();
+      const later = await git(checkout, "rev-parse", "origin/main");
+      const tools = await stubTools([line(later, candidate)]);
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain(`No successful main CI run for HEAD ${candidate}.`);
+      expect((await tools.calls()).pnpm).toEqual(fullCheck);
+    });
+
+    it("runs the full check when gh fails", async () => {
+      const { checkout, candidate } = await gateCandidate();
+      const tools = await stubTools("fail");
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain(`No successful main CI run for HEAD ${candidate}.`);
+      const calls = await tools.calls();
+      expect(calls.gh).toHaveLength(1);
+      expect(calls.pnpm).toEqual(fullCheck);
+    });
+
+    it("asks about the repository of origin, not the one that GH_REPO names", async () => {
+      const { checkout } = await gateCandidate();
+      const tools = await stubTools([]);
+
+      await releaseGo(checkout, "1.2.3", { ...tools.env, GH_REPO: "someone/workhorse" });
+
+      const calls = await tools.calls();
+      expect(calls.gh).toHaveLength(1);
+      expect(calls.gh[0]).toContain(" repos/stablemates/workhorse/actions/");
+    });
+
+    it.each([
+      ["origin is not a GitHub URL", async () => {}],
+      [
+        "origin pushes to another URL",
+        async (checkout: string, origin: string) => {
+          // Both URLs reach the scratch origin, so the tag push reaches no network.
+          await git(checkout, "config", "--add", `url.${origin}.insteadOf`, forkOrigin);
+          await git(checkout, "remote", "set-url", "origin", githubOrigin);
+          await git(checkout, "remote", "set-url", "--push", "origin", forkOrigin);
+        },
+      ],
+      [
+        "origin has a second URL",
+        async (checkout: string, origin: string) => {
+          await git(checkout, "config", "--add", `url.${origin}.insteadOf`, forkOrigin);
+          await git(checkout, "remote", "set-url", "origin", githubOrigin);
+          await git(checkout, "config", "--add", "remote.origin.url", forkOrigin);
+        },
+      ],
+      [
+        "origin has a second push URL",
+        async (checkout: string, origin: string) => {
+          await git(checkout, "config", "--add", `url.${origin}.insteadOf`, forkOrigin);
+          await git(checkout, "remote", "set-url", "origin", githubOrigin);
+          await git(checkout, "config", "--add", "remote.origin.pushurl", forkOrigin);
+          await git(checkout, "config", "--add", "remote.origin.pushurl", githubOrigin);
+        },
+      ],
+    ])("runs the full check without asking GitHub when %s", async (_, configure) => {
+      const { checkout, candidate } = await scratchRelease();
+      await pushTag(checkout, "v1.2.3", candidate);
+      await pushTag(checkout, "python/v1.2.3", candidate);
+      const origin = await git(checkout, "config", "--get", "remote.origin.url");
+      await git(checkout, "config", `url.${origin}.insteadOf`, githubOrigin);
+      await configure(checkout, origin);
+      const tools = await stubTools([ciRun(candidate, "success")]);
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain(`No successful main CI run for HEAD ${candidate}.`);
+      const calls = await tools.calls();
+      expect(calls.gh).toEqual([]);
+      expect(calls.pnpm).toEqual(fullCheck);
+    });
+
+    it("keeps the refusals before it reads CI", async () => {
+      const { checkout, candidate } = await gateCandidate();
+      await pushTag(checkout, "go/v1.2.3", candidate);
+      const tools = await stubTools([ciRun(candidate, "success")]);
+
+      const result = await releaseGo(checkout, "1.2.3", tools.env);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("go/v1.2.3 already exists on origin");
+      expect(await tools.calls()).toEqual({ gh: [], pnpm: [] });
+    });
   });
 
   it("refuses a version that has no PEP 440 spelling", async () => {
