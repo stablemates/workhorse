@@ -4,7 +4,8 @@
 # language/database combination declared in support.json, every variation of a suite, such as Go's
 # race detector and Rust without optional features, and every package check. A pull request runs a
 # lane only when it changes an input of that lane, as scripts/ci-lanes.ts maps them. A file that the
-# map does not name runs every lane.
+# map does not name runs every lane. A docs-only pull request skips the unit lane, the one always-run
+# lane that reads no documentation.
 name: CI
 
 on:

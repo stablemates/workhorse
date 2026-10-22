@@ -5,7 +5,9 @@
 - **Amended by:** [SM-1138](https://linear.app/stablemates/issue/SM-1138)
   (Ruby's package check runs on every change),
   [SM-1548](https://linear.app/stablemates/issue/SM-1548)
-  (a pull request runs a lane only when it changes an input of that lane)
+  (a pull request runs a lane only when it changes an input of that lane),
+  [SM-1681](https://linear.app/stablemates/issue/SM-1681)
+  (a docs-only pull request runs only the lanes that check the documentation)
 - **Related:** [ADR 0043](0043-public-ci-and-release-policy.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   [SM-970](https://linear.app/stablemates/issue/SM-970)
@@ -94,6 +96,34 @@ such a read must add the file to the lane's inputs.
 A lane does not need to name an input of a check that an always-run lane also runs. For example,
 the Rust lane runs `pnpm parity:check`, and the static lane runs the same check on every change.
 
+_Amended by [SM-1681](https://linear.app/stablemates/issue/SM-1681)._ A docs-only pull request
+runs only the always-run lanes that check the documentation. A change is docs-only if every file
+matches `DOC_PATHS` in `scripts/ci-lanes.ts`: `docs/**`, `site/**`, a root `*.md` file, or
+`api/README.md`. These lanes run, as `DOC_CHECK_LANES` names them:
+
+- `static` runs `pnpm format:check`, `pnpm lint`, and `pnpm typecheck`, which read the site and
+  the Markdown files.
+- `npm-release-scope` runs the documentation tests of the unit scope, such as the guide reference
+  values, the guide examples, the glossary, the comparison names, and the site guide coverage.
+- `demo` builds the site, which checks the language examples of the guides and the site pages,
+  and runs the site smoke test.
+
+The `unit` lane runs only the unit tests that spawn the Python toolchain. None of them reads the
+documentation, so a docs-only pull request skips it. A filtered lane that names a changed file as an
+input still runs, for example the Python lane for a guide. A change that also has a file outside
+`DOC_PATHS` runs every always-run lane. `scripts/ci-lanes.test.ts` holds the steps of each skipped
+lane to a list, and fails when a test of the `unit` lane names the documentation.
+
+The `packed` lane keeps `docs/**` and `site/**` as inputs, because its full build builds the site.
+It is a weekly lane, so no pull request runs it.
+
+The `required` job stays the one required check, and every pull request still runs CI. A pull
+request never uses `[skip ci]`, because then `required` never reports. The squash commit of a
+docs-only merge to `main` can contain `[skip ci]`, because its pull request already ran each check
+that reads the documentation. It must not on a release candidate commit, because the release
+workflows require a successful push run of CI for the tagged commit. AGENTS.md states the
+procedure.
+
 `pnpm rust:test` runs the whole Rust workspace once with `--all-features`. It replaces the pair of
 runs that `rust:test` and `rust:integration` made in CI. `pnpm rust:integration` stays as a focused
 local command and as the list of targets that parity evidence may cite. Every target it names also
@@ -121,3 +151,9 @@ Each run also costs less. If the map omits an input that a lane reads, a change 
 the lane. A push to `main` runs every lane, but a maintainer can cancel that run, so the weekly run
 is the last check that reports the failure. The scans and the shared inputs make this omission less
 likely.
+
+_Amended by [SM-1681](https://linear.app/stablemates/issue/SM-1681)._ A docs-only pull request
+costs one lane less. A docs-only merge that skips its push run costs no `main` run. The pull request
+tested its merge commit on the base of that time. If another change lands first and makes a doc
+check fail, such as a guide reference value that no longer matches its architecture page, the next
+full run on `main` or the weekly run reports it.

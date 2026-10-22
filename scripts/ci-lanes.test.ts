@@ -6,9 +6,12 @@ import { parse } from "yaml";
 import {
   ALWAYS_RUN_LANE_INPUTS,
   ALWAYS_RUN_LANES,
+  DOC_CHECK_LANES,
+  DOC_PATHS,
   FILTERED_LANE_NAMES,
   FILTERED_LANES,
   LANE_NAMES,
+  isDocsOnlyChange,
   matchesGlob,
   planLanes,
   SHARED_INPUTS,
@@ -16,6 +19,7 @@ import {
   WEEKLY_LANES,
 } from "./ci-lanes.js";
 import { databaseTestFiles } from "../vitest.config.js";
+import { pythonToolchainTestFiles } from "../vitest.npm.config.js";
 import { WEEKLY_COMPATIBILITY_SCHEDULE } from "./ci-matrix.js";
 
 const repository = path.resolve(import.meta.dirname, "..");
@@ -26,6 +30,7 @@ const tracked = new Set(trackedFiles);
 
 interface Job {
   readonly if?: string;
+  readonly steps?: readonly { readonly run?: string }[];
   readonly needs?: string | readonly string[];
   readonly "continue-on-error"?: boolean;
   readonly outputs?: Record<string, string>;
@@ -265,11 +270,19 @@ describe("the lane-input map and the repository", () => {
 });
 
 describe("selecting lanes for a pull request", () => {
-  const always = Object.fromEntries(ALWAYS_RUN_LANES.map((lane) => [lane, true]));
   const weekly = Object.fromEntries(WEEKLY_LANES.map((lane) => [lane, false]));
 
+  // The filtered lanes that the change runs. A docs-only change runs only the doc-check lanes of
+  // the always-run lanes, and any other change runs each of them.
   function selected(files: readonly string[]): string[] {
     const { plan } = planLanes("pull_request", "", files);
+    const docsOnly = files.length > 0 && files.every((file) => matchesAny(file, DOC_PATHS));
+    const always = Object.fromEntries(
+      ALWAYS_RUN_LANES.map((lane) => [
+        lane,
+        !docsOnly || (DOC_CHECK_LANES as readonly string[]).includes(lane),
+      ]),
+    );
     expect(plan).toMatchObject({ ...always, ...weekly });
     return FILTERED_LANE_NAMES.filter((lane) => plan[lane]).toSorted();
   }
@@ -420,6 +433,126 @@ describe("selecting lanes for a pull request", () => {
     },
   ])("runs the lanes of $change", ({ files, lanes }) => {
     expect(selected(files)).toEqual([...lanes].toSorted());
+  });
+});
+
+function alwaysRun(files: readonly string[]): string[] {
+  const { plan } = planLanes("pull_request", "", files);
+  return ALWAYS_RUN_LANES.filter((lane) => plan[lane]).toSorted();
+}
+
+describe("a docs-only pull request", () => {
+  // SM-1585 (PR #901) changed three documentation files.
+  const docsChange = [
+    "docs/architecture/overview.md",
+    "docs/guides/390-connection-pooling.md",
+    "site/content/docs/pgbouncer.mdx",
+  ];
+
+  it("runs only the always-run lanes that check the documentation", () => {
+    expect(alwaysRun(docsChange)).toEqual([...DOC_CHECK_LANES].toSorted());
+    expect(alwaysRun(["README.md", "api/README.md", "docs/decisions/0083-x.md"])).toEqual(
+      [...DOC_CHECK_LANES].toSorted(),
+    );
+    expect(planLanes("pull_request", "", docsChange).reason).toBe(
+      "the change is docs-only, so it runs static, npm-release-scope, demo and python",
+    );
+  });
+
+  it.each([
+    "go/worker.go",
+    "python/README.md",
+    "LICENSE",
+    "benchmarks/README.md",
+    ".oxlintrc.json",
+    "Dockerfile",
+    "scripts/ci-lanes.ts",
+  ])("runs every always-run lane and the lanes of %s with documentation", (file) => {
+    expect(alwaysRun([...docsChange, file])).toEqual([...ALWAYS_RUN_LANES].toSorted());
+    const { plan } = planLanes("pull_request", "", [file]);
+    const { plan: mixed } = planLanes("pull_request", "", [...docsChange, file]);
+    const lanes = FILTERED_LANE_NAMES.filter((lane) => plan[lane]);
+    expect(lanes.filter((lane) => !mixed[lane])).toEqual([]);
+  });
+
+  // The weekly packed lane reads docs/** and site/**, but a pull request never runs it.
+  it("names no lane that the event skips in the plan reason", () => {
+    expect(planLanes("pull_request", "", ["docs/architecture/overview.md"]).reason).toBe(
+      "the change is docs-only, so it runs static, npm-release-scope, demo and no filtered lane",
+    );
+    expect(planLanes("pull_request", "", ["dashboard/app/src/main.tsx"]).reason).not.toContain(
+      "packed",
+    );
+  });
+
+  it("is not a change without files", () => {
+    expect(isDocsOnlyChange([])).toBe(false);
+  });
+
+  it.each(DOC_PATHS)("never runs every lane for a tracked file of %s", (glob) => {
+    const files = trackedFiles.filter((file) => matchesGlob(file, glob));
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((file) => selectLanes([file]).all)).toEqual([]);
+    expect(ALWAYS_RUN_LANE_INPUTS).toContain(glob);
+  });
+
+  it("keeps the doc-check lanes in the always-run lanes", () => {
+    for (const lane of DOC_CHECK_LANES) expect(ALWAYS_RUN_LANES).toContain(lane);
+  });
+
+  // The lanes that a docs-only change skips must check nothing in the documentation. If a step is
+  // added to one of them, decide whether it reads the documentation, then update this list.
+  const skippedLaneRuns: Record<string, readonly string[]> = {
+    unit: ["pnpm install --frozen-lockfile", "pnpm npm:test:python-toolchain"],
+  };
+
+  it("skips only the lanes whose steps this test knows", () => {
+    const skipped = ALWAYS_RUN_LANES.filter(
+      (lane) => !(DOC_CHECK_LANES as readonly string[]).includes(lane),
+    );
+    expect(Object.keys(skippedLaneRuns).toSorted()).toEqual([...skipped].toSorted());
+    for (const lane of skipped) {
+      const runs = (workflow.jobs[lane]?.steps ?? []).flatMap((step) =>
+        step.run ? [step.run.trim()] : [],
+      );
+      expect(runs).toEqual(skippedLaneRuns[lane]);
+    }
+  });
+
+  it("skips no test that reads the documentation", () => {
+    const docReference = /(?:^|[^\w./-])(?:\.\.\/)*((?:docs|site)\/[\w./-]*|[\w-]+\.mdx?\b)/;
+    const directoryName = /["'](docs|site|guides)["']/;
+    const reads: string[] = [];
+    for (const entry of pythonToolchainTestFiles)
+      for (const file of importClosure(entry))
+        for (const line of readFileSync(path.join(repository, file), "utf8").split("\n"))
+          if (docReference.test(line) || directoryName.test(line)) reads.push(`${file}: ${line}`);
+    expect(reads).toEqual([]);
+  });
+
+  // Each check that reads the documentation, with the lane that runs it.
+  it.each([
+    ["static", "pnpm format:check"],
+    ["static", "pnpm lint"],
+    ["static", "pnpm typecheck"],
+    ["demo", "pnpm build"],
+    ["demo", "pnpm test:site-smoke:built"],
+    ["npm-release-scope", "pnpm npm:test:unit"],
+  ])("runs in the %s lane: %s", (lane, run) => {
+    expect((DOC_CHECK_LANES as readonly string[]).includes(lane)).toBe(true);
+    const runs = (workflow.jobs[lane]?.steps ?? []).map((step) => step.run?.trim());
+    expect(runs).toContain(run);
+  });
+
+  it.each([
+    "scripts/comparison-names.test.ts",
+    "scripts/glossary-avoid-words.test.ts",
+    "scripts/guide-examples.test.ts",
+    "scripts/guide-reference-values.test.ts",
+    "typescript/core/test/site-guide-coverage.test.ts",
+  ])("runs %s in the npm release test scope", (file) => {
+    expect(tracked.has(file)).toBe(true);
+    expect(matchesAny(file, [...databaseTestFiles, ...pythonToolchainTestFiles])).toBe(false);
   });
 });
 

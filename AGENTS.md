@@ -146,6 +146,28 @@ run.
   require that run to succeed. Other commits can land on `main` during a release. Thus, check the
   commit SHA of a run before you cancel it.
 
+A docs-only merge can skip its `main` CI run. A docs-only change is a change in which every file
+matches `DOC_PATHS` in `scripts/ci-lanes.ts`: `docs/**`, `site/**`, a root `*.md` file, or
+`api/README.md`. Its pull request already ran each check that reads those files.
+
+1. List the files of the pull request, with both paths of a renamed file:
+   `gh api repos/{owner}/{repo}/pulls/<number>/files --paginate --jq '.[] | .filename, (.previous_filename // empty)'`.
+2. Send that list to `pnpm --silent exec tsx scripts/ci-lanes.ts --docs-only`. It prints
+   `docs-only` and exits 0 only for a docs-only change.
+3. If the change is docs-only, put a `[skip ci]` line in the squash commit message, above the
+   trailers.
+
+Never add `[skip ci]` to a pull request, because then the `required` check never reports. Never add
+it when the merge changes a file outside those paths or a `CHANGELOG.md` file. Never add it to a
+release candidate commit, because the release workflows require a successful `main` CI run for the
+tagged commit. If you do not know whether a maintainer will tag the commit, do not add it.
+
+GitHub skips every push and `pull_request` workflow when the head commit message contains a skip
+marker: `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`, or
+`skip-checks: true`. Do not quote a marker in a commit message unless you want to skip CI. Keep
+markers out of a pull request title and description too, because the squash message can copy them.
+Write "the skip-CI marker" instead.
+
 ## Keep benchmark comparisons private
 
 Benchmark results stay private until a maintainer decides to publish them. Comparative results
