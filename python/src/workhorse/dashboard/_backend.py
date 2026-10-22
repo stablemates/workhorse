@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -10,7 +9,7 @@ from decimal import Decimal
 from typing import cast
 
 from .._drivers import SyncExecutor
-from .._statements import SQL_STATEMENTS, DriverStatement
+from .._statements import DriverStatement
 from ..admin import (
     Admin,
     AdminAudit,
@@ -25,13 +24,6 @@ from ._errors import DashboardRPCError
 # How long one health document serves nearby reads, in seconds. It matches the TypeScript host's
 # createDashboardQueueHealthReader, so the three backends agree on staleness.
 QUEUE_HEALTH_TTL = 3.0
-
-# The shared retention preview statement. Psycopg binds one value to each placeholder, so a
-# parameter that the statement uses more than once is sent once for each use.
-_RETENTION_POLICY_PREVIEW = DriverStatement(*SQL_STATEMENTS["retention_policy_preview"])
-_RETENTION_POLICY_PREVIEW_ORDER = tuple(
-    int(number) - 1 for number in re.findall(r"\$(\d+)", _RETENTION_POLICY_PREVIEW.asyncpg)
-)
 
 
 def _statement(sql: str) -> DriverStatement:
@@ -295,37 +287,11 @@ class DashboardBackend:
         )
 
     def preview_retention_policy(self, input: object, _actor: str) -> object:
-        document = cast(Mapping[str, object], input)
-        definition = cast(Mapping[str, object], document["definition"])
-        current = self._rows("SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")[0]
-        names = (
-            "taskIdentityRetentionDays",
-            "terminalOutcomeRetentionDays",
-            "taskEventRetentionDays",
-            "attemptHistoryRetentionDays",
-            "scheduleOccurrenceRetentionDays",
-            "statisticsRetentionDays",
+        # The function merges the definition into the current policy and caps each count.
+        return self._json_result(
+            "SELECT workhorse.dashboard_retention_preview_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
         )
-        columns = tuple(_camel_to_snake(name) for name in names)
-        values = [
-            definition.get(name, current[column])
-            for name, column in zip(names, columns, strict=True)
-        ]
-        row = self._executor.rows(
-            _RETENTION_POLICY_PREVIEW,
-            [values[index] for index in _RETENTION_POLICY_PREVIEW_ORDER],
-        )[0]
-        sampled = {
-            "terminalTasks": int(cast(int, row["terminal_tasks"])),
-            "taskEvents": int(cast(int, row["task_events"])),
-            "attemptHistory": int(cast(int, row["attempt_history"])),
-            "scheduleOccurrences": int(cast(int, row["schedule_occurrences"])),
-            "statistics": int(cast(int, row["statistics"])),
-        }
-        return {
-            "eligible": {name: min(value, 10_000) for name, value in sampled.items()},
-            "capped": {name: value > 10_000 for name, value in sampled.items()},
-        }
 
     def set_queue_paused(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)

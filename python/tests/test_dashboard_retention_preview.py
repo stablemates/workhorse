@@ -1,48 +1,30 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
-from workhorse._statements import SQL_STATEMENTS, DriverStatement
+from workhorse._statements import DriverStatement
 from workhorse.dashboard._backend import DashboardBackend
-
-_COLUMNS = (
-    "task_identity_retention_days",
-    "terminal_outcome_retention_days",
-    "task_event_retention_days",
-    "attempt_history_retention_days",
-    "schedule_occurrence_retention_days",
-    "statistics_retention_days",
-)
 
 
 class _RetentionPreviewExecutor:
-    """Answer the policy read with 14 days for every setting and record the preview statement."""
+    """Record each statement and its parameters, and answer with an empty impact document."""
 
     dialect = "psycopg"
 
     def __init__(self) -> None:
-        self.statement: DriverStatement | None = None
+        self.statements: list[str] = []
         self.parameters: list[object] = []
 
     def rows(
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[dict[str, object]]:
-        if "get_retention_policy_v1()" in statement.psycopg:
-            return [dict.fromkeys(_COLUMNS, 14)]
-        self.statement = statement
+        self.statements.append(statement.psycopg)
         self.parameters = list(parameters)
-        return [
-            {
-                "terminal_tasks": 0,
-                "task_events": 0,
-                "attempt_history": 0,
-                "schedule_occurrences": 0,
-                "statistics": 0,
-            }
-        ]
+        return [{"result": {"eligible": {}, "capped": {}}}]
 
 
-def test_preview_sends_the_shared_statement_and_keeps_an_explicit_null() -> None:
+def test_preview_calls_the_dashboard_function_with_the_input() -> None:
     executor = _RetentionPreviewExecutor()
     backend = DashboardBackend(
         executor,  # type: ignore[arg-type]
@@ -51,13 +33,12 @@ def test_preview_sends_the_shared_statement_and_keeps_an_explicit_null() -> None
         maintenance_loops={},
         read_only=False,
     )
+    document = {"definition": {"terminalOutcomeRetentionDays": None, "statisticsRetentionDays": 3}}
 
-    backend.preview_retention_policy(
-        {"definition": {"terminalOutcomeRetentionDays": None, "statisticsRetentionDays": 3}},
-        "operator",
-    )
+    backend.preview_retention_policy(document, "operator")
 
-    assert executor.statement == DriverStatement(*SQL_STATEMENTS["retention_policy_preview"])
-    # An absent setting keeps the current value. The explicit null stays null, so the statement
-    # counts no terminal tasks. Psycopg takes one value for each use of a parameter.
-    assert executor.parameters == [14, None, 14, None, 14, 14, 14, 14, 14, 14, 3, 3, 3, 3, 3, 3]
+    assert executor.statements == [
+        "SELECT workhorse.dashboard_retention_preview_v1(%s::jsonb) AS result"
+    ]
+    # The function merges the definition, so the explicit null reaches it unchanged.
+    assert [json.loads(str(value)) for value in executor.parameters] == [document]

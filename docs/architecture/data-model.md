@@ -2139,9 +2139,11 @@ The row also holds five bounded work limits:
 
 Passing `{ force: true }` to synchronization copies every supplied value and clears all overrides.
 
-`Queue.previewRetentionPolicy` does no writes. It counts at most 10,001 eligible rows per
-category and reports 10,000 plus a capped flag. Its terminal-task count includes
-`fast_task_outcome` rows alongside `task_outcome` rows.
+`Queue.previewRetentionPolicy` and the dashboard procedure `previewRetentionPolicy` call
+`dashboard_retention_preview_v1(p_input jsonb)`, which does no writes. A setting that the input
+`definition` does not name keeps its effective value, and an explicit null disables its category.
+The function counts at most 10,001 eligible rows per category and reports 10,000 plus a capped
+flag. Its terminal-task count includes `fast_task_outcome` rows alongside `task_outcome` rows.
 
 #### Validity rules
 

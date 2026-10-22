@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 75,
+    "installedSchemaVersion": 76,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -68,6 +68,16 @@
     "compatible": false,
     "refusalCode": "schema-too-old",
     "refusal": "Refuse mutations until schema 54 is installed: earlier fail_v1 treats -1 as an immediate retry."
+  },
+  {
+    "id": "schema-before-the-dashboard-retention-preview",
+    "installedSchemaVersion": 74,
+    "clientProtocolVersion": 5,
+    "servedProtocolVersions": [5],
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the schema is migrated: the statement catalogue names dashboard_retention_preview_v1, which schema 74 does not carry.",
+    "note": "The served protocol matches, so only the schema floor refuses this client."
   },
   {
     "id": "schema-before-the-one-lease-busy-heartbeat",
@@ -141,7 +151,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -160,7 +170,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -169,7 +179,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -179,7 +189,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 74,
+    "installedSchemaVersion": 75,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

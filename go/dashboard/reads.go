@@ -96,26 +96,12 @@ func (service *backend) activity(ctx context.Context, input any, _ string) (any,
 }
 
 func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
-	definition := value["definition"].(map[string]any)
-	rows, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")
-	if err != nil {
-		return nil, err
-	}
-	names := []string{"taskIdentityRetentionDays", "terminalOutcomeRetentionDays", "taskEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays"}
-	values := make([]any, len(names))
-	// An absent setting keeps its current value. An explicit null disables the category, so the
-	// statement counts no rows for it.
-	for index, name := range names {
-		value, present := definition[name]
-		if !present {
-			value = rows[0][snake(name)]
-		}
-		values[index] = value
-	}
-	// The shared statement counts each kind of row up to one past the cap. The wrapper caps each
-	// count and reports which ones it capped.
-	return service.jsonQuery(ctx, `SELECT jsonb_build_object('eligible',jsonb_build_object('terminalTasks',LEAST(terminal_tasks,10000),'taskEvents',LEAST(task_events,10000),'attemptHistory',LEAST(attempt_history,10000),'scheduleOccurrences',LEAST(schedule_occurrences,10000),'statistics',LEAST(statistics,10000)),'capped',jsonb_build_object('terminalTasks',terminal_tasks>10000,'taskEvents',task_events>10000,'attemptHistory',attempt_history>10000,'scheduleOccurrences',schedule_occurrences>10000,'statistics',statistics>10000)) result FROM (`+retentionPolicyPreviewStatement+`) counts`, values...)
+	// The function merges the definition into the current policy and caps each count.
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
 }
 
 func (service *backend) taskDetail(ctx context.Context, input any, _ string) (any, error) {

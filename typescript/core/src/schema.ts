@@ -531,6 +531,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "allow throttle on fast-tier queues",
     kind: "additive",
   },
+  {
+    fromVersion: 74,
+    toVersion: 75,
+    file: "0076-add-the-dashboard-retention-preview-function.sql",
+    description: "add the dashboard retention preview function",
+    kind: "additive",
+  },
 ];
 
 /**

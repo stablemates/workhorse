@@ -66,26 +66,6 @@ const QUEUE_HEALTH_TTL: Duration = Duration::from_secs(3);
 /// The window `queue_health_v1` applies when a caller supplies none.
 const QUEUE_HEALTH_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
-/// Bounds each retention preview count, so an estimate never scans a whole table.
-const PREVIEW_CAP: i64 = 10_000;
-
-const RETENTION_SETTINGS: [&str; 6] = [
-    "taskIdentityRetentionDays",
-    "terminalOutcomeRetentionDays",
-    "taskEventRetentionDays",
-    "attemptHistoryRetentionDays",
-    "scheduleOccurrenceRetentionDays",
-    "statisticsRetentionDays",
-];
-
-const PREVIEW_COUNTS: [(&str, &str); 5] = [
-    ("terminalTasks", "terminal_tasks"),
-    ("taskEvents", "task_events"),
-    ("attemptHistory", "attempt_history"),
-    ("scheduleOccurrences", "schedule_occurrences"),
-    ("statistics", "statistics"),
-];
-
 pub(super) struct Backend<E: Executor> {
     pub(super) admin: Admin<E>,
     pub(super) environment: String,
@@ -154,7 +134,10 @@ impl<E: Executor> Backend<E> {
                 let result = self.raw_json_query(sql::DASHBOARD_EVENT_DETAIL_V1, Some(input)).await;
                 found(result, "Event not found")
             }
-            "previewRetentionPolicy" => self.preview_retention_policy(input).await,
+            // The function merges the definition into the current policy and caps each count.
+            "previewRetentionPolicy" => {
+                self.json_query(sql::DASHBOARD_RETENTION_PREVIEW_V1, Some(input)).await
+            }
             "taskDetail" => self.task_detail(input).await,
             "settings" => {
                 let input = json!({ "writable": writable, "settingsController": true });
@@ -304,33 +287,6 @@ impl<E: Executor> Backend<E> {
             self.optional_query(sql::DASHBOARD_TASK_DETAIL_V1, value.into()).await,
             "Task not found",
         )
-    }
-
-    async fn preview_retention_policy(&self, input: Value) -> Procedure {
-        let definition = object(&document(input), "definition");
-        let rows = self.rows(sql::GET_RETENTION_POLICY_V1, &[]).await?;
-        let current = exactly_one(&rows, "get_retention_policy_v1")?;
-        let mut days = Vec::with_capacity(RETENTION_SETTINGS.len());
-        // An absent setting keeps its current value. An explicit null disables the category, so the
-        // statement counts no rows for it.
-        for name in RETENTION_SETTINGS {
-            days.push(match definition.get(name) {
-                Some(value) => value.as_i64().map(|value| integer(value, name)).transpose()?,
-                None => {
-                    current.try_get::<_, Option<i32>>(snake(name).as_str()).map_err(Error::from)?
-                }
-            });
-        }
-        let params: Vec<&(dyn ToSql + Sync)> = days.iter().map(|day| day as _).collect();
-        let rows = self.rows(sql::RETENTION_POLICY_PREVIEW, &params).await?;
-        let counts = exactly_one(&rows, "retention_policy_preview")?;
-        let (mut eligible, mut capped) = (Map::new(), Map::new());
-        for (name, column) in PREVIEW_COUNTS {
-            let count = i64::from(counts.try_get::<_, i32>(column).map_err(Error::from)?);
-            eligible.insert(name.into(), count.min(PREVIEW_CAP).into());
-            capped.insert(name.into(), (count > PREVIEW_CAP).into());
-        }
-        Ok(json!({ "eligible": eligible, "capped": capped }))
     }
 
     /// Seals the group and cancels each member task that is not terminal. The authenticated

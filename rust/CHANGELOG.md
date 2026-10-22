@@ -83,8 +83,20 @@ enqueue outcome metric. In a batch with a debounce or a throttle member, a fast-
 one member now reports the position of that member in the batch. Debounce on a fast-tier queue is
 still rejected.
 
-The migration does not raise the SDK compatibility floor, which stays at schema 73. No SDK
-statement changes. The migration changes no stored data.
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration changes no stored data.
+
+### The retention preview reads through a dashboard function
+
+Before this change, each dashboard host read the retention policy, sent a shared statement that
+counted rows directly in the tables, and capped the counts in its own code. ADR 0040 asks for one
+SQL implementation for each dashboard procedure (SM-1478). Migration 0076
+(`0076-add-the-dashboard-retention-preview-function.sql`) moves the schema to version 75 and adds
+`dashboard_retention_preview_v1`. The Rust dashboard host now calls it. The `previewRetentionPolicy` response does
+not change.
+
+Every SDK statement catalogue names the new function, so the SDK compatibility floor rises from
+schema 73 to 75. Run `workhorse schema migrate` before the first process of this release starts.
+A 0.9 process keeps working on schema 75. The migration changes no stored data.
 
 ## 0.9.0 — 2026-10-20
 

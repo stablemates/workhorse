@@ -9,22 +9,11 @@ module Stablemates
         # How long one health document serves nearby reads, in seconds. It matches the other hosts'
         # queue health readers, so every backend agrees on staleness.
         QUEUE_HEALTH_TTL = 3.0
-        PREVIEW_CAP = 10_000
-        RETENTION_SETTINGS = %w[
-          taskIdentityRetentionDays terminalOutcomeRetentionDays taskEventRetentionDays
-          attemptHistoryRetentionDays scheduleOccurrenceRetentionDays statisticsRetentionDays
-        ].freeze
-        PREVIEW_COUNTS = {
-          "terminalTasks" => "terminal_tasks", "taskEvents" => "task_events",
-          "attemptHistory" => "attempt_history", "scheduleOccurrences" => "schedule_occurrences",
-          "statistics" => "statistics"
-        }.freeze
         MAINTENANCE_SETTINGS = %w[
           timezone partitionPreparationIntervalMs terminalCleanupIntervalMs historyRetentionLocalTime
           statisticsRollupIntervalMs statisticsGroupLimit statisticsRecomputeBuckets
         ].freeze
-        private_constant :QUEUE_HEALTH_TTL, :PREVIEW_CAP, :RETENTION_SETTINGS, :PREVIEW_COUNTS,
-          :MAINTENANCE_SETTINGS
+        private_constant :QUEUE_HEALTH_TTL, :MAINTENANCE_SETTINGS
 
         def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:)
           @executor = executor
@@ -131,20 +120,8 @@ module Stablemates
           result(SqlCatalogue::DASHBOARD_CRON_V1, {"maintenanceLoops" => @maintenance_loops})
         end
 
-        def preview_retention_policy(input, _actor)
-          definition = input.fetch("definition")
-          current = one(@executor.rows(SqlCatalogue::GET_RETENTION_POLICY_V1), "get_retention_policy_v1")
-          days = RETENTION_SETTINGS.map do |name|
-            value = definition.fetch(name) { current.fetch(snake(name)) }
-            value&.to_s
-          end
-          counts = one(@executor.rows(SqlCatalogue::RETENTION_POLICY_PREVIEW, days), "retention_policy_preview")
-          sampled = PREVIEW_COUNTS.transform_values { |column| Values.parse_integer(counts.fetch(column)) }
-          {
-            "eligible" => sampled.transform_values { |count| [count, PREVIEW_CAP].min },
-            "capped" => sampled.transform_values { |count| count > PREVIEW_CAP }
-          }
-        end
+        # The function merges the definition into the current policy and caps each count.
+        def preview_retention_policy(input, _actor) = result(SqlCatalogue::DASHBOARD_RETENTION_PREVIEW_V1, input)
 
         def set_queue_paused(input, actor)
           paused = input.fetch("paused")

@@ -146,9 +146,8 @@ The host handles a request in this order:
 7. It calls the private `workhorse.dashboard._backend.DashboardBackend`.
 
 The backend's `procedures()` implements the database-owned contract procedures through versioned
-dashboard views and lifecycle functions. The exception is `previewRetentionPolicy`, which reads
-`get_retention_policy_v1()` and then counts the eligible rows directly in the tables, as every host
-does. SM-1478 owns the decision about this exception. The host supplies `enqueueTest` and
+dashboard views and lifecycle functions. `previewRetentionPolicy` calls
+`dashboard_retention_preview_v1`, as every host does. The host supplies `enqueueTest` and
 `setSchedulePaused`. The behavior of these two procedures belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six scenarios and all 81 exchanges
 against both writable and read-only hosts.
@@ -165,6 +164,10 @@ These functions return their complete `dashboard/v1` response documents:
 - `workhorse.dashboard_events_v1(p_input jsonb)`
 - `workhorse.dashboard_task_detail_v1(p_input jsonb)`
 - `workhorse.dashboard_human_waits_v1(p_input jsonb)`
+- `workhorse.dashboard_retention_preview_v1(p_input jsonb)`. It merges the input `definition` into
+  the effective retention policy. An absent setting keeps its effective value, and an explicit null
+  disables its category. It returns the `RetentionPolicyImpact` document: each count is capped at
+  10,000, and `capped` is true for a count with more eligible rows.
 
 Two functions return one document or SQL `NULL`:
 

@@ -12,7 +12,7 @@ import (
 
 // An installed schema version these tests' fake executors report so the compatibility check
 // accepts them. Track protocol/v1/manifest.json's schema.minimumVersion when it advances.
-const testSchemaVersion = 73
+const testSchemaVersion = 75
 
 type compatibilityFixture struct {
 	ID                     string  `json:"id"`

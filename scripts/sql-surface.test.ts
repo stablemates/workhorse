@@ -96,6 +96,18 @@ describe("deriving the governed set", () => {
     });
   });
 
+  it("keeps governing a relation and its columns that only a released client reads", () => {
+    const retained = deriveGovernedSurface(schema, [], [], {
+      task_event: { kind: "table", columns: { occurred_at: "timestamptz" } },
+      no_such_relation: { kind: "table", columns: { id: "uuid" } },
+    });
+    expect(retained.relations.task_event).toEqual({
+      kind: "table",
+      columns: { occurred_at: "timestamptz" },
+    });
+    expect(retained.relations.no_such_relation).toBeUndefined();
+  });
+
   it("records what no supported release reads as an internal helper", () => {
     expect(derived.internalHelpers.functions).toContain("uuid_v7_v1");
     expect(derived.internalHelpers.relations).toContain("schema_migration");
@@ -212,6 +224,7 @@ it("promises every governed function and column the installed schema still provi
     schema,
     await readSurfaceSources(repository),
     Object.keys(promised.functions),
+    promised.relations,
   );
   expect(classifyGovernedSurface(promised, current)).toEqual([]);
   expect(
