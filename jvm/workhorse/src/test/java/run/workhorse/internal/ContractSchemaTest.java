@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,7 +42,7 @@ class ContractSchemaTest {
                 // A schema in JSON text reads the way a schema that PostgreSQL stores does.
                 Object document =
                     fixture.get("schemaJson") instanceof String text
-                        ? Json.parseExact(text)
+                        ? Json.parseSchema(text)
                         : fixture.get("schema");
                 if (Boolean.TRUE.equals(fixture.get("schemaError"))) {
                   assertThrows(IllegalArgumentException.class, () -> new ContractSchema(document));
@@ -77,6 +78,21 @@ class ContractSchemaTest {
     assertTrue(schema.valid(0.30000000000000004));
     columns.put("schema", null);
     assertNull(Contracts.storedSchema(new Row(columns)));
+  }
+
+  // SM-1593: Json.parseExact refuses this constant, because a value path cannot read it back.
+  @Test
+  void readsAStoredSchemaFractionOutsideTheDoubleRange() {
+    String integer = "1" + "0".repeat(309);
+    Map<String, @Nullable Object> columns = new HashMap<>();
+    columns.put("schema", "{\"payload\": {\"maximum\": " + integer + ".1}}");
+    Map<String, @Nullable Object> document =
+        Objects.requireNonNull(Json.object(Contracts.storedSchema(new Row(columns))));
+    ContractSchema schema = new ContractSchema(document.get("payload"));
+    assertTrue(schema.valid(1L));
+    assertTrue(schema.valid(Double.MAX_VALUE));
+    assertTrue(schema.valid(new BigInteger(integer)));
+    assertFalse(schema.valid(new BigInteger(integer).add(BigInteger.ONE)));
   }
 
   @Test

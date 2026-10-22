@@ -54,13 +54,14 @@ public final class Contracts {
    *
    * <p>jsonb keeps all the digits of a number that another SDK synchronized. {@link
    * Json#parse(String)} reads a fraction as a {@code Double}, so the contract would compare a
-   * rounded constant.
+   * rounded constant. {@link Json#parseSchema(String)} also keeps a fraction outside the double
+   * range, which {@link Json#parseExact(String)} refuses (SM-1593).
    *
    * @throws IllegalArgumentException if the column holds no strict JSON value
    */
   public static @Nullable Object storedSchema(Row row) {
     String text = row.text("schema");
-    return text == null ? null : Json.parseExact(text);
+    return text == null ? null : Json.parseSchema(text);
   }
 
   private static PayloadContract decode(Row row) {

@@ -248,7 +248,7 @@ that its own values cannot hold. The `serde_json` `arbitrary_precision` feature 
 | Go         | `decodeContractJSON` decodes the column with `UseNumber`.                                                           |
 | Rust       | The SDK selects `schema::text`. `compile_stored_contract_schema` keeps each number token.                           |
 | Ruby       | `Contracts.parse_schema` reads a fraction a Float cannot hold as a Rational.                                        |
-| JVM        | `Contracts.storedSchema` reads the column with `Json.parseExact`.                                                   |
+| JVM        | `Contracts.storedSchema` reads the column with `Json.parseSchema`.                                                  |
 
 The TypeScript, Python, and Rust drivers parse `jsonb` into doubles, so these SDKs wrap
 `get_contract_definition_v1` in a statement that selects `schema::text`. In Rust, a schema object
@@ -259,8 +259,10 @@ The meta-schema check in TypeScript and Rust sees a double, not the exact text. 
 number outside the double range becomes the largest finite double, and a non-zero number that
 rounds to zero becomes the smallest positive double. Each keeps the sign of the token. A stored
 `"multipleOf": 1e-400` therefore stays valid. Python reads an integer with a fraction part, such as
-`9007199254740993.0`, as an `int`, so a count keyword such as `maxLength` accepts it. The JVM
-refuses a stored fraction outside the double range (SM-1593).
+`9007199254740993.0`, as an `int`, so a count keyword such as `maxLength` accepts it.
+`Json.parseSchema` is `Json.parseExact` without one refusal: it keeps a fraction outside the double
+range as a `BigDecimal` (SM-1593). `Json.parseExact` refuses such a fraction, because `Json.parse`
+cannot read the stored value back. Thus each JVM value path keeps that refusal.
 
 python-jsonschema validates a subschema that names `$schema` with the library validator of that
 dialect, which does not have the exact keywords. Thus `compile_contract_schema` compiles a copy
