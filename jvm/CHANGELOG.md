@@ -29,6 +29,11 @@ adds.
   Now `Contracts.storedSchema` reads the schema with `Json.parseSchema`, which keeps the constant as
   a `BigDecimal`, and `ContractSchema` compares it exactly. The value paths still refuse such a
   fraction (SM-1593).
+- **`Queue.syncContracts` stores a schema fraction outside the double range.** Before this change,
+  the JVM refused an application schema such as `{"maximum": 1000…0.1}`, with 310 digits before
+  the point as a `BigDecimal`: "contract schema is not a JSON value". Now the sync converts each
+  schema with `Json.parseSchema`, and PostgreSQL stores all the digits. Each value path still
+  refuses such a fraction (SM-1598).
 - **The dashboard reads a stored long integer without a `BigInteger` parse.** A stored value
   without a payload contract can hold integers of 131,072 digits. Before this change, each
   dashboard read parsed such an integer into a `BigInteger`, which took about 0.2 s for each

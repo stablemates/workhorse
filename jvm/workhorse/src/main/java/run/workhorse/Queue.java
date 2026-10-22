@@ -954,8 +954,7 @@ public final class Queue {
   }
 
   private @Nullable Void syncContracts(Call call, Map<String, TaskTypeContracts> definitions) {
-    String document =
-        Json.write(Contracts.document(definitions, value -> tree(value, "contract schema")));
+    String document = Json.write(Contracts.document(definitions, this::schemaTree));
     assertCompatible(call);
     Sql.rows(call.connection, SqlCatalogue.SYNC_CONTRACT_DEFINITIONS_V1, document);
     lock.lock();
@@ -1715,8 +1714,21 @@ public final class Queue {
 
   /** A value as the core's JSON tree, through the codec and the strict parser. */
   private @Nullable Object tree(@Nullable Object value, String label) {
+    return tree(value, label, Json::parseExact);
+  }
+
+  /**
+   * A contract schema as the core's JSON tree. It keeps a fraction outside the double range, which
+   * {@link Json#parseExact(String)} refuses for a value (SM-1598).
+   */
+  private @Nullable Object schemaTree(@Nullable Object value) {
+    return tree(value, "contract schema", Json::parseSchema);
+  }
+
+  private @Nullable Object tree(
+      @Nullable Object value, String label, Function<String, @Nullable Object> parser) {
     try {
-      return Json.parseExact(codec.encode(value));
+      return parser.apply(codec.encode(value));
     } catch (IllegalArgumentException error) {
       throw new IllegalArgumentException(
           label + " is not a JSON value: " + error.getMessage(), error);

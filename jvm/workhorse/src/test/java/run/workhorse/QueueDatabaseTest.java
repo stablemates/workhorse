@@ -610,6 +610,46 @@ class QueueDatabaseTest {
         () -> queue.enqueue(type, Map.of("count", new BigDecimal("12345678901234567.01"))));
   }
 
+  /** A fraction with 310 digits before the point, outside the double range (SM-1598). */
+  private static final BigDecimal WIDE_FRACTION = new BigDecimal("1" + "0".repeat(309) + ".1");
+
+  @Test
+  void storesEveryDigitOfASchemaFractionOutsideTheDoubleRange() throws SQLException {
+    String type = unique("wide-schema");
+    queue.syncContracts(
+        Map.of(
+            type,
+            new TaskTypeContracts(
+                "v1",
+                Map.of(
+                    "v1",
+                    new TaskContractVersion(
+                        Map.of("type", "number", "maximum", WIDE_FRACTION), true)))));
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT schema #>> '{payload,maximum}' FROM workhorse.contract_definition"
+                    + " WHERE task_type = ? AND version = 'v1'")) {
+      statement.setString(1, type);
+      try (ResultSet result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(WIDE_FRACTION.toPlainString(), result.getString(1));
+      }
+    }
+    assertEquals(EnqueueOutcome.ACCEPTED, queue.enqueue(type, 1).outcome());
+  }
+
+  @Test
+  void aValueStillRefusesAFractionOutsideTheDoubleRange() {
+    IllegalArgumentException error =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> queue.enqueue("decimal", Map.of("amount", WIDE_FRACTION)));
+    assertTrue(error.getMessage().contains("payload is not a JSON value: "), error.getMessage());
+    assertTrue(
+        error.getMessage().endsWith("a fraction outside the double range"), error.getMessage());
+  }
+
   // Payload and result contracts.
 
   @Test
