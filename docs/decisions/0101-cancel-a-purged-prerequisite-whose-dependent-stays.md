@@ -62,7 +62,7 @@ that names a purged task and a dependent that its policy releases cannot deadloc
 
 One limit remains. An enqueue that names a purged task and a dependent that its policy cancels or
 fails can deadlock with the purge, and PostgreSQL then aborts one of them with `40P01`. A cancel of
-the same task has the same limit today. SM-1286 owns it.
+the same task has the same limit. SM-1286 keeps the limit, as the second amendment below records.
 
 Two purges run one after the other, also for different queues. Each purge takes one transaction
 advisory lock, `hashtextextended('workhorse:purge-queue', 0)`, before any row lock. Without it, two
@@ -109,6 +109,8 @@ that the count includes the canceled tasks.
   alone from the result.
 - A purge in a transaction that already holds task row locks can deadlock with another purge. The
   amendment below keeps this limit.
+- An enqueue that names a purged or canceled task and a dependent that its policy rejects can
+  deadlock with the purge or the cancel. The second amendment below keeps this limit.
 
 ## Amendment: keep the purge lock limit (2026-10-22)
 
@@ -135,6 +137,33 @@ The two other choices of SM-1289 have these costs:
 - A refusal check cannot find the row locks of its own transaction in `pg_locks`. A check for a
   transaction ID refuses too much, because any earlier write, also outside the task tables, gives
   the transaction an ID.
+
+## Amendment: keep the cancel and enqueue lock limit (2026-10-22)
+
+SM-1286 keeps the limit between a cancel, or a purge, and an enqueue. Workhorse adds no retry and no
+new lock order, because an SDK cannot send again an enqueue that runs in a transaction of the
+caller, and a cancel learns its dependents only after it locks its task.
+
+The cycle needs a dependent that sorts below its prerequisite. Task identities are random, so about
+half of all pairs have that order. `typescript/core/test/integration-cancel-enqueue-deadlock.test.ts`
+reproduces the cycle:
+
+1. The task `B` depends on `A` with `on_cancellation = cancel`, and `B` sorts below `A`.
+2. A cancel of `A` locks `A`. A third transaction holds `B` and pauses the cancel.
+3. An enqueue names `A` and `B`. It locks `B` and waits for `A`.
+4. The third transaction ends. The cancel locks `B` for deletion and waits for the enqueue.
+5. PostgreSQL aborts one of them with `40P01`.
+
+The same test shows that an enqueue waits for the cancel without a cycle when `B` sorts above `A`.
+
+The other choices have these costs:
+
+- An SDK retry of an enqueue on `40P01` cannot replay the statements that the caller ran earlier in
+  the same transaction. It would also have to exist in six SDKs.
+- A global lock order needs the dependents before the cancel locks its task. The cancel finds them
+  only through its outcome trigger, after the lock.
+
+A caller that gets `40P01` from a cancel, a purge, or an enqueue can run its transaction again.
 
 ## Rejected alternatives
 
