@@ -1,68 +1,85 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { checkpointInputFingerprint } from "../src/index.js";
 import type { Json } from "../src/types.js";
 
-// Each SDK must give the same digest for the same input, so these vectors are the shared target.
-// The last vector orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33.
-// 2^53 - 1 is the largest number magnitude that an input can hold.
-const vectors: Array<[Json, string]> = [
-  [null, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"],
-  [true, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"],
-  [0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"],
-  [1.5, "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"],
-  [9_007_199_254_740_991, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"],
-  [-9_007_199_254_740_991, "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"],
-  [1e-7, "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"],
-  ["é", "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"],
-  [[], "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"],
-  [{}, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"],
-  [
-    { amountCents: 1000, currency: "EUR" },
-    "f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471",
-  ],
-  [
-    { b: [1, { d: 2, c: 3 }], a: "x" },
-    "4bc2f0faf907fa5fdaedde9cbf7002e3cbf041208b96a4ab4ce6693fbf4bea67",
-  ],
-  [{ "\u{1F600}": 1, דּ: 2 }, "2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3"],
-];
+// `protocol/v1/checkpoint-fingerprints.json` holds the vectors that every SDK must give.
+interface Vector {
+  id: string;
+  input: string;
+  canonical?: string;
+  digest?: string;
+  refusal?: "loneSurrogate" | "nonFinite" | "unsafeNumber";
+}
+
+const { vectors } = JSON.parse(
+  await readFile(
+    new URL("../../../protocol/v1/checkpoint-fingerprints.json", import.meta.url),
+    "utf8",
+  ),
+) as { vectors: Vector[] };
+
+const refusals = {
+  loneSurrogate: new TypeError("Checkpoint input strings must not contain a lone surrogate"),
+  nonFinite: new TypeError("Checkpoint input must contain only finite numbers"),
+  unsafeNumber: new TypeError("Checkpoint input numbers must be at most 2^53 - 1 in magnitude"),
+};
+
+// Each input is decoded in a new realm. JSON.parse in V8 13.6 and 14.6 (Node 24 and 26) can read
+// an escaped key as a key that an earlier parse in the same realm made (nodejs/node#63785).
+function decode({ input }: Vector): Json {
+  return runInNewContext("JSON.parse(text)", { text: input }) as Json;
+}
+
+const digests = vectors.filter(({ refusal }) => refusal === undefined);
+const refused = vectors.filter(({ refusal }) => refusal !== undefined);
+
+function byId(id: string): Vector {
+  const found = vectors.find((candidate) => candidate.id === id);
+  if (found === undefined) throw new Error(`No vector ${id}`);
+  return found;
+}
 
 const boxed = (value: number) => new Number(value) as unknown as Json;
 
 describe("checkpointInputFingerprint", () => {
-  it.each(vectors)("hashes the canonical JSON of %j", (input, digest) => {
-    expect(checkpointInputFingerprint(input)).toBe(digest);
+  it("states one outcome and the digest of the canonical text for each vector", () => {
+    expect(vectors.length).toBeGreaterThan(0);
+    expect(new Set(vectors.map(({ id }) => id)).size).toBe(vectors.length);
+    expect(digests.map(({ id, digest }) => [id, digest])).toEqual(
+      digests.map(({ id, canonical }) => [id, sha256(canonical ?? "")]),
+    );
+    expect(
+      refused.filter(
+        ({ canonical, digest, refusal }) =>
+          canonical !== undefined || digest !== undefined || !((refusal ?? "") in refusals),
+      ),
+    ).toEqual([]);
   });
 
-  it("ignores key order and gives a different digest for a different input", () => {
-    const charge = { amountCents: 1000, currency: "EUR" };
-    expect(checkpointInputFingerprint({ currency: "EUR", amountCents: 1000 })).toBe(
-      checkpointInputFingerprint(charge),
-    );
-    expect(checkpointInputFingerprint({ ...charge, amountCents: 900 })).not.toBe(
-      checkpointInputFingerprint(charge),
-    );
-    expect(checkpointInputFingerprint(-0)).toBe(checkpointInputFingerprint(0));
-  });
+  it.each(digests.map((found) => [found.id, found] as const))(
+    "gives the digest of the vector %s",
+    (_id, found) => {
+      expect(checkpointInputFingerprint(decode(found))).toBe(found.digest);
+    },
+  );
 
-  it("rejects an input that is not JSON with finite numbers", () => {
-    expect(() => checkpointInputFingerprint({ amount: Number.NaN })).toThrow(/finite numbers/);
+  it.each(refused.map((found) => [found.id, found] as const))(
+    "refuses the vector %s",
+    (_id, found) => {
+      expect(() => checkpointInputFingerprint(decode(found))).toThrow(
+        refusals[found.refusal as keyof typeof refusals],
+      );
+    },
+  );
+
+  it("rejects an input that is not JSON", () => {
+    expect(() => checkpointInputFingerprint({ amount: Number.NaN })).toThrow(refusals.nonFinite);
     expect(() => checkpointInputFingerprint(undefined as unknown as Json)).toThrow(
       /JSON serializable/,
     );
-    expect(() => checkpointInputFingerprint("\uD800")).toThrow(/lone surrogate/);
-    expect(() => checkpointInputFingerprint(["\uDE00x"])).toThrow(/lone surrogate/);
-    expect(() => checkpointInputFingerprint({ "\uD83D": 1 })).toThrow(/lone surrogate/);
-  });
-
-  it("rejects a number larger than 2^53 - 1 in magnitude", () => {
-    // A Number cannot show whether a source integer was rounded, so every SDK refuses the range.
-    for (const input of [2 ** 53, -(2 ** 53), 2 ** 64, 1e21, Number.MAX_VALUE]) {
-      expect(() => checkpointInputFingerprint({ id: input })).toThrow(
-        new TypeError("Checkpoint input numbers must be at most 2^53 - 1 in magnitude"),
-      );
-    }
   });
 
   it("checks a boxed Number as it checks the primitive", () => {
@@ -123,20 +140,16 @@ describe("checkpointInputFingerprint", () => {
   });
 
   it("reads each escaped key after a key that ends in a backslash", () => {
-    // JSON.parse in V8 13.6 and 14.6 can read such a key as the earlier backslash key when the
-    // object shape expects one next key (nodejs/node#63785). The walk does not parse JSON.
-    JSON.parse('{"sm1272Order":7,"\\\\":1}');
-    for (const key of ['"', "\n", "\u0001", "/"]) {
-      const input = { sm1272Order: 7, [key]: 1 };
-      expect(checkpointInputFingerprint(input)).toBe(sha256(canonicalText(key)));
-    }
+    // JSON.parse in this realm makes the backslash key first. Then V8 13.6 and 14.6 can read the
+    // other keys as that key (nodejs/node#63785). The fingerprint does not parse JSON.
+    JSON.parse(byId("sm1272-backslash-key").input);
+    const ids = ["sm1272-quote-key", "sm1272-newline-key", "sm1272-control-key"];
+    expect(ids.map((id) => checkpointInputFingerprint(decode(byId(id))))).toEqual(
+      ids.map((id) => byId(id).digest),
+    );
   });
 });
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-function canonicalText(key: string): string {
-  return `{${JSON.stringify(key)}:1,"sm1272Order":7}`;
 }

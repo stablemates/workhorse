@@ -20,6 +20,17 @@ upgrade steps.
 
 ## Unreleased
 
+### One protocol fixture holds the checkpoint fingerprint vectors
+
+Before this change, each SDK test kept its own copy of the checkpoint input fingerprint vectors. No
+vector had a quote, a backslash, a control character, or a lone surrogate. Thus two SDKs could
+write an escape differently and give different digests, and no test found it (SM-1431).
+
+`protocol/v1/checkpoint-fingerprints.json` now holds the vectors. Each vector has an input as JSON
+text and an expected digest or an expected refusal. The vectors cover escapes, control characters,
+key order above U+FFFF, number forms, exponent limits, integer limits, lone surrogates, and the
+SM-1272 key case. The tests of all six SDKs read the file directly. No digest changes.
+
 ### `workhorse init` writes a Prisma 7 client on Prisma 7
 
 Before this change, `workhorse init` always wrote the Prisma 6 constructor

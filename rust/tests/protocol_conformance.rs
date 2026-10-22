@@ -33,8 +33,10 @@ use conformance::matcher::{
     assert_value, normalize_timestamp, read_pointer, resolve, same, single_key, References,
 };
 
-/// Files in `protocol/v1` that describe fixtures rather than declare them.
-const METADATA: &[&str] = &["manifest.json", "cron.md", "governed-surface.json"];
+/// Files in `protocol/v1` that describe fixtures rather than declare them, and the fingerprint
+/// vectors that the unit tests read.
+const METADATA: &[&str] =
+    &["manifest.json", "cron.md", "governed-surface.json", "checkpoint-fingerprints.json"];
 /// Fixture files, keyed by the category name the list uses.
 const CATEGORIES: &[&str] = &[
     "compatibility",

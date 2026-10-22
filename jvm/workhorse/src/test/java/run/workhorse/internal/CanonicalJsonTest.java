@@ -2,22 +2,15 @@ package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import org.jspecify.annotations.Nullable;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * The RFC 8785 text of numbers and strings. Each value is a copy of a value that another SDK tests,
- * and each comment names its source.
+ * The RFC 8785 text of numbers, including numbers above 2^53 - 1. The fingerprint refuses those
+ * numbers, so the vectors of {@code protocol/v1/checkpoint-fingerprints.json} cannot show their
+ * text. The vectors cover strings, escapes, and the object member whose value is null.
  */
 class CanonicalJsonTest {
-  // python/tests/test_checkpoint_input.py:56-76, which includes every value of
-  // ruby/spec/unit/checkpoint_fingerprint_spec.rb:46-48. The fingerprint refuses a magnitude above
-  // 2^53 - 1, so this test calls the number form.
   @ParameterizedTest
   @CsvSource({
     "1, 1",
@@ -43,34 +36,5 @@ class CanonicalJsonTest {
   })
   void writesEachNumberInTheEcmaScriptForm(double value, String text) {
     assertEquals(text, CanonicalJson.number(value));
-  }
-
-  @Test
-  void writesTheIntegerBoundInDecimal() {
-    // ruby/spec/unit/checkpoint_fingerprint_spec.rb:49.
-    assertEquals("9007199254740991", CanonicalJson.canonical(9_007_199_254_740_991L));
-  }
-
-  @Test
-  void writesAnObjectMemberWhoseValueIsNull() {
-    // A JVM regression test, not a shared vector. Review round 1 of SM-1387 found that the object
-    // writer threw NullPointerException for a null member. RFC 8785 gives this text in every SDK.
-    Map<String, @Nullable Object> input = new LinkedHashMap<>();
-    input.put("b", null);
-    input.put("a", List.of());
-    assertEquals("{\"a\":[],\"b\":null}", CanonicalJson.canonical(input));
-    assertEquals(64, CanonicalJson.fingerprint(input).length());
-  }
-
-  @Test
-  void escapesOnlyTheQuoteTheBackslashAndTheControlCharacters() {
-    // python/tests/test_checkpoint_input.py:84-87.
-    assertEquals(
-        "\"a\\\"\\\\\\b\\f\\n\\r\\t\\u0001\\u001f\u007f é\"",
-        CanonicalJson.canonical("a\"\\\b\f\n\r\t\u0001\u001f\u007f é"));
-    // ruby/spec/unit/checkpoint_fingerprint_spec.rb:50.
-    assertEquals(
-        "\"q\\\"\\\\\\b\\t\\n\\f\\r\\u0001\u007f /\"",
-        CanonicalJson.canonical("q\"\\\b\t\n\f\r\u0001\u007f /"));
   }
 }

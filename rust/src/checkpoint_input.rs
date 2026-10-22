@@ -108,60 +108,62 @@ mod tests {
 
     use super::*;
 
-    // The shared vectors of typescript/core/test/checkpoint-fingerprint.test.ts. The last vector
-    // orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33. 2^53 - 1 is
-    // the largest number magnitude that an input can hold.
+    /// `protocol/v1/checkpoint-fingerprints.json` holds the vectors that every SDK must give.
+    /// `serde_json` refuses a lone surrogate escape and a number outside the double range when it
+    /// decodes the text, before the fingerprint.
     #[test]
     fn the_fingerprint_gives_the_shared_vectors() {
-        let vectors = [
-            (json!(null), "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"),
-            (json!(true), "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"),
-            (json!(0), "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"),
-            (json!(1.5), "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"),
-            (
-                json!(9_007_199_254_740_991_i64),
-                "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26",
-            ),
-            (
-                json!(-9_007_199_254_740_991_i64),
-                "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815",
-            ),
-            (
-                json!(9_007_199_254_740_991.0),
-                "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26",
-            ),
-            (json!(1e-7), "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"),
-            (json!("é"), "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"),
-            (json!([]), "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"),
-            (json!({}), "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"),
-            (
-                json!({ "amountCents": 1000, "currency": "EUR" }),
-                "f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471",
-            ),
-            (
-                json!({ "b": [1, { "d": 2, "c": 3 }], "a": "x" }),
-                "4bc2f0faf907fa5fdaedde9cbf7002e3cbf041208b96a4ab4ce6693fbf4bea67",
-            ),
-            (
-                json!({ "\u{1F600}": 1, "\u{FB33}": 2 }),
-                "2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3",
-            ),
-        ];
-        for (input, digest) in vectors {
-            assert_eq!(checkpoint_input_fingerprint(&input).unwrap(), digest, "input {input}");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../protocol/v1/checkpoint-fingerprints.json");
+        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let vectors = fixture["vectors"].as_array().unwrap();
+        assert!(!vectors.is_empty());
+        for vector in vectors {
+            let id = vector["id"].as_str().unwrap();
+            let decoded = serde_json::from_str::<Value>(vector["input"].as_str().unwrap());
+            match (vector["refusal"].as_str(), decoded) {
+                (None, Ok(input)) => assert_eq!(
+                    checkpoint_input_fingerprint(&input).unwrap(),
+                    vector["digest"].as_str().unwrap(),
+                    "vector {id}"
+                ),
+                (Some(refusal @ ("loneSurrogate" | "nonFinite")), Err(error)) => {
+                    let cause = if refusal == "loneSurrogate" {
+                        "hex escape"
+                    } else {
+                        "number out of range"
+                    };
+                    assert!(error.to_string().contains(cause), "vector {id}: {error}");
+                }
+                (Some(refusal @ ("unsafeNumber" | "nonFinite")), Ok(input)) => {
+                    let expected = if refusal == "unsafeNumber" {
+                        "Checkpoint input numbers must be at most 2^53 - 1 in magnitude"
+                    } else {
+                        // The `serde_json` feature `arbitrary_precision` decodes such a number.
+                        "Checkpoint input value must contain only finite numbers"
+                    };
+                    match checkpoint_input_fingerprint(&input) {
+                        Err(Error::InvalidArgument(message)) => {
+                            assert_eq!(message, expected, "vector {id}")
+                        }
+                        other => panic!("vector {id}: expected a refusal, got {other:?}"),
+                    }
+                }
+                (refusal, decoded) => {
+                    panic!("vector {id}: refusal {refusal:?}, decoded {decoded:?}")
+                }
+            }
         }
     }
 
     #[test]
-    fn key_order_and_number_form_do_not_change_the_fingerprint() {
+    fn a_serialize_type_has_the_fingerprint_of_its_json() {
         let charge = json!({ "amountCents": 1000, "currency": "EUR" });
-        let fingerprint = checkpoint_input_fingerprint(&charge).unwrap();
-        let reordered = HashMap::from([("currency", json!("EUR")), ("amountCents", json!(1000))]);
-        assert_eq!(checkpoint_input_fingerprint(&reordered).unwrap(), fingerprint);
-        let float = json!({ "amountCents": 1000.0, "currency": "EUR" });
-        assert_eq!(checkpoint_input_fingerprint(&float).unwrap(), fingerprint);
-        let discounted = json!({ "amountCents": 900, "currency": "EUR" });
-        assert_ne!(checkpoint_input_fingerprint(&discounted).unwrap(), fingerprint);
+        let reordered = HashMap::from([("currency", json!("EUR")), ("amountCents", json!(1000.0))]);
+        assert_eq!(
+            checkpoint_input_fingerprint(&reordered).unwrap(),
+            checkpoint_input_fingerprint(&charge).unwrap()
+        );
         assert_eq!(
             checkpoint_input_fingerprint(&-0.0).unwrap(),
             checkpoint_input_fingerprint(&0).unwrap()
@@ -192,13 +194,6 @@ mod tests {
             let Value::Number(number) = &input else { unreachable!() };
             assert_eq!(ecmascript_number(number).unwrap(), text);
         }
-    }
-
-    #[test]
-    fn strings_use_the_json_stringify_escapes() {
-        let mut out = String::new();
-        write_string("a\"\\\u{8}\u{c}\n\r\t\u{1}\u{1f}\u{7f}\u{2028}é", &mut out);
-        assert_eq!(out, "\"a\\\"\\\\\\b\\f\\n\\r\\t\\u0001\\u001f\u{7f}\u{2028}é\"");
     }
 
     #[test]

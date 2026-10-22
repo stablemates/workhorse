@@ -1,0 +1,533 @@
+{
+  "$comment": [
+    "The checkpoint input fingerprint vectors of ADR 0098. Each SDK test reads this file, decodes each input with its own JSON decoder, and computes the fingerprint.",
+    "input is JSON text. A vector with digest gives that SHA-256 digest of canonical, the RFC 8785 text of the input.",
+    "A vector with refusal is refused. An SDK can refuse it when it decodes the text or when it computes the fingerprint.",
+    "loneSurrogate: a string or a key has a lone surrogate. nonFinite: a number is outside the double range. unsafeNumber: a number is more than 2^53 - 1 in magnitude.",
+    "The file escapes each character outside printable ASCII, so each code point is visible."
+  ],
+  "vectors": [
+    {
+      "id": "null",
+      "input": "null",
+      "canonical": "null",
+      "digest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    },
+    {
+      "id": "true",
+      "input": "true",
+      "canonical": "true",
+      "digest": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
+      "id": "false",
+      "input": "false",
+      "canonical": "false",
+      "digest": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    },
+    {
+      "id": "empty-string",
+      "input": "\"\"",
+      "canonical": "\"\"",
+      "digest": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+    },
+    {
+      "id": "empty-array",
+      "input": "[]",
+      "canonical": "[]",
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "id": "empty-object",
+      "input": "{}",
+      "canonical": "{}",
+      "digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "id": "nested-empty-arrays",
+      "input": "[[[]],{}]",
+      "canonical": "[[[]],{}]",
+      "digest": "b291c0bcd01c9fca6b7a3b85b7110dbb1c046f3047bbf77bc9519460f8c133ae"
+    },
+    {
+      "id": "literals-in-an-array",
+      "input": "[null,true,false]",
+      "canonical": "[null,true,false]",
+      "digest": "37257214f22b92121c5ff4d7e29ed2d31b3f1129ee698e96e581ec05cb2e3cf7"
+    },
+    {
+      "id": "zero",
+      "input": "0",
+      "canonical": "0",
+      "digest": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "negative-zero",
+      "input": "-0",
+      "canonical": "0",
+      "digest": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "negative-zero-fraction",
+      "input": "-0.0",
+      "canonical": "0",
+      "digest": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "one-point-five",
+      "input": "1.5",
+      "canonical": "1.5",
+      "digest": "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"
+    },
+    {
+      "id": "negative-one-point-five",
+      "input": "-1.5",
+      "canonical": "-1.5",
+      "digest": "37c2b212b94e5372b33df924ea2a91182d90c237d0bf942c1768e794ebef2376"
+    },
+    {
+      "id": "one-with-a-fraction",
+      "input": "1.0",
+      "canonical": "1",
+      "digest": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "id": "one-with-an-exponent",
+      "input": "1e0",
+      "canonical": "1",
+      "digest": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "id": "one-with-an-uppercase-exponent",
+      "input": "1E+0",
+      "canonical": "1",
+      "digest": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "id": "one-hundred",
+      "input": "100.0",
+      "canonical": "100",
+      "digest": "ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306"
+    },
+    {
+      "id": "thousand-as-an-exponent",
+      "input": "1e3",
+      "canonical": "1000",
+      "digest": "40510175845988f13f6162ed8526f0b09f73384467fa855e1e79b44a56562a58"
+    },
+    {
+      "id": "one-tenth",
+      "input": "0.1",
+      "canonical": "0.1",
+      "digest": "14be4b45f18e0d8c67b4f719b5144eee88497e413709d11d85b096d8e2346310"
+    },
+    {
+      "id": "one-two-three-point-four-five-six",
+      "input": "123.456",
+      "canonical": "123.456",
+      "digest": "52dad41684065ccf8dd86bc21e739e57c750e4e1305f759956b7373308023eae"
+    },
+    {
+      "id": "one-millionth",
+      "input": "0.000001",
+      "canonical": "0.000001",
+      "digest": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "id": "one-millionth-as-an-exponent",
+      "input": "1e-6",
+      "canonical": "0.000001",
+      "digest": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "id": "below-one-millionth",
+      "input": "1.234e-6",
+      "canonical": "0.000001234",
+      "digest": "4561f092ec62c175d58d17f136412e713559fd0e0a51fadd8d4085cc3511b4e1"
+    },
+    {
+      "id": "one-ten-millionth",
+      "input": "1e-7",
+      "canonical": "1e-7",
+      "digest": "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"
+    },
+    {
+      "id": "one-ten-millionth-in-decimal",
+      "input": "0.0000001",
+      "canonical": "1e-7",
+      "digest": "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"
+    },
+    {
+      "id": "negative-small-exponent",
+      "input": "-2.5e-8",
+      "canonical": "-2.5e-8",
+      "digest": "c0b884c9bb30550c4469e89352c6b296198d64ed2e1caac75c79f7947bb3e026"
+    },
+    {
+      "id": "smallest-subnormal",
+      "input": "5e-324",
+      "canonical": "5e-324",
+      "digest": "c46e7ca1be4c8734f373a56530787288fa2058d73d07855e9247e949f811a42a"
+    },
+    {
+      "id": "smallest-normal",
+      "input": "2.2250738585072014e-308",
+      "canonical": "2.2250738585072014e-308",
+      "digest": "8d51a73768cb59d15302f6b0a4c7147a04b0cce9df743b5bf50e31ab87b2d807"
+    },
+    {
+      "id": "underflow-to-zero",
+      "input": "1e-400",
+      "canonical": "0",
+      "digest": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "id": "ten-to-the-fifteen",
+      "input": "1e15",
+      "canonical": "1000000000000000",
+      "digest": "6a4ef24cb01aa0e97da4186c067128b828532db703db8872fa736a0cc0b363b1"
+    },
+    {
+      "id": "ten-to-the-fifteen-plus-fraction",
+      "input": "1000000000000000.5",
+      "canonical": "1000000000000000.5",
+      "digest": "6e0e40f86360d43323bb004ec39c881a2cfb16671005df57276c1c9c390b4316"
+    },
+    {
+      "id": "round-half-to-even",
+      "input": "-1010086764207289.2",
+      "canonical": "-1010086764207289.2",
+      "digest": "8c9cd251d68d9058d664f7b00a40ee5aeae4d248a7d4df400374f23b2ca536d2"
+    },
+    {
+      "id": "largest-safe-integer",
+      "input": "9007199254740991",
+      "canonical": "9007199254740991",
+      "digest": "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "id": "smallest-safe-integer",
+      "input": "-9007199254740991",
+      "canonical": "-9007199254740991",
+      "digest": "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"
+    },
+    {
+      "id": "largest-safe-integer-with-a-fraction",
+      "input": "9007199254740991.0",
+      "canonical": "9007199254740991",
+      "digest": "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "id": "largest-safe-integer-as-an-exponent",
+      "input": "9.007199254740991e15",
+      "canonical": "9007199254740991",
+      "digest": "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "id": "two-to-the-fifty-three",
+      "input": "9007199254740992",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "negative-two-to-the-fifty-three",
+      "input": "-9007199254740992",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "two-to-the-fifty-three-plus-one",
+      "input": "9007199254740993",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "two-to-the-fifty-three-with-a-fraction",
+      "input": "9007199254740992.0",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "unsafe-integer-in-an-object",
+      "input": "{\"id\":9007199254740993}",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "ten-to-the-sixteen",
+      "input": "1e16",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "ten-to-the-twenty",
+      "input": "1e20",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "ten-to-the-twenty-one",
+      "input": "[1e21]",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "large-exponent-with-a-fraction",
+      "input": "1.25e22",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "long-integer",
+      "input": "123456789012345680000",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "largest-unsigned-64-bit-integer",
+      "input": "18446744073709551615",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "two-to-the-sixty-four",
+      "input": "18446744073709551616",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "smallest-signed-64-bit-integer",
+      "input": "-9223372036854775808",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "largest-double",
+      "input": "1.7976931348623157e308",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "negative-largest-double",
+      "input": "-1.7976931348623157e308",
+      "refusal": "unsafeNumber"
+    },
+    {
+      "id": "exponent-above-the-double-range",
+      "input": "1e400",
+      "refusal": "nonFinite"
+    },
+    {
+      "id": "negative-exponent-above-the-double-range",
+      "input": "{\"amount\":-1e400}",
+      "refusal": "nonFinite"
+    },
+    {
+      "id": "e-acute",
+      "input": "\"\u00e9\"",
+      "canonical": "\"\u00e9\"",
+      "digest": "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"
+    },
+    {
+      "id": "quote",
+      "input": "\"\\\"\"",
+      "canonical": "\"\\\"\"",
+      "digest": "0c926fba014b31b506cd4ceb60d646c0c867432650fa0671fcafed6b772614a3"
+    },
+    {
+      "id": "backslash",
+      "input": "\"\\\\\"",
+      "canonical": "\"\\\\\"",
+      "digest": "687a9ed5a2b7019504648f874bb683f56e7787e1a4738493d84349c8d4e72b23"
+    },
+    {
+      "id": "solidus",
+      "input": "\"/\"",
+      "canonical": "\"/\"",
+      "digest": "df7e940f72aa93cbcb6d70cc35124b0767c7a0e353043c7c24b660ea9be7b952"
+    },
+    {
+      "id": "escaped-solidus",
+      "input": "\"\\/\"",
+      "canonical": "\"/\"",
+      "digest": "df7e940f72aa93cbcb6d70cc35124b0767c7a0e353043c7c24b660ea9be7b952"
+    },
+    {
+      "id": "short-escapes",
+      "input": "\"\\b\\f\\n\\r\\t\"",
+      "canonical": "\"\\b\\f\\n\\r\\t\"",
+      "digest": "88821412381596c0dc2c66e310ae7e66100d7e4196456e2e9f3d261d0b562746"
+    },
+    {
+      "id": "other-control-characters",
+      "input": "\"\\u0000\\u0001\\u000b\\u000e\\u001f\"",
+      "canonical": "\"\\u0000\\u0001\\u000b\\u000e\\u001f\"",
+      "digest": "49b87ce4077d619798db85253267796ed6a279723a0b5b6717b6bb38b9e221d9"
+    },
+    {
+      "id": "delete",
+      "input": "\"\u007f\"",
+      "canonical": "\"\u007f\"",
+      "digest": "6fe76740e12a93d5598fe685cb6ad3d3c94e44609065a56866b69647772026ec"
+    },
+    {
+      "id": "line-and-paragraph-separators",
+      "input": "\"\u2028\u2029\"",
+      "canonical": "\"\u2028\u2029\"",
+      "digest": "e3a0e2262ac7790f4df36b522a8fbdd4ee3370d568eb15dc25c5f1775f14ed6c"
+    },
+    {
+      "id": "html-characters",
+      "input": "\"<>&'\"",
+      "canonical": "\"<>&'\"",
+      "digest": "ca5bda9247e326be48b4d7f72e21b9cd3fd7ca4759c510b9c163448eae412b0e"
+    },
+    {
+      "id": "unicode-escapes",
+      "input": "\"\\u0041\\u00E9\\u00e9\"",
+      "canonical": "\"A\u00e9\u00e9\"",
+      "digest": "907c95965d5b46d41a794eed5e974625e586145ca84c6aff25363d77c93e20ba"
+    },
+    {
+      "id": "escaped-surrogate-pair",
+      "input": "\"\\ud83d\\ude00\"",
+      "canonical": "\"\ud83d\ude00\"",
+      "digest": "7a0c50b92434b015545fe93ab723db2d4b2cdd14a441405624a9ce8be29f1d5a"
+    },
+    {
+      "id": "astral-character",
+      "input": "\"\ud83d\ude00\"",
+      "canonical": "\"\ud83d\ude00\"",
+      "digest": "7a0c50b92434b015545fe93ab723db2d4b2cdd14a441405624a9ce8be29f1d5a"
+    },
+    {
+      "id": "replacement-character",
+      "input": "\"\ufffd\"",
+      "canonical": "\"\ufffd\"",
+      "digest": "568601070314e0f4489c9944b3c151d5251d379330008293bb7e1a826a22a845"
+    },
+    {
+      "id": "noncharacter",
+      "input": "\"\uffff\"",
+      "canonical": "\"\uffff\"",
+      "digest": "7c6c5c98a320272b95b2a73e2a2ff15825794b0460f8af7835c9dfd9e76b38bb"
+    },
+    {
+      "id": "all-escapes",
+      "input": "\"q\\\"\\\\\\b\\t\\n\\f\\r\\u0001\u007f /\"",
+      "canonical": "\"q\\\"\\\\\\b\\t\\n\\f\\r\\u0001\u007f /\"",
+      "digest": "2051ec9c1ec220e0ef2765f409d8964dbacd8a815f525bc927aebbbf2e282c5f"
+    },
+    {
+      "id": "lone-high-surrogate",
+      "input": "\"\\ud800\"",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "lone-low-surrogate-in-an-array",
+      "input": "[\"\\ude00x\"]",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "lone-surrogate-in-a-key",
+      "input": "{\"\\ud83d\":1}",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "high-surrogate-before-a-letter",
+      "input": "\"\\ud83d\\u0041\"",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "reversed-surrogate-pair",
+      "input": "\"\\ude00\\ud83d\"",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "lone-high-surrogate-after-a-letter",
+      "input": "\"a\\ud800\"",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "lone-high-surrogate-after-a-pair-in-a-key",
+      "input": "{\"\\ud83d\\ude00\\ud83d\":1}",
+      "refusal": "loneSurrogate"
+    },
+    {
+      "id": "charge",
+      "input": "{\"amountCents\":1000,\"currency\":\"EUR\"}",
+      "canonical": "{\"amountCents\":1000,\"currency\":\"EUR\"}",
+      "digest": "f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471"
+    },
+    {
+      "id": "charge-in-another-order-with-whitespace",
+      "input": " { \"currency\" : \"EUR\" ,\n \"amountCents\" : 1e3 } ",
+      "canonical": "{\"amountCents\":1000,\"currency\":\"EUR\"}",
+      "digest": "f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471"
+    },
+    {
+      "id": "scenario-charge",
+      "input": "{\"amountCents\":1000}",
+      "canonical": "{\"amountCents\":1000}",
+      "digest": "9d2b4e1adb2bfbf2ee8be37fd8df1e553dac2776ee865a46d86a38cd6e2737c4"
+    },
+    {
+      "id": "scenario-discounted-charge",
+      "input": "{\"amountCents\":900}",
+      "canonical": "{\"amountCents\":900}",
+      "digest": "2f3d79878d3e6c858a9fbb038b327843f2f752501b99581f7ffc54303eb82f7f"
+    },
+    {
+      "id": "nested-objects",
+      "input": "{\"b\":[1,{\"d\":2,\"c\":3}],\"a\":\"x\"}",
+      "canonical": "{\"a\":\"x\",\"b\":[1,{\"c\":3,\"d\":2}]}",
+      "digest": "4bc2f0faf907fa5fdaedde9cbf7002e3cbf041208b96a4ab4ce6693fbf4bea67"
+    },
+    {
+      "id": "null-member",
+      "input": "{\"b\":null,\"a\":[]}",
+      "canonical": "{\"a\":[],\"b\":null}",
+      "digest": "19ba18a5b9b54a620e46b2c04ebc7d3e7b4dcb1e74fda6cb1a58826f788834c5"
+    },
+    {
+      "id": "key-prefixes",
+      "input": "{\"b\":1,\"aa\":2,\"a\":3,\"\":4,\"B\":5}",
+      "canonical": "{\"\":4,\"B\":5,\"a\":3,\"aa\":2,\"b\":1}",
+      "digest": "a51a76894de30bfaeceb602a5dc80378e14bb3a03c88580dab841cb322c7f3f4"
+    },
+    {
+      "id": "key-above-ascii",
+      "input": "{\"z\":1,\"\u00e9\":2,\"Z\":3}",
+      "canonical": "{\"Z\":3,\"z\":1,\"\u00e9\":2}",
+      "digest": "bf9eaa37655cfed5683b96e34c701c9582f246c75f832c45d894f9bd6048c350"
+    },
+    {
+      "id": "key-above-u-ffff",
+      "input": "{\"\ud83d\ude00\":1,\"\ufb33\":2}",
+      "canonical": "{\"\ud83d\ude00\":1,\"\ufb33\":2}",
+      "digest": "2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3"
+    },
+    {
+      "id": "key-above-u-ffff-before-u-ffff",
+      "input": "{\"\uffff\":1,\"\ud83d\ude00\":2}",
+      "canonical": "{\"\ud83d\ude00\":2,\"\uffff\":1}",
+      "digest": "48c5d098713870a7b88be7fc0ffc0a79e912d20f80ea8a4a5604426f49add103"
+    },
+    {
+      "id": "escaped-keys",
+      "input": "{\"\\\"\":1,\"\\\\\":2,\"\\n\":3,\"\\u0001\":4,\"/\":5}",
+      "canonical": "{\"\\u0001\":4,\"\\n\":3,\"\\\"\":1,\"/\":5,\"\\\\\":2}",
+      "digest": "d1501cf2fcca9606938bfea39aee981c49245a8a74263994fa99f2f7b12fef3a"
+    },
+    {
+      "id": "sm1272-backslash-key",
+      "input": "{\"sm1272Order\":7,\"\\\\\":1}",
+      "canonical": "{\"\\\\\":1,\"sm1272Order\":7}",
+      "digest": "6aa1916b53e0da707774e7f0d031f8a9d804c866cf619b89bf4a329230f36800"
+    },
+    {
+      "id": "sm1272-quote-key",
+      "input": "{\"sm1272Order\":7,\"\\\"\":1}",
+      "canonical": "{\"\\\"\":1,\"sm1272Order\":7}",
+      "digest": "0ed3ac91e81c35507141e4f27b0ca12575cb5af0075557d2760c86f8a911b4ce"
+    },
+    {
+      "id": "sm1272-newline-key",
+      "input": "{\"sm1272Order\":7,\"\\n\":1}",
+      "canonical": "{\"\\n\":1,\"sm1272Order\":7}",
+      "digest": "ffbdfb4d13571bc286b8aacfa39bc3b52aadb3a67895354bc0196a4f1b70180e"
+    },
+    {
+      "id": "sm1272-control-key",
+      "input": "{\"sm1272Order\":7,\"\\u0001\":1}",
+      "canonical": "{\"\\u0001\":1,\"sm1272Order\":7}",
+      "digest": "bd46e2548404735bb21bc1aa1712f97ea0291fd5fae98ef1d90ad4dd3af2a203"
+    }
+  ]
+}

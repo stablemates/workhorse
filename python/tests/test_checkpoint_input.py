@@ -1,53 +1,43 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
+from protocol_fixtures import read_protocol_fixture
 
-from workhorse import Json, checkpoint_input_fingerprint
-from workhorse._checkpoint_input import _canonical, _number
+from workhorse import checkpoint_input_fingerprint
+from workhorse._checkpoint_input import _number
 
-# The vectors of typescript/core/test/checkpoint-fingerprint.test.ts, which every SDK must match.
-# The last vector orders keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33.
-# 2**53 - 1 is the largest number magnitude that an input can hold.
-VECTORS: list[tuple[Json, str]] = [
-    (None, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"),
-    (True, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"),
-    (0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"),
-    (1.5, "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"),
-    (9_007_199_254_740_991, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"),
-    (-9_007_199_254_740_991, "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"),
-    (9_007_199_254_740_991.0, "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"),
-    (1e-7, "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"),
-    ("é", "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"),
-    ([], "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"),
-    ({}, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"),
-    (
-        {"amountCents": 1000, "currency": "EUR"},
-        "f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471",
-    ),
-    (
-        {"b": [1, {"d": 2, "c": 3}], "a": "x"},
-        "4bc2f0faf907fa5fdaedde9cbf7002e3cbf041208b96a4ab4ce6693fbf4bea67",
-    ),
-    (
-        {"\U0001f600": 1, "דּ": 2},
-        "2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3",
-    ),
-]
+# protocol/v1/checkpoint-fingerprints.json holds the vectors that every SDK must give.
+VECTORS: list[dict[str, Any]] = read_protocol_fixture("checkpoint-fingerprints.json")["vectors"]
+
+REFUSALS = {
+    "loneSurrogate": "lone surrogate",
+    "nonFinite": "only finite numbers",
+    "unsafeNumber": "numbers must be at most 2\\*\\*53 - 1",
+}
 
 
-@pytest.mark.parametrize(("input", "digest"), VECTORS)
-def test_the_fingerprint_gives_the_shared_vectors(input: Json, digest: str) -> None:
-    assert checkpoint_input_fingerprint(input) == digest
+def test_the_fixture_has_vectors() -> None:
+    assert VECTORS
 
 
-def test_key_order_and_number_form_do_not_change_the_fingerprint() -> None:
-    charge = {"amountCents": 1000, "currency": "EUR"}
-    fingerprint = checkpoint_input_fingerprint(charge)
-    assert checkpoint_input_fingerprint({"currency": "EUR", "amountCents": 1000}) == fingerprint
-    assert checkpoint_input_fingerprint({"amountCents": 1000.0, "currency": "EUR"}) == fingerprint
-    assert checkpoint_input_fingerprint({"amountCents": 900, "currency": "EUR"}) != fingerprint
-    assert checkpoint_input_fingerprint(-0.0) == checkpoint_input_fingerprint(0)
+@pytest.mark.parametrize("vector", VECTORS, ids=[vector["id"] for vector in VECTORS])
+def test_the_fingerprint_gives_the_shared_vectors(vector: dict[str, Any]) -> None:
+    input = json.loads(vector["input"])
+    if "refusal" in vector:
+        with pytest.raises(ValueError, match=REFUSALS[vector["refusal"]]):
+            checkpoint_input_fingerprint(input)
+    else:
+        assert checkpoint_input_fingerprint(input) == vector["digest"]
+
+
+def test_a_tuple_has_the_fingerprint_of_a_list() -> None:
     assert checkpoint_input_fingerprint((1, "x")) == checkpoint_input_fingerprint([1, "x"])
+    assert checkpoint_input_fingerprint({"amountCents": 1000.0}) == (
+        checkpoint_input_fingerprint({"amountCents": 1000})
+    )
 
 
 @pytest.mark.parametrize(
@@ -81,28 +71,13 @@ def test_numbers_use_the_ecmascript_form(value: float, text: str) -> None:
     assert _number(float(value)) == text
 
 
-def test_strings_use_the_json_stringify_escapes() -> None:
-    assert _canonical('a"\\\b\f\n\r\t\x01\x1f\x7f\u2028é') == (
-        '"a\\"\\\\\\b\\f\\n\\r\\t\\u0001\\u001f\x7f\u2028é"'
-    )
-
-
 @pytest.mark.parametrize(
     ("input", "error", "message"),
     [
         ({"amount": float("nan")}, ValueError, "only finite numbers"),
         ([float("inf")], ValueError, "only finite numbers"),
         (-float("inf"), ValueError, "only finite numbers"),
-        (2**53, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        (-(2**53), ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        (2**64, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        ({"id": 2**53 + 1}, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
         (float(2**53), ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        ([1e21], ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        (-1.7976931348623157e308, ValueError, "numbers must be at most 2\\*\\*53 - 1"),
-        ("\ud800", ValueError, "lone surrogate"),
-        (["\ude00x"], ValueError, "lone surrogate"),
-        ({"\ud83d": 1}, ValueError, "lone surrogate"),
         ({1: "x"}, TypeError, "keys must be strings"),
         ({"at": object()}, TypeError, "contains object, which is not a JSON value"),
         ({1, 2}, TypeError, "contains set, which is not a JSON value"),

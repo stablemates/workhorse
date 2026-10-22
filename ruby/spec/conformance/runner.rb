@@ -10,8 +10,9 @@ require_relative "runtime"
 
 module Conformance
   PROTOCOL = File.expand_path("../../../protocol/v1", __dir__)
-  # Files in `protocol/v1` that describe fixtures rather than declare them.
-  METADATA = %w[manifest.json cron.md governed-surface.json].freeze
+  # Files in `protocol/v1` that describe fixtures rather than declare them, and the fingerprint vectors that
+  # the unit tests read.
+  METADATA = %w[manifest.json cron.md governed-surface.json checkpoint-fingerprints.json].freeze
   # Fixture files, keyed by the category name the list uses.
   CATEGORIES = %w[
     compatibility contracts cron-occurrences failures interpreter requests runtime scenarios schedules
