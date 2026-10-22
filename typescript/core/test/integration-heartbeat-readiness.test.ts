@@ -11,6 +11,9 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { databaseUrl, pool, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
 
+// The wait for a state that a loaded host can delay past the default of 1 s.
+const WAIT = { timeout: 5_000 };
+
 const ROUND_TIMEOUTS =
   "SELECT set_config('statement_timeout', $1, true), " +
   "set_config('idle_in_transaction_session_timeout', $2, true)";
@@ -30,9 +33,10 @@ async function occupy(source: Pool, count: number): Promise<() => void> {
 }
 
 /**
- * A view of `source` whose connect() a test controls. Statements still go to `source.query`, so
- * claims work while connect() fails. Only the dedicated connections (listener, heartbeat, and the
- * readiness check) come from connect().
+ * A view of `source` whose connect() a test controls. Most statements go to `source.query`, but the
+ * dedicated connections (listener, heartbeat, and the readiness check) come from connect(). So does
+ * each claim statement of a worker with a heartbeat gate, because the claim reads the gate after it
+ * borrows its connection. So a claim fails while connect() fails.
  */
 function controlledPool(source: Pool, max: number, options: { stallListen?: boolean } = {}) {
   const control = {
@@ -234,22 +238,28 @@ describe("worker heartbeat readiness", () => {
     });
     const run = worker.run();
     try {
-      // The first connect() of run() is the heartbeat reservation.
-      await vi.waitFor(() => expect(control.clients.length).toBeGreaterThanOrEqual(2));
-      const heartbeat = control.clients[0]!;
       const first = await producer.enqueue("gate.task", {}, { queue: "gate" });
       await vi.waitFor(() => expect(handled).toEqual([first]), { timeout: 5_000 });
 
+      // The pause keeps any claim from starting while connect() fails and the gate is still open,
+      // because a claim then fails on its own connect(). A wake that came before the loss, such as
+      // the notification of the first task, would start one. The pause holds back a claim that
+      // waits for its notification delay. It does not hold back a claim that has started.
+      worker.pause();
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(0), WAIT);
+      await vi.waitFor(() => expect(claims.inFlight).toBe(0), WAIT);
       // The heartbeat connection fails between rounds, and the pool lends no replacement.
-      expect(control.clients[0]).toBe(heartbeat);
       await loseHeartbeat(control, gate);
-      await vi.waitFor(() => expect(claims.inFlight).toBe(0));
+      // The resume wakes dispatch, which reads the closed gate.
+      const readsAtResume = gate.closedReads;
+      worker.resume();
+      await vi.waitFor(() => expect(gate.closedReads).toBeGreaterThan(readsAtResume), WAIT);
       const claimsBefore = claims.started;
       const readsBefore = gate.closedReads;
       // The listener wakes dispatch for the new task. Dispatch reads the closed gate and claims
       // nothing. Nothing else wakes it before the poll interval of one minute.
       const second = await producer.enqueue("gate.task", {}, { queue: "gate" });
-      await vi.waitFor(() => expect(gate.closedReads).toBeGreaterThan(readsBefore));
+      await vi.waitFor(() => expect(gate.closedReads).toBeGreaterThan(readsBefore), WAIT);
       expect(claims.started).toBe(claimsBefore);
       expect(await taskState(second)).toBe("ready");
       expect(handled).toEqual([first]);
@@ -276,7 +286,7 @@ async function loseHeartbeat(
     (control.clients[0] as unknown as { processID: number }).processID,
   ]);
   // The reservation sees the loss when its client reports the terminated backend.
-  await vi.waitFor(() => expect(gate.channel?.usable()).toBe(false));
+  await vi.waitFor(() => expect(gate.channel?.usable()).toBe(false), WAIT);
 }
 
 // Each test fills the worker's pool, so that a claim waits for a pooled connection. While it waits,
