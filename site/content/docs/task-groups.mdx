@@ -341,13 +341,11 @@ counts of the group that enqueued it.
   </Tab>
   <Tab value="Go">
     ```go
-    worker.Handle("imports.report", func(
+    worker.Handle("imports.report", workhorse.Typed(func(
     	ctx context.Context,
-    	payload any,
+    	report ImportReport,
     	handler *workhorse.HandlerContext,
     ) (any, error) {
-    	report, _ := payload.(map[string]any)
-    	importID, _ := report["importId"].(string)
     	link, err := handler.GetTaskGroup()
     	if err != nil {
     		return nil, err
@@ -356,11 +354,11 @@ counts of the group that enqueued it.
     		return nil, errors.New("the task has no task group")
     	}
     	counts := link.Group.Counts
-    	if err := sendReport(ctx, importID, counts.Succeeded, counts.Failed); err != nil {
+    	if err := sendReport(ctx, report.ImportID, counts.Succeeded, counts.Failed); err != nil {
     		return nil, err
     	}
     	return map[string]any{"sent": true}, nil
-    })
+    }))
     ```
   </Tab>
   <Tab value="Rust">

@@ -79,11 +79,14 @@ def run(database_url: str) -> None:
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+type welcome struct {
+	To string \`json:"to"\`
+}
 
 func run(ctx context.Context, pool *pgxpool.Pool) error {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
@@ -96,15 +99,11 @@ func run(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
-	worker.Handle("email.welcome", func(
-		_ context.Context, payload any, _ *workhorse.HandlerContext,
+	worker.Handle("email.welcome", workhorse.Typed(func(
+		_ context.Context, message welcome, _ *workhorse.HandlerContext,
 	) (any, error) {
-		message, ok := payload.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("payload must be an object")
-		}
-		return map[string]any{"deliveredTo": message["to"]}, nil
-	})
+		return map[string]any{"deliveredTo": message.To}, nil
+	}))
 	return worker.Run(ctx)
 }`,
 
@@ -378,29 +377,52 @@ def register_invoice(worker: Worker) -> None:
 
 import (
 	"context"
+	"fmt"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
+type invoice struct {
+	Amount int    \`json:"amount"\`
+	Email  string \`json:"email"\`
+}
+
+type charge struct {
+	ID string \`json:"id"\`
+}
+
+func chargeCard(amount int) (charge, error) {
+	return charge{ID: fmt.Sprintf("ch_%d", amount)}, nil
+}
+
+func renderInvoice(chargeID string) (map[string]any, error) {
+	return map[string]any{"chargeId": chargeID}, nil
+}
+
 func registerInvoice(worker *workhorse.Worker) {
-	worker.Handle("invoice.issue", func(
-		_ context.Context, payload any, handler *workhorse.HandlerContext,
+	worker.Handle("invoice.issue", workhorse.Typed(func(
+		_ context.Context, payload invoice, handler *workhorse.HandlerContext,
 	) (any, error) {
 		// After Workhorse stores a checkpoint result, later runs return it.
-		charge, err := handler.Checkpoint("charge", func() (any, error) {
-			return map[string]any{"payload": payload}, nil
+		stored, err := handler.Checkpoint("charge", func() (any, error) {
+			return chargeCard(payload.Amount)
 		})
+		if err != nil {
+			return nil, err
+		}
+		paid, err := workhorse.DecodeValue[charge](stored)
 		if err != nil {
 			return nil, err
 		}
 		pdf, err := handler.Checkpoint("render", func() (any, error) {
-			return map[string]any{"charge": charge}, nil
+			return renderInvoice(paid.ID)
 		})
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"charge": charge, "pdf": pdf}, nil
-	})
+		fmt.Println("email", payload.Email, pdf)
+		return map[string]any{"chargeId": paid.ID}, nil
+	}))
 }`,
 
   checkpointsRust: `use serde::Deserialize;
@@ -1553,10 +1575,13 @@ def deliver_scan(queue: Queue, task_id: str, result: Json, delivery_id: str) -> 
 
 import (
 	"context"
-	"fmt"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+type review struct {
+	Approved bool \`json:"approved"\`
+}
 
 func configureRelease(worker *workhorse.Worker) {
 	worker.Handle("release.publish", func(
@@ -1566,21 +1591,17 @@ func configureRelease(worker *workhorse.Worker) {
 		if err != nil {
 			return nil, err
 		}
-		review, err := handler.WaitForHuman("release-approval", map[string]any{
+		response, err := handler.WaitForHuman("release-approval", map[string]any{
 			"release": release, "scan": scan,
 		})
 		if err != nil {
 			return nil, err
 		}
-		decision, ok := review.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("review must be an object")
+		decision, err := workhorse.DecodeValue[review](response)
+		if err != nil {
+			return nil, err
 		}
-		approved, ok := decision["approved"].(bool)
-		if !ok {
-			return nil, fmt.Errorf("review needs a boolean approved field")
-		}
-		return map[string]any{"published": approved}, nil
+		return map[string]any{"published": decision.Approved}, nil
 	})
 }
 

@@ -83,7 +83,8 @@ func TestAnUndecodablePayloadFailsItsAttemptWithoutCallingTheHandler(t *testing.
 		t.Fatal("the handler ran with an undecodable payload")
 	}
 	if len(executor.envelopes) != 1 || !json.Valid([]byte(executor.envelopes[0])) ||
-		!strings.Contains(executor.envelopes[0], "could not decode the task payload") {
+		!strings.Contains(executor.envelopes[0], "could not decode the task payload") ||
+		!strings.Contains(executor.envelopes[0], `"name":"PayloadDecodeError"`) {
 		t.Fatalf("unexpected failure settlement: statements=%q envelopes=%q", executor.statements, executor.envelopes)
 	}
 }

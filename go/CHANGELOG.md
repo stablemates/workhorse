@@ -10,6 +10,33 @@ adds.
 
 ## Unreleased
 
+### A handler can receive a typed payload
+
+Before this release, a Go handler received its payload as `any`. A handler that read a field used a
+chain of type assertions, each with its own error branch. Now `workhorse.Typed[P]` adapts a handler
+that takes its payload as `P` to a `Handler`, so `Worker.Handle` does not change (SM-1218).
+
+```go
+worker.Handle("email.welcome", workhorse.Typed(func(
+	_ context.Context, message welcome, _ *workhorse.HandlerContext,
+) (any, error) {
+	return map[string]any{"deliveredTo": message.To}, nil
+}))
+```
+
+The adapter decodes the payload with `encoding/json`. A field that the payload omits keeps its zero
+value, so use a payload contract to require a field. If the payload does not decode into `P`, the
+handler does not run, and the attempt fails under the retry policy of the task.
+
+`workhorse.DecodeValue[T]` decodes a checkpoint result, a signal payload, or a human wait response
+into `T` with the same rules. These operations return decoded JSON, so a checkpoint whose operation
+returns a struct gives back a map, and `DecodeValue` turns it into the struct again.
+
+**Behavior change.** A payload that the worker cannot decode now fails its attempt with a
+`*PayloadDecodeError`. Before this release, the failure envelope recorded the name `Error`. Now it
+records `PayloadDecodeError`, the name the Rust SDK records. A `Typed` handler whose payload does
+not fit `P` fails with the same error.
+
 ### A worker refuses to start without its heartbeat connection
 
 **Behavior change.** Before this release, `Worker.Run` and `Worker.RunOnce` tried to reserve the

@@ -54,8 +54,11 @@ gives the decision the name `account-review`. It stores the context that an oper
     if err != nil {
     	return nil, err
     }
-    review, ok := value.(map[string]any)
-    if ok && review["approved"] == true {
+    review, err := workhorse.DecodeValue[Review](value)
+    if err != nil {
+    	return nil, err
+    }
+    if review.Approved {
     	activateAccount(accountID)
     }
     ```

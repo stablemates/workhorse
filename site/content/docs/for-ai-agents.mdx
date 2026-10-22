@@ -363,6 +363,10 @@ Each example does these steps:
     	workhorse "github.com/stablemates/workhorse/go"
     )
 
+    type orderCreated struct {
+    	OrderID string `json:"orderId"`
+    }
+
     func main() {
     	if err := run(); err != nil {
     		panic(err)
@@ -416,12 +420,12 @@ Each example does these steps:
     	if err != nil {
     		return err
     	}
-    	worker.Handle("order.created", func(
+    	worker.Handle("order.created", workhorse.Typed(func(
     		_ context.Context,
-    		payload any,
+    		order orderCreated,
     		handler *workhorse.HandlerContext,
     	) (any, error) {
-    		orderID := payload.(map[string]any)["orderId"].(string)
+    		orderID := order.OrderID
     		// The send runs once. A replay reuses the recorded receipt.
     		receipt, err := handler.Checkpoint("confirmation-email", func() (any, error) {
     			return sendConfirmationEmail(orderID)
@@ -430,7 +434,7 @@ Each example does these steps:
     			return nil, err
     		}
     		return map[string]any{"processedOrderId": orderID, "receipt": receipt}, nil
-    	})
+    	}))
     	if _, err = worker.RunOnce(ctx); err != nil { // Production workers call Run.
     		return err
     	}

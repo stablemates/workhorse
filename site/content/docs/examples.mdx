@@ -286,11 +286,15 @@ so a later run of the handler does not run the code again.
 
     import (
     	"context"
-    	"fmt"
     	"time"
 
     	workhorse "github.com/stablemates/workhorse/go"
     )
+
+    type trialLifecycle struct {
+    	To         string    `json:"to"`
+    	FollowUpAt time.Time `json:"followUpAt"`
+    }
 
     // Stand-ins for a mail provider. A real send passes the key to the provider's
     // idempotency option, and the provider drops a repeated send with the same key.
@@ -303,43 +307,26 @@ so a later run of the handler does not run the code again.
     }
 
     func registerTrialHandler(worker *workhorse.Worker) {
-    	worker.Handle("trial.lifecycle", func(
+    	worker.Handle("trial.lifecycle", workhorse.Typed(func(
     		_ context.Context,
-    		payload any,
+    		trial trialLifecycle,
     		handler *workhorse.HandlerContext,
     	) (any, error) {
-    		message, ok := payload.(map[string]any)
-    		if !ok {
-    			return nil, fmt.Errorf("trial payload must be an object")
-    		}
-    		to, ok := message["to"].(string)
-    		if !ok {
-    			return nil, fmt.Errorf("trial payload needs a string to field")
-    		}
-    		followUpText, ok := message["followUpAt"].(string)
-    		if !ok {
-    			return nil, fmt.Errorf("trial payload needs a string followUpAt field")
-    		}
-    		followUpAt, err := time.Parse(time.RFC3339, followUpText)
-    		if err != nil {
-    			return nil, err
-    		}
-
     		if _, err := handler.Checkpoint("welcome", func() (any, error) {
-    			return sendWelcome(to, "welcome:"+handler.Task.ID)
+    			return sendWelcome(trial.To, "welcome:"+handler.Task.ID)
     		}); err != nil {
     			return nil, err
     		}
-    		if err := handler.SleepUntil("follow-up-window", followUpAt); err != nil {
+    		if err := handler.SleepUntil("follow-up-window", trial.FollowUpAt); err != nil {
     			return nil, err
     		}
     		if _, err := handler.Checkpoint("follow-up", func() (any, error) {
-    			return sendFollowUp(to, "follow-up:"+handler.Task.ID)
+    			return sendFollowUp(trial.To, "follow-up:"+handler.Task.ID)
     		}); err != nil {
     			return nil, err
     		}
-    		return map[string]any{"deliveredTo": to}, nil
-    	})
+    		return map[string]any{"deliveredTo": trial.To}, nil
+    	}))
     }
     ```
 
@@ -1239,6 +1226,10 @@ handler. The handler must check for the request and stop.
     	workhorse "github.com/stablemates/workhorse/go"
     )
 
+    type exportBuild struct {
+    	Parts []string `json:"parts"`
+    }
+
     func uploadPart(ctx context.Context, part string) error {
     	fmt.Println("uploading", part)
     	return context.Cause(ctx)
@@ -1259,30 +1250,18 @@ handler. The handler must check for the request and stop.
     		return err
     	}
 
-    	worker.Handle("export.build", func(
+    	worker.Handle("export.build", workhorse.Typed(func(
     		handlerContext context.Context,
-    		payload any,
+    		export exportBuild,
     		_ *workhorse.HandlerContext,
     	) (any, error) {
-    		message, ok := payload.(map[string]any)
-    		if !ok {
-    			return nil, fmt.Errorf("export payload must be an object")
-    		}
-    		parts, ok := message["parts"].([]any)
-    		if !ok {
-    			return nil, fmt.Errorf("export payload needs an array parts field")
-    		}
-    		for _, value := range parts {
-    			part, ok := value.(string)
-    			if !ok {
-    				return nil, fmt.Errorf("export part must be a string")
-    			}
+    		for _, part := range export.Parts {
     			if err := uploadPart(handlerContext, part); err != nil {
     				return nil, err
     			}
     		}
     		return map[string]any{"exported": true}, nil
-    	})
+    	}))
     	return nil
     }
     ```
@@ -1511,63 +1490,63 @@ must continue after a deployment.
 
     import (
     	"context"
-    	"fmt"
+    	"encoding/json"
     	"time"
 
     	workhorse "github.com/stablemates/workhorse/go"
     )
 
+    type AgentRun struct {
+    	Prompt         string `json:"prompt"`
+    	ConversationID string `json:"conversationId"`
+    }
+
+    type Tool struct {
+    	ID string `json:"id"`
+    }
+
+    // Each tool keeps its arguments as raw JSON, so the child task gets the whole tool.
+    type Plan struct {
+    	Tools []json.RawMessage `json:"tools"`
+    }
+
+    type Approval struct {
+    	Approved bool `json:"approved"`
+    }
+
     type Model interface {
-    	Plan(context.Context, string, string) (map[string]any, error)
+    	Plan(context.Context, string, string) (Plan, error)
     }
 
     func registerAgent(worker *workhorse.Worker, model Model, cooldown time.Duration) {
-    	worker.Handle("agent.run", func(
+    	worker.Handle("agent.run", workhorse.Typed(func(
     		ctx context.Context,
-    		payload any,
+    		run AgentRun,
     		handler *workhorse.HandlerContext,
     	) (any, error) {
-    		message, ok := payload.(map[string]any)
-    		if !ok {
-    			return nil, fmt.Errorf("agent payload must be an object")
-    		}
-    		prompt, promptOK := message["prompt"].(string)
-    		conversationID, conversationOK := message["conversationId"].(string)
-    		if !promptOK || !conversationOK {
-    			return nil, fmt.Errorf("agent payload needs string prompt and conversationId fields")
-    		}
-
-    		planValue, err := handler.Checkpoint("plan", func() (any, error) {
-    			return model.Plan(ctx, prompt, "plan:"+handler.Task.ID)
+    		stored, err := handler.Checkpoint("plan", func() (any, error) {
+    			return model.Plan(ctx, run.Prompt, "plan:"+handler.Task.ID)
     		})
     		if err != nil {
     			return nil, err
     		}
-    		plan, ok := planValue.(map[string]any)
-    		if !ok {
-    			return nil, fmt.Errorf("model plan must be an object")
+    		plan, err := workhorse.DecodeValue[Plan](stored)
+    		if err != nil {
+    			return nil, err
     		}
-    		rawTools, ok := plan["tools"].([]any)
-    		if !ok {
-    			return nil, fmt.Errorf("model plan needs an array tools field")
-    		}
-    		children := make([]workhorse.ChildTaskRequest, 0, len(rawTools))
-    		for _, value := range rawTools {
-    			tool, ok := value.(map[string]any)
-    			if !ok {
-    				return nil, fmt.Errorf("tool must be an object")
-    			}
-    			toolID, ok := tool["id"].(string)
-    			if !ok {
-    				return nil, fmt.Errorf("tool needs a string id field")
+    		children := make([]workhorse.ChildTaskRequest, 0, len(plan.Tools))
+    		for _, spec := range plan.Tools {
+    			tool, err := workhorse.DecodeValue[Tool](spec)
+    			if err != nil {
+    				return nil, err
     			}
     			children = append(children, workhorse.ChildTaskRequest{
-    				Name:    toolID,
+    				Name:    tool.ID,
     				Type:    "agent.tool",
-    				Payload: tool,
+    				Payload: spec,
     				Options: workhorse.EnqueueOptions{
     					Queue:          "tools",
-    					ConcurrencyKey: conversationID,
+    					ConcurrencyKey: run.ConversationID,
     				},
     			})
     		}
@@ -1579,20 +1558,16 @@ must continue after a deployment.
     		if err := handler.Sleep("model-cooldown", cooldown); err != nil {
     			return nil, err
     		}
-    		approval, err := handler.WaitForSignal("approval")
+    		signal, err := handler.WaitForSignal("approval")
     		if err != nil {
     			return nil, err
     		}
-    		approvalPayload, ok := approval.(map[string]any)
-    		if !ok {
-    			return nil, fmt.Errorf("approval must be an object")
+    		approval, err := workhorse.DecodeValue[Approval](signal)
+    		if err != nil {
+    			return nil, err
     		}
-    		approved, ok := approvalPayload["approved"].(bool)
-    		if !ok {
-    			return nil, fmt.Errorf("approval needs a boolean approved field")
-    		}
-    		return map[string]any{"plan": plan, "tools": tools, "approved": approved}, nil
-    	})
+    		return map[string]any{"plan": plan, "tools": tools, "approved": approval.Approved}, nil
+    	}))
     }
     ```
 

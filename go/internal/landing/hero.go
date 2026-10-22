@@ -2,11 +2,14 @@ package example
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+type welcome struct {
+	To string `json:"to"`
+}
 
 func run(ctx context.Context, pool *pgxpool.Pool) error {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
@@ -19,14 +22,10 @@ func run(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
-	worker.Handle("email.welcome", func(
-		_ context.Context, payload any, _ *workhorse.HandlerContext,
+	worker.Handle("email.welcome", workhorse.Typed(func(
+		_ context.Context, message welcome, _ *workhorse.HandlerContext,
 	) (any, error) {
-		message, ok := payload.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("payload must be an object")
-		}
-		return map[string]any{"deliveredTo": message["to"]}, nil
-	})
+		return map[string]any{"deliveredTo": message.To}, nil
+	}))
 	return worker.Run(ctx)
 }

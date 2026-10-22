@@ -52,6 +52,10 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
+type welcome struct {
+	To string `json:"to"`
+}
+
 func main() {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
@@ -70,13 +74,13 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	worker.Handle("email.welcome", func(
+	worker.Handle("email.welcome", workhorse.Typed(func(
 		_ context.Context,
-		payload any,
+		message welcome,
 		_ *workhorse.HandlerContext,
 	) (any, error) {
-		return map[string]any{"deliveredTo": payload.(map[string]any)["to"]}, nil
-	})
+		return map[string]any{"deliveredTo": message.To}, nil
+	}))
 	if _, err := worker.RunOnce(ctx); err != nil {
 		panic(err)
 	}
