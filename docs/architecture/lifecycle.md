@@ -845,6 +845,14 @@ running handlers minus the reserved slots.
 - The loop waits for the first finished handler, returned claim, or wake. It never awaits a claim
   inline.
 
+A Go `Worker` can run again after `Run` returned `ErrShutdownIncomplete`. The handlers that an
+ended run abandoned still run, and each one keeps its slot until it returns. The free slots of the
+new run thus also exclude the handlers of every ended run, so the handlers of all runs stay within
+`Concurrency`. When one of those handlers returns, it wakes the dispatch loop of the new run. The
+loop counts the freed slot at once and applies the rules above, without the wait for the next poll.
+`RunOnce` claims nothing while those handlers hold every slot. A claim asks only for slots that are
+free now, so the loop never waits for a slot, and its stop stays inside its deadline.
+
 A claim counts as empty if it returns no row, or only rows of unhandled types that it releases
 through `release_owned_v1`. After an empty claim, the loop starts no claim until the poll deadline
 or until a dispatch wake that is newer than that claim.

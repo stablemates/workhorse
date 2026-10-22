@@ -61,10 +61,12 @@ type dispatchHarness struct {
 	settled chan bool
 	// withoutHeartbeat closes the claim gate, as a pool without its heartbeat connection does.
 	withoutHeartbeat atomic.Bool
-	heartbeat        chan struct{}
-	cancel           context.CancelFunc
-	outcome          chan dispatchOutcome
-	nextTask         int
+	// gate, when set, answers each read of the claim gate in place of withoutHeartbeat.
+	gate      atomic.Pointer[func() bool]
+	heartbeat chan struct{}
+	cancel    context.CancelFunc
+	outcome   chan dispatchOutcome
+	nextTask  int
 }
 
 type dispatchOutcome struct {
@@ -128,8 +130,13 @@ func startDispatchWith(t *testing.T, worker *Worker, tier dispatchTier) *dispatc
 			notificationWake: harness.notification,
 			registryWake:     harness.registry,
 			listening:        func() bool { return true },
-			claimable:        func() bool { return !harness.withoutHeartbeat.Load() },
-			heartbeatWake:    harness.heartbeat,
+			claimable: func() bool {
+				if gate := harness.gate.Load(); gate != nil {
+					return (*gate)()
+				}
+				return !harness.withoutHeartbeat.Load()
+			},
+			heartbeatWake: harness.heartbeat,
 			claimSettled: func(skipped bool) {
 				// A test that does not read settlements must not block the loop.
 				select {
@@ -598,7 +605,10 @@ func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
 	}
 
 	next := startDispatchWith(t, ended.worker, fastTierQueue)
-	pending := next.expectClaim(2)
+	// The second handler returns. Its slot is the one free slot of the next run (SM-1582).
+	abandoned[1].finish <- nil
+	<-ended.results
+	pending := next.expectClaim(1)
 	recorder := claimLimitRecorder{limits: make(chan int, 1)}
 	completed := make(chan error, 1)
 	go func() {
@@ -616,9 +626,124 @@ func TestAFastCompletionOfAnEndedRunClaimsNothingForTheNextRun(t *testing.T) {
 	if err := next.stop([]fakeClaimCall{pending}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, execution := range abandoned {
-		execution.finish <- nil
-		<-ended.results
+	abandoned[0].finish <- nil
+	<-ended.results
+}
+
+// endRunWithAbandonedExecutions stands in for a Run that returned ErrShutdownIncomplete: its
+// dispatch loop returned while count executions still run. The cleanup finishes the executions that
+// the test did not finish.
+func endRunWithAbandonedExecutions(t *testing.T, concurrency int) (*dispatchHarness, []func()) {
+	t.Helper()
+	ended := startDispatch(t, WorkerOptions{Concurrency: concurrency, PollInterval: time.Hour}, false)
+	ended.expectClaim(concurrency).respond <- fakeClaimResponse{tasks: ended.tasks(concurrency, dispatchTaskType)}
+	abandoned := ended.expectExecutions(concurrency)
+	ended.cancel()
+	if outcome := <-ended.outcome; outcome.active != concurrency {
+		t.Fatalf("the ended run left %d executions, want %d", outcome.active, concurrency)
+	}
+	finish := make([]func(), len(abandoned))
+	for index, execution := range abandoned {
+		var once sync.Once
+		// The execution sends its result after it frees its slot.
+		finish[index] = func() {
+			once.Do(func() {
+				execution.finish <- nil
+				<-ended.results
+			})
+		}
+		t.Cleanup(finish[index])
+	}
+	return ended, finish
+}
+
+// SM-1582: Run returned ErrShutdownIncomplete with 2 handlers still running, and the caller started
+// the same Worker again. Those handlers still hold both slots of Concurrency 2. When one of them
+// returns, the next run claims 1 task, and its stop ends although the other handler still runs.
+func TestTheNextRunClaimsOnlyTheSlotsThatTheHandlersOfAnEndedRunFree(t *testing.T) {
+	ended, finishAbandoned := endRunWithAbandonedExecutions(t, 2)
+	next := startDispatchWith(t, ended.worker, fullTierQueue)
+	finishAbandoned[0]()
+	// A queue with a backlog returns as many tasks as the claim asks for.
+	var call fakeClaimCall
+	select {
+	case call = <-next.claims:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the next run did not claim the slot that the ended run's handler freed")
+	}
+	call.respond <- fakeClaimResponse{tasks: next.tasks(call.limit, dispatchTaskType)}
+	started := next.expectExecutions(1)
+	next.cancel()
+	select {
+	case outcome := <-next.outcome:
+		if outcome.active != 1 {
+			t.Fatalf("the next run left %d executions, want 1", outcome.active)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the next run's dispatch loop did not return after its stop")
+	}
+	if call.limit != 1 {
+		t.Fatalf("the next run claimed %d tasks while the ended run's handlers held 1 of 2 slots", call.limit)
+	}
+	started[0].finish <- nil
+	<-next.results
+}
+
+// SM-1582: when a handler of an ended run returns, the next run claims its slot at once. The poll
+// interval is one hour, so only the wake of the freed slot can start that claim.
+func TestTheNextRunClaimsASlotThatAnEndedRunFreesWithoutAPoll(t *testing.T) {
+	ended, finishAbandoned := endRunWithAbandonedExecutions(t, 2)
+	next := startDispatchWith(t, ended.worker, fullTierQueue)
+	// The test holds one pass of the loop at its claim gate, before the pass counts its free slots.
+	// It frees a slot there, and it closes the gate for that pass, so the pass starts no claim.
+	checked := make(chan struct{})
+	answer := make(chan bool)
+	var held atomic.Bool
+	gate := func() bool {
+		if !held.CompareAndSwap(false, true) {
+			return true
+		}
+		checked <- struct{}{}
+		return <-answer
+	}
+	next.gate.Store(&gate)
+	next.registry <- struct{}{}
+	select {
+	case <-checked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no pass of the next run's dispatch loop read the claim gate")
+	}
+	// If the held pass is the first pass, the registry wake is still in its buffer. Remove it, so it
+	// cannot start the next pass.
+	select {
+	case <-next.registry:
+	default:
+	}
+	finishAbandoned[0]()
+	answer <- false
+	call := next.expectClaim(1)
+	if err := next.stop([]fakeClaimCall{call}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// failingExecutor fails the test on any statement.
+type failingExecutor struct {
+	t *testing.T
+}
+
+func (executor failingExecutor) Query(context.Context, string, ...any) ([]Row, error) {
+	executor.t.Error("RunOnce sent a statement while the ended run's handlers held every slot")
+	return nil, errors.New("unexpected statement")
+}
+
+// SM-1582: RunOnce is a run of the same Worker. While the handlers of an ended run hold every slot,
+// it claims nothing.
+func TestRunOnceClaimsNothingWhileTheHandlersOfAnEndedRunHoldEverySlot(t *testing.T) {
+	ended, _ := endRunWithAbandonedExecutions(t, 1)
+	processed, err := ended.worker.runOnce(context.Background(), failingExecutor{t: t})
+	if processed || err != nil {
+		t.Fatalf("runOnce = %v, %v; want false, nil", processed, err)
 	}
 }
 

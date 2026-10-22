@@ -290,7 +290,6 @@ type Worker struct {
 	logger                     *slog.Logger
 	metrics                    *workerMetrics
 	runPermit                  chan struct{}
-	handlerSlots               chan struct{}
 	handlers                   map[string]Handler
 	compatibility              *CachedCompatibilityCheck
 	onRegistrationError        func(error)
@@ -313,6 +312,13 @@ type Worker struct {
 	// claimConnection is holdClaimConnection outside tests. A claim and a fused completion take
 	// their connection through it before they read the claim gate.
 	claimConnection func(ctx context.Context, executor Executor) (Executor, func(), error)
+	// slotsMu guards the count of each runSlots and the move of that count to endedRunSlots.
+	slotsMu sync.Mutex
+	// endedRunSlots counts the handler slots that executions of an ended run still hold. A later
+	// run subtracts them from its free slots, so the handlers of all runs stay within the
+	// concurrency. endedRunSlotFreed wakes the dispatch loop when one of these slots is free.
+	endedRunSlots     atomic.Int64
+	endedRunSlotFreed chan struct{}
 }
 
 type heartbeatMember struct {
@@ -526,7 +532,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		logger:                     logger,
 		metrics:                    metrics,
 		runPermit:                  runPermit,
-		handlerSlots:               make(chan struct{}, concurrency),
+		endedRunSlotFreed:          make(chan struct{}, 1),
 		handlers:                   make(map[string]Handler),
 		compatibility:              NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
 		onRegistrationError:        options.OnRegistrationError,
@@ -821,15 +827,48 @@ type executionResult struct {
 type dispatchSlot struct {
 	cohort     int
 	claimer    *completionClaimer
+	run        *runSlots
 	handedOver bool
 	released   atomic.Bool
 }
 
+// runSlots counts the handler slots that the executions of one dispatch loop hold. When the loop
+// returns, endRun moves the count to Worker.endedRunSlots. An execution that outlives its run thus
+// keeps its slot, and the next run of the same Worker starts no task in that slot.
+type runSlots struct {
+	held  int
+	ended bool
+}
+
+func (worker *Worker) takeSlot(run *runSlots) {
+	worker.slotsMu.Lock()
+	run.held++
+	worker.slotsMu.Unlock()
+	worker.activeSlots.Add(1)
+}
+
 func (slot *dispatchSlot) release(worker *Worker) {
-	if slot.released.CompareAndSwap(false, true) {
-		<-worker.handlerSlots
-		worker.activeSlots.Add(-1)
+	if !slot.released.CompareAndSwap(false, true) {
+		return
 	}
+	worker.activeSlots.Add(-1)
+	worker.slotsMu.Lock()
+	defer worker.slotsMu.Unlock()
+	if !slot.run.ended {
+		slot.run.held--
+		return
+	}
+	worker.endedRunSlots.Add(-1)
+	wakeWorker(worker.endedRunSlotFreed)
+}
+
+// endRun moves the slots that the executions of run still hold to endedRunSlots.
+func (worker *Worker) endRun(run *runSlots) {
+	worker.slotsMu.Lock()
+	defer worker.slotsMu.Unlock()
+	run.ended = true
+	worker.endedRunSlots.Add(int64(run.held))
+	run.held = 0
 }
 
 // claimSettlement is one finished claim. skipped reports a claim that was never sent because the
@@ -920,7 +959,13 @@ func (reservation *completionReservation) settle(tasks []ClaimedTask, answered b
 // It first waits for every claim and fused completion claim still in flight and launches the tasks
 // they returned. It returns the executions still running and the first error; the caller drains
 // the executions.
+//
+// The executions of an ended run of the same Worker keep their slots until they return. The free
+// slots exclude them, so a claim never asks for a slot that a launch cannot take at once.
 func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironment) (int, error) {
+	run := &runSlots{}
+	// The caller drains the executions after the loop returns. Each later run counts their slots.
+	defer worker.endRun(run)
 	refillBatch := dispatchRefillBatch(worker.concurrency)
 	cohorts := worker.cohorts
 	// The first cohorts take the remainder of an uneven split.
@@ -993,7 +1038,8 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		return workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !environment.listening())
 	}
 	freeSlots := func() int {
-		return worker.concurrency - active + handedOver - reserved
+		// endedRunSlots only decreases while this loop runs, so an older value is safe.
+		return worker.concurrency - int(worker.endedRunSlots.Load()) - active + handedOver - reserved
 	}
 	cohortFree := func(cohort int) int {
 		return cohortCapacity[cohort] - cohortActive[cohort] + cohortHandedOver[cohort] - cohortReserved[cohort]
@@ -1033,12 +1079,11 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		if cohort < 0 || cohortFree(cohort) <= 0 {
 			cohort = roomiestCohort()
 		}
-		slot := &dispatchSlot{cohort: cohort, claimer: claimer}
+		slot := &dispatchSlot{cohort: cohort, claimer: claimer, run: run}
 		task.slot = slot
-		worker.handlerSlots <- struct{}{}
+		worker.takeSlot(run)
 		active++
 		cohortActive[cohort]++
-		worker.activeSlots.Add(1)
 		go func() {
 			err := environment.execute(task)
 			slot.release(worker)
@@ -1293,6 +1338,9 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		case <-environment.heartbeatWake:
 			// The heartbeat connection is back. Claims start now, not at the next poll.
 			emptyWait = nil
+		case <-worker.endedRunSlotFreed:
+			// An execution of an ended run freed its slot. A claim for it starts now, not at the
+			// next poll.
 		case <-environment.registryWake:
 		}
 	}
@@ -1594,6 +1642,11 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor) e
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
 	if !worker.heartbeatReady() {
+		return false, nil
+	}
+	// The executions of an ended run can hold every slot. Their handlers count toward the
+	// concurrency, so RunOnce starts no other handler.
+	if int(worker.endedRunSlots.Load()) >= worker.concurrency {
 		return false, nil
 	}
 	task, claimErr := worker.claimNext(context.WithoutCancel(ctx), executor)
