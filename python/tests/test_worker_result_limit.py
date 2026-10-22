@@ -14,7 +14,7 @@ from psycopg_pool import ConnectionPool
 from test_worker_dispatch import FullTierRejection, task_row
 
 from workhorse import Admin, AdminAudit, EnqueueOptions, Queue, TaskValueSizeLimitError, Worker
-from workhorse._contracts import jsonb_text_bytes
+from workhorse._contracts import CONTRACT_DEFINITION, jsonb_text_bytes
 from workhorse._statements import STATEMENTS, DriverStatement
 from workhorse.worker import _encode_result, _has_unstorable_escape
 
@@ -84,9 +84,10 @@ class Settlements:
         if statement is STATEMENTS.complete:
             self._complete(str(parameters[0]), str(parameters[3]))
             return [{"accepted": True}]
-        if statement is STATEMENTS.get_contract:
+        if statement is CONTRACT_DEFINITION:
             self.contract_lookups.append((parameters[0], parameters[1]))
-            return [{"schema": {"payload": {}, "result": RESULT_SCHEMA}}]
+            # The contract read selects the schema as jsonb text.
+            return [{"schema": json.dumps({"payload": {}, "result": RESULT_SCHEMA})}]
         if statement is STATEMENTS.fail:
             with self._lock:
                 self.failed[str(parameters[0])] = json.loads(str(parameters[3]))

@@ -431,6 +431,9 @@ at full precision.
   reason is that a schema bound must be checked against the stored value, not against a double.
 - Rust decodes through `serde_json` without `arbitrary_precision`. An integer stays exact within the
   signed and unsigned 64-bit ranges. Beyond them, it becomes a double.
+- A stored contract schema is the exception in every SDK. Each SDK reads it from its jsonb text
+  and keeps each schema number exact
+  ([Data model: Contract number comparison](data-model.md#contract-number-comparison)).
 
 Workhorse does not reject a value past that bound. The reason is that PostgreSQL accepts it and some
 languages read it correctly. `docs/parity.md` records the bound and tells a caller to send a larger

@@ -28,9 +28,11 @@ from ._compatibility import (
     assert_sync_compatible as _assert_sync_compatible,
 )
 from ._contracts import (
+    CONTRACT_DEFINITION as _CONTRACT_DEFINITION,
     apply_contract as _apply_contract,
     compile_contract_schema as _compile_contract_schema,
     jsonb_text_bytes as _jsonb_text_bytes,
+    stored_schema_document as _stored_schema_document,
 )
 from ._drivers import (
     PooledSyncExecutor as _PooledSyncExecutor,
@@ -1273,7 +1275,7 @@ class _HandlerDurability:
         if key in contracts:
             definition = contracts[key]
         else:
-            rows = self._executor.rows(_STATEMENTS.get_contract, (type, version))
+            rows = self._executor.rows(_CONTRACT_DEFINITION, (type, version))
             definition = rows[0] if rows else None
             contracts[key] = definition
         if definition is not None:
@@ -1875,12 +1877,10 @@ class Worker:
         with self._state_lock:
             validator = self._contract_validators.get(key)
         if validator is None:
-            rows = self._executor.rows(_STATEMENTS.get_contract, (task.type, version))
+            rows = self._executor.rows(_CONTRACT_DEFINITION, (task.type, version))
             if len(rows) != 1:
                 raise TaskContractUnavailableError(task.type, version)
-            document = rows[0].get("schema")
-            if isinstance(document, str):
-                document = json.loads(document)
+            document = _stored_schema_document(rows[0])
             if not isinstance(document, Mapping) or "result" not in document:
                 raise TaskContractUnavailableError(task.type, version)
             validator = _compile_contract_schema(cast(Json, document["result"]))

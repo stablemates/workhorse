@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { compileContractSchema } from "../src/contract-schema.js";
+import { compileContractSchema, parseStoredContractSchema } from "../src/contract-schema.js";
 import type { Json } from "../src/types.js";
 
 interface Fixture {
   id: string;
-  schema: Json;
+  schema?: Json;
+  schemaJson?: string;
   schemaError?: boolean;
   instances?: { value?: Json; json?: string; needs?: NumberNeed; valid: boolean }[];
 }
@@ -93,11 +94,37 @@ describe("contract schema profile", () => {
     expect(compileContractSchema({ multipleOf: 0.5 })(-2.5)).toBe(true);
   });
 
+  it("keeps each stored schema number that a double cannot hold as its decimal", () => {
+    const stored = parseStoredContractSchema(
+      '{"$defs": {"limit": {"maximum": 9007199254740995}}, "$ref": "#/$defs/limit"}',
+    );
+    const validator = compileContractSchema(stored);
+    expect(validator(9007199254740994)).toBe(true);
+    expect(validator(9007199254740996)).toBe(false);
+    expect(compileContractSchema(parseStoredContractSchema('{"maximum": 1.0}'))(1)).toBe(true);
+    const exponent = compileContractSchema(parseStoredContractSchema('{"minimum": 1E-400}'));
+    expect(exponent(0)).toBe(false);
+    expect(exponent(5e-324)).toBe(true);
+  });
+
+  it("compares a stored constant inside an object or an array as its decimal", () => {
+    const validator = compileContractSchema(
+      parseStoredContractSchema('{"const": {"n": [9007199254740993, 0.10]}}'),
+    );
+    expect(validator({ n: [9007199254740992, 0.1] })).toBe(false);
+    expect(compileContractSchema(parseStoredContractSchema('{"const": [0.10]}'))([0.1])).toBe(true);
+  });
+
   it.each(fixtures)("matches the shared table for $id", (fixture) => {
     let validator: ReturnType<typeof compileContractSchema> | undefined;
     let schemaError: unknown;
     try {
-      validator = compileContractSchema(fixture.schema);
+      // A schema in JSON text reads the way a schema that PostgreSQL stores does.
+      validator = compileContractSchema(
+        fixture.schemaJson === undefined
+          ? fixture.schema!
+          : parseStoredContractSchema(fixture.schemaJson),
+      );
     } catch (error) {
       schemaError = error;
     }

@@ -29,9 +29,7 @@ describe("Rust parity evidence", () => {
   it("reads the declared fixtures and the expected-unsupported list with its Issues", () => {
     expect(state.declared.has("interpreter/matcher-semantics")).toBe(true);
     expect(state.declared.has("failures/undeclared-name")).toBe(true);
-    expect([...state.unsupported]).toEqual([
-      ["contracts/numbers-compare-exact-decimals", "SM-1541"],
-    ]);
+    expect([...state.unsupported]).toEqual([]);
   });
 
   it("rejects a Rust Supported cell that cites a pattern instead of executed evidence", () => {

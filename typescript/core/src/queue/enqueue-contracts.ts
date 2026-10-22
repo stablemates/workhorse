@@ -31,7 +31,7 @@ import {
   MAX_TASK_PRIORITY,
   MAX_TASK_VALUE_MAX_BYTES,
 } from "../types.js";
-import { compileContractSchema } from "../contract-schema.js";
+import { compileContractSchema, parseStoredContractSchema } from "../contract-schema.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 import type { CachedContractDefinition, QueueModuleState } from "./modules.js";
 
@@ -536,12 +536,20 @@ interface SerializedTaskAcceptance {
 
 interface ContractDefinitionRow {
   version: string;
-  schema: { payload: Json; result: Json };
+  // The jsonb text, so that a number that a double cannot hold keeps all its digits.
+  schema: string | { payload: Json; result: Json };
   payload_max_bytes: number;
   result_max_bytes: number;
   payload_redact_keys: string[];
   result_redact_keys: string[];
 }
+
+// The contract definition with its schema as jsonb text. pg parses jsonb into doubles, and the text
+// keeps the exact decimal of each schema number.
+const CONTRACT_DEFINITION_TEXT =
+  "SELECT contract.version, contract.schema::text AS schema, contract.payload_max_bytes, " +
+  "contract.result_max_bytes, contract.payload_redact_keys, contract.result_redact_keys " +
+  `FROM (${SQL_STATEMENTS["get_contract_definition_v1"]}) contract`;
 
 /** One row an enqueue statement returns. */
 export interface EnqueueRow {
@@ -616,17 +624,21 @@ export class EnqueueContractsModule extends QueueModule {
     version: string | null,
     database: Queryable = this.context.database,
   ): Promise<{ version: string; contract: TaskContractVersion } | null> {
-    const result = await database.query<ContractDefinitionRow>(
-      SQL_STATEMENTS["get_contract_definition_v1"],
-      [taskType, version],
-    );
+    const result = await database.query<ContractDefinitionRow>(CONTRACT_DEFINITION_TEXT, [
+      taskType,
+      version,
+    ]);
     const row = result.rows[0];
     if (row === undefined) return null;
+    const schema =
+      typeof row.schema === "string"
+        ? (parseStoredContractSchema(row.schema) as { payload: Json; result: Json })
+        : row.schema;
     return {
       version: row.version,
       contract: {
-        payloadSchema: row.schema.payload,
-        resultSchema: row.schema.result,
+        payloadSchema: schema.payload,
+        resultSchema: schema.result,
         maxPayloadBytes: row.payload_max_bytes,
         maxResultBytes: row.result_max_bytes,
         sensitivePayloadKeys: row.payload_redact_keys,

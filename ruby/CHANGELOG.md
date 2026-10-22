@@ -26,6 +26,14 @@ then logs `workhorse.worker.polling_only` once at warn level. The message names
 `workhorse.worker.queues` and `workhorse.worker.pool_max_size`. A worker with `polling_only: true`
 logs no warning. Without the opt-out, nothing changes.
 
+### A contract compares a stored schema number with all its digits
+
+Before this change, the Ruby SDK read a stored contract schema with `JSON.parse`, which reads a
+fraction as a Float. Another SDK can store `"minimum": 0.30000000000000000001`, which a Float cannot
+hold. The Ruby SDK then accepted `0.3`. Now a fraction that a Float cannot hold stays a Rational,
+and the contract keywords compare it exactly (SM-1541, ADR 0039). `ContractSchema.new` still
+accepts only JSON values.
+
 ### A worker reserves its heartbeat connection at startup, and refuses to start without it
 
 Before this change, a worker took the heartbeat connection of its pool only when a task arrived,

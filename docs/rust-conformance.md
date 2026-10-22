@@ -13,7 +13,7 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 | Fixture file            | Declared | Passing | Expected unsupported |
 | ----------------------- | -------: | ------: | -------------------: |
 | `compatibility.json`    |       20 |      20 |                    0 |
-| `contracts.json`        |       40 |      39 |                    1 |
+| `contracts.json`        |       41 |      41 |                    0 |
 | `cron-occurrences.json` |       19 |      19 |                    0 |
 | `failures.json`         |        4 |       4 |                    0 |
 | `interpreter.json`      |        1 |       1 |                    0 |
@@ -26,8 +26,6 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 
 The list gives the reason for each entry. Remove an entry in the commit that makes it pass.
 
-### SM-1541
-
-- `contracts/numbers-compare-exact-decimals`
+The list is empty: every fixture passes.
 
 Regenerate with `pnpm rust:conformance:generate`; CI uses `pnpm rust:conformance:check`.

@@ -3963,7 +3963,8 @@ public final class Worker implements AutoCloseable {
       if (rows.size() != 1) {
         throw new ContractUnavailableException(task.type(), version);
       }
-      Map<String, @Nullable Object> document = Json.object(rows.get(0).json("schema"));
+      Map<String, @Nullable Object> document =
+          Json.object(run.workhorse.internal.Contracts.storedSchema(rows.get(0)));
       if (document == null || !document.containsKey("result")) {
         throw new ContractUnavailableException(task.type(), version);
       }

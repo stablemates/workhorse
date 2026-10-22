@@ -70,6 +70,16 @@ warning now also carries `workhorse.worker.pool_max_size`: the size that the wor
 `unknown`. A pool that reports its size does not change. Without the opt-out, the `Worker`
 constructor still refuses a pool whose size is unknown.
 
+### A contract compares a stored schema number with all its digits
+
+Before this change, the TypeScript SDK read a stored contract schema into doubles. Another SDK can
+store `"maximum": 9007199254740995`, which a double cannot hold. The TypeScript SDK then compared a
+result with `9007199254740996` and accepted that result. Now the SDK reads the stored schema as
+jsonb text and keeps each schema number exact (SM-1541, ADR 0039). `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `const`, and `enum` compare the exact
+decimals. An application schema that you give in `contracts` does not change, because its numbers
+are already doubles.
+
 ### A worker waits for its heartbeat connection before it claims
 
 Before this change, a TypeScript worker started the reservation of its dedicated heartbeat

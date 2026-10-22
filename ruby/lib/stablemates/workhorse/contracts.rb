@@ -122,7 +122,7 @@ module Stablemates
       end
       private_class_method :names?
 
-      def self.number?(value) = value.is_a?(Integer) || (value.is_a?(Float) && value.finite?)
+      def self.number?(value) = value.is_a?(Integer) || value.is_a?(Rational) || (value.is_a?(Float) && value.finite?)
       private_class_method :number?
 
       # A non-negative integer, which JSON may write as 3.0.
@@ -133,16 +133,24 @@ module Stablemates
 
       def initialize(schema)
         Values.check_json(schema, "contract schema")
+        compile(schema)
+      end
+
+      # A schema that +Contracts.parse_schema+ read from PostgreSQL. A Rational in it holds a
+      # fraction that a Float cannot hold. Internal to the SDK.
+      def self.stored(schema) = allocate.tap { |contract| contract.send(:compile, schema) } # :nodoc:
+
+      def valid?(instance) = valid_at?(@schema, instance, 0)
+
+      private
+
+      def compile(schema)
         violation = ContractSchema.profile_violation(schema)
         raise ArgumentError, violation if violation
 
         @schema = schema
         check_references(schema, "$")
       end
-
-      def valid?(instance) = valid_at?(@schema, instance, 0)
-
-      private
 
       # A reference names the root schema or one root definition. The validators behind the six SDKs
       # resolve those two forms alike, and both name a schema position the profile check visited. The
@@ -289,7 +297,8 @@ module Stablemates
 
       # The decimal that JSON writes to PostgreSQL for a number. Float#to_s gives the shortest
       # decimal that reads back as the same Float, so 2**60 as a Float compares as
-      # 1152921504606847000, not as its binary value. A non-finite Float stays a Float.
+      # 1152921504606847000, not as its binary value. A non-finite Float stays a Float. A Rational
+      # from a stored schema is already exact.
       def exact(number) = (number.is_a?(Float) && number.finite?) ? Rational(number.to_s) : number
 
       def finite?(number) = !number.is_a?(Float) || number.finite?
@@ -302,7 +311,7 @@ module Stablemates
         end
         when Array then right.is_a?(Array) && left.size == right.size && left.zip(right).all? { |l, r| equal?(l, r) }
         when true, false, nil then left.equal?(right)
-        when Integer, Float then number?(right) && exact(left) == exact(right)
+        when Integer, Float, Rational then number?(right) && exact(left) == exact(right)
         else left == right
         end
       end
@@ -333,12 +342,12 @@ module Stablemates
       end
 
       def decode(row)
-        schema = Values.parse_json(row.fetch("schema"))
+        schema = parse_schema(row.fetch("schema"))
         raise invalid_definition unless schema.is_a?(Hash) && schema.key?("payload")
 
         PayloadContract.new(
           version: row.fetch("version"),
-          schema: ContractSchema.new(schema["payload"]),
+          schema: ContractSchema.stored(schema["payload"]),
           payload_max_bytes: Values.parse_integer(row.fetch("payload_max_bytes")),
           result_max_bytes: Values.parse_integer(row.fetch("result_max_bytes")),
           payload_redact_keys: Values.parse_text_array(row.fetch("payload_redact_keys")),
@@ -349,6 +358,22 @@ module Stablemates
       end
 
       def invalid_definition = Error.new("invalid contract definition returned by PostgreSQL")
+
+      # The jsonb text of a stored schema document. jsonb keeps every digit of a number that another
+      # SDK synchronized. A fraction that a Float cannot hold stays a Rational, so the contract
+      # compares it exactly.
+      def parse_schema(text) = text.nil? ? nil : exact_numbers(JSON.parse(text, decimal_class: Rational))
+
+      def exact_numbers(value)
+        case value
+        when Rational
+          float = value.to_f
+          (float.finite? && Rational(float.to_s) == value) ? float : value
+        when Array then value.map { |item| exact_numbers(item) }
+        when Hash then value.transform_values { |item| exact_numbers(item) }
+        else value
+        end
+      end
 
       # Compiles every schema, then renders the +sync_contract_definitions_v1+ document.
       def document(contracts)

@@ -15,6 +15,7 @@ from ._compatibility import (
     assert_sync_compatible as _assert_sync_compatible,
 )
 from ._contracts import (
+    CONTRACT_DEFINITION as _CONTRACT_DEFINITION,
     apply_contract as _apply_contract,
     serialize_contracts as _serialize_contracts,
 )
@@ -256,7 +257,7 @@ class Queue:
         return definition
 
     def _load_contract(self, task_type: str) -> _Row | None:
-        rows = self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
+        rows = self._executor.rows(_CONTRACT_DEFINITION, (task_type, None))
         return rows[0] if rows else None
 
     def sync_schedules(
@@ -669,7 +670,7 @@ class AsyncQueue:
         return definition
 
     async def _load_contract(self, task_type: str) -> _Row | None:
-        rows = await self._executor.rows(_STATEMENTS.get_contract, (task_type, None))
+        rows = await self._executor.rows(_CONTRACT_DEFINITION, (task_type, None))
         return rows[0] if rows else None
 
     async def sync_schedules(

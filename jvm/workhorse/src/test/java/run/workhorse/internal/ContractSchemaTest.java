@@ -2,6 +2,7 @@ package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,8 +10,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.jspecify.annotations.Nullable;
@@ -35,13 +38,16 @@ class ContractSchemaTest {
           DynamicTest.dynamicTest(
               String.valueOf(fixture.get("id")),
               () -> {
+                // A schema in JSON text reads the way a schema that PostgreSQL stores does.
+                Object document =
+                    fixture.get("schemaJson") instanceof String text
+                        ? Json.parseExact(text)
+                        : fixture.get("schema");
                 if (Boolean.TRUE.equals(fixture.get("schemaError"))) {
-                  assertThrows(
-                      IllegalArgumentException.class,
-                      () -> new ContractSchema(fixture.get("schema")));
+                  assertThrows(IllegalArgumentException.class, () -> new ContractSchema(document));
                   return;
                 }
-                ContractSchema schema = new ContractSchema(fixture.get("schema"));
+                ContractSchema schema = new ContractSchema(document);
                 Object instances = fixture.get("instances");
                 for (Object instance : instances == null ? List.of() : (List<?>) instances) {
                   Map<String, @Nullable Object> example = Json.object(instance);
@@ -58,6 +64,19 @@ class ContractSchemaTest {
     }
     assertTrue(tests.size() >= 38, "the fixture file holds every case");
     return tests.stream();
+  }
+
+  @Test
+  void readsAStoredSchemaFractionThatADoubleCannotHold() {
+    Map<String, @Nullable Object> columns = new HashMap<>();
+    columns.put("schema", "{\"payload\": {\"minimum\": 0.30000000000000000001}}");
+    Map<String, @Nullable Object> document =
+        Objects.requireNonNull(Json.object(Contracts.storedSchema(new Row(columns))));
+    ContractSchema schema = new ContractSchema(document.get("payload"));
+    assertFalse(schema.valid(0.3));
+    assertTrue(schema.valid(0.30000000000000004));
+    columns.put("schema", null);
+    assertNull(Contracts.storedSchema(new Row(columns)));
   }
 
   @Test

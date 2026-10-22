@@ -324,6 +324,10 @@ If your language holds a number exactly, Workhorse compares all of its digits. G
 TypeScript cannot hold that value. Python, Ruby, and Rust hold large integers exactly, but they
 keep a fraction as a double.
 
+A number in the schema keeps all of its digits in every SDK. Another SDK can store `"maximum":
+9007199254740995`, which a double cannot hold. A TypeScript worker still compares its result with
+that exact constant.
+
 <details>
 <summary>Reference: number comparison</summary>
 
@@ -343,12 +347,8 @@ shortest decimal that reads back as the same double. These keywords compare the 
 | Ruby       | yes                | no             |
 | JVM        | yes                | `BigDecimal`   |
 
-**Limits until SM-1541.**
-
-1. TypeScript, Python, Ruby, and Rust read a stored schema constant that a double cannot hold as a
-   double.
-2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in the
-   bound keywords, `const`, `enum`, and `uniqueItems`.
+**Stored schema numbers.** Each SDK reads a stored schema from its jsonb text and keeps each
+schema number exact, also a number that its own values cannot hold.
 
 More detail: [Data model: Contract number comparison](../architecture/data-model.md#contract-number-comparison).
 

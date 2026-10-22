@@ -9,11 +9,17 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
   unheld_numbers = %w[exactFraction].freeze
   fixtures.each do |fixture|
     it "matches the protocol contract fixture #{fixture.fetch("id")}" do
+      # A schema in JSON text reads the way a schema that PostgreSQL stores does.
+      build = lambda do
+        next schema(fixture.fetch("schema")) unless fixture.key?("schemaJson")
+
+        Stablemates::Workhorse::ContractSchema.stored(Stablemates::Workhorse::Contracts.parse_schema(fixture["schemaJson"]))
+      end
       if fixture["schemaError"]
-        expect { schema(fixture.fetch("schema")) }.to raise_error(ArgumentError)
+        expect { build.call }.to raise_error(ArgumentError)
         next
       end
-      validator = schema(fixture.fetch("schema"))
+      validator = build.call
       fixture.fetch("instances", []).each do |instance|
         next if unheld_numbers.include?(instance["needs"])
 
@@ -21,6 +27,16 @@ RSpec.describe Stablemates::Workhorse::ContractSchema do
         expect(validator.valid?(value)).to be(instance.fetch("valid")), instance.inspect
       end
     end
+  end
+
+  it "keeps a stored fraction that a Float cannot hold as a Rational" do
+    stored = Stablemates::Workhorse::Contracts.parse_schema('{"minimum": 0.30000000000000000001, "maximum": 1.5}')
+    expect(stored).to eq("minimum" => Rational("0.30000000000000000001"), "maximum" => 1.5)
+    expect(stored["maximum"]).to be_a(Float)
+    validator = Stablemates::Workhorse::ContractSchema.stored(stored)
+    expect(validator.valid?(0.3)).to be(false)
+    expect(validator.valid?(0.30000000000000004)).to be(true)
+    expect { described_class.new(stored) }.to raise_error(ArgumentError)
   end
 
   it "refuses a non-finite Float under multipleOf" do

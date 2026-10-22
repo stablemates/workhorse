@@ -11,6 +11,7 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator, ValidationError, validators
 from jsonschema.protocols import Validator
 
+from ._statements import STATEMENTS, DriverStatement
 from .errors import TaskContractValidationError
 from .types import Json, TaskTypeContracts
 
@@ -121,16 +122,57 @@ def _check_profile(schema: Json, path: str, references: list[tuple[str, str]]) -
             raise TypeError(f"{keyword_path} is outside the Workhorse contract profile")
 
 
+def _contract_definition_text(statement: str) -> str:
+    return (
+        "SELECT contract.version, contract.schema::text AS schema, contract.payload_max_bytes, "
+        "contract.result_max_bytes, contract.payload_redact_keys, contract.result_redact_keys "
+        f"FROM ({statement}) contract"
+    )
+
+
+# The contract definition with its schema as jsonb text. A driver parses jsonb fractions into
+# floats, and the text keeps the exact decimal of each schema number.
+CONTRACT_DEFINITION = DriverStatement(
+    psycopg=_contract_definition_text(STATEMENTS.get_contract.psycopg),
+    asyncpg=_contract_definition_text(STATEMENTS.get_contract.asyncpg),
+)
+
+
+def _stored_fraction(text: str) -> float | int | Decimal:
+    exact = Decimal(text)
+    value = float(text)
+    if math.isfinite(value) and Decimal(repr(value)) == exact:
+        return value
+    # An integer such as 9007199254740993.0 stays an int, so that a count keyword accepts it.
+    return int(exact) if exact == exact.to_integral_value() else exact
+
+
+def parse_stored_schema(text: str) -> Json:
+    """Read the jsonb text of a schema that PostgreSQL stores, and keep every number exact.
+
+    jsonb keeps all the digits of a number that another SDK synchronized. A fraction that a float
+    cannot hold stays a Decimal, and the contract keywords compare it exactly.
+    """
+    return cast(Json, json.loads(text, parse_float=_stored_fraction))
+
+
+def stored_schema_document(row: Mapping[str, object]) -> object:
+    document = row.get("schema")
+    return parse_stored_schema(document) if isinstance(document, str) else document
+
+
 def _is_number(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
+    return isinstance(value, int | float | Decimal) and not isinstance(value, bool)
 
 
-def _decimal(value: int | float) -> Decimal | float:
+def _decimal(value: int | float | Decimal) -> Decimal | float:
     """The decimal that json.dumps writes to PostgreSQL for a number.
 
     repr gives the shortest decimal that reads back as the same float. A non-finite float stays a
-    float, so it compares as before.
+    float, so it compares as before. A Decimal from a stored schema is already exact.
     """
+    if isinstance(value, Decimal):
+        return value
     if isinstance(value, int):
         return Decimal(value)
     return Decimal(repr(value)) if math.isfinite(value) else value
@@ -141,7 +183,7 @@ def _canonical(value: object) -> object:
     if isinstance(value, bool) or value is None:
         return ("literal", value)
     if _is_number(value):
-        return ("number", _decimal(cast(int | float, value)))
+        return ("number", _decimal(cast(int | float | Decimal, value)))
     if isinstance(value, list):
         return ("array", tuple(_canonical(item) for item in value))
     if isinstance(value, dict):
@@ -232,7 +274,31 @@ _ContractValidator = cast(Any, validators.extend)(
 def compile_contract_schema(schema: Json) -> Validator:
     check_contract_schema(schema)
     Draft202012Validator.check_schema(cast(Any, schema))
-    return cast(Validator, _ContractValidator(cast(Any, schema)))
+    return cast(Validator, _ContractValidator(cast(Any, _without_dialect(schema))))
+
+
+def _without_dialect(schema: Json) -> Json:
+    """The schema without its `$schema` keywords.
+
+    jsonschema validates a subschema that names a `$schema` with the library class of that dialect,
+    which has none of the contract keywords. The profile allows only Draft 2020-12, so the keyword
+    is an annotation, and the copy compares the same way.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    copy: dict[str, Json] = {}
+    for keyword, value in schema.items():
+        if keyword == "$schema":
+            continue
+        if keyword in SCHEMA_VALUES:
+            copy[keyword] = _without_dialect(value)
+        elif keyword in SCHEMA_ARRAYS and isinstance(value, list):
+            copy[keyword] = [_without_dialect(child) for child in value]
+        elif keyword in SCHEMA_MAPS and isinstance(value, dict):
+            copy[keyword] = {name: _without_dialect(child) for name, child in value.items()}
+        else:
+            copy[keyword] = value
+    return copy
 
 
 def apply_contract(
@@ -243,9 +309,7 @@ def apply_contract(
     cache: dict[tuple[str, str], Any],
 ) -> None:
     version = str(row["version"])
-    document = row["schema"]
-    if isinstance(document, str):
-        document = json.loads(document)
+    document = stored_schema_document(row)
     if not isinstance(document, Mapping) or "payload" not in document:
         raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
     validator = cache.get((task_type, version))
