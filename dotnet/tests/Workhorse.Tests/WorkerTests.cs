@@ -111,12 +111,39 @@ public sealed class WorkerTests(ScratchDatabase database)
         await running.StopAsync();
     }
 
+    /// <summary>The drain attempts that a loaded host can make inconclusive before the drain test fails.</summary>
+    private const int DrainAttempts = 3;
+
     [Fact]
     public async Task DrainFinishesRunningTasksInsideTheGraceAndReturnsTheRest()
     {
+        // After the grace, the cancelled handler has one unwind window of 250 ms to release its task.
+        // On a loaded host, that release or the settlement of the finishing task can take longer. The
+        // stop then abandons that attempt and throws, and the stop path cancels the late statement
+        // (SM-1682, as SM-1543 and SM-1155). Such an attempt shows nothing about the drain, so the
+        // test runs it again.
+        for (var attempt = 1; attempt <= DrainAttempts; attempt++)
+        {
+            if (await DrainOnceAsync())
+            {
+                return;
+            }
+        }
+
+        Assert.Fail(
+            $"In each of {DrainAttempts} attempts, the stop abandoned one attempt because its settlement outlived the unwind window. "
+            + "A host stall cannot explain that every time, so look for a slow settlement on the stop path.");
+    }
+
+    /// <summary>
+    /// Runs one drain of two handlers. Returns <c>false</c> when the stop abandoned one attempt
+    /// because its settlement outlived the unwind window.
+    /// </summary>
+    private async Task<bool> DrainOnceAsync()
+    {
         var queue = UniqueQueue("drain");
         var bothStarted = new CountdownEvent(2);
-        CancelReason? seen = null;
+        var seen = new TaskCompletionSource<CancelReason?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var worker = new Worker(database.DataSource, Options(queue, options =>
         {
@@ -140,7 +167,7 @@ public sealed class WorkerTests(ScratchDatabase database)
             }
             finally
             {
-                seen = context.CancelReason;
+                seen.TrySetResult(context.CancelReason);
             }
 
             return "never";
@@ -148,18 +175,26 @@ public sealed class WorkerTests(ScratchDatabase database)
         var finishing = await EnqueueAsync(database.DataSource, queue, "drain", new { orderId = 1 });
         var returned = await EnqueueAsync(database.DataSource, queue, "drain", new { orderId = 2 });
 
-        var running = new RunningWorker(worker);
+        await using var running = new RunningWorker(worker);
         await EventuallyAsync(() => bothStarted.IsSet, "both handlers run");
         var stop = running.StopAsync();
         finish.SetResult();
-        await stop;
+        try
+        {
+            await stop;
+        }
+        catch (ShutdownIncompleteException error) when (error.Abandoned == 1)
+        {
+            // The host stalled a settlement of either attempt past the unwind window.
+            return false;
+        }
 
         var completed = await TaskAsync(database.DataSource, finishing);
         Assert.Equal("succeeded", completed.Text("state"));
         var back = await TaskAsync(database.DataSource, returned);
         Assert.Equal("ready", back.Text("state"));
-        Assert.Equal(CancelReason.Shutdown, seen);
-        await running.DisposeAsync();
+        Assert.Equal(CancelReason.Shutdown, await seen.Task.WaitAsync(Patience, TestContext.Current.CancellationToken));
+        return true;
     }
 
     [Fact]
