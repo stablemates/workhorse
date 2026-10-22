@@ -16,7 +16,9 @@ import type {
   DashboardDurabilityPlan,
   DashboardRedriveCursor,
   DashboardRedriveStatus,
+  DashboardQueueTier,
   DashboardRunNowStatus,
+  DashboardSetQueueTierStatus,
   DashboardTaskGroup,
 } from "../wire.js";
 
@@ -75,6 +77,34 @@ export interface DashboardQueueController {
     queueName: string,
     audit: DashboardAuditContext,
   ) => Promise<{ deletedCount: number }>;
+  setQueueTier?: (
+    queueName: string,
+    tier: DashboardQueueTier,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardSetQueueTierResult>;
+  setQueueHistory?: (
+    queueName: string,
+    settings: DashboardQueueHistoryChange,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardQueueHistoryResult>;
+}
+
+/** The tier a switch reports. `tier` is the new tier, or null when a guard refused the switch. */
+export interface DashboardSetQueueTierResult {
+  status: DashboardSetQueueTierStatus;
+  tier: DashboardQueueTier | null;
+}
+
+/** The history settings one change names. An absent setting keeps its value. */
+export interface DashboardQueueHistoryChange {
+  recordAttempts?: boolean;
+  recordClaims?: boolean;
+}
+
+/** Both history settings of a queue after a change. */
+export interface DashboardQueueHistoryResult {
+  recordAttempts: boolean;
+  recordClaims: boolean;
 }
 
 export interface DashboardCancelTaskResult {

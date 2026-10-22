@@ -5,6 +5,15 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The dashboard sets the tier and the history of a queue
+
+The Rack dashboard answers two new mutations, `setQueueTier` and `setQueueHistory`. `setQueueTier`
+calls `Admin#set_queue_tier` with the authenticated actor and answers `{status: "set", tier}`. If
+Workhorse refuses the switch, the dashboard answers the guard as the status: `live_tasks`,
+`concurrency_policy`, or `rate_limit_policy`. Then `tier` is `null`, and the queue keeps its tier.
+`setQueueHistory` calls `Admin#set_queue_history`. An absent setting keeps its current value. A
+read-only dashboard refuses both mutations (SM-966).
+
 ### `Admin` moves a queue between tiers and sets its history
 
 `Admin#set_queue_tier(queue, tier, audit:)` moves a queue to the `:fast` or `:full` tier and returns

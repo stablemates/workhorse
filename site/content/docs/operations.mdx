@@ -1556,6 +1556,12 @@ tells you that the switches apply after a move to the fast tier. Workhorse also 
 that it does not know. Thus, the command shows a warning if no known queue has that name.
 [The fast tier](/docs/fast-tier) tells what each switch writes.
 
+The Queues page of the dashboard offers the same two changes. Each queue row has a menu with the
+tier switch and the two history switches. The dashboard calls `Admin.setQueueTier` and
+`Admin.setQueueHistory` through its host, so Workhorse applies the same checks. If Workhorse refuses
+a tier switch, the page names the check that refused it, and the queue keeps its tier. If the host
+cannot make these changes, the menu shows them disabled, with the reason.
+
 <details>
 <summary>Reference: tier and history commands</summary>
 
@@ -1577,7 +1583,12 @@ that it does not know. Thus, the command shows a warning if no known queue has t
 **`admin queues`.** A queue without a `queue_control` row reports `full` with both switches off. The
 `HISTORY` column is `all` on the full tier, else `none` or the enabled switches.
 
-More detail: [Operations and CLI: Queue tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#queue-tier).
+**Dashboard.** The Queues page menu calls the `setQueueTier` and `setQueueHistory` procedures of
+`dashboard/v1`. `setQueueTier` answers `set`, `live_tasks`, `concurrency_policy`, or
+`rate_limit_policy` in `status`. It records the authenticated actor and the reason on the queue.
+
+More detail: [Operations and CLI: Queue tier](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#queue-tier),
+[Dashboard: Queues page](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#queues-page).
 
 </details>
 

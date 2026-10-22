@@ -58,6 +58,8 @@ public final class Dashboard implements Filter {
           "setSchedulePaused",
           "setQueuePaused",
           "purgeQueue",
+          "setQueueTier",
+          "setQueueHistory",
           "setWorkerPaused",
           "overrideMaintenancePolicy",
           "revertMaintenancePolicy",

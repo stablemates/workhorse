@@ -23,6 +23,8 @@ const MUTATION_INPUTS: Readonly<Record<string, unknown>> = {
   },
   setQueuePaused: { queue: "default", paused: true, audit: AUDIT },
   purgeQueue: { queue: "default", audit: AUDIT },
+  setQueueTier: { queue: "default", tier: "fast", audit: AUDIT },
+  setQueueHistory: { queue: "default", recordAttempts: true, audit: AUDIT },
   setWorkerPaused: { workerId: "worker-1", paused: true, audit: AUDIT },
   overrideMaintenancePolicy: { definition: { timezone: "UTC" }, audit: AUDIT },
   revertMaintenancePolicy: { settings: ["timezone"], audit: AUDIT },

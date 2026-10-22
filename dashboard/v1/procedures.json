@@ -1275,6 +1275,110 @@
         ]
       }
     },
+    "setQueueTier": {
+      "path": "/rpc/dashboard/setQueueTier",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "full"
+            ]
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "At most 512 UTF-8 bytes."
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "queue",
+          "tier",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardSetQueueTierResult"
+      }
+    },
+    "setQueueHistory": {
+      "path": "/rpc/dashboard/setQueueHistory",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recordAttempts": {
+            "type": "boolean"
+          },
+          "recordClaims": {
+            "type": "boolean"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "At most 512 UTF-8 bytes."
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "queue",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardQueueHistoryResult"
+      }
+    },
     "setWorkerPaused": {
       "path": "/rpc/dashboard/setWorkerPaused",
       "mutation": true,
@@ -3858,6 +3962,21 @@
         "terminal-cleanup-backlog"
       ]
     },
+    "DashboardQueueHistoryResult": {
+      "type": "object",
+      "properties": {
+        "recordAttempts": {
+          "type": "boolean"
+        },
+        "recordClaims": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "recordAttempts",
+        "recordClaims"
+      ]
+    },
     "DashboardQueuesPage": {
       "type": "object",
       "properties": {
@@ -4776,6 +4895,39 @@
         "occurrenceCount",
         "lastFiredAt",
         "evaluatorCount"
+      ]
+    },
+    "DashboardSetQueueTierResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DashboardSetQueueTierStatus"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "const": "fast"
+            },
+            {
+              "const": "full"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "tier"
+      ]
+    },
+    "DashboardSetQueueTierStatus": {
+      "enum": [
+        "concurrency_policy",
+        "live_tasks",
+        "rate_limit_policy",
+        "set"
       ]
     },
     "DashboardSettingsPage": {

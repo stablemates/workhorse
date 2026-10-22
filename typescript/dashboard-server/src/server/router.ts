@@ -348,6 +348,19 @@ const purgeQueueInput = z.object({
   queue: z.string().trim().min(1),
   audit: auditSchema,
 });
+/** One tier switch. The audit reason is required, as `workhorse admin set-tier --reason` requires it. */
+const setQueueTierInput = z.object({
+  queue: z.string().trim().min(1),
+  tier: z.enum(["fast", "full"]),
+  audit: auditSchema,
+});
+/** One history change. An absent setting keeps its current value. */
+const setQueueHistoryInput = z.object({
+  queue: z.string().trim().min(1),
+  recordAttempts: z.boolean().optional(),
+  recordClaims: z.boolean().optional(),
+  audit: auditSchema,
+});
 const checkedDashboardRedriveBatchMax: typeof MAX_REDRIVE_BATCH_SIZE = dashboardRedriveBatchMax;
 const redriveTaskInput = z.object({
   id: z.uuid(),
@@ -712,6 +725,38 @@ export const dashboardRouter = {
         auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
     }),
+    /**
+     * Move one queue between the full and fast tiers through `Admin.setQueueTier`.
+     *
+     * The guards stay in `set_queue_tier_v1`. A refused switch answers a status that names the
+     * guard, so the dashboard can state it, and the queue keeps its tier.
+     */
+    setQueueTier: mutationProcedure.input(setQueueTierInput).handler(async ({ context, input }) => {
+      if (!context.queueController?.setQueueTier) {
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+      }
+      return context.queueController.setQueueTier(
+        input.queue,
+        input.tier,
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
+      );
+    }),
+    /** Choose the history a fast-tier queue records through `Admin.setQueueHistory`. */
+    setQueueHistory: mutationProcedure
+      .input(setQueueHistoryInput)
+      .handler(async ({ context, input }) => {
+        if (!context.queueController?.setQueueHistory) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        return context.queueController.setQueueHistory(
+          input.queue,
+          {
+            ...(input.recordAttempts === undefined ? {} : { recordAttempts: input.recordAttempts }),
+            ...(input.recordClaims === undefined ? {} : { recordClaims: input.recordClaims }),
+          },
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
+      }),
     setWorkerPaused: mutationProcedure
       .input(setWorkerPausedInput)
       .handler(async ({ context, input }) => {

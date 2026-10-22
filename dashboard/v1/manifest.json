@@ -133,6 +133,12 @@
     "purgeQueue": {
       "mutation": true
     },
+    "setQueueTier": {
+      "mutation": true
+    },
+    "setQueueHistory": {
+      "mutation": true
+    },
     "setWorkerPaused": {
       "mutation": true
     },

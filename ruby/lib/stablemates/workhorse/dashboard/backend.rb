@@ -13,7 +13,13 @@ module Stablemates
           timezone partitionPreparationIntervalMs terminalCleanupIntervalMs historyRetentionLocalTime
           statisticsRollupIntervalMs statisticsGroupLimit statisticsRecomputeBuckets
         ].freeze
-        private_constant :QUEUE_HEALTH_TTL, :MAINTENANCE_SETTINGS
+        # The wire status for each guard that set_queue_tier_v1 names when it refuses a tier switch.
+        REFUSED_TIER_STATUSES = {
+          "tier change" => "live_tasks",
+          "concurrency policies" => "concurrency_policy",
+          "rate-limit policies" => "rate_limit_policy"
+        }.freeze
+        private_constant :QUEUE_HEALTH_TTL, :MAINTENANCE_SETTINGS, :REFUSED_TIER_STATUSES
 
         def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:)
           @executor = executor
@@ -38,6 +44,7 @@ module Stablemates
             "settings" => method(:settings), "system" => method(:system),
             "previewRetentionPolicy" => method(:preview_retention_policy),
             "setQueuePaused" => method(:set_queue_paused), "purgeQueue" => method(:purge_queue),
+            "setQueueTier" => method(:set_queue_tier), "setQueueHistory" => method(:set_queue_history),
             "setWorkerPaused" => method(:set_worker_paused),
             "overrideMaintenancePolicy" => method(:override_maintenance_policy),
             "revertMaintenancePolicy" => method(:revert_maintenance_policy),
@@ -136,6 +143,26 @@ module Stablemates
 
         def purge_queue(input, actor)
           {"deletedCount" => @admin.purge_queue(input.fetch("queue"), audit: audit(input, actor))}
+        end
+
+        # The guards stay in set_queue_tier_v1. A refused switch answers the status that names the
+        # guard, and the queue keeps its tier.
+        def set_queue_tier(input, actor)
+          tier = @admin.set_queue_tier(input.fetch("queue"), input.fetch("tier").to_sym,
+            audit: audit(input, actor))
+          {"status" => "set", "tier" => tier.to_s}
+        rescue FastTierUnsupportedError => error
+          status = REFUSED_TIER_STATUSES[error.feature]
+          raise if status.nil?
+
+          {"status" => status, "tier" => nil}
+        end
+
+        # An absent setting keeps its current value.
+        def set_queue_history(input, _actor)
+          history = @admin.set_queue_history(input.fetch("queue"),
+            record_attempts: input["recordAttempts"], record_claims: input["recordClaims"])
+          {"recordAttempts" => history.record_attempts, "recordClaims" => history.record_claims}
         end
 
         def set_worker_paused(input, actor)

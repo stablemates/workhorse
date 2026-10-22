@@ -439,6 +439,7 @@ interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
 interface DashboardQueueRow
+type DashboardQueueTier
 interface DashboardQueuesPage
 interface DashboardRateLimitPolicySummary
 interface DashboardRedriveCursor
@@ -448,6 +449,7 @@ interface DashboardRetentionCategoryRow
 type DashboardRetentionPolicy
 type DashboardRunNowStatus
 interface DashboardScheduleRow
+type DashboardSetQueueTierStatus
 interface DashboardSettingsPage
 interface DashboardSignalWaitRow
 interface DashboardSignalWaitSummary
@@ -531,6 +533,8 @@ interface DashboardOperatorControllerOptions
 interface DashboardOperatorControllers
 interface DashboardPrincipal
 interface DashboardQueueController
+interface DashboardQueueHistoryChange
+interface DashboardQueueHistoryResult
 interface DashboardRedriveBatch
 interface DashboardRedriveFilter
 interface DashboardRedriveResult
@@ -540,6 +544,7 @@ interface DashboardRpcContext
 interface DashboardRunNowResult
 type DashboardRuntimeConfig
 interface DashboardScheduleController
+interface DashboardSetQueueTierResult
 interface DashboardSettingsController
 interface DashboardSignalTaskResult
 interface DashboardSingleAdminOptions
@@ -637,6 +642,7 @@ interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
 interface DashboardQueueRow
+type DashboardQueueTier
 interface DashboardQueuesPage
 interface DashboardRateLimitPolicySummary
 interface DashboardRedriveCursor
@@ -646,6 +652,7 @@ interface DashboardRetentionCategoryRow
 type DashboardRetentionPolicy
 type DashboardRunNowStatus
 interface DashboardScheduleRow
+type DashboardSetQueueTierStatus
 interface DashboardSettingsPage
 interface DashboardSignalWaitRow
 interface DashboardSignalWaitSummary
@@ -783,6 +790,8 @@ interface DashboardOperatorControllerOptions
 interface DashboardOperatorControllers
 interface DashboardPrincipal
 interface DashboardQueueController
+interface DashboardQueueHistoryChange
+interface DashboardQueueHistoryResult
 interface DashboardRedriveBatch
 interface DashboardRedriveFilter
 interface DashboardRedriveResult
@@ -792,6 +801,7 @@ interface DashboardRpcContext
 interface DashboardRunNowResult
 type DashboardRuntimeConfig
 interface DashboardScheduleController
+interface DashboardSetQueueTierResult
 interface DashboardSettingsController
 interface DashboardSignalTaskResult
 interface DashboardSingleAdminOptions
@@ -1946,6 +1956,16 @@ type DashboardOperatorAction = {
   queueName: string;
   audit: DashboardAuditContext;
 } | {
+  kind: "setQueueTier";
+  queueName: string;
+  tier: "fast" | "full";
+  audit: DashboardAuditContext;
+} | {
+  kind: "setQueueHistory";
+  queueName: string;
+  settings: DashboardQueueHistoryChange;
+  audit: DashboardAuditContext;
+} | {
   kind: "runTaskNow";
   taskId: string;
   audit: DashboardAuditContext;
@@ -2048,6 +2068,8 @@ interface DashboardQueueController {
   purgeQueue?: (queueName: string, audit: DashboardAuditContext) => Promise<{
     deletedCount: number;
   }>;
+  setQueueTier?: (queueName: string, tier: DashboardQueueTier, audit: DashboardAuditContext) => Promise<DashboardSetQueueTierResult>;
+  setQueueHistory?: (queueName: string, settings: DashboardQueueHistoryChange, audit: DashboardAuditContext) => Promise<DashboardQueueHistoryResult>;
 }
 
 type DashboardQueueHealthDocument = {
@@ -2056,12 +2078,24 @@ type DashboardQueueHealthDocument = {
 
 type DashboardQueueHealthReader = () => Promise<DashboardQueueHealthDocument>;
 
+interface DashboardQueueHistoryChange {
+  recordAttempts?: boolean;
+  recordClaims?: boolean;
+}
+
+interface DashboardQueueHistoryResult {
+  recordAttempts: boolean;
+  recordClaims: boolean;
+}
+
 interface DashboardQueueRow {
   queue: string;
   state: string;
   count: number;
   oldestMs: number | null;
 }
+
+type DashboardQueueTier = "fast" | "full";
 
 interface DashboardQueuesPage {
   capturedAt: string;
@@ -2229,6 +2263,13 @@ interface DashboardScheduleRow {
   /** Live workers that currently offer this schedule namespace. */
   evaluatorCount: number;
 }
+
+interface DashboardSetQueueTierResult {
+  status: DashboardSetQueueTierStatus;
+  tier: DashboardQueueTier | null;
+}
+
+type DashboardSetQueueTierStatus = "set" | "live_tasks" | "concurrency_policy" | "rate_limit_policy";
 
 interface DashboardSettingsController {
   overrideMaintenancePolicy(definition: Partial<MaintenancePolicyDefinition>, audit: DashboardAuditContext): Promise<void>;
@@ -3779,7 +3820,7 @@ class MissingRowError extends WorkhorseError {
   constructor(source: string);
 }
 
-type OptionalDashboardProcedure = "runTaskNow" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
+type OptionalDashboardProcedure = "runTaskNow" | "setQueueTier" | "setQueueHistory" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
 
 const PROTOCOL_VERSION = 5;
 
@@ -6228,6 +6269,35 @@ const dashboardRouter: {
     }, {
       deletedCount: number;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /**
+    * Move one queue between the full and fast tiers through `Admin.setQueueTier`.
+    *
+    * The guards stay in `set_queue_tier_v1`. A refused switch answers a status that names the
+    * guard, so the dashboard can state it, and the queue keeps its tier.
+    */
+    setQueueTier: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
+      queue: z.ZodString;
+      tier: z.ZodEnum<{
+        fast: "fast";
+        full: "full";
+      }>;
+      audit: z.ZodObject<{
+        actor: z.ZodString;
+        reason: z.ZodString;
+        requestId: z.ZodString;
+      }, z.core.$strip>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardSetQueueTierResult, import("./types.js").DashboardSetQueueTierResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    /** Choose the history a fast-tier queue records through `Admin.setQueueHistory`. */
+    setQueueHistory: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
+      queue: z.ZodString;
+      recordAttempts: z.ZodOptional<z.ZodBoolean>;
+      recordClaims: z.ZodOptional<z.ZodBoolean>;
+      audit: z.ZodObject<{
+        actor: z.ZodString;
+        reason: z.ZodString;
+        requestId: z.ZodString;
+      }, z.core.$strip>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardQueueHistoryResult, import("./types.js").DashboardQueueHistoryResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     setWorkerPaused: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, DashboardRpcContext & Record<never, never>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>>, import("@orpc/server").MergedCurrentContext<import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, Record<never, never>>, z.ZodObject<{
       workerId: z.ZodString;
       paused: z.ZodBoolean;

@@ -11,6 +11,20 @@ adds.
 
 ## Unreleased
 
+### The dashboard changes a queue's tier and history
+
+Before this change, an operator used `workhorse admin set-tier` and `set-history` to move a queue
+between tiers or to change the history that a fast-tier queue records. The dashboard showed the
+tier but could not change it (SM-966, ADR 0077). The Rust dashboard host now answers two
+mutations. `setQueueTier` calls `Admin::set_queue_tier` and records the authenticated actor and
+the audit reason on the queue. `setQueueHistory` calls `Admin::set_queue_history`. An omitted
+setting keeps its value.
+
+`set_queue_tier_v1` holds every guard. If it refuses a switch, the host answers a status and a
+null tier, and the queue does not change. The status is `live_tasks` when the queue holds a live
+task. It is `concurrency_policy` or `rate_limit_policy` when a fast switch meets that queue policy.
+Both mutations need a same-origin request and a writable dashboard. No schema change is necessary.
+
 ### A contract compares every number as an exact decimal
 
 Before this change, the Rust SDK read a stored contract schema into a `serde_json::Value`, which

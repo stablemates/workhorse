@@ -182,6 +182,23 @@ SDK compatibility floor rises from schema 75 to 76. Run `workhorse schema migrat
 process of this release starts. A 0.9 process keeps working on schema 76. The migration changes no
 stored data.
 
+### The dashboard sets the tier and the history of a queue
+
+Before this change, an operator used `Admin.SetQueueTier` or `Admin.SetQueueHistory` to change a
+queue tier or the history that a fast-tier queue records. The dashboard showed these settings but
+could not change them (SM-966). The Go dashboard host now answers two new mutations.
+
+`setQueueTier` calls `Admin.SetQueueTier` with the actor that the host assigns. If the switch
+succeeds, the response is `{"status":"set","tier":...}`. If `set_queue_tier_v1` refuses the switch,
+the response names the guard as `live_tasks`, `concurrency_policy`, or `rate_limit_policy`, and
+`tier` is `null`. The queue keeps its tier. Any other error stays an error.
+
+`setQueueHistory` calls `Admin.SetQueueHistory`. A setting that the request omits keeps its current
+value. The response gives `recordAttempts` and `recordClaims`.
+
+Both mutations require a same-origin request. A read-only dashboard refuses them with `FORBIDDEN`.
+No schema change is necessary.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

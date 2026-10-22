@@ -85,6 +85,10 @@ function renderQueues(data: DashboardQueuesPage, QueuesPage: unknown): string {
         setQueuePaused: () => undefined,
         setConfirmingQueue: () => undefined,
         purgeQueue: () => undefined,
+        changingQueue: null,
+        tierCapabilities: { canSetTier: true, canSetHistory: true },
+        setQueueTier: () => undefined,
+        setQueueHistory: () => undefined,
       }),
     ),
   );

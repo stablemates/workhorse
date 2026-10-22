@@ -884,6 +884,7 @@ these actions:
 - Cancel a task group.
 - Pause or resume a queue, a schedule, or a worker.
 - Purge a queue.
+- Change the tier of a queue and the history that a fast-tier queue records.
 - Change the maintenance policy.
 
 The Settings page changes the maintenance policy through `DashboardSettingsController`. It shows
@@ -899,7 +900,7 @@ If the host did not authorize settings changes, the Settings page is read-only.
 | Controller                    | Methods                                                                                                               |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `DashboardTaskController`     | `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`, `redriveTask`, `redriveDeadLetters`, `cancelTaskGroup` |
-| `DashboardQueueController`    | `setQueuePaused`, `purgeQueue`                                                                                        |
+| `DashboardQueueController`    | `setQueuePaused`, `purgeQueue`, `setQueueTier`, `setQueueHistory`                                                     |
 | `DashboardScheduleController` | `setSchedulePaused`                                                                                                   |
 | `DashboardWorkerController`   | `setWorkerPaused`                                                                                                     |
 | `DashboardSettingsController` | `overrideMaintenancePolicy`, `revertMaintenancePolicy`, `overrideRetentionPolicy`, `revertRetentionPolicy`            |

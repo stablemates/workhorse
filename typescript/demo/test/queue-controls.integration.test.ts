@@ -267,6 +267,69 @@ describe("Workhorse demo", () => {
     ]);
   });
 
+  it("audits a tier switch and a history change, and reports a refused switch", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      queueController: createLocalOperatorControllers(database).queueController,
+    });
+    const client = dashboardClient(app);
+    await workhorse.context.queue.enqueue("live", {}, { queue: "tier-live-demo" });
+
+    await expect(
+      client.dashboard.setQueueTier({
+        queue: "tier-live-demo",
+        tier: "fast",
+        audit: { actor: "operator", reason: "refused switch", requestId: "tier-refused" },
+      }),
+    ).resolves.toEqual({ status: "live_tasks", tier: null });
+    await expect(
+      client.dashboard.setQueueTier({
+        queue: "tier-empty-demo",
+        tier: "fast",
+        audit: { actor: "operator", reason: "go fast", requestId: "tier-fast" },
+      }),
+    ).resolves.toEqual({ status: "set", tier: "fast" });
+    await expect(
+      client.dashboard.setQueueHistory({
+        queue: "tier-empty-demo",
+        recordClaims: true,
+        audit: { actor: "operator", reason: "record claims", requestId: "history-claims" },
+      }),
+    ).resolves.toEqual({ recordAttempts: false, recordClaims: true });
+
+    // The refused switch rolled back its whole audit transaction, so it leaves no audit row.
+    expect(
+      (
+        await pool.query(
+          `SELECT action, target, actor, reason, request_id, before, after, status
+             FROM public.workhorse_demo_audit
+            WHERE action IN ('setQueueTier', 'setQueueHistory') ORDER BY id`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        action: "setQueueTier",
+        target: "queue:tier-empty-demo",
+        actor: "local-demo",
+        reason: "go fast",
+        request_id: "tier-fast",
+        before: { tier: "full", recordAttempts: false, recordClaims: false },
+        after: { status: "set", tier: "fast" },
+        status: "succeeded",
+      },
+      {
+        action: "setQueueHistory",
+        target: "queue:tier-empty-demo",
+        actor: "local-demo",
+        reason: "record claims",
+        request_id: "history-claims",
+        before: { tier: "fast", recordAttempts: false, recordClaims: false },
+        after: { recordAttempts: false, recordClaims: true },
+        status: "succeeded",
+      },
+    ]);
+  });
+
   it("reports a queue's tier and the history a fast-tier queue records", async () => {
     const { app } = createTestApplication();
     const client = dashboardClient(app);

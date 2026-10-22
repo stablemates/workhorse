@@ -254,11 +254,13 @@ where
 }
 
 /// Procedures that change state. Each needs a same-origin request and a writable dashboard.
-const MUTATIONS: [&str; 16] = [
+const MUTATIONS: [&str; 18] = [
     "enqueueTest",
     "setSchedulePaused",
     "setQueuePaused",
     "purgeQueue",
+    "setQueueTier",
+    "setQueueHistory",
     "setWorkerPaused",
     "overrideMaintenancePolicy",
     "revertMaintenancePolicy",

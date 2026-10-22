@@ -1,5 +1,22 @@
-import type { DashboardQueuesPage } from "@stablemates/workhorse-dashboard-server/wire";
-import { Button, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
+import type {
+  DashboardQueuesPage,
+  DashboardQueueTier,
+} from "@stablemates/workhorse-dashboard-server/wire";
+import {
+  ActionIcon,
+  Button,
+  Code,
+  Group,
+  Loader,
+  Paper,
+  ScrollArea,
+  Stack,
+  Switch,
+  Table,
+  Text,
+} from "@mantine/core";
+import { DotsThreeVertical } from "@phosphor-icons/react";
+import { Menu } from "../dropdown-activity.js";
 import {
   concurrencyCappedFootnote,
   describeConcurrencyBlocked,
@@ -8,7 +25,12 @@ import {
 } from "../concurrency-policy.js";
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "../rate-limit.js";
 import { BudgetsTable, budgetCappedFootnote } from "../budgets-table.js";
-import { describeQueueTier } from "../queue-tier.js";
+import {
+  describeQueueTier,
+  queueTierActions,
+  type QueueTierActionId,
+  type QueueTierCapabilities,
+} from "../queue-tier.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { HelpButton } from "../components/help-button.js";
 import { formatCount } from "../count-format.js";
@@ -21,6 +43,10 @@ export function QueuesPage({
   setQueuePaused,
   setConfirmingQueue,
   purgeQueue,
+  changingQueue,
+  tierCapabilities,
+  setQueueTier,
+  setQueueHistory,
 }: {
   data: DashboardQueuesPage;
   togglingQueue: string | null;
@@ -29,6 +55,15 @@ export function QueuesPage({
   setQueuePaused: (queue: string, paused: boolean) => void;
   setConfirmingQueue: (queue: string | null) => void;
   purgeQueue: (queue: string) => void;
+  /** The queue whose tier or history change is in flight. */
+  changingQueue: string | null;
+  /** What this host can change. An absent capability keeps its action visible and disabled. */
+  tierCapabilities: QueueTierCapabilities;
+  setQueueTier: (queue: string, tier: DashboardQueueTier) => void;
+  setQueueHistory: (
+    queue: string,
+    change: { recordAttempts?: boolean; recordClaims?: boolean },
+  ) => void;
 }) {
   return (
     <Stack gap="xl">
@@ -61,7 +96,7 @@ export function QueuesPage({
                       <span>Tier</span>
                       <HelpButton
                         label="Tier"
-                        help="A full-tier queue records every attempt and claim. A fast-tier queue skips that history for throughput unless an operator turns part of it back on. Change either with workhorse admin set-tier and set-history."
+                        help="A full-tier queue records every attempt and claim. A fast-tier queue skips that history for throughput unless an operator turns part of it back on. Change either from the queue's menu in the Actions column, or with workhorse admin set-tier and set-history. Workhorse refuses a tier change while the queue holds tasks that are not finished."
                       />
                     </Group>
                   </Table.Th>
@@ -224,36 +259,56 @@ export function QueuesPage({
                         {formatCount(queue.failed)}
                       </Table.Td>
                       <Table.Td ta="right">
-                        {confirmingQueue === queue.queue ? (
-                          <Group gap={4} justify="flex-end" wrap="nowrap">
+                        <Group gap={4} justify="flex-end" wrap="nowrap">
+                          {confirmingQueue === queue.queue ? (
+                            <Group gap={4} justify="flex-end" wrap="nowrap">
+                              <Button
+                                color="red"
+                                size="compact-xs"
+                                loading={purgingQueue === queue.queue}
+                                onClick={() => purgeQueue(queue.queue)}
+                              >
+                                Confirm clear
+                              </Button>
+                              <Button
+                                variant="subtle"
+                                color="gray"
+                                size="compact-xs"
+                                disabled={purgingQueue === queue.queue}
+                                onClick={() => setConfirmingQueue(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </Group>
+                          ) : (
                             <Button
+                              variant="light"
                               color="red"
                               size="compact-xs"
-                              loading={purgingQueue === queue.queue}
-                              onClick={() => purgeQueue(queue.queue)}
+                              onClick={() => setConfirmingQueue(queue.queue)}
                             >
-                              Confirm clear
+                              Clear
                             </Button>
-                            <Button
-                              variant="subtle"
-                              color="gray"
-                              size="compact-xs"
-                              disabled={purgingQueue === queue.queue}
-                              onClick={() => setConfirmingQueue(null)}
-                            >
-                              Cancel
-                            </Button>
-                          </Group>
-                        ) : (
-                          <Button
-                            variant="light"
-                            color="red"
-                            size="compact-xs"
-                            onClick={() => setConfirmingQueue(queue.queue)}
-                          >
-                            Clear
-                          </Button>
-                        )}
+                          )}
+                          <QueueTierMenu
+                            queue={queue}
+                            capabilities={tierCapabilities}
+                            pending={changingQueue === queue.queue}
+                            onAction={(action) => {
+                              if (action === "tier") {
+                                setQueueTier(queue.queue, queue.tier === "fast" ? "full" : "fast");
+                              } else if (action === "recordAttempts") {
+                                setQueueHistory(queue.queue, {
+                                  recordAttempts: queue.recordAttempts !== true,
+                                });
+                              } else {
+                                setQueueHistory(queue.queue, {
+                                  recordClaims: queue.recordClaims !== true,
+                                });
+                              }
+                            }}
+                          />
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   );
@@ -283,5 +338,69 @@ export function QueuesPage({
         </Text>
       ) : null}
     </Stack>
+  );
+}
+
+/**
+ * The tier and history menu of one queue row.
+ *
+ * Each action goes to `Admin.setQueueTier` or `Admin.setQueueHistory` through the host, so the
+ * guards are the ones the CLI meets. A disabled action states its reason under its label.
+ */
+function QueueTierMenu({
+  queue,
+  capabilities,
+  pending,
+  onAction,
+}: {
+  queue: DashboardQueuesPage["queues"][number];
+  capabilities: QueueTierCapabilities;
+  pending: boolean;
+  onAction: (action: QueueTierActionId) => void;
+}) {
+  const [tierAction, ...historyActions] = queueTierActions(queue, capabilities);
+  const item = (action: NonNullable<typeof tierAction>) => (
+    <Menu.Item
+      key={action.id}
+      disabled={action.unavailable !== null || pending}
+      onClick={() => onAction(action.id)}
+    >
+      <Text size="sm" lh={1.3}>
+        {action.label}
+      </Text>
+      {action.unavailable === null ? null : (
+        <Text size="xs" c="dimmed" lh={1.3} mt={2} style={{ whiteSpace: "normal" }}>
+          {action.unavailable}
+        </Text>
+      )}
+    </Menu.Item>
+  );
+  return (
+    <Menu
+      blocksRefresh
+      position="bottom-end"
+      withinPortal
+      shadow="md"
+      width={280}
+      transitionProps={{ duration: 0 }}
+    >
+      <Menu.Target>
+        <ActionIcon
+          size="sm"
+          variant="subtle"
+          color="gray"
+          aria-label={`Tier and history for ${queue.queue}`}
+        >
+          {pending ? <Loader size={14} /> : <DotsThreeVertical size={16} weight="bold" />}
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Tier</Menu.Label>
+        {tierAction === undefined ? null : item(tierAction)}
+        <Menu.Divider />
+        <Menu.Label>Fast-tier history</Menu.Label>
+        {historyActions.map(item)}
+      </Menu.Dropdown>
+    </Menu>
   );
 }

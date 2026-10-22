@@ -1,12 +1,14 @@
-import type { Admin, Queue } from "@stablemates/workhorse";
+import { FastTierUnsupportedError, type Admin, type Queue } from "@stablemates/workhorse";
 import type { DeadLetterFilter, Json, RedriveResult, TaskGroup } from "@stablemates/workhorse";
 import type { DashboardRedriveCursor, DashboardTaskGroup } from "../wire.js";
 import type {
   DashboardAuditContext,
   DashboardCancellationAuditContext,
   DashboardQueueController,
+  DashboardQueueHistoryChange,
   DashboardRedriveFilter,
   DashboardRedriveResult,
+  DashboardSetQueueTierResult,
   DashboardTaskController,
   DashboardWorkerController,
 } from "./types.js";
@@ -19,6 +21,18 @@ export type DashboardOperatorAction =
       audit: DashboardAuditContext;
     }
   | { kind: "purgeQueue"; queueName: string; audit: DashboardAuditContext }
+  | {
+      kind: "setQueueTier";
+      queueName: string;
+      tier: "fast" | "full";
+      audit: DashboardAuditContext;
+    }
+  | {
+      kind: "setQueueHistory";
+      queueName: string;
+      settings: DashboardQueueHistoryChange;
+      audit: DashboardAuditContext;
+    }
   | { kind: "runTaskNow"; taskId: string; audit: DashboardAuditContext }
   | { kind: "cancelTask"; taskId: string; audit: DashboardCancellationAuditContext }
   | {
@@ -78,6 +92,20 @@ function isoTimestamp(value: Date | string | null): string | null {
 
 function redriveResult(result: RedriveResult): DashboardRedriveResult {
   return { ...result, requestedAt: isoTimestamp(result.requestedAt) };
+}
+
+/**
+ * The status of a tier switch that `set_queue_tier_v1` refused, or null for another error.
+ *
+ * The function names its guard in the error detail. This maps that name onto the wire status and
+ * decides nothing itself.
+ */
+function refusedTierStatus(error: unknown): DashboardSetQueueTierResult["status"] | null {
+  if (!(error instanceof FastTierUnsupportedError)) return null;
+  if (error.feature === "tier change") return "live_tasks";
+  if (error.feature === "concurrency policies") return "concurrency_policy";
+  if (error.feature === "rate-limit policies") return "rate_limit_policy";
+  return null;
 }
 
 const taskGroupCallbackOrder = ["onFinish", "onSuccess", "onFailure"] as const;
@@ -148,6 +176,27 @@ export function createDashboardOperatorControllers(
         options.run({ kind: "purgeQueue", queueName, audit }, async ({ admin }) => ({
           deletedCount: await admin.purgeQueue(queueName, audit),
         })),
+      // The refusal is mapped outside the runner. PostgreSQL aborts the runner's transaction when
+      // set_queue_tier_v1 refuses, so the runner must roll back before the result is reported.
+      setQueueTier: async (queueName, tier, audit) => {
+        try {
+          return await options.run(
+            { kind: "setQueueTier", queueName, tier, audit },
+            async ({ admin }): Promise<DashboardSetQueueTierResult> => ({
+              status: "set",
+              tier: await admin.setQueueTier(queueName, tier, audit),
+            }),
+          );
+        } catch (error) {
+          const status = refusedTierStatus(error);
+          if (status === null) throw error;
+          return { status, tier: null };
+        }
+      },
+      setQueueHistory: (queueName, settings, audit) =>
+        options.run({ kind: "setQueueHistory", queueName, settings, audit }, async ({ admin }) =>
+          admin.setQueueHistory(queueName, settings),
+        ),
     },
     taskController: {
       runTaskNow: (taskId, audit) =>

@@ -1232,6 +1232,52 @@
               }
             ]
           }
+        },
+        {
+          "id": "sync-policy-queue-concurrency",
+          "sql": "SELECT count(*)::integer AS count FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
+          "parameters": [
+            "conformance-policy",
+            [
+              {
+                "queue": "conformance-policy",
+                "maxActive": 2
+              }
+            ],
+            true
+          ],
+          "expect": {
+            "rows": [
+              {
+                "count": 1
+              }
+            ]
+          }
+        },
+        {
+          "id": "sync-policy-queue-rate-limit",
+          "sql": "SELECT count(*)::integer AS count FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)",
+          "parameters": [
+            "conformance-rate-policy",
+            [
+              {
+                "queue": "conformance-rate-policy",
+                "rate": {
+                  "limit": 1,
+                  "intervalMs": 60000,
+                  "burst": 1
+                }
+              }
+            ],
+            true
+          ],
+          "expect": {
+            "rows": [
+              {
+                "count": 1
+              }
+            ]
+          }
         }
       ]
     },
@@ -3309,6 +3355,32 @@
                   },
                   {
                     "tier": "full",
+                    "queue": "conformance-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "failed": 0,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 0,
+                    "recordClaims": false,
+                    "recordAttempts": false,
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": {
+                      "active": 0,
+                      "available": 2,
+                      "maxActive": 2,
+                      "namespace": "conformance-policy",
+                      "blockedReady": 0,
+                      "saturatedKeys": 0,
+                      "maxActivePerKey": null,
+                      "highestKeyActive": 0,
+                      "utilizationKnown": true
+                    },
+                    "terminalCountsApproximate": false
+                  },
+                  {
+                    "tier": "full",
                     "queue": "conformance-preserved",
                     "ready": 0,
                     "active": 0,
@@ -3336,6 +3408,34 @@
                     "recordClaims": false,
                     "recordAttempts": false,
                     "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "terminalCountsApproximate": false
+                  },
+                  {
+                    "tier": "full",
+                    "queue": "conformance-rate-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "failed": 0,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 0,
+                    "recordClaims": false,
+                    "recordAttempts": false,
+                    "rateLimitPolicy": {
+                      "rate": {
+                        "burst": 1,
+                        "limit": 1,
+                        "intervalMs": 60000
+                      },
+                      "perKey": null,
+                      "namespace": "conformance-rate-policy",
+                      "throttledKeys": 0,
+                      "nextEligibleAt": null,
+                      "throttledReady": 0,
+                      "availableTokens": 1
+                    },
                     "concurrencyPolicy": null,
                     "terminalCountsApproximate": false
                   },
@@ -3546,6 +3646,30 @@
                     "completedPerMinute": 0.016666666666666666
                   },
                   {
+                    "queue": "conformance-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": {
+                      "active": 0,
+                      "available": 2,
+                      "maxActive": 2,
+                      "namespace": "conformance-policy",
+                      "blockedReady": 0,
+                      "saturatedKeys": 0,
+                      "maxActivePerKey": null,
+                      "highestKeyActive": 0,
+                      "utilizationKnown": true
+                    },
+                    "enqueuedPerMinute": 0,
+                    "completedPerMinute": 0
+                  },
+                  {
                     "queue": "conformance-preserved",
                     "ready": 0,
                     "active": 0,
@@ -3581,6 +3705,32 @@
                     "rateLimitPolicy": null,
                     "concurrencyPolicy": null,
                     "enqueuedPerMinute": 0.016666666666666666,
+                    "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-rate-policy",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": {
+                      "rate": {
+                        "burst": 1,
+                        "limit": 1,
+                        "intervalMs": 60000
+                      },
+                      "perKey": null,
+                      "namespace": "conformance-rate-policy",
+                      "throttledKeys": 0,
+                      "nextEligibleAt": null,
+                      "throttledReady": 0,
+                      "availableTokens": 1
+                    },
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0,
                     "completedPerMinute": 0
                   },
                   {
@@ -5715,19 +5865,19 @@
             "status": 200,
             "body": {
               "json": {
-                "eligible": {
-                  "terminalTasks": 1,
-                  "taskEvents": 0,
-                  "attemptHistory": 0,
-                  "scheduleOccurrences": 0,
-                  "statistics": 0
-                },
                 "capped": {
-                  "terminalTasks": false,
+                  "statistics": false,
                   "taskEvents": false,
+                  "terminalTasks": false,
                   "attemptHistory": false,
-                  "scheduleOccurrences": false,
-                  "statistics": false
+                  "scheduleOccurrences": false
+                },
+                "eligible": {
+                  "statistics": 0,
+                  "taskEvents": 0,
+                  "terminalTasks": 1,
+                  "attemptHistory": 0,
+                  "scheduleOccurrences": 0
                 }
               }
             }
@@ -5747,19 +5897,19 @@
             "status": 200,
             "body": {
               "json": {
-                "eligible": {
-                  "terminalTasks": 0,
-                  "taskEvents": 0,
-                  "attemptHistory": 0,
-                  "scheduleOccurrences": 0,
-                  "statistics": 0
-                },
                 "capped": {
-                  "terminalTasks": false,
+                  "statistics": false,
                   "taskEvents": false,
+                  "terminalTasks": false,
                   "attemptHistory": false,
-                  "scheduleOccurrences": false,
-                  "statistics": false
+                  "scheduleOccurrences": false
+                },
+                "eligible": {
+                  "statistics": 0,
+                  "taskEvents": 0,
+                  "terminalTasks": 0,
+                  "attemptHistory": 0,
+                  "scheduleOccurrences": 0
                 }
               }
             }
@@ -8960,6 +9110,50 @@
           }
         },
         {
+          "id": "set-queue-tier-cross-origin",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-tier",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin mutation request is required"
+            }
+          }
+        },
+        {
+          "id": "set-queue-history-cross-origin",
+          "procedure": "setQueueHistory",
+          "request": {
+            "json": {
+              "queue": "conformance-fast",
+              "recordAttempts": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin mutation request is required"
+            }
+          }
+        },
+        {
           "id": "set-worker-paused-cross-origin",
           "procedure": "setWorkerPaused",
           "request": {
@@ -9390,6 +9584,60 @@
           "request": {
             "json": {
               "queue": "conformance-purge",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 403,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "FORBIDDEN",
+                "status": 403,
+                "message": "This dashboard is read-only"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier-read-only",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-tier",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 403,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "FORBIDDEN",
+                "status": 403,
+                "message": "This dashboard is read-only"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-history-read-only",
+          "procedure": "setQueueHistory",
+          "request": {
+            "json": {
+              "queue": "conformance-fast",
+              "recordAttempts": true,
               "audit": {
                 "actor": "browser-operator",
                 "reason": "conformance exchange",
@@ -11743,6 +11991,174 @@
             "body": {
               "json": {
                 "deletedCount": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-tier",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "set",
+                "tier": "fast"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier-full",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-tier",
+              "tier": "full",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "set",
+                "tier": "full"
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier-live-tasks",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "live_tasks",
+                "tier": null
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier-concurrency-policy",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-policy",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "concurrency_policy",
+                "tier": null
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-tier-rate-limit-policy",
+          "procedure": "setQueueTier",
+          "request": {
+            "json": {
+              "queue": "conformance-rate-policy",
+              "tier": "fast",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "rate_limit_policy",
+                "tier": null
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-history",
+          "procedure": "setQueueHistory",
+          "request": {
+            "json": {
+              "queue": "conformance-fast",
+              "recordAttempts": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "recordAttempts": true,
+                "recordClaims": false
+              }
+            }
+          }
+        },
+        {
+          "id": "set-queue-history-keeps-omitted",
+          "procedure": "setQueueHistory",
+          "request": {
+            "json": {
+              "queue": "conformance-fast",
+              "recordClaims": true,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "recordAttempts": true,
+                "recordClaims": true
               }
             }
           }

@@ -21,12 +21,15 @@ type DashboardProcedureInputs = InferRouterInputs<DashboardRouter>["dashboard"];
  * Procedures a host may leave unimplemented.
  *
  * Each mutates state a read-only host has no business changing, and the dashboard treats an absent
- * method as a capability limit it states rather than as an error: the run-now and redrive actions
- * stay visible and disabled, and the demo controls are not offered at all. Every other procedure is
- * required, because a dashboard that cannot read its own pages has nothing to show.
+ * method as a capability limit it states rather than as an error: the run-now, redrive, queue tier,
+ * and queue history actions stay visible and disabled, and the demo controls are not offered at
+ * all. Every other procedure is required, because a dashboard that cannot read its own pages has
+ * nothing to show.
  */
 type OptionalDashboardProcedure =
   | "runTaskNow"
+  | "setQueueTier"
+  | "setQueueHistory"
   | "enqueueTest"
   | "redriveTask"
   | "redriveDeadLetters";

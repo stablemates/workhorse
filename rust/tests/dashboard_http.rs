@@ -17,6 +17,7 @@ use tower::ServiceExt;
 use workhorse::dashboard::http::{self, header, Request, StatusCode};
 use workhorse::dashboard::http_body_util::BodyExt;
 use workhorse::dashboard::{self, Authorization, DashboardOptions, Principal};
+use workhorse::policies::{RateLimit, RateLimitPolicyDefinition};
 use workhorse::{EnqueueOptions, EnqueueRequest, Queue};
 
 type Pool = deadpool_postgres::Pool;
@@ -95,11 +96,13 @@ fn location<B>(response: &http::Response<B>) -> &str {
 }
 
 /// Procedures that change state, in contract order.
-const MUTATIONS: [&str; 15] = [
+const MUTATIONS: [&str; 17] = [
     "enqueueTest",
     "setSchedulePaused",
     "setQueuePaused",
     "purgeQueue",
+    "setQueueTier",
+    "setQueueHistory",
     "setWorkerPaused",
     "overrideMaintenancePolicy",
     "revertMaintenancePolicy",
@@ -332,6 +335,64 @@ async fn the_audit_actor_comes_from_the_principal_never_the_browser() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["json"]["code"], "BAD_REQUEST");
     assert_eq!(body["json"]["message"], "actor must contain between 1 and 200 characters");
+}
+
+#[tokio::test]
+async fn a_tier_switch_records_the_principal_and_reports_a_refusal() {
+    let Some(database) = support::scratch_database("dashboard_http_tier").await else {
+        return;
+    };
+    let dashboard =
+        dashboard::handler(options(pool(database.url()), "operator@example.test")).unwrap();
+    let call = |procedure: &str, input: Value| {
+        let uri = format!("https://example.test/workhorse/rpc/dashboard/{procedure}");
+        mutation(&uri, "https://example.test", json!({ "json": input }))
+    };
+
+    // The switch records the principal as the actor, never the actor the browser sends.
+    let input = json!({ "queue": "tiered", "tier": "fast", "audit": audit() });
+    let (status, body) = send_json(dashboard.clone(), call("setQueueTier", input)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["json"], json!({ "status": "set", "tier": "fast" }));
+    let client = database.connect().await;
+    let row = client
+        .query_one(
+            "SELECT tier, updated_by, reason FROM workhorse.queue_control \
+             WHERE queue_name = 'tiered'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>("tier"), "fast");
+    assert_eq!(row.get::<_, String>("updated_by"), "operator@example.test");
+    assert_eq!(row.get::<_, String>("reason"), "incident 42");
+
+    // An omitted history setting keeps its value.
+    let input = json!({ "queue": "tiered", "recordClaims": true, "audit": audit() });
+    let (status, body) = send_json(dashboard.clone(), call("setQueueHistory", input)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["json"], json!({ "recordAttempts": false, "recordClaims": true }));
+
+    // A rate-limit policy refuses a fast switch, and the queue stays on the full tier.
+    let rate = RateLimit { limit: 1, interval_ms: 60_000, burst: 1 };
+    let policy = RateLimitPolicyDefinition { queue: "limited".into(), rate, per_key: None };
+    let queue = Queue::new(pool(database.url()), "limited");
+    queue.sync_rate_limit_policies("dashboard-tier", &[policy], true).await.unwrap();
+    let input = json!({ "queue": "limited", "tier": "fast", "audit": audit() });
+    let (status, body) = send_json(dashboard.clone(), call("setQueueTier", input)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["json"], json!({ "status": "rate_limit_policy", "tier": null }));
+    let tier = client
+        .query_opt("SELECT tier FROM workhorse.queue_control WHERE queue_name = 'limited'", &[])
+        .await
+        .unwrap()
+        .map(|row| row.get::<_, String>(0));
+    assert_ne!(tier.as_deref(), Some("fast"));
+
+    // The request schema refuses a tier that does not exist.
+    let input = json!({ "queue": "tiered", "tier": "medium", "audit": audit() });
+    let (status, body) = send_json(dashboard, call("setQueueTier", input)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
 #[tokio::test]
