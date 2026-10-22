@@ -2765,7 +2765,10 @@ or an enqueue, must not call a purge. If it does, it can deadlock with another p
 4. Each waits for the other, and PostgreSQL aborts one of them with `40P01`.
 
 The admin CLI and the dashboard run a purge in its own transaction, so the limit does not apply to
-them. It applies to an `Admin` that runs in a transaction of the caller (SM-1289).
+them. It applies to an `Admin` that runs in a transaction of the caller. Workhorse keeps the limit
+and does not refuse such a purge, because PostgreSQL cannot reliably tell whether the own
+transaction holds row locks ([ADR 0101](../decisions/0101-cancel-a-purged-prerequisite-whose-dependent-stays.md),
+SM-1289). `integration-purge-transaction-deadlock.test.ts` reproduces the cycle.
 
 Before its first delete, `purge_queue_internal_v1` locks its full-tier rows in this order:
 
