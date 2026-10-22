@@ -123,8 +123,11 @@ func (err *ProgressRateLimitError) Error() string {
 type checkpointCall struct {
 	done        chan struct{}
 	fingerprint *string
-	value       any
-	err         error
+	// joiners counts the duplicate calls that found this entry, for the internal tests only.
+	// HandlerContext.checkpoint guards it, and no production code reads it.
+	joiners int
+	value   any
+	err     error
 }
 
 type waitCall struct {
@@ -320,6 +323,7 @@ func (handler *HandlerContext) Checkpoint(
 		handler.checkpoints = make(map[string]*checkpointCall)
 	}
 	if pending := handler.checkpoints[name]; pending != nil {
+		pending.joiners++
 		handler.checkpoint.Unlock()
 		if err := handler.checkInput(name, pending.fingerprint, fingerprint); err != nil {
 			return nil, err
