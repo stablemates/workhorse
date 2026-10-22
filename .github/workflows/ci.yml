@@ -121,7 +121,7 @@ jobs:
           tool: cargo-deny@0.20.2 # Pinned to the cargo-deny version in mise.toml.
       # `pnpm lint` runs RuboCop over the Ruby gem, `ruby-api:check` loads it to read its API, and
       # `ruby:vuln` runs bundler-audit from its bundle.
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
@@ -570,7 +570,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: ${{ matrix.ruby }}
           working-directory: ruby
@@ -816,7 +816,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -860,7 +860,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "3.4"
           working-directory: ruby
@@ -910,7 +910,7 @@ jobs:
       # The development demo starts its Ruby worker with `bundle exec`. The demo smoke test runs a
       # copy of the tracked files, which lacks the ignored `ruby/.bundle/config` naming the bundle
       # path, so the smoke step names the installed bundle itself.
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+      - uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: 3.4.11 # Pinned to the ruby version in mise.toml.
           working-directory: ruby
