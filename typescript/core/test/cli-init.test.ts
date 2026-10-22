@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,6 +20,19 @@ async function project(packageJson: Record<string, unknown> | null): Promise<str
   }
   return directory;
 }
+
+/** Install a stub package manifest, as a package manager leaves it in `node_modules`. */
+async function install(directory: string, name: string, version: string): Promise<void> {
+  const packageDirectory = path.join(directory, "node_modules", ...name.split("/"));
+  await mkdir(packageDirectory, { recursive: true });
+  await writeFile(path.join(packageDirectory, "package.json"), JSON.stringify({ name, version }));
+}
+
+const prismaProject = {
+  dependencies: { "@prisma/client": "^7.0.0" },
+  devDependencies: { typescript: "^5.0.0" },
+  packageManager: "npm@11.0.0",
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -160,6 +173,96 @@ describe("workhorse init", () => {
     expect(kysely).toMatch(/createKyselyAdapter\(database, \{[^}]*\n\s+pool,\n/);
     for (const config of [prisma, typeorm, kysely])
       expect(config).not.toContain("notificationPool");
+  });
+
+  it("keeps the Prisma 6 template and writes the Prisma 7 template with a driver adapter", () => {
+    const base = {
+      orm: "prisma",
+      framework: "none",
+      typescript: true,
+      packageManager: "pnpm",
+    } as const;
+    const unread = renderWorkerConfig(base);
+    const prisma6 = renderWorkerConfig({ ...base, prismaMajor: 6 });
+    const prisma7 = renderWorkerConfig({ ...base, prismaMajor: 7 });
+
+    expect(prisma6).toBe(unread);
+    expect(prisma6).toContain(
+      'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@stablemates/workhorse-prisma";\n',
+    );
+    expect(prisma6).toContain(
+      "const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });",
+    );
+    expect(prisma6).not.toContain("adapter-pg");
+
+    expect(prisma7).toContain('import { PrismaPg } from "@prisma/adapter-pg";\n');
+    expect(prisma7).toContain(
+      "const database = new PrismaClient({\n      adapter: new PrismaPg({ connectionString: databaseUrl }),\n    });",
+    );
+    expect(prisma7).not.toContain("datasources");
+    // Both majors give the worker the same dedicated pool and close the client, then the pool.
+    for (const config of [prisma6, prisma7]) {
+      expect(config).toContain("const pool = new Pool({ connectionString: databaseUrl });");
+      expect(config).toMatch(/createPrismaAdapter\(database, \{[^}]*\n\s+pool,\n/);
+      expect(config).toContain(
+        "close: async () => {\n        await database.$disconnect();\n        await pool.end();\n      },",
+      );
+    }
+  });
+
+  it("reads the installed Prisma major and names a missing driver adapter", async () => {
+    const directory = await project(prismaProject);
+    await install(directory, "@prisma/client", "7.10.1");
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.prismaMajor).toBe(7);
+    expect(await readFile(result.configPath, "utf8")).toContain("new PrismaPg(");
+    expect(result.nextSteps[0]).toBe("Install the driver adapter:  npm install @prisma/adapter-pg");
+
+    await install(directory, "@prisma/adapter-pg", "7.10.1");
+    const installed = await initializeProject(directory, { force: true });
+    expect(installed.nextSteps.join("\n")).not.toContain("@prisma/adapter-pg");
+  });
+
+  it("finds Prisma hoisted into a parent node_modules", async () => {
+    const root = await project(null);
+    await install(root, "@prisma/client", "7.0.0");
+    await install(root, "@prisma/adapter-pg", "7.0.0");
+    const directory = path.join(root, "packages", "app");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "package.json"), JSON.stringify(prismaProject));
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.prismaMajor).toBe(7);
+    expect(result.nextSteps[0]).toMatch(/^Install the schema:/);
+  });
+
+  it("writes the Prisma 6 template for an installed Prisma 6", async () => {
+    const directory = await project(prismaProject);
+    await install(directory, "@prisma/client", "6.19.3");
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.prismaMajor).toBe(6);
+    expect(await readFile(result.configPath, "utf8")).toBe(
+      renderWorkerConfig({ ...result.project, prismaMajor: undefined }),
+    );
+    expect(result.nextSteps[0]).toMatch(/^Install the schema:/);
+  });
+
+  it("writes the Prisma 6 template with a note when the Prisma major cannot be read", async () => {
+    const directory = await project(prismaProject);
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.prismaMajor).toBeUndefined();
+    expect(await readFile(result.configPath, "utf8")).toContain("datasources: { db: { url");
+    expect(result.nextSteps[0]).toBe(
+      "Check the Prisma client: init could not read the installed @prisma/client version.",
+    );
+    expect(result.nextSteps.join("\n")).toContain("docs/prisma#create-the-adapter");
   });
 
   it("prints a framework-appropriate dashboard mount", () => {

@@ -170,6 +170,20 @@ The command reads the `package.json` file in the target directory. `detectProjec
    write.
 3. `pnpm`, only when the project declares neither.
 
+For a `prisma` project, `initializeProject` also reads the major of the installed `@prisma/client`.
+It reads `node_modules/@prisma/client/package.json` in the target directory, then in each parent
+directory, as Node.js resolution does. It does not read the version range in `package.json`.
+
+| Installed `@prisma/client` | Client constructor in the template                                               | Extra output                                                  |
+| -------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Major 6 or lower           | `new PrismaClient({ datasources: { db: { url: databaseUrl } } })`                | None                                                          |
+| Major 7 or higher          | `new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) })` | The install command for `@prisma/adapter-pg`, if it is absent |
+| Not found, or no version   | The Prisma 6 constructor                                                         | A note that links the Prisma 7 constructor                    |
+
+Both constructors keep the same dedicated `pool` and the same `close`, which disconnects the client
+and then ends the pool. The install command uses the detected package manager: `npm install` for
+`npm`, and `<manager> add` for the others.
+
 #### Output
 
 The command writes `workhorse.config.ts`. If the project declares no TypeScript dependency, it
