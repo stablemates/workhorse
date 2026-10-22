@@ -76,6 +76,7 @@ import { createDashboardRouter } from "../dashboard-routing.js";
 import { createDashboardRefreshController } from "../dashboard-refresh-controller.js";
 import { useMutationInFlight } from "../mutation-in-flight.js";
 import { formatCount } from "../count-format.js";
+import { describeQueueTier, describeTierSwitch } from "../queue-tier.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -163,6 +164,7 @@ export function useDashboardController(
   const togglingSchedule = useMutationInFlight<string>();
   const togglingQueue = useMutationInFlight<string>();
   const purgingQueue = useMutationInFlight<string>();
+  const changingQueueTier = useMutationInFlight<string>();
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
   const togglingWorker = useMutationInFlight<string>();
   const savingSettings = useMutationInFlight<boolean>();
@@ -613,6 +615,68 @@ export function useDashboardController(
     [auditActor, client, loadPage, purgingQueue],
   );
 
+  const setQueueTier = useCallback(
+    async (queue: string, tier: "fast" | "full") => {
+      if (!client.setQueueTier) return;
+      changingQueueTier.start(queue);
+      try {
+        const result = await client.setQueueTier({
+          queue,
+          tier,
+          audit: {
+            actor: auditActor,
+            reason: `Move ${queue} to the ${tier} tier from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        notifyDashboard({
+          id: `queue-tier-${queue}`,
+          ...describeTierSwitch(queue, tier, result.status),
+        });
+        if (result.status === "set") await loadPage();
+      } catch (cause) {
+        notifyFailure("Queue tier not changed", cause, "Workhorse could not change the queue tier");
+      } finally {
+        changingQueueTier.stop();
+      }
+    },
+    [auditActor, client, loadPage, changingQueueTier],
+  );
+
+  const setQueueHistory = useCallback(
+    async (queue: string, change: { recordAttempts?: boolean; recordClaims?: boolean }) => {
+      if (!client.setQueueHistory) return;
+      changingQueueTier.start(queue);
+      try {
+        const result = await client.setQueueHistory({
+          queue,
+          ...change,
+          audit: {
+            actor: auditActor,
+            reason: `Change the history of ${queue} from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        notifyDashboard({
+          id: `queue-history-${queue}`,
+          title: "Queue history changed",
+          message: describeQueueTier({ tier: "fast", ...result }).title,
+          tone: "success",
+        });
+        await loadPage();
+      } catch (cause) {
+        notifyFailure(
+          "Queue history not changed",
+          cause,
+          "Workhorse could not change the queue history",
+        );
+      } finally {
+        changingQueueTier.stop();
+      }
+    },
+    [auditActor, client, loadPage, changingQueueTier],
+  );
+
   const toggleWorker = useCallback(
     async (workerId: string, paused: boolean) => {
       togglingWorker.start(workerId);
@@ -1050,6 +1114,13 @@ export function useDashboardController(
         setQueuePaused={(queue, paused) => void toggleQueue(queue, paused)}
         setConfirmingQueue={setConfirmingQueue}
         purgeQueue={(queue) => void clearQueue(queue)}
+        changingQueue={changingQueueTier.value}
+        tierCapabilities={{
+          canSetTier: Boolean(client.setQueueTier),
+          canSetHistory: Boolean(client.setQueueHistory),
+        }}
+        setQueueTier={(queue, tier) => void setQueueTier(queue, tier)}
+        setQueueHistory={(queue, change) => void setQueueHistory(queue, change)}
       />
     );
   } else if (loadState.data?.route === "/system") {

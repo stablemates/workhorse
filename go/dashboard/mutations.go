@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -44,6 +45,47 @@ func (service *backend) purgeQueue(ctx context.Context, input any, actor string)
 		return nil, err
 	}
 	return map[string]any{"deletedCount": count}, nil
+}
+
+// setQueueTier answers the status of one tier switch. set_queue_tier_v1 holds every guard; a
+// refused switch names its guard in the FastTierUnsupportedError feature, and this maps that name
+// onto the wire status. Any other error stays an error.
+func (service *backend) setQueueTier(ctx context.Context, input any, actor string) (any, error) {
+	value, _ := document(input)
+	tier, _ := value["tier"].(string)
+	result, err := service.admin.SetQueueTier(ctx, fmt.Sprint(value["queue"]), workhorse.QueueTier(tier), adminAudit(value, actor))
+	if err == nil {
+		return map[string]any{"status": "set", "tier": string(result)}, nil
+	}
+	var refused *workhorse.FastTierUnsupportedError
+	if errors.As(err, &refused) {
+		if status, ok := refusedTierStatuses[refused.Feature]; ok {
+			return map[string]any{"status": status, "tier": nil}, nil
+		}
+	}
+	return nil, err
+}
+
+var refusedTierStatuses = map[string]string{
+	"tier change":          "live_tasks",
+	"concurrency policies": "concurrency_policy",
+	"rate-limit policies":  "rate_limit_policy",
+}
+
+// setQueueHistory changes the history settings of one queue. An absent setting keeps its value.
+func (service *backend) setQueueHistory(ctx context.Context, input any, _ string) (any, error) {
+	value, _ := document(input)
+	setting := func(name string) *bool {
+		if flag, ok := value[name].(bool); ok {
+			return &flag
+		}
+		return nil
+	}
+	history, err := service.admin.SetQueueHistory(ctx, fmt.Sprint(value["queue"]), setting("recordAttempts"), setting("recordClaims"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"recordAttempts": history.RecordAttempts, "recordClaims": history.RecordClaims}, nil
 }
 
 func (service *backend) setWorkerPaused(ctx context.Context, input any, actor string) (any, error) {

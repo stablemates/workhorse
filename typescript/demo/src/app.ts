@@ -1420,6 +1420,27 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
             target = `queue:${action.queueName}`;
             break;
           }
+          case "setQueueTier":
+          case "setQueueHistory": {
+            // No row lock: set_queue_tier_v1 takes its tier lock before it writes this row, and a
+            // row lock taken first could wait on a concurrent switch that waits on this row.
+            const rows = await transaction.execute<{
+              tier: string;
+              record_attempts: boolean;
+              record_claims: boolean;
+            }>(sql`
+              SELECT tier, record_attempts, record_claims FROM workhorse.queue_control
+               WHERE queue_name = ${action.queueName}
+            `);
+            const row = rows.rows[0];
+            before = {
+              tier: row?.tier ?? "full",
+              recordAttempts: row?.record_attempts ?? false,
+              recordClaims: row?.record_claims ?? false,
+            };
+            target = `queue:${action.queueName}`;
+            break;
+          }
           case "runTaskNow": {
             const rows = await transaction.execute<{
               state: string | null;

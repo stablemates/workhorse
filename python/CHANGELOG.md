@@ -10,6 +10,17 @@ adds.
 
 ## Unreleased
 
+### The dashboard sets the tier and the history of a queue
+
+Before this change, an operator could change the tier or the history settings of a queue only
+through `Admin`. The Python dashboard host now answers the `setQueueTier` and `setQueueHistory`
+procedures (SM-966). Both are mutations, so a read-only dashboard refuses them with `FORBIDDEN`.
+
+`setQueueTier` calls `Admin.set_queue_tier` with the signed-in actor and answers the new tier.
+If `set_queue_tier_v1` refuses the switch, the answer gives the reason as a status:
+`live_tasks`, `concurrency_policy`, or `rate_limit_policy`. `setQueueHistory` calls
+`Admin.set_queue_history`. It keeps a setting that the request omits, and it answers both settings.
+
 ### A worker on a pool of 1 polls under the opt-out
 
 Before this change, a worker with `shared_heartbeats=True` started the shared listener on any pool.

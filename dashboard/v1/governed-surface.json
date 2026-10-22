@@ -1772,6 +1772,47 @@
         }
       }
     },
+    "setQueueHistory": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "queue": {
+          "type": "string",
+          "required": true
+        },
+        "recordAttempts": {
+          "type": "boolean",
+          "required": false
+        },
+        "recordClaims": {
+          "type": "boolean",
+          "required": false
+        }
+      },
+      "response": {
+        "recordAttempts": {
+          "type": "boolean"
+        },
+        "recordClaims": {
+          "type": "boolean"
+        }
+      }
+    },
     "setQueuePaused": {
       "mutation": true,
       "request": {
@@ -1803,6 +1844,53 @@
       "response": {
         "paused": {
           "type": "boolean"
+        }
+      }
+    },
+    "setQueueTier": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "queue": {
+          "type": "string",
+          "required": true
+        },
+        "tier": {
+          "type": "enum",
+          "enum": [
+            "fast",
+            "full"
+          ],
+          "required": true
+        }
+      },
+      "response": {
+        "status": {
+          "type": "enum",
+          "enum": [
+            "concurrency_policy",
+            "live_tasks",
+            "rate_limit_policy",
+            "set"
+          ]
+        },
+        "tier": {
+          "type": "null|unknown"
         }
       }
     },

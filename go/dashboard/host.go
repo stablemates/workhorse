@@ -81,7 +81,8 @@ type handler struct {
 
 var mutations = map[string]bool{
 	"enqueueTest": true, "setSchedulePaused": true, "setQueuePaused": true,
-	"purgeQueue": true, "setWorkerPaused": true, "overrideMaintenancePolicy": true,
+	"purgeQueue": true, "setQueueTier": true, "setQueueHistory": true,
+	"setWorkerPaused": true, "overrideMaintenancePolicy": true,
 	"revertMaintenancePolicy": true, "overrideRetentionPolicy": true,
 	"revertRetentionPolicy": true, "runTaskNow": true, "cancelTask": true,
 	"signalTask": true, "completeHumanWait": true,

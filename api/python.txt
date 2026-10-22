@@ -2603,6 +2603,23 @@ class DashboardQueueHealthReason(dict)
 
 type DashboardQueueHealthReasonCode = Literal["budget-blocked", "concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion", "terminal-cleanup-backlog"]
 
+class DashboardQueueHistoryResult(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  recordAttempts: ForwardRef('Required[bool]', module='dashboard_v1')
+  recordClaims: ForwardRef('Required[bool]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
 class DashboardQueuesPage(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
@@ -3192,6 +3209,25 @@ class DashboardScheduleRowIdentity(dict)
   def setdefault(self, key, default=None)
   def update(...)
   def values(...)
+
+class DashboardSetQueueTierResult(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  status: ForwardRef('Required[DashboardSetQueueTierStatus]', module='dashboard_v1')
+  tier: ForwardRef("Required[Literal['fast'] | Literal['full'] | None]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+type DashboardSetQueueTierStatus = Literal["concurrency_policy", "live_tasks", "rate_limit_policy", "set"]
 
 class DashboardSettingsPage(dict)
   def __init__(self, *args, **kwargs)
@@ -5502,6 +5538,45 @@ class RunTaskNowInputAudit(dict)
 
 type RunTaskNowOutput = DashboardRunNowResult
 
+class SetQueueHistoryInput(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  audit: ForwardRef('Required[SetQueueHistoryInputAudit]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  queue: ForwardRef('Required[str]', module='dashboard_v1')
+  recordAttempts: ForwardRef('NotRequired[bool]', module='dashboard_v1')
+  recordClaims: ForwardRef('NotRequired[bool]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class SetQueueHistoryInputAudit(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  actor: ForwardRef('Required[str]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  reason: ForwardRef('Required[str]', module='dashboard_v1')
+  requestId: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+type SetQueueHistoryOutput = DashboardQueueHistoryResult
+
 class SetQueuePausedInput(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
@@ -5553,6 +5628,44 @@ class SetQueuePausedOutput(dict)
   def setdefault(self, key, default=None)
   def update(...)
   def values(...)
+
+class SetQueueTierInput(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  audit: ForwardRef('Required[SetQueueTierInputAudit]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  queue: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  tier: ForwardRef("Required[Literal['fast', 'full']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class SetQueueTierInputAudit(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  actor: ForwardRef('Required[str]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  reason: ForwardRef('Required[str]', module='dashboard_v1')
+  requestId: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+type SetQueueTierOutput = DashboardSetQueueTierResult
 
 class SetSchedulePausedInput(dict)
   def __init__(self, *args, **kwargs)
@@ -5928,7 +6041,11 @@ def validate_revert_retention_policy_input(value: object) -> None
 
 def validate_run_task_now_input(value: object) -> None
 
+def validate_set_queue_history_input(value: object) -> None
+
 def validate_set_queue_paused_input(value: object) -> None
+
+def validate_set_queue_tier_input(value: object) -> None
 
 def validate_set_schedule_paused_input(value: object) -> None
 

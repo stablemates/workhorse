@@ -2363,6 +2363,32 @@
                           },
                           {
                             "tier": "full",
+                            "queue": "conformance-policy",
+                            "ready": 0,
+                            "active": 0,
+                            "failed": 0,
+                            "paused": false,
+                            "canceled": 0,
+                            "scheduled": 0,
+                            "succeeded": 0,
+                            "recordClaims": false,
+                            "recordAttempts": false,
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": {
+                              "active": 0,
+                              "available": 2,
+                              "maxActive": 2,
+                              "namespace": "conformance-policy",
+                              "blockedReady": 0,
+                              "saturatedKeys": 0,
+                              "maxActivePerKey": null,
+                              "highestKeyActive": 0,
+                              "utilizationKnown": true
+                            },
+                            "terminalCountsApproximate": false
+                          },
+                          {
+                            "tier": "full",
                             "queue": "conformance-preserved",
                             "ready": 0,
                             "active": 0,
@@ -2390,6 +2416,34 @@
                             "recordClaims": false,
                             "recordAttempts": false,
                             "rateLimitPolicy": null,
+                            "concurrencyPolicy": null,
+                            "terminalCountsApproximate": false
+                          },
+                          {
+                            "tier": "full",
+                            "queue": "conformance-rate-policy",
+                            "ready": 0,
+                            "active": 0,
+                            "failed": 0,
+                            "paused": false,
+                            "canceled": 0,
+                            "scheduled": 0,
+                            "succeeded": 0,
+                            "recordClaims": false,
+                            "recordAttempts": false,
+                            "rateLimitPolicy": {
+                              "rate": {
+                                "burst": 1,
+                                "limit": 1,
+                                "intervalMs": 60000
+                              },
+                              "perKey": null,
+                              "namespace": "conformance-rate-policy",
+                              "throttledKeys": 0,
+                              "nextEligibleAt": null,
+                              "throttledReady": 0,
+                              "availableTokens": 1
+                            },
                             "concurrencyPolicy": null,
                             "terminalCountsApproximate": false
                           },
@@ -2662,6 +2716,30 @@
                             "completedPerMinute": 0.016666666666666666
                           },
                           {
+                            "queue": "conformance-policy",
+                            "ready": 0,
+                            "active": 0,
+                            "paused": false,
+                            "dueSoon": 0,
+                            "retrying": 0,
+                            "oldestReadyMs": null,
+                            "priorityBacklog": [],
+                            "rateLimitPolicy": null,
+                            "concurrencyPolicy": {
+                              "active": 0,
+                              "available": 2,
+                              "maxActive": 2,
+                              "namespace": "conformance-policy",
+                              "blockedReady": 0,
+                              "saturatedKeys": 0,
+                              "maxActivePerKey": null,
+                              "highestKeyActive": 0,
+                              "utilizationKnown": true
+                            },
+                            "enqueuedPerMinute": 0,
+                            "completedPerMinute": 0
+                          },
+                          {
                             "queue": "conformance-preserved",
                             "ready": 0,
                             "active": 0,
@@ -2693,6 +2771,32 @@
                             "rateLimitPolicy": null,
                             "concurrencyPolicy": null,
                             "enqueuedPerMinute": 0.016666666666666666,
+                            "completedPerMinute": 0
+                          },
+                          {
+                            "queue": "conformance-rate-policy",
+                            "ready": 0,
+                            "active": 0,
+                            "paused": false,
+                            "dueSoon": 0,
+                            "retrying": 0,
+                            "oldestReadyMs": null,
+                            "priorityBacklog": [],
+                            "rateLimitPolicy": {
+                              "rate": {
+                                "burst": 1,
+                                "limit": 1,
+                                "intervalMs": 60000
+                              },
+                              "perKey": null,
+                              "namespace": "conformance-rate-policy",
+                              "throttledKeys": 0,
+                              "nextEligibleAt": null,
+                              "throttledReady": 0,
+                              "availableTokens": 1
+                            },
+                            "concurrencyPolicy": null,
+                            "enqueuedPerMinute": 0,
                             "completedPerMinute": 0
                           },
                           {
@@ -4098,19 +4202,19 @@
                     "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: preview-retention-policy.",
                     "value": {
                       "json": {
-                        "eligible": {
-                          "terminalTasks": 1,
-                          "taskEvents": 0,
-                          "attemptHistory": 0,
-                          "scheduleOccurrences": 0,
-                          "statistics": 0
-                        },
                         "capped": {
-                          "terminalTasks": false,
+                          "statistics": false,
                           "taskEvents": false,
+                          "terminalTasks": false,
                           "attemptHistory": false,
-                          "scheduleOccurrences": false,
-                          "statistics": false
+                          "scheduleOccurrences": false
+                        },
+                        "eligible": {
+                          "statistics": 0,
+                          "taskEvents": 0,
+                          "terminalTasks": 1,
+                          "attemptHistory": 0,
+                          "scheduleOccurrences": 0
                         }
                       }
                     }
@@ -5689,6 +5793,286 @@
                     "value": {
                       "json": {
                         "deletedCount": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/MutationForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UnknownWorkspace"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
+    "/rpc/dashboard/setQueueTier": {
+      "post": {
+        "operationId": "dashboard_setQueueTier",
+        "summary": "Switch a queue's tier",
+        "description": "Moves one queue to the fast or full tier through the same database function as Admin.setQueueTier, and records audit.actor and audit.reason on the queue. status is set when the queue is on the requested tier. It is live_tasks when the queue holds a live task, and concurrency_policy or rate_limit_policy when a fast switch meets that queue policy. A refused switch changes nothing and answers a null tier.",
+        "tags": [
+          "mutations"
+        ],
+        "x-workhorse-mutation": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "queue": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "tier": {
+                        "type": "string",
+                        "enum": [
+                          "fast",
+                          "full"
+                        ]
+                      },
+                      "audit": {
+                        "type": "object",
+                        "properties": {
+                          "actor": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "requestId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
+                          }
+                        },
+                        "required": [
+                          "actor",
+                          "reason",
+                          "requestId"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "queue",
+                      "tier",
+                      "audit"
+                    ]
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-queue-tier.",
+                  "value": {
+                    "json": {
+                      "queue": "conformance-tier",
+                      "tier": "fast",
+                      "audit": {
+                        "actor": "browser-operator",
+                        "reason": "conformance exchange",
+                        "requestId": "conformance-request"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardSetQueueTierResult"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-queue-tier.",
+                    "value": {
+                      "json": {
+                        "status": "set",
+                        "tier": "fast"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/MutationForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UnknownWorkspace"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
+    "/rpc/dashboard/setQueueHistory": {
+      "post": {
+        "operationId": "dashboard_setQueueHistory",
+        "summary": "Choose a queue's history",
+        "description": "Sets whether a fast-tier queue records attempt history and claimed events, through the same database function as Admin.setQueueHistory. An omitted setting keeps its value. Returns both settings after the change. A full-tier queue records both regardless.",
+        "tags": [
+          "mutations"
+        ],
+        "x-workhorse-mutation": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "queue": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "recordAttempts": {
+                        "type": "boolean"
+                      },
+                      "recordClaims": {
+                        "type": "boolean"
+                      },
+                      "audit": {
+                        "type": "object",
+                        "properties": {
+                          "actor": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "requestId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "At most 512 UTF-8 bytes."
+                          }
+                        },
+                        "required": [
+                          "actor",
+                          "reason",
+                          "requestId"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "queue",
+                      "audit"
+                    ]
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-queue-history-keeps-omitted.",
+                  "value": {
+                    "json": {
+                      "queue": "conformance-fast",
+                      "recordClaims": true,
+                      "audit": {
+                        "actor": "browser-operator",
+                        "reason": "conformance exchange",
+                        "requestId": "conformance-request"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardQueueHistoryResult"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-queue-history-keeps-omitted.",
+                    "value": {
+                      "json": {
+                        "recordAttempts": true,
+                        "recordClaims": true
                       }
                     }
                   }
@@ -9234,6 +9618,21 @@
           "terminal-cleanup-backlog"
         ]
       },
+      "DashboardQueueHistoryResult": {
+        "type": "object",
+        "properties": {
+          "recordAttempts": {
+            "type": "boolean"
+          },
+          "recordClaims": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "recordAttempts",
+          "recordClaims"
+        ]
+      },
       "DashboardQueuesPage": {
         "type": "object",
         "properties": {
@@ -10152,6 +10551,39 @@
           "occurrenceCount",
           "lastFiredAt",
           "evaluatorCount"
+        ]
+      },
+      "DashboardSetQueueTierResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DashboardSetQueueTierStatus"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "const": "fast"
+              },
+              {
+                "const": "full"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "tier"
+        ]
+      },
+      "DashboardSetQueueTierStatus": {
+        "enum": [
+          "concurrency_policy",
+          "live_tasks",
+          "rate_limit_policy",
+          "set"
         ]
       },
       "DashboardSettingsPage": {

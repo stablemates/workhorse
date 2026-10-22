@@ -227,6 +227,22 @@ export type DashboardRunNowStatus =
   | "waiting"
   | "not_found";
 
+/** A queue's storage tier (ADR 0077). */
+export type DashboardQueueTier = "fast" | "full";
+
+/**
+ * What one tier switch reported.
+ *
+ * `set` means the queue is now on the requested tier. Each other status names the guard of
+ * `set_queue_tier_v1` that refused the switch: the queue still holds a live task, or a fast switch
+ * met a concurrency policy or a rate-limit policy. A refused switch changes nothing.
+ */
+export type DashboardSetQueueTierStatus =
+  | "set"
+  | "live_tasks"
+  | "concurrency_policy"
+  | "rate_limit_policy";
+
 /**
  * Statuses the redrive mutations report. `RedriveStatus` itself rather than a hand-copied union, so
  * the dashboard vocabulary and the one `Admin.redrive` reports cannot drift, exactly as

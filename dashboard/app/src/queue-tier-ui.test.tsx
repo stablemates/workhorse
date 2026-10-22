@@ -6,7 +6,7 @@ import type {
   DashboardManagedQueueRow,
   DashboardQueuesPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { describeQueueTier } from "./queue-tier.js";
+import { describeQueueTier, describeTierSwitch, queueTierActions } from "./queue-tier.js";
 
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", {
@@ -61,6 +61,10 @@ async function renderQueues(data: DashboardQueuesPage): Promise<string> {
         setQueuePaused: () => undefined,
         setConfirmingQueue: () => undefined,
         purgeQueue: () => undefined,
+        changingQueue: null,
+        tierCapabilities: { canSetTier: true, canSetHistory: true },
+        setQueueTier: () => undefined,
+        setQueueHistory: () => undefined,
       }),
     ),
   );
@@ -121,5 +125,70 @@ describe("queues page tier column", () => {
     const { tier: _tier, recordAttempts: _attempts, recordClaims: _claims, ...legacy } = queueRow();
     const markup = await renderQueues(queuesPage([legacy]));
     expect(markup).toContain("does not report queue tiers");
+  });
+});
+
+describe("queue tier actions", () => {
+  const capable = { canSetTier: true, canSetHistory: true };
+
+  it("offers the other tier and the history of a fast-tier queue", () => {
+    const actions = queueTierActions(queueRow({ tier: "fast", recordClaims: true }), capable);
+    expect(actions.map((action) => [action.id, action.label, action.unavailable])).toEqual([
+      ["tier", "Move to the full tier", null],
+      ["recordAttempts", "Record attempts", null],
+      ["recordClaims", "Stop recording claims", null],
+    ]);
+  });
+
+  it("keeps the history actions of a full-tier queue disabled with the reason", () => {
+    const [tier, attempts, claims] = queueTierActions(queueRow({ tier: "full" }), capable);
+    expect(tier?.label).toBe("Move to the fast tier");
+    expect(tier?.unavailable).toBeNull();
+    expect(attempts?.unavailable).toContain("records attempts and claims regardless");
+    expect(claims?.unavailable).toContain("records attempts and claims regardless");
+  });
+
+  it("states that the host cannot change the tier or history", () => {
+    const actions = queueTierActions(queueRow({ tier: "fast" }), {
+      canSetTier: false,
+      canSetHistory: false,
+    });
+    expect(actions[0]?.unavailable).toBe("This host cannot change the tier of a queue.");
+    expect(actions[1]?.unavailable).toBe("This host cannot change the history of a queue.");
+  });
+
+  it("disables every action when the schema does not report tiers", () => {
+    for (const action of queueTierActions({}, capable)) {
+      expect(action.unavailable).toContain("does not report queue tiers");
+    }
+  });
+});
+
+describe("tier switch outcome", () => {
+  it("confirms a switch", () => {
+    const fast = describeTierSwitch("mail", "fast", "set");
+    expect(fast).toMatchObject({ title: "Queue tier changed", tone: "success" });
+    expect(fast.message).toContain("mail is on the fast tier");
+    expect(describeTierSwitch("mail", "full", "set").message).toContain("full tier");
+  });
+
+  it("names the guard that refused a switch", () => {
+    const live = describeTierSwitch("mail", "fast", "live_tasks");
+    expect(live).toMatchObject({ title: "Queue tier not changed", tone: "failure" });
+    expect(live.message).toContain("still holds tasks that are not finished");
+    expect(describeTierSwitch("mail", "fast", "concurrency_policy").message).toContain(
+      "has a concurrency policy",
+    );
+    expect(describeTierSwitch("mail", "fast", "rate_limit_policy").message).toContain(
+      "has a rate-limit policy",
+    );
+  });
+});
+
+describe("queues page tier menu", () => {
+  it("offers a tier and history menu on each row", async () => {
+    const markup = await renderQueues(queuesPage([queueRow({ queue: "events", tier: "fast" })]));
+    expect(markup).toContain('aria-label="Tier and history for events"');
+    expect(markup).toContain("from the queue&#x27;s menu in the Actions column");
   });
 });

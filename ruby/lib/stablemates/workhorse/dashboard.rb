@@ -48,7 +48,8 @@ module Stablemates
   module Workhorse
     class Dashboard
       MUTATIONS = %w[
-        enqueueTest setSchedulePaused setQueuePaused purgeQueue setWorkerPaused
+        enqueueTest setSchedulePaused setQueuePaused purgeQueue setQueueTier setQueueHistory
+        setWorkerPaused
         overrideMaintenancePolicy revertMaintenancePolicy overrideRetentionPolicy revertRetentionPolicy
         runTaskNow cancelTask signalTask completeHumanWait redriveTask redriveDeadLetters
         cancelTaskGroup

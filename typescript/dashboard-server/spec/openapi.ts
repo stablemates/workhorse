@@ -185,6 +185,16 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Deletes the queue's blocked, ready, and scheduled tasks. It cancels a task that a task outside the purge waits for. deletedCount includes the canceled tasks.",
   },
+  setQueueTier: {
+    summary: "Switch a queue's tier",
+    description:
+      "Moves one queue to the fast or full tier through the same database function as Admin.setQueueTier, and records audit.actor and audit.reason on the queue. status is set when the queue is on the requested tier. It is live_tasks when the queue holds a live task, and concurrency_policy or rate_limit_policy when a fast switch meets that queue policy. A refused switch changes nothing and answers a null tier.",
+  },
+  setQueueHistory: {
+    summary: "Choose a queue's history",
+    description:
+      "Sets whether a fast-tier queue records attempt history and claimed events, through the same database function as Admin.setQueueHistory. An omitted setting keeps its value. Returns both settings after the change. A full-tier queue records both regardless.",
+  },
   setWorkerPaused: {
     summary: "Pause or resume a worker",
     description: "Sets the pause flag of one worker registration and returns it.",

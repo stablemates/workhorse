@@ -30,6 +30,8 @@ _MUTATIONS = frozenset(
         "setSchedulePaused",
         "setQueuePaused",
         "purgeQueue",
+        "setQueueTier",
+        "setQueueHistory",
         "setWorkerPaused",
         "overrideMaintenancePolicy",
         "revertMaintenancePolicy",

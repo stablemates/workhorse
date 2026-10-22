@@ -15,7 +15,7 @@ use crate::queue::exactly_one;
 use crate::sql_catalogue_generated as sql;
 use crate::{
     Admin, AdminAudit, BulkRedriveOptions, DeadLetterCursor, DeadLetterFilter, Error, Executor,
-    RedriveResult, RedriveStatus,
+    QueueTier, RedriveResult, RedriveStatus,
 };
 
 type Procedure = Result<Value, ProcedureError>;
@@ -43,6 +43,8 @@ pub(super) const BUILT_INS: &[&str] = &[
     "taskValue",
     "setQueuePaused",
     "purgeQueue",
+    "setQueueTier",
+    "setQueueHistory",
     "setWorkerPaused",
     "overrideMaintenancePolicy",
     "revertMaintenancePolicy",
@@ -162,6 +164,8 @@ impl<E: Executor> Backend<E> {
                 let deleted = self.admin.purge_queue(&queue, &audit).await;
                 deleted.map(|count| json!({ "deletedCount": count })).map_err(Into::into)
             }
+            "setQueueTier" => self.set_queue_tier(input, actor).await,
+            "setQueueHistory" => self.set_queue_history(input).await,
             "setWorkerPaused" => self.set_worker_paused(input, actor).await,
             "overrideMaintenancePolicy" => self.override_maintenance_policy(input).await,
             "revertMaintenancePolicy" => {
@@ -316,6 +320,35 @@ impl<E: Executor> Backend<E> {
             self.admin.resume_queue(&queue, &audit).await?;
         }
         Ok(json!({ "paused": paused }))
+    }
+
+    /// Moves a queue between tiers. `set_queue_tier_v1` holds every guard; a refusal it names
+    /// becomes a status with a null tier, and the switch changes nothing.
+    async fn set_queue_tier(&self, input: Value, actor: &str) -> Procedure {
+        let value = document(input);
+        let tier = QueueTier::parse(&text(&value, "tier"))
+            .ok_or_else(|| Error::invalid("tier must be fast or full"))?;
+        let (queue, audit) = (text(&value, "queue"), audit(&value, actor));
+        match self.admin.set_queue_tier(&queue, tier, &audit).await {
+            Ok(tier) => Ok(json!({ "status": "set", "tier": tier.as_str() })),
+            Err(error) => match refused_tier_status(&error) {
+                Some(status) => Ok(json!({ "status": status, "tier": null })),
+                None => Err(error.into()),
+            },
+        }
+    }
+
+    /// Changes which history a fast-tier queue records. An omitted setting keeps its value.
+    async fn set_queue_history(&self, input: Value) -> Procedure {
+        let value = document(input);
+        let setting = |key: &str| value.get(key).and_then(Value::as_bool);
+        let (attempts, claims) = (setting("recordAttempts"), setting("recordClaims"));
+        let history =
+            self.admin.set_queue_history(&text(&value, "queue"), attempts, claims).await?;
+        Ok(json!({
+            "recordAttempts": history.record_attempts,
+            "recordClaims": history.record_claims,
+        }))
     }
 
     async fn set_worker_paused(&self, input: Value, actor: &str) -> Procedure {
@@ -520,6 +553,20 @@ enum Delivery {
     HumanWait,
 }
 
+/// The wire status of a tier switch that `set_queue_tier_v1` refused, or `None` for another
+/// error. The function names its guard in the error detail; this only maps that name.
+fn refused_tier_status(error: &Error) -> Option<&'static str> {
+    match error {
+        Error::FastTierUnsupported { feature, .. } => match feature.as_str() {
+            "tier change" => Some("live_tasks"),
+            "concurrency policies" => Some("concurrency_policy"),
+            "rate-limit policies" => Some("rate_limit_policy"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn found(result: Result<Option<Value>, ProcedureError>, message: &str) -> Procedure {
     match result? {
         None | Some(Value::Null) => Err(RpcError::not_found(message).into()),
@@ -606,6 +653,23 @@ fn optional_timestamp(value: Option<DateTime<Utc>>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_each_refused_tier_switch_to_its_status() {
+        let refusal = |feature: &str| Error::FastTierUnsupported {
+            queue: "mail".into(),
+            feature: feature.into(),
+            ordinal: None,
+        };
+        assert_eq!(refused_tier_status(&refusal("tier change")), Some("live_tasks"));
+        assert_eq!(
+            refused_tier_status(&refusal("concurrency policies")),
+            Some("concurrency_policy")
+        );
+        assert_eq!(refused_tier_status(&refusal("rate-limit policies")), Some("rate_limit_policy"));
+        assert_eq!(refused_tier_status(&refusal("durable steps")), None);
+        assert_eq!(refused_tier_status(&Error::invalid("other")), None);
+    }
 
     #[test]
     fn snake_cases_setting_names() {

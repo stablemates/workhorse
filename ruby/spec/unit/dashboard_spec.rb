@@ -171,6 +171,37 @@ RSpec.describe W::Dashboard do
       expect(actor.call(authorize: ->(_env) { true })).to eq("dashboard")
     end
 
+    it "answers a tier switch and the guard that refused one" do
+      tier = ->(answer) {
+        executor = FakeExecutor.new { |sql, params| (sql == W::SqlCatalogue::SET_QUEUE_TIER) ? answer.call(params) : [] }
+        status, body = rpc(dashboard(executor), "setQueueTier", {"queue" => "mail", "tier" => "fast", "audit" => audit})
+        [status, body.dig("json", "status"), body.dig("json", "tier"), executor.statements.last&.last]
+      }
+
+      expect(tier.call(->(_params) { [{"tier" => "fast"}] }))
+        .to eq([200, "set", "fast", ["mail", "fast", "operator", "Maintenance window"]])
+      {"tier change" => "live_tasks", "concurrency policies" => "concurrency_policy",
+       "rate-limit policies" => "rate_limit_policy"}.each do |feature, status|
+        refused = tier.call(->(_params) { raise W::FastTierUnsupportedError.new("mail", feature, nil) })
+        expect(refused[0..2]).to eq([200, status, nil])
+      end
+      expect(tier.call(->(_params) { raise W::FastTierUnsupportedError.new("mail", "signals", nil) })[0]).to eq(500)
+      expect(rpc(dashboard, "setQueueTier", {"queue" => "mail", "tier" => "slow", "audit" => audit})[0]).to eq(400)
+    end
+
+    it "changes only the history settings that the request names" do
+      executor = FakeExecutor.new do |sql, _params|
+        (sql == W::SqlCatalogue::SET_QUEUE_HISTORY) ? [{"record_attempts" => "t", "record_claims" => "f"}] : []
+      end
+
+      status, body = rpc(dashboard(executor), "setQueueHistory",
+        {"queue" => "mail", "recordAttempts" => true, "audit" => audit})
+
+      expect([status, body]).to eq([200, {"json" => {"recordAttempts" => true, "recordClaims" => false}}])
+      expect(executor.statements.last).to eq([W::SqlCatalogue::SET_QUEUE_HISTORY, ["mail", "true", nil]])
+      expect(rpc(dashboard(read_only: true), "setQueueHistory", {"queue" => "mail", "audit" => audit})[0]).to eq(403)
+    end
+
     it "refuses a mutation without a same-origin request" do
       status, body = rpc(dashboard, "setQueuePaused", {"queue" => "mail", "paused" => true, "audit" => audit},
         origin: "http://attacker.test")

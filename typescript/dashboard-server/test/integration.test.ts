@@ -112,3 +112,139 @@ describe("dashboard batch execution detail", () => {
     ]);
   });
 });
+
+function writableClient(): RouterClient<DashboardRouter> {
+  const controllers = createDashboardOperatorControllers({
+    run: (_action, operation) => operation({ admin, queue }),
+  });
+  const host = createDashboardHost({
+    database: pool,
+    path: "/",
+    authorize: () => ({ actor: "authenticated-operator" }),
+    ...controllers,
+  });
+  return createORPCClient(
+    new RPCLink({
+      url: "http://dashboard.test/rpc",
+      fetch: async (request) => {
+        const headers = new Headers(request.headers);
+        headers.set("origin", "http://dashboard.test");
+        return (
+          (await host.handle(new Request(request, { headers }))) ??
+          new Response(null, { status: 404 })
+        );
+      },
+    }),
+  );
+}
+const audit = (reason: string) => ({
+  actor: "spoofed-operator",
+  reason,
+  requestId: `request-${randomUUID()}`,
+});
+async function queueControl(queueName: string) {
+  const result = await pool.query<{
+    tier: string;
+    record_attempts: boolean;
+    record_claims: boolean;
+    updated_by: string | null;
+    reason: string | null;
+  }>(
+    `SELECT tier, record_attempts, record_claims, updated_by, reason
+       FROM workhorse.queue_control WHERE queue_name = $1`,
+    [queueName],
+  );
+  return result.rows[0];
+}
+
+describe("dashboard queue tier and history", () => {
+  it("switches an empty queue's tier and records the authenticated actor and reason", async () => {
+    const queueName = `dashboard-tier-${randomUUID()}`;
+    const client = writableClient();
+
+    await expect(
+      client.dashboard.setQueueTier({ queue: queueName, tier: "fast", audit: audit("go fast") }),
+    ).resolves.toEqual({ status: "set", tier: "fast" });
+    await expect(queueControl(queueName)).resolves.toMatchObject({
+      tier: "fast",
+      updated_by: "authenticated-operator",
+      reason: "go fast",
+    });
+    const page = await client.dashboard.queues();
+    expect(page.queues.find((row) => row.queue === queueName)).toMatchObject({ tier: "fast" });
+
+    await expect(
+      client.dashboard.setQueueTier({ queue: queueName, tier: "full", audit: audit("go back") }),
+    ).resolves.toEqual({ status: "set", tier: "full" });
+    await expect(queueControl(queueName)).resolves.toMatchObject({
+      tier: "full",
+      reason: "go back",
+    });
+  });
+
+  it("refuses a queue with a live task and leaves its tier unchanged", async () => {
+    const queueName = `dashboard-tier-live-${randomUUID()}`;
+    await queue.enqueue("dashboard-tier-live", {}, { queue: queueName });
+
+    await expect(
+      writableClient().dashboard.setQueueTier({
+        queue: queueName,
+        tier: "fast",
+        audit: audit("go fast"),
+      }),
+    ).resolves.toEqual({ status: "live_tasks", tier: null });
+    expect((await queueControl(queueName))?.tier ?? "full").toBe("full");
+  });
+
+  it("refuses a fast switch for a queue with a concurrency or rate-limit policy", async () => {
+    const concurrencyQueue = `dashboard-tier-concurrency-${randomUUID()}`;
+    const rateQueue = `dashboard-tier-rate-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies(`dashboard-tier-${randomUUID()}`, [
+      { queue: concurrencyQueue, maxActive: 1 },
+    ]);
+    await queue.syncRateLimitPolicies(`dashboard-tier-${randomUUID()}`, [
+      { queue: rateQueue, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+    ]);
+    const client = writableClient();
+
+    await expect(
+      client.dashboard.setQueueTier({
+        queue: concurrencyQueue,
+        tier: "fast",
+        audit: audit("go fast"),
+      }),
+    ).resolves.toEqual({ status: "concurrency_policy", tier: null });
+    await expect(
+      client.dashboard.setQueueTier({ queue: rateQueue, tier: "fast", audit: audit("go fast") }),
+    ).resolves.toEqual({ status: "rate_limit_policy", tier: null });
+    expect((await queueControl(concurrencyQueue))?.tier ?? "full").toBe("full");
+    expect((await queueControl(rateQueue))?.tier ?? "full").toBe("full");
+  });
+
+  it("changes one history setting and keeps the omitted one", async () => {
+    const queueName = `dashboard-history-${randomUUID()}`;
+    const client = writableClient();
+    await client.dashboard.setQueueTier({ queue: queueName, tier: "fast", audit: audit("fast") });
+
+    await expect(
+      client.dashboard.setQueueHistory({
+        queue: queueName,
+        recordAttempts: true,
+        audit: audit("record attempts"),
+      }),
+    ).resolves.toEqual({ recordAttempts: true, recordClaims: false });
+    await expect(
+      client.dashboard.setQueueHistory({
+        queue: queueName,
+        recordClaims: true,
+        audit: audit("record claims"),
+      }),
+    ).resolves.toEqual({ recordAttempts: true, recordClaims: true });
+    const page = await client.dashboard.queues();
+    expect(page.queues.find((row) => row.queue === queueName)).toMatchObject({
+      tier: "fast",
+      recordAttempts: true,
+      recordClaims: true,
+    });
+  });
+});

@@ -20,6 +20,25 @@ upgrade steps.
 
 ## Unreleased
 
+### The dashboard Queues page switches a queue's tier and history
+
+Before this change, an operator on the Queues page saw the tier and history of each queue. To
+change them, the operator had to leave the page for `workhorse admin set-tier` and `set-history`
+(SM-966).
+
+- `dashboard/v1` adds the mutations `setQueueTier` and `setQueueHistory`. They call
+  `Admin.setQueueTier` and `Admin.setQueueHistory`, so `set_queue_tier_v1` keeps every guard.
+  Each has the bounded audit attribution and the same-origin check. `setQueueTier` requires a
+  reason.
+- `setQueueTier` answers `status` `set`, `live_tasks`, `concurrency_policy`, or
+  `rate_limit_policy`. A refused switch changes nothing, and the Queues page names the guard.
+- `setQueueHistory` changes the settings that the request names and keeps the other.
+- `DashboardQueueController` adds the optional `setQueueTier` and `setQueueHistory`, and
+  `createDashboardOperatorControllers` implements them. The two procedures are optional in
+  `DashboardClient`. If a client does not have one, the Queues page shows the action disabled with
+  the reason.
+- All six dashboard hosts implement both procedures. No schema change is necessary.
+
 ### The Go release script reuses the main CI run of the candidate
 
 Before this change, `scripts/release-go.sh` always ran the full `pnpm check`, which repeats every

@@ -16,14 +16,22 @@ from ..admin import (
     BulkRedriveOptions,
     DeadLetterCursor,
     DeadLetterFilter,
+    QueueTier,
     RedriveResult,
 )
 from ..dashboard_v1 import _CANCEL_TASK_GROUP_SQL, _TASK_GROUP_DETAIL_SQL, _TASK_GROUPS_SQL
+from ..errors import FastTierUnsupportedError
 from ._errors import DashboardRPCError
 
 # How long one health document serves nearby reads, in seconds. It matches the TypeScript host's
 # createDashboardQueueHealthReader, so the three backends agree on staleness.
 QUEUE_HEALTH_TTL = 3.0
+# The wire status for each feature name that set_queue_tier_v1 reports when it refuses a switch.
+_REFUSED_TIER_STATUS = {
+    "tier change": "live_tasks",
+    "concurrency policies": "concurrency_policy",
+    "rate-limit policies": "rate_limit_policy",
+}
 
 
 def _statement(sql: str) -> DriverStatement:
@@ -83,6 +91,8 @@ class DashboardBackend:
             "previewRetentionPolicy": self.preview_retention_policy,
             "setQueuePaused": self.set_queue_paused,
             "purgeQueue": self.purge_queue,
+            "setQueueTier": self.set_queue_tier,
+            "setQueueHistory": self.set_queue_history,
             "setWorkerPaused": self.set_worker_paused,
             "overrideMaintenancePolicy": self.override_maintenance_policy,
             "revertMaintenancePolicy": self.revert_maintenance_policy,
@@ -306,6 +316,32 @@ class DashboardBackend:
         value = cast(Mapping[str, object], input)
         count = self._admin.purge_queue(cast(str, value["queue"]), _admin_audit(value, actor))
         return {"deletedCount": count}
+
+    def set_queue_tier(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        try:
+            tier = self._admin.set_queue_tier(
+                cast(str, value["queue"]),
+                cast(QueueTier, value["tier"]),
+                _admin_audit(value, actor),
+            )
+        except FastTierUnsupportedError as error:
+            # set_queue_tier_v1 names its guard in the error detail. This maps that name onto
+            # the wire status and decides nothing itself.
+            status = _REFUSED_TIER_STATUS.get(error.feature)
+            if status is None:
+                raise
+            return {"status": status, "tier": None}
+        return {"status": "set", "tier": tier}
+
+    def set_queue_history(self, input: object, _actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        history = self._admin.set_queue_history(
+            cast(str, value["queue"]),
+            record_attempts=cast(bool | None, value.get("recordAttempts")),
+            record_claims=cast(bool | None, value.get("recordClaims")),
+        )
+        return {"recordAttempts": history.record_attempts, "recordClaims": history.record_claims}
 
     def set_worker_paused(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)

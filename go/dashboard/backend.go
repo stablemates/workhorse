@@ -59,6 +59,7 @@ func (service *backend) procedures() map[string]Procedure {
 		"taskDetail":             service.taskDetail, "settings": service.settings, "system": service.system,
 		"checkpointValue": service.checkpointValue, "taskValue": service.taskValue,
 		"setQueuePaused": service.setQueuePaused, "purgeQueue": service.purgeQueue,
+		"setQueueTier": service.setQueueTier, "setQueueHistory": service.setQueueHistory,
 		"setWorkerPaused":           service.setWorkerPaused,
 		"overrideMaintenancePolicy": service.overrideMaintenancePolicy,
 		"revertMaintenancePolicy":   service.revertMaintenancePolicy,

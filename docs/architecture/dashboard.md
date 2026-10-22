@@ -733,6 +733,22 @@ Since schema version 37, each queue row carries `tier`, `recordAttempts`, and `r
 `queue_control`. A queue without a control row reports `full`, `false`, and `false`. An older
 schema omits the three keys, and the Queues page shows a dash in its Tier column.
 
+Two mutations change these values. Both are optional `DashboardQueueController` methods and
+optional procedures in `DashboardClient`. If a client has no such method, the Queues page shows
+the action disabled with the reason. It also disables the actions when the schema omits `tier`.
+
+- `setQueueTier` takes `queue`, `tier` (`fast` or `full`), and `audit`. The shared controller calls
+  `Admin.setQueueTier` with the server-assigned actor and the audit reason. `set_queue_tier_v1`
+  writes them to `queue_control.updated_by` and `queue_control.reason`. The answer is
+  `{ status, tier }`. `status` is `set`, or the guard that refused the switch: `live_tasks`,
+  `concurrency_policy`, or `rate_limit_policy`. A refused switch answers a null `tier` and changes
+  nothing. Each host maps the `P1007` refusal of its own `Admin` to the status, from the `feature`
+  in the error detail, and has no guard of its own.
+- `setQueueHistory` takes `queue`, optional `recordAttempts` and `recordClaims`, and `audit`. It calls
+  `Admin.setQueueHistory`. An absent setting keeps its value. The answer holds both settings after
+  the change. `set_queue_history_v1` records no attribution, so only a host runner that writes its
+  own audit row, such as the demo, keeps the `audit` of this call.
+
 ### Task groups page
 
 The Task groups page shows the [task groups](task-groups.md) of the database. It has a list of

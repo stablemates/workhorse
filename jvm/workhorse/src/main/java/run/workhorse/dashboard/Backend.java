@@ -23,7 +23,10 @@ import run.workhorse.AdminAudit;
 import run.workhorse.BulkRedrivePage;
 import run.workhorse.ConnectionSource;
 import run.workhorse.DeadLetterCursor;
+import run.workhorse.FastTierUnsupportedException;
 import run.workhorse.Queue;
+import run.workhorse.QueueHistory;
+import run.workhorse.QueueTier;
 import run.workhorse.RedriveFilter;
 import run.workhorse.RedriveResult;
 import run.workhorse.RedriveStatus;
@@ -166,6 +169,8 @@ final class Backend {
         (input, actor) ->
             orderedMap(
                 "deletedCount", admin.purgeQueue(text(input, "queue"), audit(input, actor))));
+    procedures.put("setQueueTier", this::setQueueTier);
+    procedures.put("setQueueHistory", (input, actor) -> setQueueHistory(input));
     procedures.put("setWorkerPaused", this::setWorkerPaused);
     procedures.put("overrideMaintenancePolicy", (input, actor) -> overrideMaintenance(input));
     procedures.put(
@@ -229,6 +234,38 @@ final class Backend {
       admin.resumeQueue(text(input, "queue"), audit);
     }
     return orderedMap("paused", paused);
+  }
+
+  /**
+   * Moves one queue between the tiers. The guards stay in {@code set_queue_tier_v1}: a refused
+   * switch answers a status that names the guard, and the queue keeps its tier.
+   */
+  private Object setQueueTier(Map<String, ? extends @Nullable Object> input, String actor) {
+    QueueTier tier = QueueTier.valueOf(text(input, "tier").toUpperCase(Locale.ROOT));
+    try {
+      QueueTier result = admin.setQueueTier(text(input, "queue"), tier, audit(input, actor));
+      return orderedMap("status", "set", "tier", lower(result));
+    } catch (FastTierUnsupportedException error) {
+      String status =
+          switch (error.feature()) {
+            case "tier change" -> "live_tasks";
+            case "concurrency policies" -> "concurrency_policy";
+            case "rate-limit policies" -> "rate_limit_policy";
+            default -> throw error;
+          };
+      return orderedMap("status", status, "tier", null);
+    }
+  }
+
+  /** Chooses the history a fast-tier queue records. An absent setting keeps its current value. */
+  private Object setQueueHistory(Map<String, ? extends @Nullable Object> input) {
+    QueueHistory history =
+        admin.setQueueHistory(
+            text(input, "queue"),
+            optionalBool(input, "recordAttempts"),
+            optionalBool(input, "recordClaims"));
+    return orderedMap(
+        "recordAttempts", history.recordAttempts(), "recordClaims", history.recordClaims());
   }
 
   private Object setWorkerPaused(Map<String, ? extends @Nullable Object> input, String actor) {
@@ -580,6 +617,11 @@ final class Backend {
       throw new IllegalArgumentException(name + " must be a boolean");
     }
     return value;
+  }
+
+  private static @Nullable Boolean optionalBool(
+      Map<String, ? extends @Nullable Object> input, String name) {
+    return input.get(name) == null ? null : bool(input, name);
   }
 
   /** The text form of a scalar input for a {@code text}-bound parameter, or {@code null}. */

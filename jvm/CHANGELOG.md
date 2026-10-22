@@ -20,6 +20,13 @@ adds.
   `QueueHistory`. Both controls have a caller form with a `Connection`, and the Kotlin module adds
   `setQueueTierSuspend` and `setQueueHistorySuspend`. The other SDKs already have these controls
   (SM-1417).
+- **The embedded dashboard changes the tier and the history of a queue.** The `Dashboard` filter
+  answers the `setQueueTier` and `setQueueHistory` procedures. Each procedure is a mutation: it
+  requires a same-origin request, and a read-only dashboard answers `FORBIDDEN`. `setQueueTier`
+  calls `Admin.setQueueTier` with the actor that the server assigns. If Workhorse refuses the
+  switch, the answer names the guard as `live_tasks`, `concurrency_policy`, or
+  `rate_limit_policy`, and the queue keeps its tier. `setQueueHistory` calls
+  `Admin.setQueueHistory`. An absent setting keeps its current value (SM-966).
 
 ### Fixes
 
