@@ -100,16 +100,26 @@ describe("busy heartbeat retry", () => {
     { shared: true, label: "shared heartbeats" },
   ])("retries only the busy lease before the next regular round ($label)", async ({ shared }) => {
     const heartbeatMs = 400;
+    const retryBaseMs = Math.min(100, heartbeatMs / 8);
     const queueName = `busy-retry-${shared ? "shared" : "reserved"}`;
     const first = await queue.enqueue("retry", {}, { queue: queueName });
     const second = await queue.enqueue("retry", {}, { queue: queueName });
-    // `first` is busy in the first round and in the next two retries.
-    let busyAnswers = 0;
+    // `first` is busy in each round until the worker has run 3 regular rounds and 2 retries. While
+    // `first` is busy, both handlers wait, so a regular round has 2 leases and a retry has 1.
+    let busy = true;
     let rounds: Round[] = [];
+    const busyPhase: boolean[] = [];
+    // The worker's next regular slot when each round starts. A regular round sets it before it
+    // sends, and a retry must leave it as it is.
+    const slots: (number | undefined)[] = [];
+    const busyRounds = () => rounds.filter((_round, index) => busyPhase[index]);
+    const regularRounds = () => busyRounds().filter((round) => round.taskIds.length === 2);
+    const retryRounds = () => busyRounds().filter((round) => round.taskIds.length === 1);
     const intercept = (target: { heartbeatMany: HeartbeatMany }) => {
-      rounds = interceptRounds(target, async (_round, tasks, send) => {
-        if (busyAnswers >= 3 || !tasks.some((task) => task.id === first)) return undefined;
-        busyAnswers += 1;
+      rounds = interceptRounds(target, async (index, tasks, send) => {
+        busyPhase[index] = busy;
+        slots[index] = (worker as unknown as { nextHeartbeatAt?: number }).nextHeartbeatAt;
+        if (!busy || !tasks.some((task) => task.id === first)) return undefined;
         // `first` gets busy and is not renewed. The other leases go to the database.
         const statuses = await send(tasks.filter((task) => task.id !== first));
         statuses.set(first, "busy");
@@ -141,30 +151,51 @@ describe("busy heartbeat retry", () => {
     const run = worker.runOnce();
     try {
       await vi.waitFor(() => expect(started.size).toBe(2), { timeout: 5_000, interval: 10 });
+      // The wait counts rounds, not time. A retry needs one interval in which the busy round and
+      // the retry delay end before the next slot, and the wait gives about 25 intervals.
       await vi.waitFor(
-        () => expect(rounds.filter((round) => round.taskIds.length === 2).length).toBe(3),
+        () => {
+          expect(regularRounds().length).toBeGreaterThanOrEqual(3);
+          expect(retryRounds().length).toBeGreaterThanOrEqual(2);
+        },
         { timeout: 10_000, interval: 10 },
       );
     } finally {
+      busy = false;
       release();
     }
     expect(await run).toBe(true);
 
-    const regular = rounds.filter((round) => round.taskIds.length === 2);
-    const retries = rounds.filter((round) => round.taskIds.length === 1);
-    // Each retry sent only the busy lease, and started soon after the round before it ended:
-    // at most 2 × min(100 ms, heartbeatMs / 8), plus slack for a slow host.
-    expect(retries.length).toBeGreaterThanOrEqual(2);
+    const busyIndexes = busyRounds().map((round) => rounds.indexOf(round));
+    const retries = retryRounds();
+    // The first round is regular. Each retry sends only the busy lease, after the retry delay of at
+    // least min(100 ms, heartbeatMs / 8) from the end of the busy round before it.
+    expect(rounds[0]!.taskIds).toHaveLength(2);
+    for (const index of busyIndexes) expect([1, 2]).toContain(rounds[index]!.taskIds.length);
     for (const retry of retries) expect(retry.taskIds).toEqual([first]);
     for (const retry of retries) {
       const before = rounds[rounds.indexOf(retry) - 1]!;
-      expect(retry.startedAt - before.endedAt!).toBeLessThan(heartbeatMs / 2);
+      expect(retry.startedAt - before.endedAt!).toBeGreaterThanOrEqual(0.9 * retryBaseMs);
     }
-    // The retries did not move the regular slots.
-    for (let index = 1; index < regular.length; index += 1) {
-      const gap = regular[index]!.startedAt - regular[index - 1]!.startedAt;
+    // The retries do not move the regular slots: each retry starts with the slot that the regular
+    // round before it sets. A regular round falls due one interval after the previous regular
+    // round starts. A slow round can only make the gap longer, so the test checks no upper limit.
+    // These checks compare the slots that the worker stores, not times that the test measures.
+    const regularSlots: (number | undefined)[] = [];
+    // For each retry: the slot that it starts with, and the slot of the regular round before it.
+    const retrySlots: [number | undefined, number | undefined][] = [];
+    for (const index of busyIndexes) {
+      if (rounds[index]!.taskIds.length === 2) regularSlots.push(slots[index]);
+      else retrySlots.push([slots[index], regularSlots.at(-1)]);
+    }
+    for (const regularSlot of regularSlots) expect(regularSlot).toBeDefined();
+    for (const [retrySlot, regularSlot] of retrySlots) {
+      expect(regularSlot).toBeDefined();
+      expect(retrySlot).toBe(regularSlot);
+    }
+    for (let index = 1; index < regularSlots.length; index += 1) {
+      const gap = regularSlots[index]! - regularSlots[index - 1]!;
       expect(gap).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
-      expect(gap).toBeLessThan(1.5 * heartbeatMs);
     }
     expectNoOverlap(rounds);
     expect(aborted).toEqual([]);
