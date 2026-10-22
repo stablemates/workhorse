@@ -3,6 +3,7 @@ using System.Text.Json;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -475,8 +476,11 @@ public sealed partial class Worker
         for (var offset = 0; offset < _queues.Length && claimed.Count < limit && run.GateOpen; offset++)
         {
             var queue = _queues[(start + offset) % _queues.Length];
+            using var span = WorkerTelemetry.StartClaim(queue);
+            var probedAt = Monotonic.Now();
             if (await ClaimFastAsync(run, queue, Math.Min(limit, fastLimit) - claimed.Count).ConfigureAwait(false) is { } fast)
             {
+                WorkerTelemetry.Claimed(span, queue, probedAt, fast, 0, static entry => entry.Task, fullTier: false);
                 claimed.AddRange(fast);
                 continue;
             }
@@ -511,7 +515,14 @@ public sealed partial class Worker
                 }
             }
 
+            var first = claimed.Count;
             claimed.AddRange(rows.Select(row => ClaimedOf(row, queue, startedAt, fastClaimed: false)));
+            if (permitted)
+            {
+                // The claim duration starts at the probe, so it holds a rejected fast probe and the
+                // wait for the pool, as on the JVM. The lease window starts at startedAt.
+                WorkerTelemetry.Claimed(span, queue, probedAt, claimed, first, static entry => entry.Task, fullTier: true);
+            }
         }
     }
 

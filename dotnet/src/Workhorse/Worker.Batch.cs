@@ -2,6 +2,7 @@ using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -93,8 +94,11 @@ public sealed partial class Worker
         public bool Abandoned(ClaimedTask task) =>
             worker._active.Keys.FirstOrDefault(active => active.Task.Id == task.Id && active.Task.FenceToken == task.FenceToken) is not { Abandoned: false };
 
-        public void BatchDispatched(string taskType, IReadOnlyList<ClaimedTask> tasks, bool full, long lingerMs) =>
+        public void BatchDispatched(string taskType, IReadOnlyList<ClaimedTask> tasks, bool full, long lingerMs)
+        {
+            WorkerTelemetry.Batch(taskType, tasks, full, lingerMs);
             WorkerLog.BatchDispatched(worker._logger, tasks.Count, taskType, tasks[0].Queue, full, lingerMs);
+        }
 
         public async Task RecordEvidenceAsync(bool failure, Guid batchId, string taskType, IReadOnlyList<ClaimedTask> tasks, bool full)
         {
