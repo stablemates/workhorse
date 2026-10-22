@@ -10,8 +10,11 @@ thresholds of SM-1565. The run used `pnpm benchmark:connection-budget` on `main`
 Every SDK variant kept every lease in every held-task cell, up to 64 workers with 25 tasks each.
 Every variant completed every task of the refill cells once. In each cell, the role sampler
 observed at most one listener connection and at most one heartbeat-role connection at one time.
-No probe needed SIGKILL. 118 of the 120 cells pass. The fault cell of Ruby and the fault cell of
-the JVM are inconclusive in two runs each. Thus these two cells do not pass the acceptance.
+No probe needed SIGKILL.
+
+118 of the 120 cells pass. The fault cell of Ruby and the fault cell of the JVM are inconclusive by
+measurement in two runs each. The coordinator accepted these two cells on the SDK gate tests. Thus
+all 120 cells are accepted: 118 pass, and 2 are accepted on the gate tests.
 
 ## Method
 
@@ -129,32 +132,38 @@ had ended. The first fresh claim came within 43 ms of the fault in every variant
 2 × I, 20 s. "Dispatch before next round" is a detection-only rule, and it gave `notDetected` in
 every fault run. `notDetected` does not change the result of a cell.
 
+The result row gives the result that the driver measured. The Ruby and JVM fault cells are accepted
+on the SDK gate tests, as the
+[Ruby and JVM fault cells](#the-ruby-and-jvm-fault-cells-are-accepted-on-the-sdk-gate-tests)
+section explains.
+
 ## Results against the acceptance thresholds
 
 Each entry gives the baseline verdict, then the acceptance verdict. The baseline had no refill or
 fault cells, so their baseline verdict is `-`.
 
-| Cell                 | `typescript` | `go`        | `ruby`                   | `python-sync` | `python-async` | `python-asyncpg` | `rust`      | `jvm`                    |
-| -------------------- | ------------ | ----------- | ------------------------ | ------------- | -------------- | ---------------- | ----------- | ------------------------ |
-| 2 × 1, pool 4        | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 1 × 1                | pass → pass  | pass → pass | pass → pass              | pass → pass   | pass → pass    | pass → pass      | pass → pass | pass → pass              |
-| 1 × 25               | pass → pass  | pass → pass | pass → pass              | pass → pass   | pass → pass    | pass → pass      | pass → pass | pass → pass              |
-| 4 × 1                | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 4 × 25               | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 16 × 1               | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 16 × 25              | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 64 × 1               | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 64 × 25              | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 16 × 25, I = 10 s    | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| 64 × 25, I = 10 s    | pass → pass  | pass → pass | pass → pass              | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass              |
-| Refill 2 × 1, pool 4 | - → pass     | - → pass    | - → pass                 | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                 |
-| Refill 4 × 2, pool 6 | - → pass     | - → pass    | - → pass                 | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                 |
-| Refill 16 × 4        | - → pass     | - → pass    | - → pass                 | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                 |
-| Fault 16 × 4         | - → pass     | - → pass    | - → **inconclusive (2)** | - → pass      | - → pass       | - → pass         | - → pass    | - → **inconclusive (2)** |
+| Cell                 | `typescript` | `go`        | `ruby`                             | `python-sync` | `python-async` | `python-asyncpg` | `rust`      | `jvm`                              |
+| -------------------- | ------------ | ----------- | ---------------------------------- | ------------- | -------------- | ---------------- | ----------- | ---------------------------------- |
+| 2 × 1, pool 4        | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 1 × 1                | pass → pass  | pass → pass | pass → pass                        | pass → pass   | pass → pass    | pass → pass      | pass → pass | pass → pass                        |
+| 1 × 25               | pass → pass  | pass → pass | pass → pass                        | pass → pass   | pass → pass    | pass → pass      | pass → pass | pass → pass                        |
+| 4 × 1                | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 4 × 25               | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 16 × 1               | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 16 × 25              | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 64 × 1               | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 64 × 25              | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 16 × 25, I = 10 s    | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| 64 × 25, I = 10 s    | pass → pass  | pass → pass | pass → pass                        | fail → pass   | fail → pass    | fail → pass      | fail → pass | fail → pass                        |
+| Refill 2 × 1, pool 4 | - → pass     | - → pass    | - → pass                           | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                           |
+| Refill 4 × 2, pool 6 | - → pass     | - → pass    | - → pass                           | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                           |
+| Refill 16 × 4        | - → pass     | - → pass    | - → pass                           | - → pass      | - → pass       | - → pass         | - → pass    | - → pass                           |
+| Fault 16 × 4         | - → pass     | - → pass    | - → **inconclusive, accepted (2)** | - → pass      | - → pass       | - → pass         | - → pass    | - → **inconclusive, accepted (2)** |
 
-`(2)` marks a cell that ran twice with the same result. The
-[inconclusive fault cells](#the-inconclusive-fault-cells-of-ruby-and-the-jvm) section explains
-them.
+`inconclusive, accepted` marks a cell that is inconclusive by measurement and accepted on the SDK
+gate tests. `(2)` marks a cell that ran twice with the same result. The
+[Ruby and JVM fault cells](#the-ruby-and-jvm-fault-cells-are-accepted-on-the-sdk-gate-tests)
+section explains them.
 
 ### The values against each threshold
 
@@ -190,11 +199,16 @@ sampler counts it in the listener row.
   1024 ms, and the minimum lease margin was 1976 ms. The 64 × 25 cell with I = 10 s also passes. ADR
   0071 rule 2 made the JVM capacity statement wait for this result.
 
-### The inconclusive fault cells of Ruby and the JVM
+### The Ruby and JVM fault cells are accepted on the SDK gate tests
 
-The fault cell of Ruby and the fault cell of the JVM are inconclusive on the rule "no claim in
-outage". Each cell ran a second time, with the same result. The runbook says that a cell whose
-second run is not a pass does not pass the acceptance. Thus these two cells do not pass.
+The fault cell of Ruby and the fault cell of the JVM are inconclusive by measurement on the rule
+"no claim in outage". Each cell ran a second time, with the same result. The runbook says that a
+cell whose second run is not a pass does not pass. The coordinator accepted all four runs on the
+SDK gate tests, so the two cells count as accepted. The summaries keep the result `inconclusive`,
+because the driver reports only what it measures. The
+[round 3 design decision](https://linear.app/stablemates/issue/SM-1565#comment-83508795) and the
+[coordinator decision](https://linear.app/stablemates/issue/SM-1565#comment-5e1b78ed) on SM-1565
+record this acceptance.
 
 The four runs have the same pattern:
 
@@ -222,11 +236,27 @@ In all four runs, no fresh claim came before the lower bound, and no unattribute
 the upper bound. The 120 fresh claims came between the two bounds, so the observations cannot decide
 the rule.
 
+#### Why the measurement cannot decide
+
+The measurement has no event that shows when the replacement became ready:
+
+1. In every SDK, the replacement heartbeat connection is a pool connection that opened before the
+   fault. In all 10 fault runs, its backend started 5 s to 20 s before the fault and ran ordinary
+   statements before the fault.
+2. The SDK makes that pool connection the heartbeat connection without SQL. Thus PostgreSQL records
+   no event between the fault and the first heartbeat round on the connection.
+3. Ruby and the JVM use one coordinator for all workers on a pool, and the coordinator keeps its
+   schedule after a replacement. Thus the first round on the replacement comes at the next regular
+   slot, about I = 10 s after the round that the fault interrupted.
+4. The 120 fresh claims in that time therefore have no attribution by observation.
+
 In TypeScript, Go, Python, and Rust, the first round on the replacement came within 6 ms of the
-fault, so the two bounds were close. In Ruby and the JVM, the first round on the replacement came
-at the next regular slot. That slot came about I = 10 s after the round that the fault interrupted. Ruby and the
-JVM use one coordinator for all workers on a pool, and the coordinator keeps its schedule after a
-replacement.
+fault, so the two bounds were close. The rounds of their workers fall at different times in each
+interval, so a round almost always waits for the replacement.
+
+An earlier signal of the ready time needs a report from the probe or a change in the SDK. Part (d)
+of the acceptance rules on SM-1565 rejected the report from the probe. The round 2 design decision
+rejected the SDK change, because all six SDKs follow one recovery rule.
 
 The source shows the order of events in both SDKs:
 
@@ -239,19 +269,53 @@ The source shows the order of events in both SDKs:
   workers. The rounds then run at their schedule.
 
 Thus both SDKs open the claim gate when the replacement reservation is ready, as ADR 0071 rule 6
-requires. Rule 6 does not require a round at once on the replacement. The data shows no fresh
-claim before the lower bound, no claim from a statement that started before the fault, and no recovered
-attempt. The watchdog rule passed in all four runs. The data does not prove that each of the 120
-claims came after the reservation was ready. This run observed no defect in either SDK.
+requires. Rule 6 does not require a round at once on the replacement. This run observed no defect
+in either SDK.
 
-The deterministic proof of the order is the "dispatch wakes on recovery" test of each SDK:
+#### The rules that passed in all four runs
+
+- No fresh claim came before the lower bound of the ready time, which is the fault.
+- No claim came from a statement that started before the fault.
+- No attempt was recovered, and the watchdog rule passed.
+- The first fresh claim came 26.9 ms to 34.0 ms after the fault. The limit is 2 × I, 20 s, from the
+  time when the database is reachable.
+- No lease was lost, and no sample showed an active task with an expired lease.
+- No probe needed SIGKILL. Each probe stopped with exit status 0.
+- After the recovery, the sampler saw at most one listener connection and at most one
+  heartbeat-role connection. No sample error occurred.
+
+The fault cell does not apply the renewal thresholds of a healthy cell. The measured values meet
+them in all four runs. The maximum renewal age was 14989.9 ms to 15001 ms, below 2 × I, 20,000 ms.
+The minimum lease margin was 14999 ms to 15010.1 ms, above I, 10,000 ms.
+
+#### The proof of the claim order
+
+The deterministic gate tests of the two SDKs are the client-side proof of the claim order. They
+prove that no claim runs without a held heartbeat connection, and that dispatch wakes when the
+replacement arrives. They must stay in the SDK test suites.
 
 - Ruby: "replaces a lost connection while no task runs, and claims nothing until the replacement
-  is ready", in `ruby/spec/unit/heartbeat_reservation_spec.rb`.
-- JVM: `claimsNothingWithoutAHeartbeatConnectionAndWakesWhenItReturns`, in
-  `jvm/workhorse/src/test/java/run/workhorse/WorkerHeartbeatGateDatabaseTest.java`.
+  is ready", at `ruby/spec/unit/heartbeat_reservation_spec.rb:526`. The test refuses the
+  replacement checkouts, runs a dispatch pass, and checks that the pass sends no claim statement.
+  Then it allows the checkouts and checks that a claim comes within 1 s. Without the recovery wake,
+  the next claim would wait 5 s.
+- JVM: `claimsNothingWithoutAHeartbeatConnectionAndWakesWhenItReturns`, at
+  `jvm/workhorse/src/test/java/run/workhorse/WorkerHeartbeatGateDatabaseTest.java:318`. The test
+  blocks the replacement acquisition. While the claim gate is closed, it checks that no claim takes
+  the ready task. It also checks that a fused completion sends its completion with a claim limit of
+  0, so the completion claims no task. Then it opens the gate and checks that the ready task
+  succeeds less than 2 s later.
 
-The coordinator must decide how the acceptance treats these two cells.
+#### The `backend_start` rule was tested and rejected
+
+SM-1588 tested a second form of the rule. It ended the outage at the `backend_start` of the
+replacement backend in `pg_stat_activity`. A recompute from the recorded data rejected it. In all
+10 fault runs, that time is before the fault, so the outage window is empty and no claim can fail
+the rule.
+
+The rule also made five fault cells that pass inconclusive, and it did not decide the Ruby and JVM
+cells. No verdict on this page changed.
+[SM-1588](https://linear.app/stablemates/issue/SM-1588) holds the evidence.
 
 ### The observed heartbeat-role connections are estimates
 
@@ -267,8 +331,8 @@ proof of a missing round. In every healthy cell, the maximum sampled renewal age
 
 ## Anomalies
 
-- **The Ruby and JVM fault cells.** Each ran twice and was inconclusive twice. The section above
-  gives the data.
+- **The Ruby and JVM fault cells.** Each ran twice and was inconclusive by measurement twice. The
+  coordinator accepted them on the SDK gate tests. The section above gives the data.
 - **A replaced Ruby heartbeat connection in the warm-up.** In the Ruby 64 × 25 cell, the first
   heartbeat backend ran one round at 1967 ms and closed at 2035 ms. A second backend ran its first
   round at 2755 ms and kept the role to the end. This came 2 s into the 15 s warm-up, and no lease
@@ -286,7 +350,8 @@ proof of a missing round. In every healthy cell, the maximum sampled renewal age
   now. At 64 × 25, the maximum sampled renewal age was 1008 ms in TypeScript and 1215 ms in Go. In
   the baseline it was 1008 ms and 968 ms.
 - **Ruby** passed all 11 held-task cells in the baseline, and it passes all 14 healthy cells now.
-  Its fault cell does not pass, as the section above explains.
+  Its fault cell is inconclusive by measurement and accepted on the SDK gate tests, as the section
+  above explains.
 - **Python, in all three variants,** failed every cell with more than one worker in the baseline.
   At 16 workers, the leases of 12 workers expired, and at 64 workers no claim started. Now every
   variant passes all 15 cells. In the baseline, `python-async` needed SIGKILL in 3 cells and
@@ -297,7 +362,7 @@ proof of a missing round. In every healthy cell, the maximum sampled renewal age
   connection.
 - **The JVM** failed every cell with more than one worker in the baseline. It lost 343 leases in
   the 64-worker cells. Now it passes all 14 healthy cells and records no lost lease. Its fault cell
-  does not pass, as the section above explains.
+  is inconclusive by measurement and accepted on the SDK gate tests, as the section above explains.
 
 ## What this does not measure
 
