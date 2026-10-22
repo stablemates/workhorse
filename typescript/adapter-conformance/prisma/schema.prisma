@@ -1,0 +1,9 @@
+// The Prisma 7 fixture. Prisma 7 rejects `url` in this file, so prisma.config.ts holds it. The
+// Prisma 6 fixture is typescript/prisma/prisma/schema.prisma, because Prisma 6 requires `url` here.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

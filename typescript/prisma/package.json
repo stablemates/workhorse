@@ -44,7 +44,7 @@
     "prisma": "6.19.3"
   },
   "peerDependencies": {
-    "@prisma/client": ">=6 <7",
+    "@prisma/client": ">=6 <8",
     "@stablemates/workhorse": ">=0.9.0 <0.10.0"
   },
   "engines": {

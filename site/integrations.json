@@ -46,7 +46,7 @@
       "category": "orms",
       "tier": "verified",
       "summary": "Enqueues a task inside a Prisma interactive transaction, so your data and the task commit together.",
-      "boundary": "Prisma Client 6 only. Prisma migrations do not manage the Workhorse schema.",
+      "boundary": "Prisma Client 6 and 7. Prisma migrations do not manage the Workhorse schema.",
       "package": "@stablemates/workhorse-prisma",
       "peer": "@prisma/client",
       "pinnedBy": "typescript/adapter-conformance",

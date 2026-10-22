@@ -48,26 +48,28 @@ updates:
         dependency-type: production
         update-types: [minor, patch]
         exclude-patterns: ["@mantine/*"]
-    # Two majors cannot be taken yet, and each one arrives every Monday and fails the same way.
+    # These majors cannot be taken automatically, and each one arrives every Monday and fails.
     #
     # TypeScript 7 is the native port, and its package carries no JavaScript compiler API. Eight
     # tracked files import that API, including the generators for the dashboard/v1 response schemas
     # and the SQL catalogues, so neither governed artifact can be produced at all. This is a fact
     # about the package rather than a preference, and SM-841 revisits it when the API ships.
     #
-    # Prisma 7 rejects `url` in a datasource block, which is what typescript/prisma generates from.
-    # The adapter source needs only `$queryRawUnsafe` and would survive the move; the published peer
-    # claim `@prisma/client >=6 <7` is what does not. SM-840 holds that decision, and this entry
-    # only stops the weekly reminder — it does not make the decision. The CLI and the client are
-    # named separately because they arrive as separate pull requests, and each fails against the
-    # other's major: #164 moved the CLI alone, #153 moved the client alone.
+    # The Prisma adapter claims `@prisma/client >=6 <8` (SM-840), and CI tests each claimed major
+    # against its own fixture. typescript/prisma pins Prisma 6, and typescript/adapter-conformance
+    # pins Prisma 7. A major bump moves a fixture off its major: Prisma 7 rejects the `url` that the
+    # Prisma 6 schema must have. A Prisma 8 bump also needs a decision to widen the peer range
+    # (ADR 0058). The CLI and the client are named separately because they arrive as separate pull
+    # requests, and each fails against the other's major: #164 moved the CLI alone, #153 moved the
+    # client alone.
     #
     # Objection 4 is a choice, not a blocker. Since October 2026 the `objection` package is
     # published from the ditojs/objection fork, while Vincit keeps the original repository and npm
     # access. The Objection recipe certifies one exact 3.x version (SM-1483). A move to 4.x changes
     # that certification, so a maintainer plans it instead of a weekly pull request.
     #
-    # Only the major is ignored, so a 6.x Prisma, a 5.x TypeScript, or a 3.x Objection still opens.
+    # Only the major is ignored, so a 6.x or 7.x Prisma, a 5.x TypeScript, or a 3.x Objection still
+    # opens.
     # `ignore` never applies to security updates.
     ignore:
       - dependency-name: typescript

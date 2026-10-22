@@ -90,7 +90,9 @@ copies parameter values into the message. Their error-code searches process at m
 entries. They accept only five-character uppercase alphanumeric codes.
 
 - `PrismaQueryError` prefers `meta.code` over Prisma's outer raw-query code.
-- `TypeOrmQueryError` follows `driverError` and `cause`.
+- On Prisma 7, the search follows `meta.driverAdapterError` to the `cause` of the driver adapter
+  error. That object carries the SQLSTATE as `code` for the `postgres` kind and as `originalCode`
+  for the other kinds. It also carries `detail` for the `postgres` kind.
 
 Each adapter copies the discovered code to its wrapper's `code` property. Core uses it to preserve
 typed SQL conflicts.
@@ -192,8 +194,8 @@ must still give the same guarantees.
    - A failed statement throws an error extending `QueryError`. The error retains `statement` and
      the original `cause`, and copies the SQLSTATE to `code`.
    - The code comes from `databaseErrorCode` in `typescript/core/src/errors.ts`. It searches
-     breadth-first over `cause`, `driverError`, and `meta`. It visits at most 16 objects, and it is
-     cycle-safe.
+     breadth-first over `cause`, `driverError`, `meta`, and `driverAdapterError`. It visits at most
+     16 objects, and it is cycle-safe.
    - It accepts only five-character uppercase alphanumeric codes. It prefers a nested SQLSTATE over
      a Prisma `P\d{4}` code that carries `meta`.
    - Core uses this code through any ORM wrapper to raise these errors:
@@ -605,10 +607,12 @@ wrapper.
 - `databaseErrorCode(error)` returns the SQLSTATE.
 - `databaseErrorDetails(error)` returns every `DETAIL` string along the chain.
 
-Both walk breadth-first over `cause`, `driverError`, and `meta`. Both visit at most 16 objects.
-Both record visited objects. Thus the walk stops on a cyclic `cause`.
+Both walk breadth-first over `cause`, `driverError`, `meta`, and `driverAdapterError`. Both visit
+at most 16 objects. Both record visited objects. Thus the walk stops on a cyclic `cause`.
 
-A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`. If an object carries `meta` and a Prisma code
+A candidate SQLSTATE is the `code` of an object. If an object has no `code`, its `originalCode` is
+the candidate, because a Prisma 7 driver adapter reports most SQLSTATEs there. A candidate SQLSTATE
+must match `/^[0-9A-Z]{5}$/`. If an object carries `meta` and a Prisma code
 that matches `/^P\d{4}$/`, the walk holds back that code. The walk returns it only when no nested
 object supplies a real SQLSTATE. Prisma reports `P2010` on the same field and keeps the true
 SQLSTATE under `meta`.

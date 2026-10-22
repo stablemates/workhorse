@@ -20,6 +20,19 @@ upgrade steps.
 
 ## Unreleased
 
+### The Prisma adapter supports Prisma 7
+
+Before this change, `@stablemates/workhorse-prisma` declared `@prisma/client >=6 <7`. A project on
+Prisma 7 could not install it without a peer warning, and CI did not test Prisma 7 (SM-840).
+
+- The peer range is now `@prisma/client >=6 <8`. Adapter conformance runs on Prisma 6 and on
+  Prisma 7 in each CI run.
+- Prisma 7 reports the PostgreSQL error of its driver adapter in `meta.driverAdapterError`. The
+  error-code search of `@stablemates/workhorse` now follows that key and reads `originalCode` when
+  an error has no `code`. Thus `PrismaQueryError.code` is the SQLSTATE on Prisma 7, and Workhorse
+  conflicts keep their own error classes. On Prisma 6, nothing changes.
+- `workhorse init` still writes the Prisma 6 constructor. SM-1590 adds the Prisma 7 form.
+
 ### A worker on a pool that hides its size polls under the opt-out
 
 Before this change, a worker with `sharedHeartbeats: true` started the shared listener on a pool

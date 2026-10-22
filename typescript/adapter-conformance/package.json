@@ -3,12 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare": "prisma generate --schema prisma/schema.prisma",
     "typecheck": "tsc -b tsconfig.json"
   },
   "devDependencies": {
     "@mikro-orm/core": "7.2.5",
     "@mikro-orm/postgresql": "7.2.5",
-    "@prisma/client": "6.19.3",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "@stablemates/workhorse": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
     "@stablemates/workhorse-knex": "workspace:*",
@@ -21,6 +23,7 @@
     "magicast": "0.5.5",
     "objection": "3.9.1",
     "pg": "8.23.1",
+    "prisma": "7.10.1",
     "typeorm": "1.1.2",
     "typescript": "^5.8.3",
     "vitest": "^4.1.12"
