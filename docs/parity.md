@@ -301,6 +301,7 @@ through its own public SDK.
 | Queue health snapshot                      | Supported  | Supported | Supported | Supported | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported | Supported |
 | Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | Supported | Supported |
+| Queue tier and history controls            | Supported  | Supported | Supported | Supported | Supported | Supported |
 | Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | Supported | Supported |
 | Task group cancel                          | Supported  | Supported | Supported | Supported | Supported | Supported |
 | Task group drift listing and repair        | Supported  | Supported | Supported | Supported | Supported | Supported |
@@ -345,9 +346,8 @@ Amendments to [ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-
 [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
 state this bar for the Rust, Ruby, and JVM `Admin` clients.
 
-`setQueueTier` and `setQueueHistory` are in the TypeScript, Python, Go, and Rust `Admin` clients.
-Ruby and the JVM do not have them. [SM-1417](https://linear.app/stablemates/issue/SM-1417) records
-that decision.
+The queue tier and history controls are in the `Admin` client of all six SDKs.
+[SM-1417](https://linear.app/stablemates/issue/SM-1417) added them to Ruby and the JVM.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
 server ([ADR 0029](decisions/0029-embeddable-dashboard-backends.md)). A cell is Supported only when

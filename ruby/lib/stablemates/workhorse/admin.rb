@@ -92,6 +92,9 @@ module Stablemates
 
     ExternalWaitPage = Data.define(:items, :next_cursor)
 
+    # The history a queue records: attempt rows and claim events.
+    QueueHistory = Data.define(:record_attempts, :record_claims)
+
     WorkerPauseResult = Data.define(:worker_id, :paused, :paused_by, :reason, :paused_at, :last_heartbeat_at)
 
     WorkerRegistryEntry = Data.define(
@@ -102,16 +105,18 @@ module Stablemates
     # Inspects and controls tasks, dead letters, workers, and queues through the executor it holds.
     #
     # Like Queue, every call runs on the connection the executor yields, so a control joins the
-    # caller's transaction. Every control takes an AdminAudit that PostgreSQL records.
+    # caller's transaction. Every control except +set_queue_history+ takes an AdminAudit that
+    # PostgreSQL records.
     class Admin
       MAX_PAGE_SIZE = 1000
       MAX_REDRIVE_BATCH_SIZE = 1000
       MAX_PAYLOAD_BYTES = 1_048_576
       MAX_REDACT_KEYS = 50
       TASK_STATES = %i[blocked scheduled ready active succeeded failed canceled].freeze
+      QUEUE_TIERS = %i[fast full].freeze
       REDRIVE_STATUSES = %i[redriven replayed eligible not_found not_failed].freeze
       private_constant :MAX_PAGE_SIZE, :MAX_REDRIVE_BATCH_SIZE, :MAX_PAYLOAD_BYTES, :MAX_REDACT_KEYS,
-        :TASK_STATES, :REDRIVE_STATUSES
+        :TASK_STATES, :QUEUE_TIERS, :REDRIVE_STATUSES
 
       def initialize(executor)
         @executor = Executor.for(executor)
@@ -310,6 +315,37 @@ module Stablemates
         Values.parse_integer(rows.first.fetch("deleted_count"))
       end
 
+      # Moves a queue between the +:fast+ and +:full+ tiers and returns the tier after the change.
+      # If the tier differs, Workhorse refuses the change with FastTierUnsupportedError while the
+      # queue holds a live task, so a task never changes tier. The audit's +request_id+ is not recorded.
+      def set_queue_tier(queue, tier, audit:)
+        name(queue, "queue")
+        raise ArgumentError, "tier must be :fast or :full" unless QUEUE_TIERS.include?(tier)
+
+        audit(audit)
+        assert_compatible
+        rows = @executor.rows(SqlCatalogue::SET_QUEUE_TIER, [queue, tier.to_s, audit.actor, audit.reason])
+        raise ArgumentError, "workhorse.set_queue_tier_v1 returned #{rows.length} rows; expected one" unless rows.one?
+
+        rows.first.fetch("tier").to_sym
+      end
+
+      # Chooses the history a fast-tier queue records. A nil setting keeps its current value, and
+      # the QueueHistory reports both settings after the change.
+      def set_queue_history(queue, record_attempts: nil, record_claims: nil)
+        name(queue, "queue")
+        optional_boolean(record_attempts, "record_attempts")
+        optional_boolean(record_claims, "record_claims")
+        assert_compatible
+        rows = @executor.rows(SqlCatalogue::SET_QUEUE_HISTORY,
+          [queue, record_attempts&.to_s, record_claims&.to_s])
+        raise ArgumentError, "workhorse.set_queue_history_v1 returned #{rows.length} rows; expected one" unless rows.one?
+
+        row = rows.first
+        QueueHistory.new(record_attempts: Values.parse_boolean(row.fetch("record_attempts")),
+          record_claims: Values.parse_boolean(row.fetch("record_claims")))
+      end
+
       # The TaskGroup, or nil when no such group exists.
       def get_task_group(group_id)
         group_id = TaskGroups.group_id(group_id)
@@ -410,6 +446,10 @@ module Stablemates
 
       def optional_string(value, label)
         raise ArgumentError, "#{label} must be a String or nil" unless value.nil? || value.is_a?(String)
+      end
+
+      def optional_boolean(value, label)
+        raise ArgumentError, "#{label} must be true, false, or nil" unless [true, false, nil].include?(value)
       end
 
       def optional_time(value, label) = value.nil? ? nil : Values.timestamp(value, label)

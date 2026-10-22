@@ -525,6 +525,36 @@ class AdminDatabaseTest {
         () -> admin.purgeQueue(queueName + "-other", request));
   }
 
+  // Queue tier and history.
+
+  @Test
+  void movesAQueueBetweenTiersAndSetsItsHistory() throws SQLException {
+    String fast =
+        "SELECT CASE WHEN tier = 'fast' THEN 1 ELSE 0 END FROM workhorse.queue_control"
+            + " WHERE queue_name = ?";
+    assertEquals(QueueTier.FAST, admin.setQueueTier(queueName, QueueTier.FAST, audit()));
+    assertEquals(1, scalar(fast, queueName));
+    assertEquals(new QueueHistory(true, false), admin.setQueueHistory(queueName, true, null));
+    assertEquals(
+        new QueueHistory(true, true),
+        admin.setQueueHistory(queueName, null, true),
+        "a null setting keeps its value");
+    assertEquals(new QueueHistory(false, true), admin.setQueueHistory(queueName, false, null));
+
+    enqueue("t", Map.of());
+    FastTierUnsupportedException rejected =
+        assertThrows(
+            FastTierUnsupportedException.class,
+            () -> admin.setQueueTier(queueName, QueueTier.FULL, audit()));
+    assertEquals(queueName, rejected.queue());
+    assertEquals("tier change", rejected.feature());
+    assertEquals(1, scalar(fast, queueName));
+
+    admin.purgeQueue(queueName, audit());
+    assertEquals(QueueTier.FULL, admin.setQueueTier(queueName, QueueTier.FULL, audit()));
+    assertEquals(0, scalar(fast, queueName));
+  }
+
   // Task group reads, cancel, and drift repair.
 
   @Test
@@ -660,6 +690,9 @@ class AdminDatabaseTest {
           IllegalArgumentException.class, () -> admin.purgeQueue(connection, queueName, audit));
       assertThrows(
           IllegalArgumentException.class,
+          () -> admin.setQueueTier(connection, queueName, QueueTier.FAST, audit));
+      assertThrows(
+          IllegalArgumentException.class,
           () -> admin.setWorkerPaused(connection, worker, true, audit));
       assertThrows(
           IllegalArgumentException.class, () -> admin.cancelTaskGroup(connection, taskId, audit));
@@ -672,6 +705,8 @@ class AdminDatabaseTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> admin.resumeQueue(connection, "", new AdminAudit("a", "b", "c")));
+    assertThrows(
+        IllegalArgumentException.class, () -> admin.setQueueHistory(connection, "", true, null));
     assertThrows(
         IllegalArgumentException.class,
         () -> admin.listTasks(connection, TaskQuery.builder().limit(1001).build()));

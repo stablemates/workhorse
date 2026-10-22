@@ -44,6 +44,8 @@ class Stablemates::Workhorse::Admin
   def redrive_many(audit:, limit: 100, dry_run: false, cursor: nil, queue: nil, type: nil, tags: [], error_name: nil, finished_after: nil, finished_before: nil)
   def repair_task_group_drift(audit:, limit: 1000)
   def resume_queue(queue, audit:)
+  def set_queue_history(queue, record_attempts: nil, record_claims: nil)
+  def set_queue_tier(queue, tier, audit:)
   def set_worker_paused(worker_id, paused, audit:)
 
 class Stablemates::Workhorse::AdminAudit
@@ -346,6 +348,10 @@ class Stablemates::Workhorse::Queue
   def sync_rate_limit_policies(namespace, definitions, prune: true)
   def sync_schedules(namespace, schedules, prune: true)
   def task_group(on_finish: nil, on_success: nil, on_failure: nil)
+
+class Stablemates::Workhorse::QueueHistory
+  superclass Data
+  members record_attempts, record_claims
 
 class Stablemates::Workhorse::RateLimit
   superclass Data

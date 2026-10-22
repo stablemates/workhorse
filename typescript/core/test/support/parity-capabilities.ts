@@ -1082,6 +1082,33 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
     go: { file: "admin_test.go", pattern: "PurgeQueue" },
   },
   {
+    capability: "Queue tier and history controls",
+    jvm: {
+      file: "run/workhorse/AdminDatabaseTest.java",
+      test: "movesAQueueBetweenTiersAndSetsItsHistory",
+    },
+    ruby: {
+      file: "integration/admin_spec.rb",
+      example: "moves a queue between tiers and sets its history",
+    },
+    rust: {
+      file: "worker_postgres.rs",
+      test: "a_fast_queue_records_attempt_history_only_when_it_opts_in",
+    },
+    typescript: {
+      file: "integration-fast-tier.test.ts",
+      patterns: ["admin.setQueueTier", "admin.setQueueHistory"],
+    },
+    python: {
+      file: "test_worker_fast_tier.py",
+      patterns: ["admin.set_queue_tier", "admin.set_queue_history"],
+    },
+    go: {
+      file: "worker_fast_tier_test.go",
+      patterns: ["admin.SetQueueTier", "admin.SetQueueHistory"],
+    },
+  },
+  {
     capability: "Dead-letter listing and redrive",
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",

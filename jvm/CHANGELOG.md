@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### Features
+
+- **`Admin` moves a queue between tiers and sets its history.** `Admin.setQueueTier` moves a queue
+  to `QueueTier.FAST` or `QueueTier.FULL` and returns the tier after the change. If the tier
+  differs and the queue holds a live task, the method throws `FastTierUnsupportedException`. `Admin.setQueueHistory` chooses the
+  history a fast-tier queue records. A `null` setting keeps its current value. The method returns a
+  `QueueHistory`. Both controls have a caller form with a `Connection`, and the Kotlin module adds
+  `setQueueTierSuspend` and `setQueueHistorySuspend`. The other SDKs already have these controls
+  (SM-1417).
+
 ### Fixes
 
 - **A worker with `sharedHeartbeats(true)` no longer starves a pool of 1.** Before this change,

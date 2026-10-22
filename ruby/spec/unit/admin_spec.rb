@@ -23,6 +23,16 @@ RSpec.describe Stablemates::Workhorse::Admin do
     expect(refusal { |admin| admin.set_worker_paused("w", "yes", audit: audit) }).to eq("paused must be true or false")
   end
 
+  it "validates the queue tier and history settings" do
+    expect(refusal { |admin| admin.set_queue_tier("q", "fast", audit: audit) }).to eq("tier must be :fast or :full")
+    expect(refusal { |admin| admin.set_queue_tier("", :fast, audit: audit) }).to eq("queue must be a non-empty String")
+    expect(refusal { |admin| admin.set_queue_tier("q", :full, audit: nil) }).to eq("audit must be an AdminAudit")
+    expect(refusal { |admin| admin.set_queue_history("q", record_attempts: "yes") })
+      .to eq("record_attempts must be true, false, or nil")
+    expect(refusal { |admin| admin.set_queue_history("q", record_claims: 1) })
+      .to eq("record_claims must be true, false, or nil")
+  end
+
   it "validates page limits" do
     expect(refusal { |admin| admin.list_tasks(limit: 0) }).to eq("list_tasks limit must be an integer between 1 and 1000")
     expect(refusal { |admin| admin.get_task_timeline(task, limit: 1001) })

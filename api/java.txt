@@ -53,6 +53,10 @@ run.workhorse.Admin: public run.workhorse.DeadLetterPage listDeadLetters(java.sq
 run.workhorse.Admin: public run.workhorse.DeadLetterPage listDeadLetters(run.workhorse.DeadLetterQuery)
 run.workhorse.Admin: public run.workhorse.HumanWaitPage listHumanWaits(java.sql.Connection, run.workhorse.HumanWaitQuery)
 run.workhorse.Admin: public run.workhorse.HumanWaitPage listHumanWaits(run.workhorse.HumanWaitQuery)
+run.workhorse.Admin: public run.workhorse.QueueHistory setQueueHistory(java.lang.String, @Nullable java.lang.Boolean, @Nullable java.lang.Boolean)
+run.workhorse.Admin: public run.workhorse.QueueHistory setQueueHistory(java.sql.Connection, java.lang.String, @Nullable java.lang.Boolean, @Nullable java.lang.Boolean)
+run.workhorse.Admin: public run.workhorse.QueueTier setQueueTier(java.lang.String, run.workhorse.QueueTier, run.workhorse.AdminAudit)
+run.workhorse.Admin: public run.workhorse.QueueTier setQueueTier(java.sql.Connection, java.lang.String, run.workhorse.QueueTier, run.workhorse.AdminAudit)
 run.workhorse.Admin: public run.workhorse.RedriveResult redrive(java.sql.Connection, java.util.UUID, run.workhorse.AdminAudit)
 run.workhorse.Admin: public run.workhorse.RedriveResult redrive(java.util.UUID, run.workhorse.AdminAudit)
 run.workhorse.Admin: public run.workhorse.SignalWaitPage listSignalWaits(java.sql.Connection, run.workhorse.SignalWaitQuery)
@@ -741,6 +745,14 @@ run.workhorse.QueueHealth: public final int hashCode()
 run.workhorse.QueueHealth: public final java.lang.String toString()
 run.workhorse.QueueHealth: public java.util.Map<java.lang.String, @Nullable java.lang.Object> snapshot()
 
+@NullMarked public record run.workhorse.QueueHistory(boolean recordAttempts, boolean recordClaims)
+run.workhorse.QueueHistory: public QueueHistory(boolean, boolean)
+run.workhorse.QueueHistory: public boolean recordAttempts()
+run.workhorse.QueueHistory: public boolean recordClaims()
+run.workhorse.QueueHistory: public final boolean equals(java.lang.Object)
+run.workhorse.QueueHistory: public final int hashCode()
+run.workhorse.QueueHistory: public final java.lang.String toString()
+
 @NullMarked public record run.workhorse.QueueOptions(java.lang.String defaultQueue, run.workhorse.JsonCodec codec, run.workhorse.WorkhorseTelemetry telemetry)
 run.workhorse.QueueOptions: public QueueOptions(java.lang.String, run.workhorse.JsonCodec, run.workhorse.WorkhorseTelemetry)
 run.workhorse.QueueOptions: public final boolean equals(java.lang.Object)
@@ -757,6 +769,12 @@ run.workhorse.QueueOptions.Builder: public run.workhorse.QueueOptions build()
 run.workhorse.QueueOptions.Builder: public run.workhorse.QueueOptions.Builder codec(run.workhorse.JsonCodec)
 run.workhorse.QueueOptions.Builder: public run.workhorse.QueueOptions.Builder defaultQueue(java.lang.String)
 run.workhorse.QueueOptions.Builder: public run.workhorse.QueueOptions.Builder telemetry(run.workhorse.WorkhorseTelemetry)
+
+@NullMarked public enum run.workhorse.QueueTier
+run.workhorse.QueueTier: enum constant FAST
+run.workhorse.QueueTier: enum constant FULL
+run.workhorse.QueueTier: public static run.workhorse.QueueTier valueOf(java.lang.String)
+run.workhorse.QueueTier: public static run.workhorse.QueueTier[] values()
 
 @NullMarked public record run.workhorse.RateLimit(int limit, java.time.Duration interval, int burst)
 run.workhorse.RateLimit: public RateLimit(int, java.time.Duration, int)

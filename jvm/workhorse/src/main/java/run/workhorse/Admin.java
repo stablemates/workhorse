@@ -33,10 +33,11 @@ import run.workhorse.internal.Values;
  * and rolls back with it. The <b>source form</b> acquires a connection from the {@link
  * ConnectionSource} for the call.
  *
- * <p>Every control takes an {@link AdminAudit} that PostgreSQL records. An invalid argument,
- * including a blank audit field, throws {@link IllegalArgumentException} before any statement runs.
- * The admin runs the startup compatibility check before its first statement, and caches the result
- * as {@link Queue} does. For the queue health snapshot, use {@link Queue#health()}.
+ * <p>Every control except {@code setQueueHistory} takes an {@link AdminAudit} that PostgreSQL
+ * records. An invalid argument, including a blank audit field, throws {@link
+ * IllegalArgumentException} before any statement runs. The admin runs the startup compatibility
+ * check before its first statement, and caches the result as {@link Queue} does. For the queue
+ * health snapshot, use {@link Queue#health()}.
  */
 public final class Admin {
   private static final System.Logger LOGGER = System.getLogger(Admin.class.getName());
@@ -614,6 +615,80 @@ public final class Admin {
                 audit.requestId()),
             "purge_queue_v1")
         .requiredLong("deleted_count");
+  }
+
+  /**
+   * Moves a queue between the fast and full tiers. If the tier differs, Workhorse refuses the
+   * change while the queue holds a live task, so a task never changes tier. The audit's request ID
+   * is not recorded.
+   *
+   * @return the tier of the queue after the change
+   * @throws FastTierUnsupportedException if the tier differs and the queue holds a live task, or if
+   *     a policy of the queue does not support the fast tier
+   */
+  public QueueTier setQueueTier(String queue, QueueTier tier, AdminAudit audit) {
+    return run(null, call -> setQueueTier(call, queue, tier, audit));
+  }
+
+  /** Moves a queue between the fast and full tiers inside the caller's transaction. */
+  public QueueTier setQueueTier(
+      Connection connection, String queue, QueueTier tier, AdminAudit audit) {
+    return run(connection, call -> setQueueTier(call, queue, tier, audit));
+  }
+
+  private QueueTier setQueueTier(Call call, String queue, QueueTier tier, AdminAudit audit) {
+    name(queue, "queue");
+    Objects.requireNonNull(tier, "tier");
+    audit(audit);
+    assertCompatible(call);
+    return Rows.constant(
+        QueueTier.class,
+        "set_queue_tier",
+        Rows.exactlyOne(
+                Sql.rows(
+                    call.connection,
+                    SqlCatalogue.SET_QUEUE_TIER,
+                    queue,
+                    wire(tier),
+                    audit.actor(),
+                    audit.reason()),
+                "set_queue_tier_v1")
+            .text("tier"));
+  }
+
+  /**
+   * Chooses the history a fast-tier queue records. A {@code null} setting keeps its current value.
+   *
+   * @return both settings after the change
+   */
+  public QueueHistory setQueueHistory(
+      String queue, @Nullable Boolean recordAttempts, @Nullable Boolean recordClaims) {
+    return run(null, call -> setQueueHistory(call, queue, recordAttempts, recordClaims));
+  }
+
+  /** Chooses the history a fast-tier queue records inside the caller's transaction. */
+  public QueueHistory setQueueHistory(
+      Connection connection,
+      String queue,
+      @Nullable Boolean recordAttempts,
+      @Nullable Boolean recordClaims) {
+    return run(connection, call -> setQueueHistory(call, queue, recordAttempts, recordClaims));
+  }
+
+  private QueueHistory setQueueHistory(
+      Call call, String queue, @Nullable Boolean recordAttempts, @Nullable Boolean recordClaims) {
+    name(queue, "queue");
+    assertCompatible(call);
+    Row row =
+        Rows.exactlyOne(
+            Sql.rows(
+                call.connection,
+                SqlCatalogue.SET_QUEUE_HISTORY,
+                queue,
+                recordAttempts == null ? null : recordAttempts.toString(),
+                recordClaims == null ? null : recordClaims.toString()),
+            "set_queue_history_v1");
+    return new QueueHistory(bool(row, "record_attempts"), bool(row, "record_claims"));
   }
 
   // ---------------------------------------------------------------------------------------------
