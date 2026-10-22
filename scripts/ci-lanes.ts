@@ -39,6 +39,7 @@ export const SHARED_INPUTS = [
   // The dashboard catalogues that typescript/dashboard-server/spec/generate-bindings.ts writes.
   "go/dashboard/v1_generated.go",
   "jvm/workhorse/src/main/java/run/workhorse/dashboard/V1.java",
+  "dotnet/src/Workhorse.AspNetCore/Internal/V1.g.cs",
   "python/src/workhorse/dashboard_v1.py",
   "ruby/lib/stablemates/workhorse/dashboard/v1_generated.rb",
   "rust/src/dashboard/v1_generated.rs",
