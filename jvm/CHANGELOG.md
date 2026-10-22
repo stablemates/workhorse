@@ -23,6 +23,12 @@ adds.
 
 ### Fixes
 
+- **The dashboard reads a stored long integer without a `BigInteger` parse.** A stored value
+  without a payload contract can hold integers of 131,072 digits. Before this change, each
+  dashboard read parsed such an integer into a `BigInteger`, which took about 0.2 s for each
+  integer. A read of a payload with seven of them kept a servlet thread busy for more than 1 s.
+  Now the dashboard read procedures keep an integer outside the `long` range as its digits and
+  write the digits back. The output of the procedures does not change (SM-1531).
 - **A worker with `sharedHeartbeats(true)` no longer starves a pool of 1.** Before this change,
   the worker started the shared listener on any `DataSource`. On a pool of 1, the listener held the
   only connection. The compatibility check then waited for the pool timeout, 30 s in HikariCP, and

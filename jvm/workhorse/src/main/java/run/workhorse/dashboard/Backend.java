@@ -314,7 +314,7 @@ final class Backend {
     result.put("status", row.text("status"));
     result.put("taskId", text(input, "id"));
     result.put("name", text(input, "name"));
-    result.put("payload", row.json("payload"));
+    result.put("payload", row.jsonForWrite("payload"));
     result.put("deliveredAt", iso(row.instant("delivered_at")));
     result.put("deliveredBy", row.text("delivered_by"));
     return result;
@@ -333,7 +333,7 @@ final class Backend {
     result.put("status", row.text("status"));
     result.put("taskId", text(input, "id"));
     result.put("name", text(input, "name"));
-    result.put("result", row.json("result"));
+    result.put("result", row.jsonForWrite("result"));
     result.put("completedAt", iso(row.instant("completed_at")));
     result.put("completedBy", row.text("completed_by"));
     return result;
@@ -392,14 +392,20 @@ final class Backend {
   // ---------------------------------------------------------------------------------------------
   // Statements
 
-  /** The parsed {@code result} column of a dashboard function, or {@code null} for SQL NULL. */
+  /**
+   * The parsed {@code result} column of a dashboard function, or {@code null} for SQL NULL.
+   *
+   * <p>Each procedure result goes to {@link Json#write(Object)} unread, so the backend parses a
+   * stored value with {@link Json#parseForWrite(String)}. An integer with 131,072 digits then costs
+   * no {@code BigInteger} parse (SM-1531).
+   */
   private @Nullable Object result(SqlCatalogue.Statement statement) {
-    return one(statement).json("result");
+    return one(statement).jsonForWrite("result");
   }
 
   private @Nullable Object result(
       SqlCatalogue.Statement statement, Map<String, ? extends @Nullable Object> document) {
-    return one(statement, Json.write(document)).json("result");
+    return one(statement, Json.write(document)).jsonForWrite("result");
   }
 
   /**
@@ -419,7 +425,7 @@ final class Backend {
               if (resultSet.next()) {
                 throw new WorkhorseException("a dashboard/v1 statement returned many rows");
               }
-              return result == null ? null : Json.parse(result);
+              return result == null ? null : Json.parseForWrite(result);
             }
           }
         });
