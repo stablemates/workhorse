@@ -263,6 +263,8 @@ rounds to zero becomes the smallest positive double. Each keeps the sign of the 
 `Json.parseSchema` is `Json.parseExact` without one refusal: it keeps a fraction outside the double
 range as a `BigDecimal` (SM-1593). `Json.parseExact` refuses such a fraction, because `Json.parse`
 cannot read the stored value back. Thus each JVM value path keeps that refusal.
+`Queue.syncContracts` also converts the application's schema with `Json.parseSchema`, so PostgreSQL
+stores every digit of such a fraction (SM-1598).
 
 python-jsonschema validates a subschema that names `$schema` with the library validator of that
 dialect, which does not have the exact keywords. Thus `compile_contract_schema` compiles a copy
