@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { readFile, rm, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { readEnvironment } from "./environment-file.js";
 
@@ -95,4 +97,50 @@ describe("repository command environment", () => {
       expect(result.port).toBe("4123");
     },
   );
+
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    it.skipIf(process.platform === "win32")(`forwards ${signal} to the command`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "workhorse-with-env-signal-"));
+      try {
+        const ready = join(directory, "ready");
+        const received = join(directory, "received");
+        const command = `const { writeFileSync } = require("node:fs");
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => { writeFileSync(${JSON.stringify(received)}, signal); process.exit(0); });
+}
+writeFileSync(${JSON.stringify(ready)}, "");
+setInterval(() => {}, 1000);`;
+        // Only the wrapper gets the signal, so the command can get it only by the forward.
+        const wrapper = spawn(
+          resolve(repositoryRoot, "node_modules/.bin/tsx"),
+          [resolve(repositoryRoot, "scripts/with-env.ts"), process.execPath, "-e", command],
+          { cwd: repositoryRoot, env: process.env, stdio: "ignore" },
+        );
+        const exited = new Promise<number | null>((resolveExit, reject) => {
+          wrapper.once("error", reject);
+          wrapper.once("exit", resolveExit);
+        });
+        try {
+          for (let attempt = 0; attempt < 250; attempt += 1) {
+            if (
+              await readFile(ready).then(
+                () => true,
+                () => false,
+              )
+            )
+              break;
+            await delay(20);
+          }
+          wrapper.kill(signal);
+
+          expect(await exited).toBe(0);
+          expect(await readFile(received, "utf8")).toBe(signal);
+        } finally {
+          if (wrapper.exitCode === null && wrapper.signalCode === null) wrapper.kill("SIGKILL");
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
 });
