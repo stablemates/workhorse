@@ -9,6 +9,18 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <!--
+      The assembly carries the committed browser bundle as resources: bundle.json and the archive
+      that it names. `pnpm dashboard-bundle:check` checks the digest of these files.
+    -->
+    <EmbeddedResource Include="../../../dashboard/v1/bundle/bundle.json;../../../dashboard/v1/bundle/read-surface-*.tar.gz">
+      <LogicalName>Workhorse.AspNetCore.Bundle.%(Filename)%(Extension)</LogicalName>
+      <Visible>false</Visible>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Only the test projects see the internals. No shipped assembly does (ADR 0107). -->
     <InternalsVisibleTo Include="Workhorse.Tests" />
+    <InternalsVisibleTo Include="Workhorse.AspNetCore.Tests" />
   </ItemGroup>
 </Project>

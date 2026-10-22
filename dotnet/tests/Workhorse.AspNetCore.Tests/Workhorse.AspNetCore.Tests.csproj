@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The tests of Workhorse.AspNetCore. They see its internals, and they run the dashboard in Kestrel
+    on a loopback port. `pnpm dotnet:test` starts this executable after Workhorse.Tests, as
+    scripts/dotnet-test.ts lists them.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Workhorse.AspNetCore.Tests</RootNamespace>
+    <!-- The analyzers need the documentation file. Test code needs no public documentation. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The scratch database and the checkout paths of the core tests, so both suites make databases one way. -->
+    <Compile Include="../Workhorse.Tests/Testing/ScratchDatabase.cs" Link="Testing/ScratchDatabase.cs" />
+    <Compile Include="../Workhorse.Tests/Testing/Repository.cs" Link="Testing/Repository.cs" />
+    <AssemblyMetadata Include="WorkhorseRepository" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../'))" />
+    <AssemblyMetadata Include="WorkhorseSchema" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../sql/schema/current.sql'))" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

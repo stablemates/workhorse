@@ -17,7 +17,162 @@ internal static class DashboardSqlCatalogue
     /// <param name="Arity">The number of distinct parameters, <c>$1</c> to <c>$Arity</c>.</param>
     internal sealed record Statement(string Name, string Sql, int Arity);
 
+    /// <summary><c>run_task_now_v1</c> (internal).</summary>
+    internal static readonly Statement RunTaskNowV1 = new(
+        "run_task_now_v1",
+        "SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)",
+        4);
+
+    /// <summary><c>override_retention_policy_v1</c> (internal).</summary>
+    internal static readonly Statement OverrideRetentionPolicyV1 = new(
+        "override_retention_policy_v1",
+        "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
+        1);
+
+    /// <summary><c>revert_retention_policy_v1</c> (internal).</summary>
+    internal static readonly Statement RevertRetentionPolicyV1 = new(
+        "revert_retention_policy_v1",
+        "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
+        1);
+
+    /// <summary><c>dashboard_retention_preview_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardRetentionPreviewV1 = new(
+        "dashboard_retention_preview_v1",
+        "SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_task_counts_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTaskCountsV1 = new(
+        "dashboard_task_counts_v1",
+        "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
+        0);
+
+    /// <summary><c>dashboard_task_facets_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTaskFacetsV1 = new(
+        "dashboard_task_facets_v1",
+        "SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_queues_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardQueuesV1 = new(
+        "dashboard_queues_v1",
+        "SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
+        0);
+
+    /// <summary><c>dashboard_tasks_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTasksV1 = new(
+        "dashboard_tasks_v1",
+        "SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_tasks_cursor_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTasksCursorV1 = new(
+        "dashboard_tasks_cursor_v1",
+        "SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_activity_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardActivityV1 = new(
+        "dashboard_activity_v1",
+        "SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_cron_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardCronV1 = new(
+        "dashboard_cron_v1",
+        "SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_workers_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardWorkersV1 = new(
+        "dashboard_workers_v1",
+        "SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_human_waits_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardHumanWaitsV1 = new(
+        "dashboard_human_waits_v1",
+        "SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_events_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardEventsV1 = new(
+        "dashboard_events_v1",
+        "SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_event_detail_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardEventDetailV1 = new(
+        "dashboard_event_detail_v1",
+        "SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_task_detail_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTaskDetailV1 = new(
+        "dashboard_task_detail_v1",
+        "SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_checkpoint_value_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardCheckpointValueV1 = new(
+        "dashboard_checkpoint_value_v1",
+        "SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_task_value_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardTaskValueV1 = new(
+        "dashboard_task_value_v1",
+        "SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_settings_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardSettingsV1 = new(
+        "dashboard_settings_v1",
+        "SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>dashboard_system_v1</c> (internal).</summary>
+    internal static readonly Statement DashboardSystemV1 = new(
+        "dashboard_system_v1",
+        "SELECT workhorse.dashboard_system_v1($1::jsonb) AS result",
+        1);
+
+    /// <summary><c>override_maintenance_policy_v1</c> (internal).</summary>
+    internal static readonly Statement OverrideMaintenancePolicyV1 = new(
+        "override_maintenance_policy_v1",
+        "SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(\n         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer\n       ) policy",
+        7);
+
+    /// <summary><c>revert_maintenance_policy_v1</c> (internal).</summary>
+    internal static readonly Statement RevertMaintenancePolicyV1 = new(
+        "revert_maintenance_policy_v1",
+        "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
+        1);
+
     /// <summary>Every statement, in manifest order.</summary>
     internal static readonly IReadOnlyList<Statement> All =
-    [];
+    [
+        RunTaskNowV1,
+        OverrideRetentionPolicyV1,
+        RevertRetentionPolicyV1,
+        DashboardRetentionPreviewV1,
+        DashboardTaskCountsV1,
+        DashboardTaskFacetsV1,
+        DashboardQueuesV1,
+        DashboardTasksV1,
+        DashboardTasksCursorV1,
+        DashboardActivityV1,
+        DashboardCronV1,
+        DashboardWorkersV1,
+        DashboardHumanWaitsV1,
+        DashboardEventsV1,
+        DashboardEventDetailV1,
+        DashboardTaskDetailV1,
+        DashboardCheckpointValueV1,
+        DashboardTaskValueV1,
+        DashboardSettingsV1,
+        DashboardSystemV1,
+        OverrideMaintenancePolicyV1,
+        RevertMaintenancePolicyV1,
+    ];
 }

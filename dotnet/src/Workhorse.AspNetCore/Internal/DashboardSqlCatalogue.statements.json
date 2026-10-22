@@ -1,3 +1,26 @@
 {
-  "statements": []
+  "statements": [
+    "dashboard_task_counts_v1",
+    "dashboard_tasks_v1",
+    "dashboard_tasks_cursor_v1",
+    "dashboard_activity_v1",
+    "dashboard_task_facets_v1",
+    "dashboard_queues_v1",
+    "dashboard_cron_v1",
+    "dashboard_workers_v1",
+    "dashboard_human_waits_v1",
+    "dashboard_events_v1",
+    "dashboard_event_detail_v1",
+    "dashboard_task_detail_v1",
+    "dashboard_checkpoint_value_v1",
+    "dashboard_task_value_v1",
+    "dashboard_settings_v1",
+    "dashboard_system_v1",
+    "dashboard_retention_preview_v1",
+    "override_maintenance_policy_v1",
+    "revert_maintenance_policy_v1",
+    "override_retention_policy_v1",
+    "revert_retention_policy_v1",
+    "run_task_now_v1"
+  ]
 }

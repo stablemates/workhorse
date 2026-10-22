@@ -207,7 +207,7 @@
     "jvm:release-check": "pnpm jvm:gates && pnpm jvm:package-check",
     "jvm:gates": "pnpm jvm:lint && pnpm jvm:build && WORKHORSE_REQUIRE_DATABASE=1 pnpm jvm:test",
     "dotnet:build": "tsx scripts/with-env.ts dotnet build dotnet/Workhorse.slnx",
-    "dotnet:test": "tsx scripts/with-env.ts dotnet run --project dotnet/tests/Workhorse.Tests",
+    "dotnet:test": "tsx scripts/with-env.ts tsx scripts/dotnet-test.ts",
     "dotnet:lint": "tsx scripts/with-env.ts dotnet format dotnet/Workhorse.slnx --verify-no-changes && tsx scripts/with-env.ts dotnet build dotnet/Workhorse.slnx --no-incremental",
     "dotnet:format": "tsx scripts/with-env.ts dotnet format dotnet/Workhorse.slnx",
     "rust:package-check": "tsx scripts/with-env.ts tsx scripts/check-rust-release.ts",
