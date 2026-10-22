@@ -28,7 +28,7 @@ namespace Workhorse;
 /// </para>
 /// </remarks>
 [SuppressMessage("Naming", "CA1711:Identifiers should not have incorrect suffix", Justification = "ADR 0107 names the type Queue, as every other SDK does.")]
-public sealed class Queue
+public sealed partial class Queue
 {
     private const long DefaultIdempotencyTtlMs = 86_400_000L;
     private const int DefaultMaxAttempts = 25;
