@@ -16,21 +16,35 @@ leases at 64 workers.
 ## Method
 
 Each SDK variant ran the 11 cells that the `full` profile had at that time. The variants ran one
-after the other, from 07:18 to 09:52 UTC. A cell has W workers in one process on one pool of P
+after the other, from 07:18 to 09:51 UTC. A cell has W workers in one process on one pool of P
 connections. Each worker has a concurrency C, a heartbeat interval I, and a lease L. In every cell
 of this run, each handler held its task until the probe stopped. The
 [runbook](../benchmarking.md#connection-budget-benchmark) describes the cells and the artifact.
 
-The machine had 32 logical CPUs and about 74 GB of available memory. PostgreSQL 18.6 ran on the
+The machine had 32 logical CPUs, and the available memory was between 78.8 and 79.6 GB in every
+reading. PostgreSQL 18.6 ran on the
 same machine, with `max_connections` 500. The 1-minute load average was between 0.26 and 1.55 in
 every reading. The highest reading came after the Ruby 64 × 25 cell. The machine was lightly
 loaded, not idle.
 
-The artifacts are in
+The summaries are in
 [`results/2026-10-21-connection-budget-baseline/`](results/2026-10-21-connection-budget-baseline/),
-one file for each variant. They are the artifacts of the run in compact JSON, with the same
-content. They use schema version 3. That version stopped a probe with SIGKILL 20 s after SIGTERM,
-and recorded the stop as `killedAfterGrace`.
+one file for each variant. `pnpm benchmark:connection-budget:summary` writes each summary from a
+full artifact. The summary keeps the provenance, the settings, and each cell with its result, its
+rules, and its key values. It keeps the cells in the order of the run, so `runs[5]` is the sixth
+cell in both files.
+
+The full artifacts use schema version 3. That version stopped a probe with SIGKILL 20 s after
+SIGTERM, and recorded the stop as `killedAfterGrace`. It recorded no result for each cell. Thus the
+summary computes the result of each cell with the rules of the driver, `cellResult`, and the kill
+deadline of 20 s. Schema 3 also does not record which worker errors came after SIGTERM. The summary
+counts none for the shutdown rule. Every cell with a worker error also fails the rule "no errors",
+so its result does not depend on that count.
+
+The full artifacts and the logs of the runner are attached to SM-1574 in Linear, as
+`sm1565-benchmark-raw-2026-10-21.tar.zst`. Its sha256 is
+`b69dc0ab5fdbfcf4a204e4b291b9a500e7d6f9d2f7c3cf3ba3f4425b5e909041`. The full artifacts hold the
+sample series. Each summary names its file in the attachment and gives the sha256 of that file.
 
 ## Results
 
@@ -77,8 +91,8 @@ lease only when a worker recovers it, so the two counts are independent.
 ### The results against the acceptance thresholds
 
 SM-1570 adds a result for each cell, from the thresholds of SM-1565. Every cell of
-this run is a held-task cell. The table applies those rules to the artifacts after the run, with
-the 20 s kill deadline of the run.
+this run is a held-task cell. The summary of each variant gives these results, with the 20 s kill
+deadline of the run. The table counts them.
 
 | Variant          | Cells that pass | Lost leases | Most expired active tasks | Cells with SIGKILL                                 |
 | ---------------- | --------------- | ----------- | ------------------------- | -------------------------------------------------- |
@@ -101,7 +115,7 @@ The first summary of this run, in a comment on SM-1565, had two errors:
 
 1. It recorded no SIGKILL for `python-async`. The `python-async` probe needed SIGKILL in three
    cells: 2 × 1 on a pool of 4, 16 × 1, and 16 × 25. These are `runs[0]`, `runs[5]`, and `runs[6]`
-   of `python-async.json`.
+   of `python-async.json`, in the summary and in the full artifact.
 2. It gave the range of the 1-minute load as 0.3 to 1.4. The recorded range is 0.26 to 1.55.
 
 A SIGKILL shows only that the probe did not stop within 20 s. The drain of an SDK can take 25 s,

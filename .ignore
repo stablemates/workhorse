@@ -1,0 +1,4 @@
+# Agent and ripgrep searches skip the recorded benchmark evidence.
+docs/benchmarks/results/
+# ripgrep 14 misses the line above when a search starts at docs/, and this form covers that case.
+docs/**/results/

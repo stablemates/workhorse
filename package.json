@@ -98,6 +98,7 @@
     "benchmark:set-based-enqueue": "tsx scripts/with-env.ts tsx scripts/benchmark-set-based-enqueue.ts",
     "benchmark:tenant-cardinality": "tsx scripts/with-env.ts tsx scripts/benchmark-tenant-cardinality.ts",
     "benchmark:connection-budget": "tsx scripts/with-env.ts tsx scripts/benchmark-connection-budget.ts",
+    "benchmark:connection-budget:summary": "tsx scripts/connection-budget-summary.ts",
     "soak:observe": "tsx scripts/soak/observe.ts",
     "soak:report": "tsx scripts/soak/report.ts",
     "agent-eval:record": "tsx scripts/with-env.ts tsx scripts/agent-eval/record.ts",
