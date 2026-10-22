@@ -3,7 +3,8 @@
 # A connection that answers each statement after +delay+ seconds. +delay+ receives the kind of
 # the statement and how many statements of that kind the connection sent before. A heartbeat
 # statement accepts every lease, and the compatibility query reports a compatible schema. Each
-# statement the heartbeat sends is recorded in +sent+ as [kind, worker_id]. +lose+ makes the
+# statement the heartbeat sends is recorded in +sent+ as [kind, workers]: the worker ID of a
+# heartbeat_many_v2 statement, or the worker IDs of the batches of a heartbeat_pool_v1 statement. +lose+ makes the
 # connection unusable, as a terminated backend does.
 class FakeHeartbeatConnection
   Result = Struct.new(:rows) do
@@ -67,12 +68,20 @@ class FakeHeartbeatConnection
   def send_query_params(sql, params, _format, _type_map)
     raise PG::ConnectionBad, "connection lost" unless status == PG::CONNECTION_OK
 
-    kind = if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 then :heartbeat
+    kind = if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2 || sql == W::SqlCatalogue::HEARTBEAT_POOL_V1 then :heartbeat
     elsif sql.start_with?("SELECT set_config") then :settings
     else sql.downcase.to_sym
     end
-    @pending = [kind, params]
-    @sent << [kind, (kind == :heartbeat) ? params[0] : nil]
+    @pending = [kind, params, sql]
+    @sent << [kind, (kind == :heartbeat) ? heartbeat_workers(sql, params) : nil]
+  end
+
+  # The worker of a heartbeat_many_v2 statement, or the worker of each batch of a
+  # heartbeat_pool_v1 statement.
+  def heartbeat_workers(sql, params)
+    return params[0] if sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
+
+    JSON.parse(params[0]).map { |batch| batch["workerId"] }
   end
 
   def block(timeout)
@@ -83,10 +92,15 @@ class FakeHeartbeatConnection
   end
 
   def get_last_result
-    kind, params = @pending
+    kind, params, sql = @pending
     return Result.new([]) unless kind == :heartbeat
+    return Result.new(JSON.parse(params[1]).map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} }) if
+      sql == W::SqlCatalogue::HEARTBEAT_MANY_V2
 
-    Result.new(JSON.parse(params[1]).map { |lease| {"task_id" => lease["taskId"], "status" => "accepted"} })
+    rows = JSON.parse(params[0]).each_with_index.flat_map do |batch, index|
+      batch["leases"].map { |lease| {"batch" => (index + 1).to_s, "task_id" => lease["taskId"], "status" => "accepted"} }
+    end
+    Result.new(rows)
   end
 
   # Closes the socket pipe too, so no test leaves file descriptors for the garbage collector.

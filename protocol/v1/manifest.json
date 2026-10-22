@@ -427,6 +427,13 @@
       "catalogues": ["protocol"]
     },
     {
+      "name": "heartbeat_pool_v1",
+      "pythonBinding": "heartbeat_pool",
+      "arity": 1,
+      "contract": "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
+      "catalogues": ["protocol"]
+    },
+    {
       "name": "heartbeat_v1",
       "arity": 4,
       "contract": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",

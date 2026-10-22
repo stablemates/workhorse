@@ -408,8 +408,9 @@ class HeartbeatDatabaseTest {
    * 2 s, so a round has a bound of 1.5 s. The replacement checkout is held until a round waits for
    * it, and it arrives about 0.6 s into that round's bound. The round that waited gets it and sends
    * nothing, and the next round runs at once on the replacement. The first statement on the
-   * replacement thus gets half of the full bound as its {@code statement_timeout}, about 750 ms.
-   * Without the fix the round that waited sends it, with half of the 0.9 s that it had left.
+   * replacement thus gets one quarter of the full bound as its {@code statement_timeout}, about 375
+   * ms. Without the fix the round that waited sends it, with one quarter of the 0.9 s that it had
+   * left, about 225 ms.
    */
   @Test
   void startsTheFirstRoundOnAReplacementWithTheFullBound() throws Exception {
@@ -433,10 +434,10 @@ class HeartbeatDatabaseTest {
       Watched.Sent first = replacement.firstOnReplacement(watched);
       long timeout = watched.firstTimeout(first.pid());
       assertTrue(
-          timeout >= 600,
+          timeout >= 300,
           "the first statement on the replacement had a statement timeout of "
               + timeout
-              + " ms, not about 750 ms: "
+              + " ms, not about 375 ms: "
               + List.copyOf(watched.statementTimeouts));
       assertTrue(member.statuses.isEmpty(), "statuses: " + List.copyOf(member.statuses));
     } finally {

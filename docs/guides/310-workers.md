@@ -126,11 +126,13 @@ The shared runtime fixture pins, at concurrency 8, the claim limits 8, 1, and 2 
 flight.
 
 **Heartbeats.** One round for each worker sends every active lease through `heartbeat_many_v2`.
-Rounds never overlap. A busy retry sends only the busy leases between two rounds.
+Rounds never overlap. A busy retry sends only the busy leases between two rounds. On the dedicated
+heartbeat connection, the rounds of the workers on one pool share one transaction and one
+`heartbeat_pool_v1` statement.
 
 `claim_v1` is the same call as `claim_many_v1` with a limit of 1.
 
-More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](../architecture/lifecycle.md#claim), and [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry).
+More detail: [Task lifecycle: Dispatch loop](../architecture/lifecycle.md#dispatch-loop), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Busy retry](../architecture/lifecycle.md#busy-retry), and [Task lifecycle: Pool renewal](../architecture/lifecycle.md#pool-renewal).
 
 </details>
 

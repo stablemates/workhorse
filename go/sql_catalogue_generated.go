@@ -682,6 +682,7 @@ var protocolStatementRegistry = map[string]string{
 	"release_owned_v1":             `SELECT workhorse.release_owned_v1($1::uuid, $2::text, $3::bigint) AS status`,
 	"get_contract_definition_v1":   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
 	"heartbeat_many_v2":            `SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal`,
+	"heartbeat_pool_v1":            `SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal`,
 	"heartbeat_v1":                 `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	"heartbeat_v2":                 `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	"queue_health_v1":              `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,

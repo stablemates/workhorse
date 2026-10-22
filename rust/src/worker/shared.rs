@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{watch, Notify};
+use tokio::sync::{oneshot, watch, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, timeout_at, Instant};
 use tokio_util::sync::CancellationToken as StopToken;
@@ -367,8 +367,9 @@ impl Drop for Cleanup {
     }
 }
 
-/// The heartbeat connection of one pool identity. Each worker sends its own rounds on it, one
-/// round at a time.
+/// The heartbeat connection of one pool identity. Each worker sends its own rounds on it. The
+/// rounds that wait for it share one transaction (`HeartbeatConnection::turn`), and one
+/// transaction runs at a time.
 ///
 /// One keeper task owns every acquisition. It takes the first connection, and after a round
 /// discards the connection, it takes a replacement at once. It retries with a backoff capped at the
@@ -377,6 +378,173 @@ impl Drop for Cleanup {
 pub(super) struct HeartbeatConnection {
     state: Arc<HeartbeatState>,
     keeper: Mutex<Option<JoinHandle<()>>>,
+    /// The rounds that share the next transaction on the connection.
+    group: Mutex<Group>,
+}
+
+/// The rows of one round: the task ID and the status of each lease.
+pub(super) type RoundRows = Vec<(String, String)>;
+
+/// The rounds of the workers on one pool identity, grouped into transactions.
+///
+/// The round that finds no transaction in progress leads one. Just before the leader sends its
+/// heartbeat statement, every waiting round whose deadline is not earlier than the leader's
+/// deadline joins it. When the transaction ends, the waiting round with the earliest deadline leads
+/// the next one. Each guard of the group (`Waiting`, `Lead`) hands the lead on when it drops, so a
+/// round that the caller drops cannot stop the group.
+#[derive(Default)]
+struct Group {
+    /// A round leads a transaction, or got the lead and has not started yet.
+    leading: bool,
+    waiting: Vec<Pending>,
+    next_id: u64,
+}
+
+/// A round that waits for a transaction.
+struct Pending {
+    id: u64,
+    deadline: Instant,
+    batches: Vec<serde_json::Value>,
+    reply: oneshot::Sender<Reply>,
+}
+
+/// What a waiting round gets.
+enum Reply {
+    /// The round leads the next transaction. It gets its batches back.
+    Lead(Vec<serde_json::Value>),
+    /// The transaction that the round joined ended with this result.
+    Rows(Result<RoundRows, Error>),
+}
+
+impl Group {
+    /// Gives the lead to the waiting round with the earliest deadline. A round that no longer waits
+    /// for its reply cannot lead, so the next one gets the lead. With no waiting round, no round
+    /// leads.
+    fn hand_over(&mut self) {
+        while let Some(index) =
+            (0..self.waiting.len()).min_by_key(|&index| self.waiting[index].deadline)
+        {
+            let pending = self.waiting.swap_remove(index);
+            if pending.reply.send(Reply::Lead(pending.batches)).is_ok() {
+                return;
+            }
+        }
+        self.leading = false;
+    }
+}
+
+/// The turn of one round in the group.
+pub(super) enum Turn<'a> {
+    /// The round leads a transaction.
+    Lead(Lead<'a>),
+    /// The round joined the transaction of another round, which ended with this result.
+    Joined(Result<RoundRows, Error>),
+}
+
+/// A round that waits in the group. Dropping it removes the round, or hands on a lead that it got.
+struct Waiting<'a> {
+    group: &'a Mutex<Group>,
+    id: u64,
+    reply: oneshot::Receiver<Reply>,
+    answered: bool,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut group = lock(self.group);
+        if let Some(index) = group.waiting.iter().position(|pending| pending.id == self.id) {
+            group.waiting.swap_remove(index);
+        } else if !self.answered && matches!(self.reply.try_recv(), Ok(Reply::Lead(_))) {
+            group.hand_over();
+        }
+    }
+}
+
+/// A joined round: where its batches start in the statement, how many it has, and its reply.
+struct Joiner {
+    start: usize,
+    count: usize,
+    reply: oneshot::Sender<Reply>,
+}
+
+/// The lead of one transaction. Dropping it hands the lead to the next waiting round. A joined
+/// round that got no answer then fails.
+pub(super) struct Lead<'a> {
+    group: &'a Mutex<Group>,
+    deadline: Instant,
+    batches: Vec<serde_json::Value>,
+    own: usize,
+    joined: Vec<Joiner>,
+}
+
+impl Lead<'_> {
+    /// Takes every waiting round whose deadline is not earlier than the deadline of the lead, and
+    /// returns the batches of all rounds in statement order: the batches of the lead first.
+    pub(super) fn join(&mut self) -> serde_json::Value {
+        let mut group = lock(self.group);
+        let mut index = 0;
+        while index < group.waiting.len() {
+            if group.waiting[index].deadline < self.deadline {
+                index += 1;
+                continue;
+            }
+            let pending = group.waiting.remove(index);
+            let start = self.batches.len();
+            self.joined.push(Joiner { start, count: pending.batches.len(), reply: pending.reply });
+            self.batches.extend(pending.batches);
+        }
+        drop(group);
+        serde_json::Value::Array(self.batches.clone())
+    }
+
+    /// Gives each joined round its rows, or the same failure, and returns the result of the lead.
+    /// `rows` holds the 1-based batch position, the task ID, and the status of each lease.
+    pub(super) fn answer(
+        &mut self,
+        rows: Result<Vec<(usize, String, String)>, Error>,
+    ) -> Result<RoundRows, Error> {
+        let joined = std::mem::take(&mut self.joined);
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => {
+                for round in joined {
+                    let _ = round.reply.send(Reply::Rows(Err(error.share())));
+                }
+                return Err(error);
+            }
+        };
+        let mut own = Vec::new();
+        let mut answers: Vec<RoundRows> = joined.iter().map(|_| Vec::new()).collect();
+        for (batch, task, status) in rows {
+            let index = batch.wrapping_sub(1);
+            if index < self.own {
+                own.push((task, status));
+            } else if let Some(round) = joined
+                .iter()
+                .position(|round| (round.start..round.start + round.count).contains(&index))
+            {
+                answers[round].push((task, status));
+            }
+        }
+        for (round, rows) in joined.into_iter().zip(answers) {
+            let _ = round.reply.send(Reply::Rows(Ok(rows)));
+        }
+        Ok(own)
+    }
+
+    /// How many rounds joined the transaction, for the tests.
+    #[cfg(test)]
+    pub(super) fn joined(&self) -> usize {
+        self.joined.len()
+    }
+}
+
+impl Drop for Lead<'_> {
+    fn drop(&mut self) {
+        // A joined round without an answer sees its reply channel close.
+        self.joined.clear();
+        lock(self.group).hand_over();
+    }
 }
 
 struct HeartbeatState {
@@ -436,7 +604,7 @@ impl HeartbeatConnection {
             failed: std::sync::atomic::AtomicUsize::new(0),
         });
         let keeper = tokio::spawn(keep(Arc::clone(&state), pool.weak()));
-        Arc::new(Self { state, keeper: Mutex::new(Some(keeper)) })
+        Arc::new(Self { state, keeper: Mutex::new(Some(keeper)), group: Mutex::default() })
     }
 
     /// Adds a user with `interval`, whose startup waits until `startup_deadline`.
@@ -476,6 +644,45 @@ impl HeartbeatConnection {
         let mut ready = self.state.ready.subscribe();
         if ready.wait_for(|ready| *ready).await.is_err() {
             std::future::pending::<()>().await;
+        }
+    }
+
+    /// Enters a round with `batches` into the group, and waits until it leads a transaction or a
+    /// transaction that it joined ends. A round whose `deadline` passes while it waits leaves the
+    /// group and fails, because it sent nothing.
+    pub(super) async fn turn(
+        &self,
+        batches: Vec<serde_json::Value>,
+        deadline: Instant,
+    ) -> Result<Turn<'_>, Error> {
+        let lead = |batches: Vec<serde_json::Value>| Lead {
+            group: &self.group,
+            deadline,
+            own: batches.len(),
+            batches,
+            joined: Vec::new(),
+        };
+        let (reply, answer) = oneshot::channel();
+        let id = {
+            let mut group = lock(&self.group);
+            if !group.leading {
+                group.leading = true;
+                return Ok(Turn::Lead(lead(batches)));
+            }
+            group.next_id += 1;
+            let id = group.next_id;
+            group.waiting.push(Pending { id, deadline, batches, reply });
+            id
+        };
+        let mut waiting = Waiting { group: &self.group, id, reply: answer, answered: false };
+        let reply = timeout_at(deadline, &mut waiting.reply)
+            .await
+            .map_err(|_| Error::invalid("heartbeat round exceeded its deadline"))?;
+        waiting.answered = true;
+        match reply {
+            Ok(Reply::Lead(batches)) => Ok(Turn::Lead(lead(batches))),
+            Ok(Reply::Rows(rows)) => Ok(Turn::Joined(rows)),
+            Err(_) => Err(Error::invalid("the heartbeat transaction ended without an answer")),
         }
     }
 
@@ -772,6 +979,184 @@ mod tests {
             startup_deadline: Instant::now(),
             listen: None,
         }
+    }
+
+    /// A heartbeat connection whose group the tests use without a database.
+    fn group_connection() -> Arc<HeartbeatConnection> {
+        HeartbeatConnection::open(&pool(), Duration::from_secs(1), Instant::now())
+    }
+
+    fn batch(worker: &str) -> serde_json::Value {
+        serde_json::json!({"workerId": worker, "leases": []})
+    }
+
+    fn workers(batches: &serde_json::Value) -> Vec<String> {
+        let batches = batches.as_array().unwrap();
+        batches.iter().map(|batch| batch["workerId"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn lead(turn: Result<Turn<'_>, Error>) -> Lead<'_> {
+        match turn.unwrap() {
+            Turn::Lead(lead) => lead,
+            Turn::Joined(_) => panic!("the round joined instead of leading"),
+        }
+    }
+
+    fn row(batch: usize, task: &str) -> (usize, String, String) {
+        (batch, task.into(), "accepted".into())
+    }
+
+    fn tasks(rows: &RoundRows) -> Vec<&str> {
+        rows.iter().map(|(task, _)| task.as_str()).collect()
+    }
+
+    /// A round of `worker` with `batches` batches in its own task. It must join a transaction,
+    /// and it returns the rows of that transaction.
+    fn joining(
+        connection: &Arc<HeartbeatConnection>,
+        worker: &'static str,
+        batches: usize,
+        deadline: Instant,
+    ) -> JoinHandle<Result<RoundRows, Error>> {
+        let connection = Arc::clone(connection);
+        tokio::spawn(async move {
+            match connection.turn(vec![batch(worker); batches], deadline).await? {
+                Turn::Joined(rows) => rows,
+                Turn::Lead(_) => panic!("round {worker} led instead of joining"),
+            }
+        })
+    }
+
+    /// Lets the spawned rounds run until `count` rounds wait in the group.
+    async fn waiting(connection: &HeartbeatConnection, count: usize) {
+        timeout(WAIT, async {
+            while lock(&connection.group).waiting.len() != count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{count} rounds never waited"));
+    }
+
+    // The first round leads. Rounds with an equal or later deadline join it just before the
+    // statement, after the batches of the lead, and each round gets the rows of its own batches.
+    #[tokio::test]
+    async fn rounds_with_a_later_deadline_join_the_transaction_and_get_their_rows() {
+        let connection = group_connection();
+        let deadline = Instant::now() + WAIT;
+        let mut first = lead(connection.turn(vec![batch("a")], deadline).await);
+        let equal = joining(&connection, "b", 2, deadline);
+        let later = joining(&connection, "c", 1, deadline + Duration::from_millis(1));
+        waiting(&connection, 2).await;
+        let batches = first.join();
+        assert_eq!(first.joined(), 2);
+        let mut order = workers(&batches);
+        assert_eq!(order.remove(0), "a", "the batches of the lead come first");
+        order.sort();
+        assert_eq!(order, ["b", "b", "c"]);
+        // The joined rounds can come in either order, so the rows follow the batches.
+        let rows: Vec<_> = workers(&batches)
+            .iter()
+            .enumerate()
+            .map(|(index, worker)| row(index + 1, &format!("{worker}{index}")))
+            .collect();
+        let expected = |worker: &str| {
+            rows.iter()
+                .filter(|(_, task, _)| task.starts_with(worker))
+                .map(|(_, task, _)| task.clone())
+                .collect::<Vec<_>>()
+        };
+        let (own, b, c) = (expected("a"), expected("b"), expected("c"));
+        assert_eq!(tasks(&first.answer(Ok(rows)).unwrap()), own);
+        drop(first);
+        assert_eq!(tasks(&equal.await.unwrap().unwrap()), b);
+        assert_eq!(tasks(&later.await.unwrap().unwrap()), c);
+        // No transaction runs now, so the next round leads at once.
+        drop(lead(connection.turn(vec![batch("d")], deadline).await));
+    }
+
+    // A round with an earlier deadline does not join. A round that arrives after the statement
+    // went out does not join either. When the transaction ends, the waiting round with the
+    // earliest deadline leads the next one, and the other round joins it.
+    #[tokio::test]
+    async fn the_waiting_round_with_the_earliest_deadline_leads_the_next_transaction() {
+        let connection = group_connection();
+        let deadline = Instant::now() + WAIT;
+        let mut first = lead(connection.turn(vec![batch("a")], deadline).await);
+        let earlier = {
+            let connection = Arc::clone(&connection);
+            tokio::spawn(async move {
+                let mut next = lead(
+                    connection.turn(vec![batch("e")], deadline - Duration::from_secs(1)).await,
+                );
+                let batches = workers(&next.join());
+                let own = next.answer(Ok(vec![row(1, "e1"), row(2, "l1")])).unwrap();
+                (batches, own)
+            })
+        };
+        waiting(&connection, 1).await;
+        assert_eq!(workers(&first.join()), ["a"], "a round with an earlier deadline joined");
+        let late = joining(&connection, "l", 1, deadline + Duration::from_secs(1));
+        waiting(&connection, 2).await;
+        first.answer(Ok(vec![row(1, "a1")])).unwrap();
+        drop(first);
+        let (batches, own) = earlier.await.unwrap();
+        assert_eq!(batches, ["e", "l"]);
+        assert_eq!(tasks(&own), ["e1"]);
+        assert_eq!(tasks(&late.await.unwrap().unwrap()), ["l1"]);
+    }
+
+    // A failed transaction gives every joined round the same failure.
+    #[tokio::test]
+    async fn every_joined_round_gets_the_failure_of_the_transaction() {
+        let connection = group_connection();
+        let deadline = Instant::now() + WAIT;
+        let mut first = lead(connection.turn(vec![batch("a")], deadline).await);
+        let joined = joining(&connection, "b", 1, deadline);
+        waiting(&connection, 1).await;
+        first.join();
+        let error = first.answer(Err(Error::invalid("the statement failed"))).unwrap_err();
+        assert_eq!(error.to_string(), "the statement failed");
+        drop(first);
+        let error = joined.await.unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "the statement failed");
+    }
+
+    // A dropped round cannot stop the group: a dropped lead hands the lead on, a dropped waiting
+    // round leaves, a dropped round that got the lead hands it on, and a joined round of a dropped
+    // lead fails. A waiting round whose deadline passes fails and leaves.
+    #[tokio::test]
+    async fn dropped_rounds_hand_the_lead_on() {
+        let connection = group_connection();
+        let deadline = Instant::now() + WAIT;
+        let first = lead(connection.turn(vec![batch("a")], deadline).await);
+        // A round that waits, and is dropped, leaves the group.
+        let mut dropped = Box::pin(connection.turn(vec![batch("x")], deadline));
+        assert!(dropped.as_mut().now_or_never().is_none());
+        assert_eq!(lock(&connection.group).waiting.len(), 1);
+        drop(dropped);
+        assert_eq!(lock(&connection.group).waiting.len(), 0);
+        // A round that expires while it waits fails and leaves.
+        let expired = connection.turn(vec![batch("t")], Instant::now() + Duration::from_millis(20));
+        let error = expired.await.err().expect("an expired round got a turn");
+        assert_eq!(error.to_string(), "heartbeat round exceeded its deadline");
+        assert_eq!(lock(&connection.group).waiting.len(), 0);
+        // The lead goes to a round that the caller drops before it reads its turn.
+        let mut handed = Box::pin(connection.turn(vec![batch("h")], deadline));
+        assert!(handed.as_mut().now_or_never().is_none());
+        let mut next = Box::pin(connection.turn(vec![batch("n")], deadline));
+        assert!(next.as_mut().now_or_never().is_none());
+        drop(first);
+        drop(handed);
+        let mut next = lead(next.await);
+        // A lead that is dropped before it answers fails its joined rounds.
+        let joined = joining(&connection, "j", 1, deadline);
+        waiting(&connection, 1).await;
+        next.join();
+        drop(next);
+        let error = joined.await.unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "the heartbeat transaction ended without an answer");
+        drop(lead(connection.turn(vec![batch("z")], deadline).await));
     }
 
     // The pool identity depends on deadpool 0.13 (see the module documentation). If an upgrade

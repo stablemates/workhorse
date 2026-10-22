@@ -108,6 +108,7 @@ const (
 	defaultScheduleTimezone              = "UTC"
 	claimManyStatementName               = "claim_many_v1"
 	heartbeatManyStatementName           = "heartbeat_many_v2"
+	heartbeatPoolStatementName           = "heartbeat_pool_v1"
 	expireOwnedStatementName             = "expire_owned_telemetry_v1"
 	releaseOwnedStatementName            = "release_owned_v1"
 	completeStatementName                = "complete_v1"
@@ -694,6 +695,7 @@ const (
 	rowRecordedCanceledField            = "recorded_canceled"
 	rowRecordedPendingField             = "recorded_pending"
 	rowActionField                      = "action"
+	rowBatchField                       = "batch"
 )
 
 // roundTimeoutsStatement sets both server timeouts of a heartbeat round for the current transaction

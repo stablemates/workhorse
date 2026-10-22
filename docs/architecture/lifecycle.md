@@ -1132,13 +1132,96 @@ no single-lease function.
 row. A mixed batch goes through `heartbeat_v1` one lease at a time, in task ID order. It never
 returns `busy`. It stays for workers that do not know the status.
 
-Each worker runs one heartbeat round at a time. It sends every active lease in one round. One
-statement carries at most 100 leases. A fused completion claim can register its tasks before the
-completing attempts leave the round, so a TypeScript, Python, Go, Ruby, or JVM round can hold more
-than 100 leases. These workers then send one statement for each 100 leases. Ruby and JVM also send
-one statement for each worker on the pool. Rust sends one statement in each round. Its rounds cannot
-hold more than 100 leases, because a completing attempt leaves the round before its fused claim
-runs. Per-task deadline timers and abort signals stay independent.
+Each worker runs one heartbeat round at a time. It sends every active lease in one round. One call
+of `heartbeat_many_v2` carries at most 100 leases of one worker. A fused completion claim can
+register its tasks before the completing attempts leave the round, so a TypeScript, Python, Go,
+Ruby, or JVM round can hold more than 100 leases. The worker then makes one batch for each 100
+leases. A Rust round cannot hold more than 100 leases, because a completing attempt leaves the round
+before its fused claim runs. Per-task deadline timers and abort signals stay independent.
+
+Under the shared heartbeats opt-out, a round sends one `heartbeat_many_v2` statement for each batch,
+each in autocommit. Go is the exception: under `SharedHeartbeats`, it sends each batch in a bounded
+transaction of its own, on a connection that it borrows from the pool. On the dedicated heartbeat
+connection, one statement sends every batch of the
+round, as [Pool renewal](#pool-renewal) describes.
+
+#### Pool renewal
+
+The workers on one pool share one dedicated heartbeat connection
+([Heartbeat connection](#heartbeat-connection)). Before SM-1633, a round on that connection sent one
+transaction for each worker and each 100 leases. Each transaction needs at least 3 round trips to
+PostgreSQL. So the round trips of a round grew with the number of workers, and a slow network or a
+slow `COMMIT` let leases expire while PostgreSQL still answered every statement (SM-1631).
+
+Now one transaction renews every batch of the round. The catalogue statement `heartbeat_pool_v1`
+takes one JSON array of batches. Each batch is `{ workerId, leases }`, with the 1 to 100 lease
+entries of one worker that `heartbeat_many_v2` takes:
+
+```sql
+SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status
+  FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal)
+  CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease
+ ORDER BY batch.ordinal, lease.ordinal
+```
+
+1. The statement calls `heartbeat_many_v2` once for each batch, in array order. Each call keeps the
+   lock steps and the statuses of [Batched renewal](#batched-renewal).
+2. It returns one row for each lease entry: the 1-based batch position, the task ID, and the status.
+   The rows come in batch order, and in input order inside each batch.
+3. The worker routes each row to the lease that it sent at that position. A lease without a row is
+   `stale`, as before.
+
+The statement needs no migration. It reads only `heartbeat_many_v2`, which schema version 72
+carries.
+
+**Row locks.** One transaction now holds the row locks of every worker in the round until its
+`COMMIT`. Before SM-1633, the rows of one worker stayed locked only until the `COMMIT` of the
+transaction of that worker. The bound of the round does not change: the server timeouts of
+[Heartbeat round deadline](#heartbeat-round-deadline) end the transaction by the deadline of the
+round, except for a `COMMIT` that PostgreSQL has already started. A settlement of a task in the
+round waits for that `COMMIT`, as it waited for the `COMMIT` of the worker's own transaction before
+([A renewal that meets a lock](#a-renewal-that-meets-a-lock)).
+
+**All or nothing.** If the statement or the `COMMIT` fails, the round renews no lease. Before
+SM-1633, Ruby and JVM counted the renewals of the transactions that committed before a failure.
+
+**Who shares the transaction.** Ruby and JVM have one heartbeat thread for each pool. Its round
+holds the leases of every worker on the pool, so it sends one statement. TypeScript, Go, Python, and
+Rust keep one scheduler for each worker
+([ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)
+rule 1). In these SDKs, the rounds that wait for the connection share one transaction:
+
+1. A round that finds no transaction on the connection leads a new one. It takes the connection,
+   and sends `BEGIN` and the settings statement with the budgets of its own deadline.
+2. Immediately before it sends `heartbeat_pool_v1`, the leader takes every waiting round whose
+   deadline is not earlier than its own deadline. These rounds join the transaction, also when they
+   arrived after the leader started. Their batches follow the batches of the leader.
+3. After `COMMIT`, each round gets the rows of its own batches. If the transaction fails, each round
+   of the transaction gets the failure, and each scheduler handles it as one failed round.
+4. A round that did not join waits. When the transaction ends, the waiting round with the earliest
+   deadline leads the next transaction, and step 2 applies to it.
+
+So a round waits for at most the transaction that is in flight when it arrives. A joined round
+counts its renewals only if the `COMMIT` ended before its own deadline. Its deadline is not earlier
+than the deadline of the leader, so a successful transaction ends before it.
+
+**Example.** Eight workers share one pool. Each round trip to PostgreSQL takes 80 ms, and the round
+bound is 750 ms.
+
+1. Before SM-1633, a round sent eight transactions of at least 3 round trips each, so at least
+   1,920 ms of round trips. That is more than the round bound, so a round could not renew every
+   worker.
+2. Now the round sends `BEGIN`, the settings statement, `heartbeat_pool_v1`, and `COMMIT`: 320 ms of
+   round trips for all eight workers.
+
+| SDK        | Who builds the batches                                                | Where the transaction is shared                                                             |
+| ---------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| TypeScript | each worker                                                           | `ReservedConnection.renew` in `heartbeat-connection.ts`                                     |
+| Go         | each worker                                                           | the `leading` flag and `waiting` list of `heartbeatConnection` in `heartbeat_connection.go` |
+| Python     | each worker                                                           | `HeartbeatGroup` in `_pool_hub.py`, in front of `HeartbeatReservation`                      |
+| Rust       | each worker                                                           | the `Group` of `shared::HeartbeatConnection` in `worker/shared.rs`                          |
+| Ruby       | the heartbeat thread of the pool (`Heartbeat`)                        | the round of that thread                                                                    |
+| JVM        | the heartbeat thread of the pool (`run.workhorse.internal.Heartbeat`) | the round of that thread                                                                    |
 
 #### A renewal that meets a lock
 
@@ -1348,8 +1431,9 @@ next hold on the pool adopts it, and otherwise the reservation releases the clie
 
 `heartbeatRoundMs` bounds each round on the reservation, as [Heartbeat round
 deadline](#heartbeat-round-deadline) describes. It is at most `heartbeatMs`, and up to 50 ms it
-equals `heartbeatMs`. The workers on the pool take turns on the reservation: a round starts only
-when the round before it has ended, and the wait counts against its deadline. If a statement of a
+equals `heartbeatMs`. The rounds of the workers on the pool share one transaction on the
+reservation, as [Pool renewal](#pool-renewal) describes. A round that waits for the transaction in
+flight joins the next one, and the wait counts against its deadline. If a statement of a
 round fails or passes the deadline, the round releases the client with an error. node-postgres then
 destroys the connection and does not return it to the pool. If a round passes its deadline while it
 waits for a connect, it sends nothing on that client, and the next round takes the client. A failed
@@ -1668,8 +1752,9 @@ Each bounded round does these steps, all before one deadline:
 
 1. Builds the lease payload. The deadline starts before this step, so serialization counts
    against it.
-2. Waits for its turn on the connection (TypeScript, Go, Python, and Rust, where workers share the
-   connection), and takes the connection, or a new one after a failed round. In TypeScript and
+2. Waits for the transaction in flight on the connection to end, or joins it before its heartbeat
+   statement (TypeScript, Go, Python, and Rust, where the rounds of the workers share the
+   transaction, as [Pool renewal](#pool-renewal) describes). The round takes the connection, or a new one after a failed round. In TypeScript and
    Python, a failed round starts the replacement when it ends, so the connect starts before the next
    round. A Go round that discards its connection starts the acquisition loop at once. If the
    replacement is not ready, a TypeScript, Go, or Python round waits for it until its own deadline.
@@ -1683,8 +1768,12 @@ Each bounded round does these steps, all before one deadline:
    of the leases are by then.
 3. Sends `BEGIN`.
 4. Sends `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`
-   as its own statement, so that both values apply to the statements after it.
-5. Sends the `heartbeat_many_v2` statement, or a busy retry's selection of it.
+   as its own statement, so that both values apply to the statements after it. Rust sends steps 3
+   and 4 as one simple query, `BEGIN; SELECT set_config(...)`, with the budgets written as
+   whole-number literals. The 8 ms check and the settings check then apply to that one query.
+5. Sends one `heartbeat_pool_v1` statement for every batch of the round, or of a busy retry's
+   selection ([Pool renewal](#pool-renewal)). In TypeScript, Go, Python, and Rust, the batches of
+   the rounds that join the transaction go into the same statement.
 6. Sends `COMMIT`. The worker counts the renewals only after `COMMIT` succeeds.
 
 PostgreSQL measures `statement_timeout` for each statement and
@@ -1694,9 +1783,14 @@ So the budgets are set from the time that remains at step 4, in whole millisecon
 
 | Budget                                | Share of the time that remains | Least value |
 | ------------------------------------- | ------------------------------ | ----------- |
-| `statement_timeout` (`$1`)            | one half                       | 1 ms        |
-| `idle_in_transaction_session_timeout` | one eighth, for each idle gap  | 1 ms        |
+| `statement_timeout` (`$1`)            | one quarter                    | 1 ms        |
+| `idle_in_transaction_session_timeout` | one quarter, for each idle gap | 1 ms        |
 | Kept for `COMMIT`                     | one quarter                    | none        |
+
+Before SM-1633, `statement_timeout` was one half and each idle gap one eighth. An idle gap is about
+one round trip, because PostgreSQL waits for the next statement of the client. With 80 ms for each
+round trip and a bound of 750 ms, one eighth was about 84 ms, so the client time could make
+PostgreSQL end the session. One quarter leaves room for the round trip.
 
 The heartbeat and both idle gaps together end within three quarters of the time that remains. The
 settings statement in step 4 also uses time, so it may use at most the last quarter. If it takes
@@ -1707,7 +1801,7 @@ is at least 1 ms, so no positive budget becomes 0, which would turn the timeout 
 The worker sends no command after the deadline. If an idle gap passes its budget,
 `idle_in_transaction_session_timeout` ends the session, and PostgreSQL releases its row locks. The
 round then fails, and the worker discards the connection. On a connection that workers share, each
-other worker loses at most that one round, and each attempt keeps its own watchdog deadline.
+worker of that transaction loses that one round, and each attempt keeps its own watchdog deadline.
 
 No setting bounds `COMMIT` on the supported PostgreSQL versions, which start at 15. A `COMMIT` that
 PostgreSQL has already started can thus finish after the deadline, and keep its row locks until
@@ -1718,7 +1812,13 @@ Some drivers prepare a statement in a cycle of its own, and PostgreSQL restarts 
 after that cycle. So the drivers below prepare no statement of the round in a cycle of its own
 after step 4. A preparation uses time before the deadline, but none of the server budgets.
 
-- Go and Rust prepare the heartbeat statement before step 4.
+- Go prepares `heartbeat_pool_v1` and the settings statement when it gets a new heartbeat
+  connection, before any round uses it. The preparation has the bound of the startup budget,
+  max(interval, 5 s), so it also fits when two round trips take longer than one interval. If it
+  fails, Go closes that connection, and its acquisition loop tries again. A round waits for the
+  preparation only until its own deadline, as it waits for the open.
+- Rust prepares `heartbeat_pool_v1` once for each connection (`prepare_cached`), in the round trip
+  of steps 3 and 4.
 - Python with asyncpg prepares the settings statement and the heartbeat statement before step 3, once
   on each connection (`AsyncpgExecutor.prepare`). It sends `BEGIN`, `COMMIT`, and `ROLLBACK` as
   simple queries, which asyncpg does not prepare. Without a statement cache, asyncpg parses the
@@ -1729,8 +1829,9 @@ after step 4. A preparation uses time before the deadline, but none of the serve
 If a preparation uses the time that remains, the Python round fails before it sends `BEGIN`.
 
 A failed statement rolls back while time remains. In TypeScript, Go, and Python, a deadlock
-(`40P01`) is then sent again in a new transaction with the time that remains. In Rust, Ruby, and
-JVM, a deadlock fails the round, and a later round sends again. A round
+(`40P01`) is then sent again in a new transaction with the time that remains, for every round of
+the transaction, at most 3 times in total. In Rust, Ruby, and JVM, a deadlock fails the round, and a
+later round sends again. A round
 that fails or passes its deadline discards its connection, because the worker cannot know its state.
 As before, a failed round changes no lease: every task continues, and the next round tries again.
 
@@ -1745,8 +1846,7 @@ statement of the round can still run. The worker keeps the connection in these c
 The worker discards the connection if the `ROLLBACK` cannot be sent, fails, or does not end in its
 bound. It also discards the connection if the deadline passes while a statement is in flight, and
 after any failure at or after step 5. The kept round still counts as a failed round: it renews no
-lease, and a busy retry schedules no other retry. In Ruby and JVM, the round then sends no later
-statement, and the results of its earlier statements still count. Thus a handler that holds every
+lease, and a busy retry schedules no other retry. Thus a handler that holds every
 other pool connection cannot make a short round take the heartbeat connection away
 ([ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)).
 
@@ -1808,13 +1908,11 @@ round needs. Then a round can miss its deadline every time. Each failed round al
 connection, so the worker must take a new one, as step 2 of [Heartbeat round
 deadline](#heartbeat-round-deadline) describes.
 
-If every renewal of a lease misses its deadline, the worker never renews that lease. In TypeScript,
-Python, Go, Ruby, and JVM, one round can send more than one statement. Each statement runs in its
-own transaction, so one statement can renew its leases in PostgreSQL while a later statement fails.
-Ruby and JVM then count the renewals of the earlier statements. TypeScript, Python, and Go fail the
-whole round, so the worker counts no renewal of that round, and the next round sends every lease
-again. When the watchdog of an attempt expires, the attempt loses its lease, and recovery makes the
-task available again.
+If every renewal of a lease misses its deadline, the worker never renews that lease. On the
+dedicated connection, one transaction renews every batch of a round
+([Pool renewal](#pool-renewal)). If it misses its deadline, the worker counts no renewal of that
+round, and the next round sends every lease again. When the watchdog of an attempt expires, the
+attempt loses its lease, and recovery makes the task available again.
 
 In Ruby and JVM, one heartbeat thread sends the rounds of every worker on a pool that uses its
 dedicated connection. The shortest interval among the leases in those rounds sets the round bound.
@@ -1895,16 +1993,15 @@ deadline. No round starts a checkout of its own.
 
 Only one round is in flight in each case.
 
-A Ruby or JVM round sends one statement for each worker on the pool, and also one for each 100
-leases of a worker. On the dedicated connection, all statements of one round share one deadline: the
-start of the round plus the round bound. A statement that would start after that deadline is not
-sent, and its leases wait for the next round. Thus a slow statement of one worker cannot move the
-renewal of another worker past the margin. Each dedicated round starts with the next worker in turn
-in Ruby (`ordered_groups`), and with the next statement in turn in JVM (`nextFirstBatch`). So a
-statement that is always slow cannot keep a later statement from its turn. A shared round has no
-deadline, and sends every statement. A TypeScript, Python, or Go round sends one statement for each
-100 leases. On the dedicated connection, all of them share the deadline of the round. If one of them
-fails or reaches the deadline, the round fails.
+On the dedicated connection, a round sends one transaction with one `heartbeat_pool_v1` statement
+for every worker and every 100 leases ([Pool renewal](#pool-renewal)). The transaction ends by the
+deadline of the round: the start of the round plus the round bound. If it fails or reaches the
+deadline, the round fails, and every lease waits for the next round. Before SM-1633, Ruby and JVM
+sent one transaction for each worker and each 100 leases, and gave the statements turns from one
+round to the next (`ordered_groups` in Ruby, `nextFirstBatch` in JVM). One statement needs no turns,
+so SM-1633 removed them. A shared round sends one statement for each worker and each 100 leases. It has
+no deadline and uses autocommit, except in Go, where each statement is a bounded transaction of its
+own.
 
 **Margin rule.** After one timed-out round, the next round falls due two intervals after the start
 of the last accepted round. That round ends by its deadline. So an attempt keeps its lease after one

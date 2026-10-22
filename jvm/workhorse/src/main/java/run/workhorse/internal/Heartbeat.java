@@ -225,9 +225,6 @@ public final class Heartbeat {
    */
   private long previous;
 
-  /** The batch that the next dedicated round sends first. Only the heartbeat thread uses it. */
-  private int rotation;
-
   /**
    * The members that the latest round reported busy, which a retry renews before the next regular
    * slot, or {@code null}. A round of either kind replaces it. Only the heartbeat thread uses it.
@@ -238,9 +235,9 @@ public final class Heartbeat {
   private long busyRetryAt;
 
   /**
-   * True when the latest {@link #sendBatches} call stopped at a batch that expired before its
-   * heartbeat statement ({@link RoundExpired}). A busy retry that stops this way fails, so it
-   * schedules no other retry. Only the heartbeat thread uses it.
+   * True when the latest {@link #sendBatches} call expired before its heartbeat statement ({@link
+   * RoundExpired}). A busy retry that stops this way fails, so it schedules no other retry. Only
+   * the heartbeat thread uses it.
    */
   private boolean roundExpired;
 
@@ -763,12 +760,12 @@ public final class Heartbeat {
    * start, so missed slots are never replayed. A dedicated round that fails throws, so the caller
    * can replace the connection; a borrowing round that fails is skipped.
    *
-   * <p>A round sends one statement for each worker and each {@link #ROUND_LIMIT} leases ({@link
-   * #batches}). On the dedicated connection, all of them share one deadline: the round start plus
-   * {@link #roundBoundNanos}. A statement that would start after it waits for the next round, so a
-   * slow statement cannot delay another renewal past it. Each round starts with the next batch, so
-   * a batch that is always slow cannot keep a later batch from its turn. A borrowing round has no
-   * deadline, and sends every batch.
+   * <p>A round has one batch for each worker and each {@link #ROUND_LIMIT} leases ({@link
+   * #batches}). On the dedicated connection, the round sends every batch in one transaction with
+   * one {@code heartbeat_pool_v1} statement, so the number of round trips does not grow with the
+   * number of workers. The deadline of that transaction is the round start plus {@link
+   * #roundBoundNanos}. A borrowing round has no deadline, and sends one {@code heartbeat_many_v2}
+   * statement for each batch.
    *
    * <p>Between two regular slots, a busy retry sends only the members that the latest round
    * reported busy ({@link #takeBusyRetry}). It is a round of this one thread, so it never overlaps
@@ -828,7 +825,6 @@ public final class Heartbeat {
       }
       long start = System.nanoTime();
       long deadline;
-      int first;
       List<Batch> batches;
       if (retry) {
         deadline = retryDeadline(start, interval, previous + interval, due);
@@ -838,17 +834,14 @@ public final class Heartbeat {
           continue;
         }
         batches = batches(due);
-        // A retry starts with its first batch, so it does not move the rotation of regular rounds.
-        first = 0;
       } else {
         previous = start;
         // The deadline starts before the payloads are built, so serialization counts against it.
         deadline = start + roundBoundNanos(interval);
         batches = batches(due);
-        first = nextFirstBatch(batches.size());
       }
       roundsStarted.incrementAndGet();
-      List<Member> busy = sendBatches(batches, first, deadline, round);
+      List<Member> busy = sendBatches(batches, deadline, round);
       if (freshConnection) {
         // The round waited for a new connection and sent nothing on it. A regular round runs at
         // once on the replacement, with a full bound. It replays no missed slot, and it starts the
@@ -922,12 +915,12 @@ public final class Heartbeat {
   }
 
   /**
-   * One {@code heartbeat_many_v2} statement: the leases of one worker, at most {@link
-   * #ROUND_LIMIT}.
+   * The leases of one worker, at most {@link #ROUND_LIMIT}: one {@code heartbeat_many_v2} call,
+   * either as its own statement or as one item of a {@code heartbeat_pool_v1} statement.
    */
   record Batch(String workerId, List<Member> members) {}
 
-  /** The statements of one round, in member order: one for each worker and each 100 leases. */
+  /** The batches of one round, in member order: one for each worker and each 100 leases. */
   static List<Batch> batches(List<Member> due) {
     Map<String, List<Member>> byWorker = new LinkedHashMap<>();
     for (Member member : due) {
@@ -946,51 +939,58 @@ public final class Heartbeat {
   }
 
   /**
-   * The batch that a dedicated round sends first. It moves by one each round, so no batch is always
-   * last. A borrowing round always starts with the first batch, because it sends every batch.
+   * Sends {@code batches}, and returns the registered members that came back {@code busy}.
+   *
+   * <p>On the dedicated connection, one {@code heartbeat_pool_v1} statement carries every batch, so
+   * the round is all or nothing. A round whose {@code deadline} has passed sends nothing. A round
+   * that expires before its heartbeat statement ({@link RoundExpired}) returns without a throw, and
+   * the caller keeps the connection. A busy retry that ends this way schedules no other retry
+   * ({@link #roundExpired}). A round that fails at or after its heartbeat statement throws, and no
+   * lease of it counts.
+   *
+   * <p>A borrowing round sends one {@code heartbeat_many_v2} statement for each batch, and skips a
+   * failed one.
    */
-  int nextFirstBatch(int count) {
-    if (!dedicated || count == 0) {
-      return 0;
-    }
-    int first = Math.floorMod(rotation, count);
-    rotation = first + 1;
-    return first;
-  }
-
-  /**
-   * Sends {@code batches} in order from {@code first}, and returns the registered members that came
-   * back {@code busy}. On the dedicated connection a batch that would start after {@code deadline}
-   * is not sent, and a failed batch throws. A batch that expires before its heartbeat statement
-   * ({@link RoundExpired}) ends the round without a throw: the results of the earlier batches
-   * count, and the caller keeps the connection. A busy retry that ends this way schedules no other
-   * retry ({@link #roundExpired}). A borrowing round sends every batch and skips a failed one.
-   */
-  List<Member> sendBatches(List<Batch> batches, int first, long deadline, Round round)
-      throws SQLException {
+  List<Member> sendBatches(List<Batch> batches, long deadline, Round round) throws SQLException {
     roundExpired = false;
     List<Member> busy = new ArrayList<>();
-    for (int index = 0; index < batches.size(); index++) {
-      Batch batch = batches.get((first + index) % batches.size());
-      long sentAt = System.nanoTime();
-      if (dedicated && deadline - sentAt <= 0) {
+    if (dedicated) {
+      if (batches.isEmpty() || deadline - System.nanoTime() <= 0) {
         return busy;
       }
+      long sentAt = System.nanoTime();
       List<Row> rows;
       try {
-        String payload = leases(batch.members());
+        String payload = pool(batches);
+        rows = round.send(deadline - System.nanoTime(), SqlCatalogue.HEARTBEAT_POOL_V1, payload);
+      } catch (RoundExpired expired) {
+        roundExpired = true;
+        return busy;
+      }
+      // The statement numbers the batches from 1, in the order of the payload.
+      List<Map<String, String>> statuses = new ArrayList<>();
+      for (int index = 0; index < batches.size(); index++) {
+        statuses.add(new HashMap<>());
+      }
+      for (Row row : rows) {
+        int batch = row.requiredInteger("batch");
+        if (batch >= 1 && batch <= batches.size()) {
+          statuses.get(batch - 1).put(row.requiredText("task_id"), row.requiredText("status"));
+        }
+      }
+      for (int index = 0; index < batches.size(); index++) {
+        settle(batches.get(index).members(), statuses.get(index), sentAt, busy);
+      }
+      return busy;
+    }
+    for (Batch batch : batches) {
+      long sentAt = System.nanoTime();
+      List<Row> rows;
+      try {
+        String payload = Json.write(leases(batch.members()));
         long remaining = deadline - System.nanoTime();
         rows = round.send(remaining, SqlCatalogue.HEARTBEAT_MANY_V2, batch.workerId(), payload);
-      } catch (RoundExpired expired) {
-        if (dedicated) {
-          roundExpired = true;
-          return busy;
-        }
-        continue;
       } catch (SQLException | RuntimeException error) {
-        if (dedicated) {
-          throw error;
-        }
         continue;
       }
       Map<String, String> statuses = new HashMap<>();
@@ -1000,6 +1000,21 @@ public final class Heartbeat {
       settle(batch.members(), statuses, sentAt, busy);
     }
     return busy;
+  }
+
+  /**
+   * The parameter of one {@code heartbeat_pool_v1} statement: a JSON array with one item for each
+   * batch, in batch order. Each item holds the worker and its leases.
+   */
+  static String pool(List<Batch> batches) {
+    List<Object> items = new ArrayList<>();
+    for (Batch batch : batches) {
+      Map<String, @Nullable Object> item = new LinkedHashMap<>();
+      item.put("workerId", batch.workerId());
+      item.put("leases", leases(batch.members()));
+      items.add(item);
+    }
+    return Json.write(items);
   }
 
   /**
@@ -1017,7 +1032,19 @@ public final class Heartbeat {
     return TimeUnit.MILLISECONDS.toNanos(boundMs);
   }
 
-  private static String leases(List<Member> chunk) {
+  /**
+   * The server budget of a dedicated round that has {@code remainingMs} left at its settings
+   * statement: one quarter, at least 1 ms, in whole milliseconds rounded down. The round sets it as
+   * {@code statement_timeout} and as {@code idle_in_transaction_session_timeout}. So the heartbeat
+   * statement and both idle gaps end within three quarters of the time left, and the last quarter
+   * is kept for the settings statement and {@code COMMIT}. Every SDK uses the same shares.
+   */
+  static long serverBudgetMs(long remainingMs) {
+    return Math.max(1, remainingMs / 4);
+  }
+
+  /** The lease objects of one batch, in member order. */
+  private static List<Object> leases(List<Member> chunk) {
     List<Object> leases = new ArrayList<>();
     for (Member member : chunk) {
       Map<String, @Nullable Object> lease = new LinkedHashMap<>();
@@ -1026,7 +1053,7 @@ public final class Heartbeat {
       lease.put("leaseMs", member.leaseMs());
       leases.add(lease);
     }
-    return Json.write(leases);
+    return leases;
   }
 
   /**
@@ -1154,11 +1181,11 @@ public final class Heartbeat {
         // PostgreSQL measures statement_timeout for each statement and the idle timeout for each
         // idle gap, and restarts both every time. While the round can hold a row lock, it has one
         // idle gap before the heartbeat, the heartbeat, and one idle gap before COMMIT. So the
-        // heartbeat gets one half, each gap one eighth, and the last quarter is kept for COMMIT.
-        long milliseconds = TimeUnit.NANOSECONDS.toMillis(remaining);
+        // heartbeat and each gap get one quarter, and the last quarter is kept for COMMIT.
+        String budget = Long.toString(serverBudgetMs(TimeUnit.NANOSECONDS.toMillis(remaining)));
         try (PreparedStatement timeouts = connection.prepareStatement(ROUND_TIMEOUTS)) {
-          timeouts.setString(1, Long.toString(Math.max(1, milliseconds / 2)));
-          timeouts.setString(2, Long.toString(Math.max(1, milliseconds / 8)));
+          timeouts.setString(1, budget);
+          timeouts.setString(2, budget);
           begun = true;
           timeouts.execute();
         }

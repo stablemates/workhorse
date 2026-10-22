@@ -119,6 +119,60 @@ const REDACTED_ERROR_NAME = "RedactedTaskError";
 /** The name recorded when a handler throws a value that is not an Error. */
 const NON_ERROR_NAME = "NonErrorThrown";
 
+/** One lease as `heartbeat_many_v2` reads it from its JSON array. */
+export interface HeartbeatLeasePayload {
+  readonly taskId: string;
+  readonly fenceToken: string;
+  readonly leaseMs: number;
+}
+
+/**
+ * The leases of `tasks` in the order of `tasks`, in batches of at most
+ * HEARTBEAT_STATEMENT_LEASE_LIMIT leases, as `heartbeat_many_v2` accepts them.
+ */
+export function heartbeatLeaseBatches(
+  tasks: readonly ClaimedTask[],
+  leaseMs: number,
+): HeartbeatLeasePayload[][] {
+  const leases = tasks.map((task) => ({
+    taskId: task.id,
+    fenceToken: task.fenceToken.toString(),
+    leaseMs,
+  }));
+  const batches: HeartbeatLeasePayload[][] = [];
+  for (let start = 0; start < leases.length; start += HEARTBEAT_STATEMENT_LEASE_LIMIT) {
+    batches.push(leases.slice(start, start + HEARTBEAT_STATEMENT_LEASE_LIMIT));
+  }
+  return batches;
+}
+
+/**
+ * Record the status of each lease of one heartbeat round. A task without a row in `statuses` is
+ * stale.
+ */
+export function reportHeartbeatStatuses(
+  tasks: readonly ClaimedTask[],
+  workerId: string,
+  statuses: ReadonlyMap<string, HeartbeatBatchStatus>,
+): void {
+  for (const task of tasks) {
+    const status = statuses.get(task.id) ?? "stale";
+    if (status !== "accepted") {
+      recordHeartbeatFailure(status);
+      logInfo("workhorse.task.heartbeat_rejected", "Task heartbeat rejected", {
+        ...taskSpanAttributes(task),
+        "workhorse.heartbeat.status": status,
+        "workhorse.worker.id": workerId,
+      });
+    } else {
+      logDebug("workhorse.task.heartbeat_accepted", "Task heartbeat accepted", {
+        ...taskSpanAttributes(task),
+        "workhorse.worker.id": workerId,
+      });
+    }
+  }
+}
+
 export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
   if (!redactDetails) return error instanceof Error ? error : String(error);
   const redacted = new Error(REDACTED_ERROR_MESSAGE);
@@ -395,42 +449,22 @@ export class ClaimLeaseFenceModule extends QueueModule {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<Map<string, HeartbeatBatchStatus>> {
-    const leases = tasks.map((task) => ({
-      taskId: task.id,
-      fenceToken: task.fenceToken.toString(),
-      leaseMs,
-    }));
-    // One statement accepts at most HEARTBEAT_STATEMENT_LEASE_LIMIT leases. A rejected fused
-    // completion keeps its lease registered while it waits for PostgreSQL, and the tasks that it
-    // claimed register too, so a worker round can hold more. Each statement runs on its own. If a
-    // later statement fails, the call fails, and the worker counts no renewal of the round.
+    // A rejected fused completion keeps its lease registered while it waits for PostgreSQL, and
+    // the tasks that it claimed register too, so a worker round can hold more leases than one
+    // statement accepts. Each statement runs on its own. If a later statement fails, the call
+    // fails, and the worker counts no renewal of the round.
     const statuses = new Map<string, HeartbeatBatchStatus>();
-    for (let start = 0; start < leases.length; start += HEARTBEAT_STATEMENT_LEASE_LIMIT) {
+    for (const batch of heartbeatLeaseBatches(tasks, leaseMs)) {
       const result = await queryFencedWrite<{
         task_id: string;
         status: HeartbeatBatchStatus;
       }>(this.context.database, SQL_STATEMENTS["heartbeat_many_v2"], [
         workerId,
-        JSON.stringify(leases.slice(start, start + HEARTBEAT_STATEMENT_LEASE_LIMIT)),
+        JSON.stringify(batch),
       ]);
       for (const row of result.rows) statuses.set(row.task_id, row.status);
     }
-    for (const task of tasks) {
-      const status = statuses.get(task.id) ?? "stale";
-      if (status !== "accepted") {
-        recordHeartbeatFailure(status);
-        logInfo("workhorse.task.heartbeat_rejected", "Task heartbeat rejected", {
-          ...taskSpanAttributes(task),
-          "workhorse.heartbeat.status": status,
-          "workhorse.worker.id": workerId,
-        });
-      } else {
-        logDebug("workhorse.task.heartbeat_accepted", "Task heartbeat accepted", {
-          ...taskSpanAttributes(task),
-          "workhorse.worker.id": workerId,
-        });
-      }
-    }
+    reportHeartbeatStatuses(tasks, workerId, statuses);
     return statuses;
   }
 

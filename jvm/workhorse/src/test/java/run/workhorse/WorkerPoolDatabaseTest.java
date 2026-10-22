@@ -30,6 +30,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import run.workhorse.testing.DelayedDataSource;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
 
@@ -70,7 +71,7 @@ class WorkerPoolDatabaseTest {
     return pool;
   }
 
-  private Worker.Builder worker(HikariDataSource pool, String workerId) {
+  private Worker.Builder worker(DataSource pool, String workerId) {
     return Worker.builder(pool)
         .queues(queueName)
         .workerId(workerId)
@@ -171,6 +172,35 @@ class WorkerPoolDatabaseTest {
    */
   @Test
   void manyWorkersOnASmallPoolKeepEveryLease() throws Exception {
+    try (HikariDataSource pool = pool(6)) {
+      keepEveryLease(pool);
+    }
+  }
+
+  /**
+   * SM-1633: the same workers when each round trip to PostgreSQL takes 80 ms more. The shared
+   * heartbeat sends one transaction for all 8 workers in each round: BEGIN with the settings
+   * statement, one {@code heartbeat_pool_v1} statement, and {@code COMMIT}. So a round needs 3
+   * round trips, about 0.25 s, for any number of workers. Each idle gap of 80 ms stays inside the
+   * idle budget, one quarter of the time that remains. Before SM-1633, a round needed 3 round trips
+   * for each worker, so the rounds could not renew every lease of 3 s.
+   */
+  @Test
+  void manyWorkersOnASmallPoolKeepEveryLeaseWhenEachRoundTripTakes80Ms() throws Exception {
+    try (HikariDataSource pool = pool(6)) {
+      // The test measures round trips, not the disk. Other test databases on the same server can
+      // make a WAL flush wait for seconds, so a COMMIT of the workers does not wait for its flush.
+      pool.setConnectionInitSql(
+          "SET application_name = '" + applicationName + "'; SET synchronous_commit = off");
+      keepEveryLease(DelayedDataSource.wrap(pool, Duration.ofMillis(80)));
+    }
+  }
+
+  /**
+   * Eight workers with two slots each on {@code pool}, a pool of 6. Each worker claims, renews, and
+   * completes its tasks, with one attempt each.
+   */
+  private void keepEveryLease(DataSource pool) throws Exception {
     int workers = 8;
     int concurrency = 2;
     // Two waves fill every slot, so each worker claims and refills.
@@ -179,30 +209,28 @@ class WorkerPoolDatabaseTest {
       enqueue("held");
     }
     List<Worker> started = new ArrayList<>();
-    try (HikariDataSource pool = pool(6)) {
-      try {
-        for (int index = 0; index < workers; index++) {
-          Worker worker =
-              worker(pool, "jvm-pool-" + index)
-                  .concurrency(concurrency)
-                  .handle(
-                      "held",
-                      Object.class,
-                      (ctx, payload) -> {
-                        // Longer than the lease, so only renewals keep it.
-                        Thread.sleep(4_000);
-                        return Map.of();
-                      })
-                  .build();
-          started.add(worker);
-          worker.start();
-        }
-        waitUntil("every task succeeded", () -> succeeded() == tasks);
-      } finally {
-        started.forEach(Worker::stop);
-        for (Worker worker : started) {
-          worker.close();
-        }
+    try {
+      for (int index = 0; index < workers; index++) {
+        Worker worker =
+            worker(pool, "jvm-pool-" + index)
+                .concurrency(concurrency)
+                .handle(
+                    "held",
+                    Object.class,
+                    (ctx, payload) -> {
+                      // Longer than the lease, so only renewals keep it.
+                      Thread.sleep(4_000);
+                      return Map.of();
+                    })
+                .build();
+        started.add(worker);
+        worker.start();
+      }
+      waitUntil("every task succeeded", () -> succeeded() == tasks);
+    } finally {
+      started.forEach(Worker::stop);
+      for (Worker worker : started) {
+        worker.close();
       }
     }
     assertEquals(

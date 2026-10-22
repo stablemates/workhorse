@@ -56,6 +56,8 @@ export const SQL_STATEMENTS = {
     "SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text",
   heartbeat_many_v2:
     "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
+  heartbeat_pool_v1:
+    "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
   heartbeat_v1:
     "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
   heartbeat_v2:

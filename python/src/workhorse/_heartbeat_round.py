@@ -1,7 +1,7 @@
 """The transaction statements around one heartbeat round on the dedicated connection.
 
 They are not protocol calls, so they do not live in the generated catalogue. The round sends the
-catalogue's `heartbeat_many_v2` statement unchanged between them.
+catalogue's `heartbeat_pool_v1` statement unchanged between them.
 """
 
 from __future__ import annotations

@@ -3,7 +3,10 @@ import { connectionPoolOf, type ConnectionPool } from "./connection-pool.js";
 import type { QueryResult, QueryResultRow } from "pg";
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { monotonicNow } from "./timers.js";
-import type { Queryable } from "./types.js";
+import { databaseErrorCode } from "./errors.js";
+import type { HeartbeatLeasePayload } from "./queue/claim-lease-fence.js";
+import { FENCED_WRITE_DEADLOCK_ATTEMPTS } from "./queue/fenced-write.js";
+import type { HeartbeatBatchStatus, Queryable } from "./types.js";
 
 /**
  * The smallest pool a worker reserves a heartbeat connection from. The pool must also hold the
@@ -380,87 +383,52 @@ class HeartbeatRoundExpiredCleanly extends Error {
  * PostgreSQL measures `statement_timeout` for each statement and
  * `idle_in_transaction_session_timeout` for each idle gap, and restarts both every time. While the
  * round can hold a row lock, it has one idle gap before the heartbeat, the heartbeat, and one idle
- * gap before `COMMIT`. So the heartbeat gets one half, each gap one eighth, and the last quarter is
- * kept for `COMMIT`. No setting bounds `COMMIT` itself.
+ * gap before `COMMIT`. So the heartbeat gets one quarter, each gap one quarter, and the last quarter
+ * is kept for `COMMIT` and the settings statement. No setting bounds `COMMIT` itself.
  */
 function roundTimeouts(remainingMs: number): [statement: string, idle: string] {
-  return [
-    String(Math.max(1, Math.floor(remainingMs / 2))),
-    String(Math.max(1, Math.floor(remainingMs / 8))),
-  ];
+  const quarter = String(Math.max(1, Math.floor(remainingMs / 4)));
+  return [quarter, quarter];
 }
 
-/**
- * A view of `client` that sends each statement in its own transaction, with server timeouts that
- * fit in the time left before `deadline`, a `monotonicNow()` value. `expired` reports that the
- * round's client timer has fired.
- *
- * Destroying a connection does not stop its statement: PostgreSQL notices a closed client only
- * when it next writes to it. So the server must end a round that the client stopped waiting for.
- * The timeouts (`roundTimeouts`) end the heartbeat, and a transaction whose client stopped before
- * `COMMIT`, by the deadline. A `COMMIT` that PostgreSQL has already started can still finish later.
- * Both settings end with the transaction, so the connection keeps no session state.
- *
- * The view sends no command after the deadline. It rolls back a failed statement only while time is
- * left; otherwise the caller discards the connection. If the round expires before it sends its
- * heartbeat, and nothing was sent or the ROLLBACK returns, the view rejects with
- * `HeartbeatRoundExpiredCleanly`, and the caller keeps the connection. A round that sent a
- * heartbeat statement, also one that failed before a deadlock resend, never expires cleanly.
- */
-function boundOnServer(client: Queryable, deadline: number, expired: () => boolean): Queryable {
-  let heartbeatSent = false;
-  const expiry = (): Error => (heartbeatSent ? roundExpired() : new HeartbeatRoundExpiredCleanly());
-  const send = <R extends QueryResultRow>(
-    text: string,
-    values?: readonly unknown[],
-    heartbeat = false,
-  ) => {
-    // The client timer can fire a little before the clock reaches the deadline, so both count.
-    if (expired() || monotonicNow() >= deadline) throw expiry();
-    if (heartbeat) heartbeatSent = true;
-    return client.query<R>(text, values);
-  };
-  return {
-    async query<R extends QueryResultRow = QueryResultRow>(
-      text: string,
-      values?: readonly unknown[],
-    ): Promise<QueryResult<R>> {
-      // A round that cannot reach its heartbeat in the time left sends nothing.
-      if (expired() || deadline - monotonicNow() < MINIMUM_REMAINING_MS) throw expiry();
-      await send("BEGIN");
-      try {
-        const setAt = monotonicNow();
-        const remaining = deadline - setAt;
-        if (remaining < MINIMUM_REMAINING_MS) throw expiry();
-        await send(ROUND_TIMEOUTS, roundTimeouts(remaining));
-        // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
-        if (monotonicNow() - setAt > remaining / 4) throw expiry();
-        const result = await send<R>(text, values, true);
-        await send("COMMIT");
-        // A COMMIT that ends after the deadline does not count as a renewal.
-        if (expired() || monotonicNow() >= deadline) throw roundExpired();
-        return result;
-      } catch (error) {
-        // A deadlock resend needs a clean session.
-        try {
-          await send("ROLLBACK");
-        } catch {
-          // The round reports its own error below, and the caller discards the connection. A
-          // clean expiry is clean only if its ROLLBACK returned.
-          if (error instanceof HeartbeatRoundExpiredCleanly) throw roundExpired();
-        }
-        // A ROLLBACK that ends after the deadline did not end in the round's bound, so the caller
-        // discards the connection, as every SDK does.
-        if (
-          error instanceof HeartbeatRoundExpiredCleanly &&
-          (expired() || monotonicNow() >= deadline)
-        ) {
-          throw roundExpired();
-        }
-        throw error;
-      }
-    },
-  };
+/** Renews every batch of one heartbeat transaction in one statement. */
+const HEARTBEAT_POOL_STATEMENT = SQL_STATEMENTS["heartbeat_pool_v1"];
+
+/** One batch of `heartbeat_pool_v1`: one worker and 1 to 100 of its leases. */
+interface HeartbeatPoolBatch {
+  readonly workerId: string;
+  readonly leases: readonly HeartbeatLeasePayload[];
+}
+
+/** One row of `heartbeat_pool_v1`. */
+interface HeartbeatPoolRow {
+  readonly batch: number;
+  readonly task_id: string;
+  readonly status: HeartbeatBatchStatus;
+}
+
+/** One heartbeat round that waits for, leads, or joined a transaction on the reserved connection. */
+interface RenewalRequest {
+  batches: readonly HeartbeatPoolBatch[];
+  /** A `monotonicNow()` value. */
+  readonly deadline: number;
+  readonly timeoutMs: number;
+  readonly timer: NodeJS.Timeout;
+  settled: boolean;
+  resolve(rows: HeartbeatPoolRow[]): void;
+  reject(error: unknown): void;
+}
+
+/** The transaction in flight on the reserved connection, and the rounds that it renews. */
+interface RenewalTransaction {
+  /** The round that started the transaction. Its deadline bounds the transaction. */
+  readonly leader: RenewalRequest;
+  /** The leader, then each round that joined, in the order of their batches in the statement. */
+  readonly members: RenewalRequest[];
+  pending: Promise<ReservedClient> | undefined;
+  /** True once the transaction sends a statement on the client. */
+  lent: boolean;
+  ended: boolean;
 }
 
 /**
@@ -468,15 +436,19 @@ function boundOnServer(client: Queryable, deadline: number, expired: () => boole
  *
  * Handlers that hold every other pooled connection cannot delay a heartbeat queued behind them,
  * because the heartbeat never waits for the shared pool. One deadline bounds a whole round: the wait
- * for the rounds before it, the connect, and the transaction. A round that passes the deadline
- * destroys the connection, and server timeouts end its heartbeat and its idle waits by the same
- * deadline (`boundOnServer`). A round that expires before its heartbeat with no statement in flight
- * keeps the connection, because nothing of the round can still run on it. The timeouts are
- * transaction-scoped, so the connection stays safe behind a transaction-mode pooler. A failed round
- * opens the replacement when it ends, outside the deadline of the next round.
+ * for the transaction before it, the connect, and its own transaction. A transaction that passes its
+ * deadline destroys the connection, and server timeouts end its heartbeat and its idle waits by the
+ * same deadline (`transact`). A transaction that expires before its heartbeat with no statement in
+ * flight keeps the connection, because nothing of it can still run on it. The timeouts are
+ * transaction-scoped, so the connection stays safe behind a transaction-mode pooler. A failed
+ * transaction opens the replacement when it ends, outside the deadline of the next round.
  *
- * Rounds take turns, because every worker on the pool sends its rounds here and one session runs
- * one transaction at a time.
+ * Every worker on the pool sends its rounds here, and one session runs one transaction at a time.
+ * So the rounds share transactions. A round that finds no transaction in flight leads a new one.
+ * Immediately before the leader sends `heartbeat_pool_v1`, each waiting round whose deadline is not
+ * earlier than the leader's joins it, and its batches go into the same statement. When the
+ * transaction ends, the waiting round with the earliest deadline leads the next one. So no round
+ * waits for more than the transaction in flight when it arrives.
  *
  * A connection that fails between rounds, as when PostgreSQL terminates its backend, is discarded
  * the same way. The failure changes no lease: each attempt's watchdog alone decides when one lapses.
@@ -495,7 +467,9 @@ export class ReservedConnection {
   private retryTimer: NodeJS.Timeout | undefined;
   private retryAttempt = 0;
   private readonly rounds = new Set<Promise<unknown>>();
-  private turn: Promise<void> = Promise.resolve();
+  // The rounds that wait for a transaction, in the order they arrived.
+  private readonly waiting: RenewalRequest[] = [];
+  private transaction: RenewalTransaction | undefined;
   private closed = false;
 
   /**
@@ -558,8 +532,17 @@ export class ReservedConnection {
     });
   }
 
-  run<T>(operation: (client: Queryable) => Promise<T>, timeoutMs: number): Promise<T> {
-    const round = this.runBounded(operation, timeoutMs);
+  /**
+   * Renew the batches that `build` returns in one heartbeat transaction, within `timeoutMs`. The
+   * deadline starts before `build` runs, so the payload counts against it. Resolves with the rows of
+   * those batches, each `batch` numbered from 1 within them, after `COMMIT` ended before the
+   * deadline. The round leads a new transaction or joins one (see the class).
+   */
+  renew(
+    timeoutMs: number,
+    build: () => readonly HeartbeatPoolBatch[],
+  ): Promise<HeartbeatPoolRow[]> {
+    const round = this.request(timeoutMs, build);
     this.rounds.add(round);
     void round.then(
       () => this.rounds.delete(round),
@@ -682,61 +665,241 @@ export class ReservedConnection {
     this.retryTimer.unref();
   }
 
-  private async runBounded<T>(
-    operation: (client: Queryable) => Promise<T>,
+  private request(
     timeoutMs: number,
-  ): Promise<T> {
+    build: () => readonly HeartbeatPoolBatch[],
+  ): Promise<HeartbeatPoolRow[]> {
     const deadline = monotonicNow() + timeoutMs;
-    // The next round waits for this one and for every round before it. A round that expires while
-    // it waits thus ends only its own wait: the round ahead of it keeps the connection to itself.
-    const previous = this.turn;
-    let finished!: () => void;
-    const own = new Promise<void>((resolve) => {
-      finished = resolve;
-    });
-    this.turn = Promise.all([previous, own]).then(() => undefined);
-    let pending: Promise<ReservedClient> | undefined;
-    // True once the round sends a statement on the client.
-    let lent = false;
-    let expired = false;
-    let timer: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        expired = true;
-        reject(new Error(`Heartbeat did not finish within ${timeoutMs} ms`));
-      }, timeoutMs);
-      timer.unref();
-    });
-    const renewal = (async () => {
-      await previous;
-      // A round whose deadline passed while it waited for its turn sends nothing.
-      if (expired) return timedOut;
-      pending = this.acquire();
-      const client = await pending;
-      // A client that arrives after the deadline sends nothing; the next round takes it.
-      if (expired) return timedOut;
-      lent = true;
-      return operation(boundOnServer(client, deadline, () => expired));
-    })();
-    try {
-      return await Promise.race([renewal, timedOut]);
-    } catch (error) {
-      // A client that sent a statement has an unknown state. A connect that the round only waited
-      // for is still clean, so the next round takes it. So is a client whose round expired cleanly
-      // before the timer fired: no statement of the round is in flight. If the timer fires first,
-      // the race rejects with its error, and the client is discarded.
-      if (pending !== undefined && lent && !(error instanceof HeartbeatRoundExpiredCleanly)) {
-        this.discard(pending, error);
+    if (this.closed) {
+      return Promise.reject(new Error("The reserved heartbeat connection is closed"));
+    }
+    return new Promise<HeartbeatPoolRow[]>((resolve, reject) => {
+      const request: RenewalRequest = {
+        batches: [],
+        deadline,
+        timeoutMs,
+        timer: setTimeout(() => this.timedOut(request), timeoutMs),
+        settled: false,
+        resolve: (rows) => {
+          if (request.settled) return;
+          request.settled = true;
+          clearTimeout(request.timer);
+          resolve(rows);
+        },
+        reject: (error) => {
+          if (request.settled) return;
+          request.settled = true;
+          clearTimeout(request.timer);
+          reject(error);
+        },
+      };
+      request.timer.unref();
+      try {
+        request.batches = build();
+      } catch (error) {
+        request.reject(error);
+        return;
       }
+      this.waiting.push(request);
+      this.startNext();
+    });
+  }
+
+  /**
+   * The timer of `request` fired. A waiting round ends only its own wait. A round that joined a
+   * transaction ends only its own part. The leader's deadline bounds the whole transaction, so its
+   * timer fails every round of it and discards a client that the transaction sent a statement on.
+   */
+  private timedOut(request: RenewalRequest): void {
+    if (request.settled) return;
+    const error = new Error(`Heartbeat did not finish within ${request.timeoutMs} ms`);
+    const transaction = this.transaction;
+    if (transaction?.leader === request) {
+      this.endTransaction(transaction, { error });
+      return;
+    }
+    const index = this.waiting.indexOf(request);
+    if (index >= 0) this.waiting.splice(index, 1);
+    request.reject(error);
+  }
+
+  /**
+   * Start a transaction for the waiting round with the earliest deadline, unless a transaction is in
+   * flight. The other waiting rounds stay in the queue and can join it.
+   */
+  private startNext(): void {
+    if (this.transaction !== undefined) return;
+    let leader: RenewalRequest | undefined;
+    for (let index = this.waiting.length - 1; index >= 0; index -= 1) {
+      const request = this.waiting[index]!;
+      if (request.settled) {
+        this.waiting.splice(index, 1);
+        continue;
+      }
+      if (leader === undefined || request.deadline <= leader.deadline) leader = request;
+    }
+    if (leader === undefined) return;
+    this.waiting.splice(this.waiting.indexOf(leader), 1);
+    const transaction: RenewalTransaction = {
+      leader,
+      members: [leader],
+      pending: undefined,
+      lent: false,
+      ended: false,
+    };
+    this.transaction = transaction;
+    void this.transact(transaction).then(
+      (rows) => this.endTransaction(transaction, { rows }),
+      (error: unknown) => this.endTransaction(transaction, { error }),
+    );
+  }
+
+  /** Take each waiting round whose deadline is not earlier than the leader's into `transaction`. */
+  private join(transaction: RenewalTransaction): void {
+    for (let index = 0; index < this.waiting.length;) {
+      const request = this.waiting[index]!;
+      if (!request.settled && request.deadline >= transaction.leader.deadline) {
+        this.waiting.splice(index, 1);
+        transaction.members.push(request);
+      } else {
+        index += 1;
+      }
+    }
+  }
+
+  /**
+   * End `transaction` once, give each of its rounds its result, and start the next transaction.
+   *
+   * A client that the transaction sent a statement on has an unknown state after a failure. A
+   * connect that the transaction only waited for is still clean, so the next transaction takes it.
+   * So is a client whose transaction expired cleanly: no statement of it is in flight.
+   */
+  private endTransaction(
+    transaction: RenewalTransaction,
+    outcome: { rows: HeartbeatPoolRow[] } | { error: unknown },
+  ): void {
+    if (transaction.ended) return;
+    transaction.ended = true;
+    if (this.transaction === transaction) this.transaction = undefined;
+    if ("rows" in outcome) {
+      let offset = 0;
+      for (const member of transaction.members) {
+        const first = offset;
+        offset += member.batches.length;
+        member.resolve(
+          outcome.rows
+            .filter((row) => row.batch > first && row.batch <= offset)
+            .map((row) => ({ batch: row.batch - first, task_id: row.task_id, status: row.status })),
+        );
+      }
+    } else {
+      const { error } = outcome;
+      if (
+        transaction.pending !== undefined &&
+        transaction.lent &&
+        !(error instanceof HeartbeatRoundExpiredCleanly)
+      ) {
+        this.discard(transaction.pending, error);
+      }
+      for (const member of transaction.members) member.reject(error);
       // Rounds start on a fixed schedule, so the next round can start soon after this one. Opening
       // the replacement now starts the connect before that round, which waits for it only if it is
       // still pending. acquire() opens at most one connect at a time.
       this.reserve();
+    }
+    this.startNext();
+  }
+
+  /**
+   * Send the heartbeat transaction of `transaction` and resolve with every row of its statement.
+   *
+   * PostgreSQL aborts a whole transaction that it chooses as a deadlock victim (40P01), and a
+   * statement in an aborted transaction fails with 25P02. So a deadlock resends the whole
+   * transaction for every round of it, with the time that remains, as a fenced write does.
+   */
+  private async transact(transaction: RenewalTransaction): Promise<HeartbeatPoolRow[]> {
+    transaction.pending = this.acquire();
+    const client = await transaction.pending;
+    // A client that arrives after the deadline sends nothing; the next transaction takes it.
+    if (transaction.ended) throw roundExpired();
+    transaction.lent = true;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.transactOnce(client, transaction, attempt > 1);
+      } catch (error) {
+        if (databaseErrorCode(error) !== "40P01" || attempt >= FENCED_WRITE_DEADLOCK_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * Send one heartbeat transaction on `client`, with server timeouts that fit in the time left
+   * before the leader's deadline.
+   *
+   * Destroying a connection does not stop its statement: PostgreSQL notices a closed client only
+   * when it next writes to it. So the server must end a transaction that the client stopped waiting
+   * for. The timeouts (`roundTimeouts`) end the heartbeat, and a transaction whose client stopped
+   * before `COMMIT`, by the deadline. A `COMMIT` that PostgreSQL has already started can still finish
+   * later. Both settings end with the transaction, so the connection keeps no session state.
+   *
+   * No command goes out after the deadline. A failed statement is rolled back only while time is
+   * left; otherwise the caller discards the connection. If the transaction expires before it sends
+   * its heartbeat, and nothing was sent or the ROLLBACK returns, it rejects with
+   * `HeartbeatRoundExpiredCleanly`, and the caller keeps the connection. A transaction that resends
+   * after a deadlock already sent a heartbeat, so it never expires cleanly.
+   */
+  private async transactOnce(
+    client: ReservedClient,
+    transaction: RenewalTransaction,
+    resent: boolean,
+  ): Promise<HeartbeatPoolRow[]> {
+    const deadline = transaction.leader.deadline;
+    let heartbeatSent = resent;
+    const expiry = (): Error =>
+      heartbeatSent ? roundExpired() : new HeartbeatRoundExpiredCleanly();
+    // The client timer can fire a little before the clock reaches the deadline, so both count.
+    const late = (): boolean => transaction.ended || monotonicNow() >= deadline;
+    const send = <R extends QueryResultRow>(text: string, values?: readonly unknown[]) => {
+      if (late()) throw expiry();
+      return client.query<R>(text, values);
+    };
+    // A transaction that cannot reach its heartbeat in the time left sends nothing.
+    if (transaction.ended || deadline - monotonicNow() < MINIMUM_REMAINING_MS) throw expiry();
+    await send("BEGIN");
+    try {
+      const setAt = monotonicNow();
+      const remaining = deadline - setAt;
+      if (remaining < MINIMUM_REMAINING_MS) throw expiry();
+      await send(ROUND_TIMEOUTS, roundTimeouts(remaining));
+      // The budgets fit only if the settings statement used at most the quarter kept for COMMIT.
+      if (monotonicNow() - setAt > remaining / 4) throw expiry();
+      if (late()) throw expiry();
+      // The rounds that wait now join, and their batches follow the leader's in the statement.
+      this.join(transaction);
+      const payload = JSON.stringify(transaction.members.flatMap((member) => member.batches));
+      // Serialization counts against the deadline, so the statement goes out only in time.
+      if (late()) throw expiry();
+      heartbeatSent = true;
+      const result = await client.query<HeartbeatPoolRow>(HEARTBEAT_POOL_STATEMENT, [payload]);
+      await send("COMMIT");
+      // A COMMIT that ends after the deadline does not count as a renewal.
+      if (late()) throw roundExpired();
+      return result.rows;
+    } catch (error) {
+      // A deadlock resend needs a clean session.
+      try {
+        await send("ROLLBACK");
+      } catch {
+        // The transaction reports its own error below, and the caller discards the connection. A
+        // clean expiry is clean only if its ROLLBACK returned.
+        if (error instanceof HeartbeatRoundExpiredCleanly) throw roundExpired();
+      }
+      // A ROLLBACK that ends after the deadline did not end in the transaction's bound, so the
+      // caller discards the connection, as every SDK does.
+      if (error instanceof HeartbeatRoundExpiredCleanly && late()) throw roundExpired();
       throw error;
-    } finally {
-      clearTimeout(timer);
-      // This round is done, or its connection is discarded.
-      finished();
     }
   }
 
@@ -768,7 +931,7 @@ export interface HeartbeatConnectionLease {
   usable(): boolean;
   ready(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   onReady(listener: () => void): () => void;
-  run<T>(operation: (client: Queryable) => Promise<T>, timeoutMs: number): Promise<T>;
+  renew(timeoutMs: number, build: () => readonly HeartbeatPoolBatch[]): Promise<HeartbeatPoolRow[]>;
   /** Borrow one ordinary connection from the same pool, as `borrowConnectionWithin` does. */
   borrow<T>(
     timeoutMs: number,
@@ -824,7 +987,7 @@ export function holdHeartbeatConnection(
     usable: () => closing === undefined && held.connection.usable(),
     ready: (timeoutMs, signal) => held.connection.ready(timeoutMs, signal),
     onReady: (listener) => held.connection.onReady(listener),
-    run: (operation, timeoutMs) => held.connection.run(operation, timeoutMs),
+    renew: (timeoutMs, build) => held.connection.renew(timeoutMs, build),
     borrow: (timeoutMs, signal, operation) =>
       borrowConnectionWithin(pool, timeoutMs, signal, operation),
     close() {

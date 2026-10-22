@@ -31,6 +31,7 @@ from workhorse._pool_hub import (
     SYNC_HUBS,
     AsyncConnectionOwner,
     AsyncTaskNotificationListener,
+    HeartbeatGroup,
     HeartbeatReservation,
     PoolHub,
     PoolRegistry,
@@ -928,6 +929,128 @@ def test_rounds_take_the_shared_connection_in_arrival_order() -> None:
     subscription.close()
 
     assert order == list(range(8))
+
+
+class GroupRound:
+    """A heartbeat round in a `HeartbeatGroup`, with the turn that its wait returned."""
+
+    def __init__(self, name: str, deadline: float) -> None:
+        self.name = name
+        self.deadline = deadline
+        self.turn: str | None = None
+        self._thread = threading.Thread(target=self._wait, daemon=True)
+
+    def start(self, group: HeartbeatGroup) -> GroupRound:
+        """Start the wait, and return once the round waits or has its turn."""
+        self._group = group
+        waiting = waiting_rounds(group)
+        self._thread.start()
+        wait_until(
+            lambda: waiting_rounds(group) > waiting or self.turn is not None, 5, "never waited"
+        )
+        return self
+
+    def _wait(self) -> None:
+        self.turn = self._group.wait(self)
+
+    def join(self, seconds: float = 5) -> str | None:
+        self._thread.join(seconds)
+        return self.turn
+
+
+def waiting_rounds(group: HeartbeatGroup) -> int:
+    with group._condition:
+        return len(group._waiting)
+
+
+def test_rounds_with_a_deadline_not_earlier_than_the_leader_join_its_transaction() -> None:
+    """One transaction carries the rounds of every worker whose deadline allows it."""
+    group = HeartbeatGroup()
+    now = monotonic()
+    leader = GroupRound("leader", now + 5)
+    assert group.wait(leader) == "lead"
+    # While the leader runs its transaction, three rounds arrive.
+    later = GroupRound("later", now + 6).start(group)
+    equal = GroupRound("equal", now + 5).start(group)
+    earlier = GroupRound("earlier", now + 4).start(group)
+
+    # Just before its heartbeat statement, the leader takes the rounds that can join, in arrival
+    # order.
+    joined = group.join(leader)
+
+    assert [heartbeat_round.name for heartbeat_round in joined] == ["later", "equal"]  # type: ignore[attr-defined]
+    assert later.join() == "joined" and equal.join() == "joined"
+    # The round with the earlier deadline waits for the next transaction, and leads it.
+    assert earlier.turn is None
+    group.finish(leader)
+    assert earlier.join() == "lead"
+    group.finish(earlier)
+
+
+def test_a_round_that_arrives_after_the_heartbeat_statement_waits_for_the_next_transaction() -> (
+    None
+):
+    group = HeartbeatGroup()
+    now = monotonic()
+    leader = GroupRound("leader", now + 5)
+    assert group.wait(leader) == "lead"
+    assert group.join(leader) == []
+    late = GroupRound("late", now + 6).start(group)
+
+    assert late.turn is None
+    group.finish(leader)
+    assert late.join() == "lead"
+    group.finish(late)
+
+
+def test_the_waiting_round_with_the_earliest_deadline_leads_the_next_transaction() -> None:
+    group = HeartbeatGroup()
+    now = monotonic()
+    leader = GroupRound("leader", now + 1)
+    assert group.wait(leader) == "lead"
+    rounds = [
+        GroupRound(name, now + seconds).start(group)
+        for name, seconds in (("third", 4.0), ("first", 2.0), ("second", 3.0))
+    ]
+
+    group.finish(leader)
+    wait_until(lambda: any(r.turn for r in rounds), 5, "no round led")
+    (next_leader,) = [r for r in rounds if r.turn == "lead"]
+    assert next_leader.name == "first"
+    # The next leader takes the others into its transaction.
+    assert [r.name for r in group.join(next_leader)] == ["third", "second"]  # type: ignore[attr-defined]
+    group.finish(next_leader)
+    assert [r.join() for r in rounds] == ["joined", "lead", "joined"]
+
+
+def test_a_waiting_round_whose_deadline_passes_expires() -> None:
+    group = HeartbeatGroup()
+    now = monotonic()
+    leader = GroupRound("leader", now + 5)
+    assert group.wait(leader) == "lead"
+
+    short = GroupRound("short", now + 0.1).start(group)
+
+    assert short.join() == "expired"
+    assert waiting_rounds(group) == 0
+    group.finish(leader)
+
+
+def test_a_leader_past_its_deadline_and_the_grace_no_longer_blocks_the_others() -> None:
+    group = HeartbeatGroup(grace_seconds=0.1)
+    now = monotonic()
+    hung = GroupRound("hung", now + 0.1)
+    assert group.wait(hung) == "lead"
+
+    next_round = GroupRound("next", now + 5).start(group)
+
+    # The hung leader never finishes. After its deadline and the grace, the next round leads.
+    assert next_round.join() == "lead"
+    # The hung leader takes no round, and its late finish does not end the new transaction.
+    assert group.join(hung) == []
+    group.finish(hung)
+    assert group._leader is next_round
+    group.finish(next_round)
 
 
 def test_a_round_with_too_little_time_left_skips_and_keeps_the_connection() -> None:

@@ -1472,8 +1472,8 @@ func TestAHeartbeatRoundReportsALockedRowAsBusy(t *testing.T) {
 
 // TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline pins the server side of the bound
 // alone. pgx also sends a cancel request when a deadline interrupts a query, but that request needs
-// a second connection and can be lost. PostgreSQL ends the statement first, at half of the time
-// left, so the error is the server's statement timeout and not the client's deadline.
+// a second connection and can be lost. PostgreSQL ends the statement first, at one quarter of the
+// time left, so the error is the server's statement timeout and not the client's deadline.
 func TestAHeartbeatStatementEndsOnTheServerBeforeTheClientDeadline(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "heartbeat-server-bound")
 	ctx := context.Background()
@@ -1844,8 +1844,8 @@ func TestARoundOnThePoolThatExpiresBeforeItsHeartbeatReturnsItsConnectionOpen(t 
 
 // TestAHeartbeatRoundAnswersEachLeaseItSent pins SM-1494 and SM-1495. A round can name one task
 // twice, when an old attempt has not unregistered yet, and it can hold more than the 100 leases
-// that one statement accepts. Each lease gets the status of its own row, and the round splits its
-// leases into statements of at most 100.
+// that one heartbeat_many_v2 call accepts. Each lease gets the status of its own row, and the round
+// splits its leases into batches of at most 100 in one heartbeat_pool_v1 statement (SM-1633).
 func TestAHeartbeatRoundAnswersEachLeaseItSent(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-ordinal")
 	ctx := context.Background()
@@ -1902,7 +1902,7 @@ func TestAHeartbeatRoundAnswersEachLeaseItSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An older fence of the task comes first and the current fence second. 150 leases of tasks
-	// that do not exist follow, so the round needs two statements.
+	// that do not exist follow, so the round needs two batches.
 	leases := []workhorse.HeartbeatLeaseForTest{
 		{TaskID: taskID, FenceToken: fenceToken - 1},
 		{TaskID: taskID, FenceToken: fenceToken},

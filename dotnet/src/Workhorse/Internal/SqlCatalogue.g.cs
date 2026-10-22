@@ -180,6 +180,12 @@ internal static class SqlCatalogue
         "SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v2($1::text, $2::jsonb) ORDER BY ordinal",
         2);
 
+    /// <summary><c>heartbeat_pool_v1</c> (protocol).</summary>
+    internal static readonly Statement HeartbeatPoolV1 = new(
+        "heartbeat_pool_v1",
+        "SELECT batch.ordinal::integer AS batch, lease.task_id::text AS task_id, lease.status FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS batch(item, ordinal) CROSS JOIN LATERAL workhorse.heartbeat_many_v2(batch.item->>'workerId', batch.item->'leases') AS lease ORDER BY batch.ordinal, lease.ordinal",
+        1);
+
     /// <summary><c>heartbeat_v1</c> (protocol).</summary>
     internal static readonly Statement HeartbeatV1 = new(
         "heartbeat_v1",
@@ -1018,6 +1024,7 @@ internal static class SqlCatalogue
         GetProgress,
         GetWait,
         HeartbeatManyV2,
+        HeartbeatPoolV1,
         HeartbeatV1,
         HeartbeatV2,
         ListCheckpoint,

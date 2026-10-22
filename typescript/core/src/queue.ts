@@ -159,6 +159,7 @@ import { FastTierUnsupportedError, SchemaCompatibilityError } from "./errors.js"
 import { assertSchemaCompatible } from "./schema.js";
 import { monotonicNow } from "./timers.js";
 import { queryFencedWrite } from "./queue/fenced-write.js";
+import { heartbeatLeaseBatches, reportHeartbeatStatuses } from "./queue/claim-lease-fence.js";
 import type {
   TaskGroup,
   TaskGroupBlockResult,
@@ -979,11 +980,19 @@ export class Queue {
         if (borrowed === "timeout") return { step: "ordinary", reason: "timeout" };
         return undefined;
       },
-      heartbeatMany: (tasks, workerId, leaseMs, timeoutMs) =>
-        connection.run(
-          (client) => this.forDatabase(client).heartbeatMany(tasks, workerId, leaseMs),
-          timeoutMs,
-        ),
+      // Every worker on the pool renews through one transaction for each round of the shared
+      // connection, so this round sends its batches to the connection instead of statements.
+      async heartbeatMany(tasks, workerId, leaseMs, timeoutMs) {
+        if (tasks.length === 0) return new Map<string, HeartbeatBatchStatus>();
+        const rows = await connection.renew(timeoutMs, () =>
+          heartbeatLeaseBatches(tasks, leaseMs).map((leases) => ({ workerId, leases })),
+        );
+        const statuses = new Map<string, HeartbeatBatchStatus>(
+          rows.map((row) => [row.task_id, row.status]),
+        );
+        reportHeartbeatStatuses(tasks, workerId, statuses);
+        return statuses;
+      },
       close: () => connection.close(),
     };
   }

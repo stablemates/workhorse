@@ -36,10 +36,20 @@ RSpec.describe "Worker heartbeat busy retry" do
   # recorded in +calls+.
   def drive(heartbeat, calls, &answer)
     heartbeat.instance_variable_set(:@previous, monotonic)
-    statement = lambda do |_sql, params, timeout|
-      ids = JSON.parse(params[1]).map { |lease| lease["taskId"] }
+    statement = lambda do |sql, params, timeout|
+      # A dedicated heartbeat sends heartbeat_pool_v1 with batches, and a borrowing one sends
+      # heartbeat_many_v2 with one list of leases.
+      batches = if sql == W::SqlCatalogue::HEARTBEAT_POOL_V1
+        JSON.parse(params[0]).map { |batch| batch["leases"] }
+      else
+        [JSON.parse(params[1])]
+      end
+      ids = batches.flatten.map { |lease| lease["taskId"] }
       calls << {at: monotonic, ids: ids, timeout: timeout}
-      answer.call(ids, calls.size).map { |id, status| {"task_id" => id, "status" => status} }
+      statuses = answer.call(ids, calls.size)
+      batches.each_with_index.flat_map do |leases, index|
+        leases.map { |lease| {"batch" => (index + 1).to_s, "task_id" => lease["taskId"], "status" => statuses[lease["taskId"]]} }
+      end
     end
     @driver = Thread.new do
       loop do

@@ -178,7 +178,8 @@ module Stablemates
         # The wait after a shared round raised an unexpected error, in seconds, so that an error that
         # repeats cannot keep the thread busy.
         FAILED_ROUND_DELAY = 0.1
-        # heartbeat_many_v2 raises an error for more leases than this in one statement.
+        # heartbeat_many_v2 raises an error for more leases than this in one call, so a batch of
+        # heartbeat_pool_v1 holds at most this many leases too.
         STATEMENT_LEASE_LIMIT = 100
         private_constant :STRINGS, :ROUND_TIMEOUTS, :MINIMUM_REMAINING, :REACQUIRE_BASE, :PROBE_INTERVAL, :RELEASE_WAIT,
           :BUSY_RETRY_BASE, :BUSY_RETRY_MARGIN, :BUSY_RETRY_MINIMUM, :FAILED_ROUND_DELAY, :STATEMENT_LEASE_LIMIT
@@ -236,8 +237,6 @@ module Stablemates
           @held = nil
           # The current readiness Probe. Guarded by @lock.
           @probe = nil
-          # The worker that the next dedicated round sends first. Only the heartbeat thread uses it.
-          @rotation = 0
           # The busy members of the latest round, which a retry renews before the next regular
           # round, and the monotonic time when that retry falls due. A round of either kind
           # replaces both. Only the heartbeat thread uses them.
@@ -645,7 +644,7 @@ module Stablemates
               # It sends nothing, and the next regular round renews every lease, the busy ones too.
               next if @dedicated && deadline - started < BUSY_RETRY_MINIMUM
 
-              send_round(selection, deadline, interval, rotate: false, &)
+              send_round(selection, deadline, interval, &)
               next
             end
             @previous = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -655,56 +654,85 @@ module Stablemates
             return true if members.nil?
             next if members.empty?
 
-            send_round(members, deadline, interval, rotate: true, &)
+            send_round(members, deadline, interval, &)
           end
         end
 
-        # Sends one round for +members+. A round sends one statement for each worker, and more for a
-        # worker with more than +STATEMENT_LEASE_LIMIT+ members (+statements+). On the
-        # dedicated connection, all of them share one +deadline+. A statement that would start after
-        # it waits for the next round, so a slow statement of one worker cannot delay the renewal of
-        # another past it. Each regular round starts with the next worker (+ordered_groups+), so a
-        # worker whose statement is always slow cannot keep another from its turn. A borrowing
-        # heartbeat has no deadline, and sends every statement.
+        # Sends one round for +members+. The members of each worker form batches of at most
+        # +STATEMENT_LEASE_LIMIT+ leases (+batches+). A worker can hold more members than its
+        # concurrency, because a fused completion claim registers its tasks before the completing
+        # attempts unregister.
+        #
+        # On the dedicated connection, one heartbeat_pool_v1 statement in one transaction renews
+        # every batch of every worker, by the one +deadline+ (+send_pooled+). The round is
+        # all-or-nothing: if the statement or COMMIT fails, no lease of the round counts. A
+        # borrowing heartbeat has no deadline, and sends one heartbeat_many_v2 statement for each
+        # batch (+send_each+).
         #
         # A round replaces the pending busy retry. If one or more members are busy, it schedules one
-        # retry for them. A round that raises schedules none, and the next regular round tries again.
-        #
-        # A statement that expires before its heartbeat (+RoundExpired+) stops the round on its
-        # connection. The statements before it still count, and the next round sends the rest. A
-        # busy retry that stops this way schedules no other retry.
-        def send_round(members, deadline, interval, rotate:)
+        # retry for them. A round that raises or expires schedules none, and the next regular round
+        # tries again.
+        def send_round(members, deadline, interval, &)
           @busy = nil
-          busy = []
-          expired = false
-          statements(members, rotate:).each do |worker_id, group|
-            sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            leases = group.map do |member|
-              {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
-            end
-            params = [worker_id, JSON.generate(leases)]
-            timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            break if @dedicated && !timeout.positive?
-
-            rows = begin
-              yield SqlCatalogue::HEARTBEAT_MANY_V2, params, timeout
-            rescue RoundExpired
-              expired = true
-              break
-            rescue RoundTimeout, PG::Error
-              raise if @dedicated
-
-              next
-            rescue
-              # A skipped round is silent: the lease watchdog handles rounds that keep failing.
-              next
-            end
-            busy.concat(settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at))
-          end
-          return if busy.empty? || (expired && !rotate)
+          batches = batches(members)
+          busy = @dedicated ? send_pooled(batches, deadline, &) : send_each(batches, deadline, &)
+          return if busy.empty?
 
           @busy = busy
           @busy_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + Heartbeat.busy_retry_delay(interval)
+        end
+
+        # Sends every batch in one heartbeat_pool_v1 statement, and returns the busy members. Each
+        # row names its batch by its 1-based position in the payload, so the statuses go back to
+        # the members of that batch. A round that expires before its heartbeat statement
+        # (+RoundExpired+) renews nothing, and the caller keeps the connection. RoundTimeout and
+        # PG::Error go to the caller, which discards the connection.
+        def send_pooled(batches, deadline)
+          sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          payload = batches.map { |worker_id, group| {"workerId" => worker_id, "leases" => leases(group)} }
+          params = [JSON.generate(payload)]
+          timeout = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          return [] unless timeout.positive?
+
+          rows = begin
+            yield SqlCatalogue::HEARTBEAT_POOL_V1, params, timeout
+          rescue RoundExpired
+            return []
+          rescue RoundTimeout, PG::Error
+            raise
+          rescue
+            # A skipped round is silent: the lease watchdog handles rounds that keep failing.
+            return []
+          end
+          statuses = Array.new(batches.size) { {} }
+          rows.each do |row|
+            batch = Integer(row["batch"], 10) - 1
+            statuses[batch][row["task_id"]] = row["status"] if batch.between?(0, batches.size - 1)
+          end
+          batches.each_with_index.flat_map { |(_worker_id, group), index| settle(group, statuses[index], sent_at) }
+        end
+
+        # Sends one heartbeat_many_v2 statement for each batch through the executor, and returns the
+        # busy members. A batch whose statement fails gets nothing, and the other batches still go.
+        def send_each(batches, deadline)
+          batches.flat_map do |worker_id, group|
+            sent_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            params = [worker_id, JSON.generate(leases(group))]
+            rows = begin
+              yield SqlCatalogue::HEARTBEAT_MANY_V2, params, deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            rescue
+              # A skipped round is silent: the lease watchdog handles rounds that keep failing.
+              next []
+            end
+            settle(group, rows.to_h { |row| [row["task_id"], row["status"]] }, sent_at)
+          end
+        end
+
+        # The lease objects of heartbeat_many_v2 for the members of one batch.
+        def leases(group)
+          group.map do |member|
+            {"taskId" => member.task.id, "fenceToken" => member.task.fence_token.to_s, "leaseMs" => member.lease_ms}
+          end
         end
 
         # Takes the pending busy retry, and returns the members it can still renew, or nil. Each
@@ -733,26 +761,12 @@ module Stablemates
           [started + round_bound(interval), regular_at, *ends].min
         end
 
-        # The statements of one round, as [worker_id, members] pairs: the +ordered_groups+, each
-        # split into slices of at most +STATEMENT_LEASE_LIMIT+ members. A fused completion claim
-        # registers its tasks before the completing attempts unregister, so a worker can hold more
-        # members than its concurrency.
-        def statements(members, rotate:)
-          ordered_groups(members, rotate:).flat_map do |worker_id, group|
+        # The batches of one round, as [worker_id, members] pairs: the members of each worker, split
+        # into slices of at most +STATEMENT_LEASE_LIMIT+ members.
+        def batches(members)
+          members.group_by(&:worker_id).flat_map do |worker_id, group|
             group.each_slice(STATEMENT_LEASE_LIMIT).map { |slice| [worker_id, slice] }
           end
-        end
-
-        # The members of one round, one group for each worker, as [worker_id, members] pairs. On the
-        # dedicated connection, each regular round starts one worker later than the round before
-        # it. A busy retry (+rotate+ false) keeps the order and does not move the rotation.
-        def ordered_groups(members, rotate: true)
-          groups = members.group_by(&:worker_id).to_a
-          return groups unless rotate && @dedicated && groups.size > 1
-
-          first = @rotation % groups.size
-          @rotation = first + 1
-          groups.rotate(first)
         end
 
         # The deadline of one round, in seconds, for the shortest member +interval+
@@ -898,11 +912,12 @@ module Stablemates
         # milliseconds. PostgreSQL measures +statement_timeout+ for each statement and
         # +idle_in_transaction_session_timeout+ for each idle gap, and restarts both every time.
         # While the round can hold a row lock, it has one idle gap before the heartbeat, the
-        # heartbeat, and one idle gap before COMMIT. So the heartbeat gets one half, each gap one
-        # eighth, and the last quarter is kept for COMMIT. No setting bounds COMMIT itself.
+        # heartbeat, and one idle gap before COMMIT. So the heartbeat gets one quarter, each gap one
+        # quarter, and the last quarter is kept for the settings statement and COMMIT. No setting
+        # bounds COMMIT itself.
         def round_timeouts(remaining)
           milliseconds = (remaining * 1000).floor
-          [[1, milliseconds / 2].max.to_s, [1, milliseconds / 8].max.to_s]
+          [[1, milliseconds / 4].max.to_s, [1, milliseconds / 4].max.to_s]
         end
 
         # Sends one statement and waits for its result until +deadline+, a monotonic time. Nothing

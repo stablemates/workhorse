@@ -41,6 +41,16 @@ adds.
 
 ### Fixes
 
+- **Workers on one pool renew their leases in one transaction.** On the dedicated heartbeat
+  connection, a round sent one transaction for each worker and each 100 leases. Each transaction
+  needs at least 3 round trips to PostgreSQL. With 8 workers on one pool and 80 ms for each round
+  trip, workers lost leases while PostgreSQL still answered (SM-1631). Now the heartbeat thread of
+  the pool sends one transaction for each round, with one `heartbeat_pool_v1` statement for every
+  worker and every 100 leases. The transaction locks the task rows of every worker in it until its
+  `COMMIT`. A round renews all of its leases or none. The settings statement now sets
+  `statement_timeout` and `idle_in_transaction_session_timeout` each to one quarter of the time that
+  remains, not to one half and one eighth. The statement needs no schema change. The
+  `sharedHeartbeats(true)` opt-out does not change (SM-1633).
 - **A worker reads a stored contract schema with a fraction outside the double range.** Another
   SDK can synchronize a schema such as `{"maximum": 1000…0.1}` with 310 digits before the point.
   Before this change, the JVM refused that constant, so it could not load the payload contract.

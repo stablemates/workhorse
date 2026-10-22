@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### Workers on one pool renew their leases in one transaction
+
+On the dedicated heartbeat connection, a round sent one transaction for each worker and each 100
+leases. Each transaction needs at least 3 round trips to PostgreSQL. With 8 workers on one pool and
+80 ms for each round trip, workers lost leases while PostgreSQL still answered (SM-1631). Now the rounds that wait for the connection share one transaction, with one `heartbeat_pool_v1` statement for every worker and every 100 leases. The round that leads the transaction takes every waiting round whose deadline is not earlier than its own. The
+transaction locks the task rows of every worker in it until its `COMMIT`. A round renews all of its
+leases or none. The settings statement now sets `statement_timeout` and
+`idle_in_transaction_session_timeout` each to one quarter of the time that remains, not to one half
+and one eighth. The statement needs no schema change. The `shared_heartbeats` opt-out does not change (SM-1633).
+
 ### The dashboard changes a queue's tier and history
 
 Before this change, an operator used `workhorse admin set-tier` and `set-history` to move a queue

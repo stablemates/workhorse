@@ -177,39 +177,73 @@ class HeartbeatTest {
     for (int round = 0; round < 3; round++) {
       List<String> sent = new ArrayList<>();
       long deadline = System.nanoTime() + millis(ROUND_DEADLINE_MS);
-      shared.sendBatches(
-          batches,
-          shared.nextFirstBatch(batches.size()),
-          deadline,
-          slowFirstBatch(due.get(0).taskId().toString(), sent));
+      shared.sendBatches(batches, deadline, slowFirstBatch(due.get(0).taskId().toString(), sent));
       // A shared round has no deadline, so the batch after the slow one is always sent.
       assertEquals(2, sent.size(), "round " + round);
       assertTrue(sent.get(1).contains(last), "round " + round);
     }
   }
 
+  /**
+   * SM-1633: a dedicated round sends one {@code heartbeat_pool_v1} statement for every batch of
+   * every worker. A batch holds at most 100 leases of one worker, and the statuses go back to the
+   * members of each batch by the batch number.
+   */
   @Test
-  void aDedicatedRoundStartsWithTheNextBatchSoNoBatchStarves() throws Exception {
-    List<Heartbeat.Member> due = members(101);
-    List<Heartbeat.Batch> batches = Heartbeat.batches(due);
-    String last = due.get(100).taskId().toString();
-    Heartbeat dedicated = new Heartbeat(null, true);
-    int renewedLast = 0;
-    for (int round = 0; round < 4; round++) {
-      List<String> sent = new ArrayList<>();
-      long deadline = System.nanoTime() + millis(ROUND_DEADLINE_MS);
-      dedicated.sendBatches(
-          batches,
-          dedicated.nextFirstBatch(batches.size()),
-          deadline,
-          slowFirstBatch(due.get(0).taskId().toString(), sent));
-      if (sent.stream().anyMatch(payload -> payload.contains(last))) {
-        renewedLast++;
-      }
+  void aDedicatedRoundSendsEveryBatchOfEveryWorkerInOneStatement() throws Exception {
+    long interval = millis(10_000);
+    List<FakeMember> due = new ArrayList<>();
+    for (int index = 0; index < 101; index++) {
+      due.add(new FakeMember("first", interval));
     }
-    // The slow batch uses the whole deadline when it goes first, so the last lease is sent in the
-    // rounds that start with its batch: every second round.
-    assertEquals(2, renewedLast);
+    FakeMember second = new FakeMember("second", interval);
+    FakeMember third = new FakeMember("third", interval);
+    due.add(second);
+    due.add(third);
+    // The fixed round is never due within the test: the member interval is 10 s.
+    Heartbeat dedicated =
+        new Heartbeat(null, true, (timeoutNanos, statement, parameters) -> List.of());
+    List<Runnable> removals = new ArrayList<>();
+    due.forEach(member -> removals.add(dedicated.register(member)));
+    Recorder round = new Recorder(0, (index, call) -> answer(call, due, second));
+    try {
+      List<Heartbeat.Member> busy =
+          dedicated.sendBatches(
+              Heartbeat.batches(List.copyOf(due)),
+              System.nanoTime() + millis(ROUND_DEADLINE_MS),
+              round);
+      assertEquals(1, round.calls.size(), "one statement carries every batch");
+      assertSame(SqlCatalogue.HEARTBEAT_POOL_V1, round.statements.get(0));
+      List<?> items = (List<?>) Json.parse(round.calls.get(0).payload());
+      assertEquals(4, items.size(), "two batches of the first worker and one of each other");
+      List<String> workers = new ArrayList<>();
+      for (Object item : items) {
+        Map<?, ?> batch = (Map<?, ?>) item;
+        workers.add((String) batch.get("workerId"));
+        assertTrue(((List<?>) batch.get("leases")).size() <= 100, "a batch has at most 100");
+      }
+      assertEquals(List.of("first", "first", "second", "third"), workers);
+      assertEquals(List.of(second), busy, "the busy status reaches the member of its batch");
+      for (FakeMember member : due) {
+        assertEquals(member == second ? 0 : 1, member.renewals.get(), member.workerId);
+      }
+    } finally {
+      removals.forEach(Runnable::run);
+    }
+  }
+
+  @Test
+  void givesTheHeartbeatAndEachIdleGapOneQuarterOfTheTimeLeft() {
+    assertEquals(250, Heartbeat.serverBudgetMs(1_000));
+    assertEquals(187, Heartbeat.serverBudgetMs(750));
+    assertEquals(2, Heartbeat.serverBudgetMs(8));
+    assertEquals(1, Heartbeat.serverBudgetMs(7));
+    assertEquals(1, Heartbeat.serverBudgetMs(1));
+    assertEquals(1, Heartbeat.serverBudgetMs(0));
+    for (long remaining = 8; remaining <= 2_000; remaining++) {
+      // The heartbeat and both idle gaps end within three quarters of the time left.
+      assertTrue(3 * Heartbeat.serverBudgetMs(remaining) <= remaining * 3 / 4, remaining + " ms");
+    }
   }
 
   // SM-1443: busy leases and the busy retry.
@@ -329,9 +363,13 @@ class HeartbeatTest {
     Map<UUID, String> statuses(int call, Call sent) throws SQLException;
   }
 
-  /** A round that records each statement and its overlap, and answers through {@code answer}. */
+  /**
+   * A round that records each statement and its overlap, and answers through {@code answer}. It
+   * answers a {@code heartbeat_pool_v1} statement with the number of the batch that sent each task.
+   */
   private static final class Recorder implements Heartbeat.Round {
     final List<Call> calls = new CopyOnWriteArrayList<>();
+    final List<SqlCatalogue.Statement> statements = new CopyOnWriteArrayList<>();
     final AtomicInteger inFlight = new AtomicInteger();
     final AtomicInteger overlap = new AtomicInteger();
     final Answer answer;
@@ -346,9 +384,10 @@ class HeartbeatTest {
     public List<Row> send(
         long timeoutNanos, SqlCatalogue.Statement statement, @Nullable Object... parameters)
         throws SQLException {
-      Call call = new Call(System.nanoTime(), (String) parameters[1]);
+      Call call = new Call(System.nanoTime(), (String) parameters[parameters.length - 1]);
       int index = calls.size();
       calls.add(call);
+      statements.add(statement);
       overlap.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
       try {
         if (sendMillis > 0) {
@@ -357,6 +396,9 @@ class HeartbeatTest {
         List<Row> rows = new ArrayList<>();
         for (Map.Entry<UUID, String> entry : answer.statuses(index, call).entrySet()) {
           Map<String, @Nullable Object> values = new LinkedHashMap<>();
+          if (statement == SqlCatalogue.HEARTBEAT_POOL_V1) {
+            values.put("batch", Long.toString(batchOf(call.payload(), entry.getKey())));
+          }
           values.put("task_id", entry.getKey().toString());
           values.put("status", entry.getValue());
           rows.add(new Row(values));
@@ -369,6 +411,21 @@ class HeartbeatTest {
         inFlight.decrementAndGet();
       }
     }
+  }
+
+  /**
+   * The 1-based number of the batch of a {@code heartbeat_pool_v1} payload that sends {@code task}.
+   */
+  private static int batchOf(String payload, UUID task) {
+    List<?> items = (List<?>) Json.parse(payload);
+    for (int index = 0; index < items.size(); index++) {
+      for (Object lease : (List<?>) ((Map<?, ?>) items.get(index)).get("leases")) {
+        if (task.toString().equals(((Map<?, ?>) lease).get("taskId"))) {
+          return index + 1;
+        }
+      }
+    }
+    throw new AssertionError("no batch sends " + task);
   }
 
   /** Every member that {@code call} sends, as accepted, apart from {@code busy}. */
@@ -621,14 +678,35 @@ class HeartbeatTest {
     assertTrue(gap < 250, "the retry came after " + gap + " ms");
   }
 
-  /** One member of each of three workers, so a round sends three batches. */
+  /** One member of each of three workers, so a round has three batches. */
   private static List<Heartbeat.Member> threeWorkers() {
     return List.of(member("first"), member("second"), member("third"));
   }
 
   @Test
-  void endsADedicatedRoundWithoutAThrowWhenABatchExpiresBeforeItsHeartbeat() throws Exception {
+  void endsADedicatedRoundWithoutAThrowWhenItExpiresBeforeItsHeartbeat() throws Exception {
     List<Heartbeat.Member> due = threeWorkers();
+    Heartbeat dedicated = new Heartbeat(null, true);
+    List<SqlCatalogue.Statement> sent = new ArrayList<>();
+    List<Heartbeat.Member> busy =
+        dedicated.sendBatches(
+            Heartbeat.batches(due),
+            System.nanoTime() + millis(ROUND_DEADLINE_MS),
+            (timeoutNanos, statement, parameters) -> {
+              sent.add(statement);
+              throw new Heartbeat.RoundExpired("injected expiry");
+            });
+    assertEquals(List.of(SqlCatalogue.HEARTBEAT_POOL_V1), sent, "one statement for the round");
+    assertTrue(busy.isEmpty(), "an expired round settles no lease");
+  }
+
+  @Test
+  void stillThrowsWhenARoundTimesOutWithItsStatementInFlight() {
+    List<FakeMember> due =
+        List.of(
+            new FakeMember("first", millis(10_000)),
+            new FakeMember("second", millis(10_000)),
+            new FakeMember("third", millis(10_000)));
     // The fixed round is never due within the test: the member interval is 10 s.
     Heartbeat dedicated =
         new Heartbeat(null, true, (timeoutNanos, statement, parameters) -> List.of());
@@ -636,44 +714,24 @@ class HeartbeatTest {
     due.forEach(member -> removals.add(dedicated.register(member)));
     List<String> sent = new ArrayList<>();
     try {
-      List<Heartbeat.Member> busy =
-          dedicated.sendBatches(
-              Heartbeat.batches(due),
-              0,
-              System.nanoTime() + millis(ROUND_DEADLINE_MS),
-              (timeoutNanos, statement, parameters) -> {
-                sent.add((String) parameters[0]);
-                if (sent.size() == 2) {
-                  throw new Heartbeat.RoundExpired("injected expiry");
-                }
-                Map<String, @Nullable Object> values = new LinkedHashMap<>();
-                values.put("task_id", due.get(0).taskId().toString());
-                values.put("status", "busy");
-                return List.of(new Row(values));
-              });
-      assertEquals(List.of("first", "second"), sent, "no batch goes out after the expired one");
-      assertEquals(List.of(due.get(0)), busy, "the earlier batch result still counts");
+      assertThrows(
+          SQLTimeoutException.class,
+          () ->
+              dedicated.sendBatches(
+                  Heartbeat.batches(List.copyOf(due)),
+                  System.nanoTime() + millis(ROUND_DEADLINE_MS),
+                  (timeoutNanos, statement, parameters) -> {
+                    sent.add((String) parameters[0]);
+                    throw new SQLTimeoutException("injected in-flight deadline");
+                  }));
     } finally {
       removals.forEach(Runnable::run);
     }
-  }
-
-  @Test
-  void stillThrowsWhenABatchTimesOutWithAStatementInFlight() {
-    List<Heartbeat.Member> due = threeWorkers();
-    Heartbeat dedicated = new Heartbeat(null, true);
-    List<String> sent = new ArrayList<>();
-    assertThrows(
-        SQLTimeoutException.class,
-        () ->
-            dedicated.sendBatches(
-                Heartbeat.batches(due),
-                0,
-                System.nanoTime() + millis(ROUND_DEADLINE_MS),
-                (timeoutNanos, statement, parameters) -> {
-                  sent.add((String) parameters[0]);
-                  throw new SQLTimeoutException("injected in-flight deadline");
-                }));
-    assertEquals(List.of("first"), sent);
+    assertEquals(1, sent.size(), "one statement carries every batch");
+    for (FakeMember member : due) {
+      // The round is all or nothing, so no lease of it counts.
+      assertEquals(0, member.renewals.get(), member.workerId);
+      assertTrue(member.statuses.isEmpty(), member.workerId);
+    }
   }
 }

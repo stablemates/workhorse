@@ -487,9 +487,7 @@ describe("destroyed heartbeat connection", () => {
     };
     const hold = holdHeartbeatConnection(lender as unknown as Pool, 1_000)!;
     try {
-      await expect(hold.run((client) => client.query("SELECT 1"), 50)).rejects.toThrow(
-        /deadline|did not finish/,
-      );
+      await expect(hold.renew(50, () => [])).rejects.toThrow(/deadline|did not finish/);
       await clientRemoved;
       await vi.waitFor(() => expect(clientErrors).toContain("25P03"));
       // The pool's idle listener would get the error in the same emit as the test's listener.
