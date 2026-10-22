@@ -541,6 +541,27 @@ Before that `DELETE`, the resolver locks the runtime rows of every rejected depe
 in `task_id` order. An enqueue batch locks its prerequisites in the same order, so neither holds a
 row the other waits for. The `DELETE` plan alone could lock the rows in any order.
 
+That order does not cover the task whose outcome started the resolver. A cancel locks the runtime
+row of its task before its outcome trigger locks a rejected dependent. An enqueue that names the
+task and the dependent as prerequisites locks both in identity order. Task identities are random,
+so the dependent sorts first in about half of such pairs. The two can then wait for each other:
+
+1. The task `B` depends on `A` with `on_cancellation = cancel`, and `B` sorts below `A`.
+2. A cancel of `A` locks the runtime row of `A` and deletes it.
+3. An enqueue names `A` and `B`. It locks `B` `FOR KEY SHARE` and waits for `A`.
+4. The resolver locks `B` `FOR UPDATE` before the `DELETE` and waits for the enqueue.
+5. PostgreSQL aborts one of them with `40P01`.
+
+If `B` sorts above `A`, the enqueue waits for `A` before it locks `B`. The cancel then finishes,
+and the enqueue continues after the cancel commits.
+
+Workhorse keeps this limit, and neither call retries the `40P01` (SM-1286,
+[ADR 0101](../decisions/0101-cancel-a-purged-prerequisite-whose-dependent-stays.md)). An SDK cannot
+send an enqueue again that runs in a transaction of the caller. A cancel learns its dependents only
+after it locks its task, so no single lock order covers both calls. A caller that gets `40P01` from
+either call can run its transaction again. `integration-cancel-enqueue-deadlock.test.ts`
+reproduces the cycle and the safe order.
+
 Before schema version 33, a batch locked request by request. One request could then hold a row the
 resolver was about to delete while the next request waited on a row the resolver already held.
 
@@ -2801,8 +2822,9 @@ next dependency levels one at a time ([Propagation and cascades](#propagation-an
 - The step 3 lock does not conflict with the key-share lock of an enqueue. An enqueue that names a
   purged task and a dependent that its policy releases cannot deadlock with the purge.
 - An enqueue that names a purged task and a dependent that its policy cancels or fails can deadlock
-  with the purge. PostgreSQL then aborts one of them with `40P01`. A cancel of the same task has the
-  same limit (SM-1286).
+  with the purge, if the dependent sorts below the purged task. PostgreSQL then aborts one of them
+  with `40P01`. A cancel of the same task has the same limit, and Workhorse keeps it for both
+  (SM-1286, [Resolver lock order](#resolver-lock-order)).
 
 `task_dependency.prerequisite_task_id` restricts deletion, so the purge sorts its tasks into two
 sets (ADR 0101):
