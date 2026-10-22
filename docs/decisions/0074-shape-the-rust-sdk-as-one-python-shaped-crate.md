@@ -603,3 +603,27 @@ twin and Go's manual value converters account for most of the gap.
   `tower::Service` serves axum unchanged and also serves every other tower host.
 - **The dashboard in the default build.** Every worker would compile an HTTP stack and carry the
   browser bundle it never serves.
+
+## Amendment: `Admin` meets the ADR 0059 parity bar, not the TypeScript method list (2026-10-22)
+
+The Admin surface section says that `Admin` gives Rust the same operator capability as Python's and
+Go's `Admin` clients. A reader can take that sentence as a promise of each operator method of every
+other SDK. SM-1532 found that only the TypeScript SDK has public methods for some operator
+operations, for example `runTaskNow`, the lineage reads, and the retention policy methods.
+
+ADR 0059 sets the 1.0.0 parity bar. Each cell of the product table in `docs/parity.md` reads
+Supported or records why it does not, and `pnpm parity:check` passes. That table has the PostgreSQL,
+Dashboard, and CLI columns. Thus an operator gets each operator capability from the dashboard and
+the CLI against any database, whatever language enqueued the work.
+
+This amendment states that bar for Rust `Admin`:
+
+1. Rust `Admin` covers each row of the public SDK operator table in `docs/parity.md`.
+   `pnpm parity:check` holds each Supported cell in the Rust column to its test evidence.
+2. Rust `Admin` does not have to have each operator method of the TypeScript SDK. `docs/parity.md`
+   lists the operator methods that only TypeScript has.
+3. A method from that list can come to Rust later, because a new method is additive. It then gets
+   a row in `docs/parity.md` and an integration test.
+
+The method block above does not change. The rejected alternative "Omitting `Admin`" still holds:
+every language has an `Admin` client.

@@ -339,6 +339,12 @@ Ruby, or the JVM uses those statements. In those languages, the embedded dashboa
 these operations: run now, the lineage reads, and the retention and maintenance policy controls.
 For the other operations, an operator must run TypeScript code.
 
+ADR 0059 sets the 1.0.0 parity bar, and the TypeScript-only methods are not part of it.
+Amendments to [ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md),
+[ADR 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md), and
+[ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
+state this bar for the Rust, Ruby, and JVM `Admin` clients.
+
 `setQueueTier` and `setQueueHistory` are in the TypeScript, Python, Go, and Rust `Admin` clients.
 Ruby and the JVM do not have them. [SM-1417](https://linear.app/stablemates/issue/SM-1417) records
 that decision.
