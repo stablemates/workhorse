@@ -87,6 +87,19 @@ Now each task records the run that launched it. Its completion asks only that ru
 tasks. A completion that outlives its run settles its task and claims nothing. It also goes in a
 statement of its own, so it cannot join or fail a batch of the new run (SM-1579).
 
+### Handlers of an ended run keep their slots in the next run
+
+Before this release, the handlers that outlived a `Run` that returned `ErrShutdownIncomplete` still
+held their slots. The next `Run` of the same `Worker` did not count them. It claimed tasks for those
+slots, and then its dispatch loop waited for a slot to start the claimed tasks. During that wait the
+loop did not read its context, so the stop of the new run had no deadline. The claimed leases
+waited for the old handlers.
+
+Now each run counts the handlers of an ended run against `Concurrency`. A run claims only the slots
+that it can start now, so the handlers of all runs stay within `Concurrency`. When one of those
+handlers returns, the dispatch loop of the new run counts the freed slot at once, without a wait
+for the next poll. `RunOnce` claims nothing while those handlers hold every slot (SM-1582).
+
 ### Dependencies
 
 - The repository now builds and checks the module with go1.26.10, because advisory GO-2026-6809 in
