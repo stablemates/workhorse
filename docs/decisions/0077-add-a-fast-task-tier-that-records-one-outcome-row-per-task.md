@@ -77,7 +77,8 @@ and every SDK moves to the new protocol version in the same release train.**
    - a durable wait: a timer, signal or human wait
    - a signal
    - a dependency, a prerequisite task or a child task
-   - a policy: a concurrency key, a budget, debounce or throttle
+   - a policy: a concurrency key, a budget or debounce. Throttle was in this list until the
+     amendment of 2026-10-22.
 2. Workhorse rejects the whole batch with one error. The error names the feature and the queue. No
    request silently falls back to the full tier. The research build's `fast_plain_request_v1` did
    fall back, and this ADR rejects that behavior.
@@ -337,3 +338,25 @@ ADR 0057 would keep serving protocols 1 to 4 for twelve months, and retain every
 call. That would protect installations that do not exist. It would also keep two protocol ranges
 in every compatibility fixture and SDK bound for a year, for a cutover whose only installation is
 the demo.
+
+## Amendment: throttle works on a fast-tier queue (2026-10-22)
+
+Rule 2.1 rejected throttle on a fast-tier queue. SM-924 compared each fast-tier rejection with the
+SQL and found no structural reason for this one. Throttle only decides if Workhorse accepts an
+enqueue request. It converts its window into an idempotency retention, and rule 2.5 keeps
+idempotency keys, which enqueue settles before any runtime row exists. SM-928 records this
+amendment.
+
+1. Migration 0075 moves the schema from 73 to 74. It replaces `enqueue_throttle_v1` and
+   `enqueue_many_v1`, so both accept throttle on a fast-tier queue. Their signatures and outcomes
+   do not change.
+2. A coalesced request on a fast-tier task writes no `throttled` event. Rule 4 limits fast-tier
+   history to two opt-ins, attempt history and the claimed event, and the coalesced outcome already
+   returns the retained task. A history switch for this event is not added.
+3. The retained task decides if the event is written, not the queue of the request, because one
+   scoped key can name a task on another queue. A task is fast-tier when it has a
+   `fast_task_runtime` row or a `fast_task_outcome` row.
+4. Debounce stays rejected. It changes the `task_runtime` row of the pending task, and no fast-tier
+   path changes a pending row.
+5. The SDK compatibility floor stays at schema 73, because no SDK statement changes. On schema 73, a
+   throttled enqueue into a fast-tier queue still raises `P1007` with the feature `throttle`.

@@ -18,9 +18,10 @@ use uuid::Uuid;
 use workhorse::contracts::{TaskContractVersion, TaskTypeContracts};
 use workhorse::{
     Admin, AdminAudit, BatchItem, BatchOptions, BatchResult, CancelReason, ChildTaskRequest,
-    ClaimedTask, Debounce, DebounceSchedule, EnqueueOptions, EnqueueRequest, Error, HandlerContext,
-    HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy, ScheduleDefinition,
-    ScheduledTask, TaskState, Worker, WorkerOptions, CLEANUP_WINDOW, UNWIND_WINDOW,
+    ClaimedTask, Debounce, DebounceSchedule, EnqueueOptions, EnqueueOutcome, EnqueueRequest, Error,
+    HandlerContext, HandlerError, Queue, QueueHistory, QueueTier, ScheduleCatchupPolicy,
+    ScheduleDefinition, ScheduledTask, TaskState, Throttle, Worker, WorkerOptions, CLEANUP_WINDOW,
+    UNWIND_WINDOW,
 };
 
 const QUEUE: &str = "rust-worker";
@@ -2082,6 +2083,50 @@ async fn a_fast_queue_rejects_full_tier_enqueue_features_by_ordinal() {
     let task = harness.enqueue("plain", json!({}), on("fast-enqueue")).await;
     assert_eq!(harness.state(task).await, TaskState::Ready);
     assert_eq!(harness.runtime_rows("fast-enqueue").await, 1);
+}
+
+#[tokio::test]
+async fn a_fast_queue_throttles_an_enqueue_and_writes_no_throttled_event() {
+    let Some(harness) = harness("fast_throttle").await else { return };
+    harness.make_fast("fast-throttle").await;
+    let throttle = Throttle { scope: "fast-throttle".into(), ..Throttle::new("digest", 60_000) };
+    let throttled = EnqueueOptions { throttle: Some(throttle.clone()), ..on("fast-throttle") };
+
+    let first = harness.queue.enqueue("digest", &json!({"n": 1}), throttled.clone()).await.unwrap();
+    assert_eq!(first.outcome, EnqueueOutcome::Accepted);
+    assert_eq!(harness.runtime_rows("fast-throttle").await, 1);
+    let second = harness.queue.enqueue("digest", &json!({"n": 1}), throttled).await.unwrap();
+    assert_eq!(second.outcome, EnqueueOutcome::Coalesced);
+    assert_eq!(second.task_id, first.task_id);
+    let events: i64 = harness
+        .database
+        .connect()
+        .await
+        .query_one(
+            "SELECT count(*) FROM workhorse.task_event WHERE task_id = $1",
+            &[&first.task_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(events, 0);
+
+    // A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+    let keyed = EnqueueOptions {
+        concurrency_key: Some("tenant-a".into()),
+        throttle: Some(Throttle { key: "keyed".into(), ..throttle }),
+        ..on("fast-throttle")
+    };
+    let requests = vec![
+        EnqueueRequest { options: on("fast-throttle"), ..EnqueueRequest::new("plain", json!({})) },
+        EnqueueRequest { options: keyed, ..EnqueueRequest::new("keyed", json!({})) },
+    ];
+    let error = harness.queue.enqueue_many(requests).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::FastTierUnsupported { queue, feature, ordinal: Some(2) }
+            if queue == "fast-throttle" && feature == "concurrency keys"),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]

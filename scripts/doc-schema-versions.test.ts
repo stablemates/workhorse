@@ -24,7 +24,7 @@ import { repositoryRoot } from "./packages.js";
 // version that added a feature or the version a 0.7 database starts at.
 
 /** The upgrade section of the newest release. The release that adds the next section moves this. */
-const upgradeHeading = "## Upgrade from 0.8.x to 0.9.0";
+const upgradeHeading = "## Upgrade from 0.9.x to the next release";
 
 function read(relativePath: string): string {
   return readFileSync(path.join(repositoryRoot, relativePath), "utf8");
@@ -130,12 +130,16 @@ describe("schema numbers in the documentation", () => {
     const text = section(file, read(file), upgradeHeading);
     const where = `${file}, "${upgradeHeading.slice(3)}"`;
 
-    const [, through, target] = stated(
+    // The section names one migration ("applies migration 0075") or a range ("applies migrations
+    // 0073 through 0074").
+    const [single, rangeFirst, rangeLast, target] = stated(
       where,
       text,
-      /applies migrations (\d{4}) through (\d{4}) and leaves the schema at\s+version (\d+)\./,
+      /applies (?:migration (\d{4})|migrations (\d{4}) through (\d{4})) and leaves the schema at\s+version (\d+)\./,
       "the migrations that `workhorse schema migrate` applies",
     );
+    const first = Number.isNaN(single) ? rangeFirst! : single!;
+    const through = Number.isNaN(single) ? rangeLast! : single!;
     expect(
       String(through).padStart(4, "0"),
       `${where}: the last migration must be ${highestNumber}`,
@@ -147,18 +151,28 @@ describe("schema numbers in the documentation", () => {
     const rows = [...text.matchAll(/^\| `(\d{4}-[^`]+\.sql)`\s*\|\s*(\d+)\s*\|/gm)];
     const lastRow = rows.at(-1);
     expect(lastRow, `${where}: found no migration table`).toBeDefined();
+    expect(
+      rows.map((row) => row[1]!.slice(0, 4)),
+      `${where}: the table must list every migration from ${String(first)} through ${String(through)}`,
+    ).toEqual(
+      Array.from({ length: through - first + 1 }, (_, offset) =>
+        String(first + offset).padStart(4, "0"),
+      ),
+    );
     expect(lastRow![1], `${where}: the last table row must name ${highestFile}`).toBe(highestFile);
     expect(
       Number(lastRow![2]),
       `${where}: the last table row must give schema version ${WORKHORSE_SCHEMA_VERSION}`,
     ).toBe(WORKHORSE_SCHEMA_VERSION);
 
-    const [floor] = stated(
+    // The floor either rises ("schema floor rises from 69 to 73.") or stays ("does not raise the
+    // floor, so it stays 73.").
+    const floor = stated(
       where,
       text,
-      /schema floor rises from \d+ to (\d+)\./,
-      "the new schema floor",
-    );
+      /(?:schema floor rises from \d+ to (\d+)|does not raise the floor, so it stays (\d+))\./,
+      "the schema floor",
+    ).find((value) => !Number.isNaN(value));
     expect(floor, `${where}: the new schema floor must be ${MINIMUM_SCHEMA_VERSION}`).toBe(
       MINIMUM_SCHEMA_VERSION,
     );

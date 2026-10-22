@@ -1365,6 +1365,24 @@ benchmarked configuration is not a statement that other supported versions are s
 Requirements for making a performance claim at all are in [`benchmarking.md`](benchmarking.md);
 until a scenario has a recorded live artifact, no performance claim is made for any version.
 
+## Upgrade from 0.9.x to the next release
+
+The next release lets a producer throttle an enqueue into a fast-tier queue. The upgrade is a
+rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0075 and leaves the schema at version 74.
+2. Roll out the new processes in any order.
+
+A 0.9.0 database is at schema version 73. The migration only changes behavior that was an error:
+
+| Migration                                     | Schema version | Changes                                                                          |
+| --------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
+| `0075-allow-throttle-on-fast-tier-queues.sql` | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue |
+
+Schema version 74 does not raise the floor, so it stays 73. No SDK statement changes. Every process
+gets the new behavior when the migration commits. On schema 73, a throttled enqueue into a
+fast-tier queue still raises the fast-tier error with the feature `throttle`.
+
 ## Upgrade from 0.8.x to 0.9.0
 
 0.9.0 renews leases through `heartbeat_many_v2`, which does not wait for a locked

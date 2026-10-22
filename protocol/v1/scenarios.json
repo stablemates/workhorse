@@ -2327,7 +2327,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 73,
+                "schemaVersion": 74,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -3128,6 +3128,89 @@
                   "index": 1
                 }
               }
+            }
+          ]
+        }
+      },
+      {
+        "id": "throttle-accepted",
+        "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-fast",
+              "type": "protocol.fast-throttle",
+              "payload": {
+                "version": 1
+              },
+              "throttle": {
+                "scope": "protocol-fast",
+                "key": "throttle",
+                "windowMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "fastThrottleTask": "0.value.taskId"
+        }
+      },
+      {
+        "id": "throttle-coalesced",
+        "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-fast",
+              "type": "protocol.fast-throttle",
+              "payload": {
+                "version": 1
+              },
+              "throttle": {
+                "scope": "protocol-fast",
+                "key": "throttle",
+                "windowMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "fastThrottleTask"
+                },
+                "outcome": "coalesced"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "throttle-writes-no-event",
+        "sql": "SELECT count(*)::integer AS events FROM workhorse.task_event WHERE task_id = $1::uuid",
+        "parameters": [
+          {
+            "$ref": "fastThrottleTask"
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "events": 0
             }
           ]
         }

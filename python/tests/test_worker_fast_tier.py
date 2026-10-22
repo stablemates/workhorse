@@ -25,11 +25,13 @@ from workhorse import (
     Debounce,
     EnqueueOptions,
     EnqueueRequest,
+    EnqueueResult,
     FastTierUnsupportedError,
     HandlerContext,
     Json,
     Queue,
     QueueHistory,
+    Throttle,
     Worker,
 )
 from workhorse._drivers import PooledSyncExecutor
@@ -100,6 +102,45 @@ def test_fast_queue_rejects_full_tier_enqueue_features(database_url: str) -> Non
         task_id = queue.enqueue("plain", {"n": 1}, EnqueueOptions(queue="fast-enqueue"))
         snapshot = Admin(connection).get_task(task_id)
         assert snapshot is not None and snapshot.state == "ready"
+
+
+def test_fast_queue_throttles_an_enqueue_and_writes_no_throttled_event(database_url: str) -> None:
+    _make_fast(database_url, "fast-throttle")
+    throttle = Throttle(key="digest", scope="fast-throttle", window_ms=60_000)
+    options = EnqueueOptions(queue="fast-throttle", throttle=throttle)
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection)
+        first = queue.enqueue_with_result("digest", {"n": 1}, options)
+        assert first.outcome == "accepted"
+        assert queue.enqueue_with_result("digest", {"n": 1}, options) == EnqueueResult(
+            task_id=first.task_id, outcome="coalesced"
+        )
+        events = connection.execute(
+            "SELECT count(*) FROM workhorse.task_event WHERE task_id = %s::uuid", (first.task_id,)
+        ).fetchone()
+        assert events == (0,)
+
+        # A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+        with pytest.raises(FastTierUnsupportedError) as keyed:
+            queue.enqueue_many_with_results(
+                [
+                    EnqueueRequest("plain", {}, EnqueueOptions(queue="fast-throttle")),
+                    EnqueueRequest(
+                        "keyed",
+                        {},
+                        EnqueueOptions(
+                            queue="fast-throttle",
+                            concurrency_key="tenant-a",
+                            throttle=Throttle(key="keyed", scope="fast-throttle", window_ms=60_000),
+                        ),
+                    ),
+                ]
+            )
+        assert (keyed.value.queue, keyed.value.feature, keyed.value.ordinal) == (
+            "fast-throttle",
+            "concurrency keys",
+            2,
+        )
 
 
 def test_tier_change_requires_an_empty_queue_and_history_is_opt_in(database_url: str) -> None:

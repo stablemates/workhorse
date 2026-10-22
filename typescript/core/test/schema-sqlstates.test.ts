@@ -18,6 +18,7 @@ const registry = {
   P1007: [
     "fast-tier queue %s does not support %s",
     "fast-tier task %s cannot be a prerequisite",
+    "v_error_message",
     "queue %s has live tasks, so its tier cannot change",
     "queue %s is not a fast-tier queue",
   ],

@@ -52,7 +52,8 @@ Thus, choose the fast tier for a queue if all of its handlers only do work and r
 - Both tiers share the stable `task` identity row.
 - After a committed transition, a fast-tier task has exactly one of `fast_task_runtime` and
   `fast_task_outcome`, and neither `task_runtime` nor `task_outcome`.
-- A fast-tier queue writes claim events and `attempt_history` rows only when it opts in. Two audit
+- A fast-tier queue writes claim events and `attempt_history` rows only when it opts in. A
+  coalesced throttle request on a fast-tier task writes no `throttled` event. Two audit
   paths always write `task_event` rows: batch evidence (`batch_dispatched`) and redrive
   (`redriven`, `redrive_created`).
 
@@ -141,9 +142,11 @@ reason.
 | Priority and delayed runs                                         | Yes    | Yes               |                                                                                                                                         |
 | Retry policies, `maxAttempts`, deadlines, and execution timeouts  | Yes    | Yes               |                                                                                                                                         |
 | Idempotency keys                                                  | Yes    | Yes               |                                                                                                                                         |
+| Throttle                                                          | Yes    | Yes               |                                                                                                                                         |
 | Cancellation, pause, purge, run-now, and redrive                  | Yes    | Yes               |                                                                                                                                         |
 | Combined completion and next claim                                | No     | Yes, every worker |                                                                                                                                         |
 | `claimed` events and attempt history                              | Always | Opt-in per queue  | Each write is a part of the cost that the tier removes.                                                                                 |
+| `throttled` events                                                | Always | No                | A fast-tier queue records only the history that it opts in to.                                                                          |
 | Checkpoints                                                       | Yes    | No                | A checkpoint is durable execution state. A fast-tier task does not keep this state.                                                     |
 | Progress                                                          | Yes    | No                | A progress write checks the attempt against a `task_runtime` row. A fast-tier task has no such row.                                     |
 | Durable sleeps, signal waits, and human waits                     | Yes    | No                | A wait stops the task. A fast-tier task is only ready or active, so it cannot stop.                                                     |
@@ -151,7 +154,6 @@ reason.
 | Child tasks, as parent or child                                   | Yes    | No                | A parent waits for its children, and a fast-tier task cannot wait. A fast-tier child never releases its parent.                         |
 | Concurrency keys, budgets, and concurrency or rate-limit policies | Yes    | No                | The full claim admits one task at a time against each policy. The fast claim takes many tasks in one statement, with no admission step. |
 | Debounce                                                          | Yes    | No                | While its window is open, debounce changes the `task_runtime` row of the pending task. No fast-tier path changes a pending row.         |
-| Throttle                                                          | Yes    | No                | No reason is recorded yet. Throttle only decides if Workhorse accepts an enqueue request.                                               |
 
 The full tier does not combine a completion with the next claim. The project measured this
 combination only on the fast tier.
@@ -162,8 +164,11 @@ continue later, keep its queue on the full tier.
 <details>
 <summary>Reference: supported features and combined completion</summary>
 
-**Supported on the fast tier.** Priority, delayed runs, and idempotency keys. Retry policies,
+**Supported on the fast tier.** Priority, delayed runs, idempotency keys, and throttle. Retry policies,
 deadlines, and execution timeouts. Heartbeats and cancellation. Redrive, pause, purge, and run-now.
+
+**Not written.** A coalesced throttle request on a fast-tier task writes no `throttled` event.
+The request does not fail.
 
 **Rejected.** Every other feature in the table raises SQLSTATE `P1007` through
 `reject_fast_feature_v1`. A full-tier task that names a fast-tier task as a prerequisite is also
@@ -208,15 +213,15 @@ that is not valid with an argument error before the tier check.
 `fast-tier queue <name> does not support <feature>` and `DETAIL` JSON `{ queue, feature, ordinal? }`.
 `ordinal` names the position of the rejected request in a batch.
 
-| Feature text                                  | Raised by                                                       |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| `concurrency keys`, `budgets`                 | `enqueue_batch_v1`, and `redrive_v1` into a fast queue          |
-| `dependencies`, `prerequisite tasks`          | `enqueue_batch_v1`                                              |
-| `debounce`, `throttle`                        | `enqueue_debounce_v1`, `enqueue_throttle_v1`, `enqueue_many_v1` |
-| `child tasks`                                 | `create_single_child_v1` and `create_children_v1`               |
-| `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`                  |
-| `tier change`                                 | `set_queue_tier_v1` while live tasks exist                      |
-| `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue               |
+| Feature text                                  | Raised by                                              |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `concurrency keys`, `budgets`                 | `enqueue_batch_v1`, and `redrive_v1` into a fast queue |
+| `dependencies`, `prerequisite tasks`          | `enqueue_batch_v1`                                     |
+| `debounce`                                    | `enqueue_debounce_v1`, `enqueue_many_v1`               |
+| `child tasks`                                 | `create_single_child_v1` and `create_children_v1`      |
+| `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`         |
+| `tier change`                                 | `set_queue_tier_v1` while live tasks exist             |
+| `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue      |
 
 **SDK errors**
 

@@ -205,7 +205,8 @@ stores `coalescing_mode = 'throttle'` and derives expiry from `clock_timestamp()
 
 ##### First request
 
-The first request returns `accepted`. Its `enqueued` event adds `details.throttle`, which contains:
+The first request returns `accepted`. On a full-tier queue, its `enqueued` event adds
+`details.throttle`, which contains:
 
 - `scope`;
 - the first 12 hexadecimal key-digest characters;
@@ -219,7 +220,8 @@ An equivalent request before expiry returns the retained task ID with `coalesced
 
 - It creates no task, runtime, ready sequence, or notification effect.
 - PostgreSQL appends one `throttled` event with the same safe key evidence. The event never stores
-  the raw key.
+  the raw key. A fast-tier task gets no `throttled` event
+  ([Fast tier: Throttle on a fast-tier queue](fast-tier.md#throttle-on-a-fast-tier-queue)).
 - The caller emits a `workhorse.task.throttled` debug log and increments
   `workhorse.tasks.enqueue.outcomes`.
 

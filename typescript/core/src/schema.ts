@@ -524,6 +524,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "skip a locked row in a one-lease heartbeat",
     kind: "additive",
   },
+  {
+    fromVersion: 73,
+    toVersion: 74,
+    file: "0075-allow-throttle-on-fast-tier-queues.sql",
+    description: "allow throttle on fast-tier queues",
+    kind: "additive",
+  },
 ];
 
 /**

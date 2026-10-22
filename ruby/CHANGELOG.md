@@ -56,6 +56,24 @@ claimed tasks. The heartbeat waited for a connection, and the leases of those ta
   delete the registry row of the new run. If a statement still runs when the budget ends, the run
   raises `WorkerStartupError`. A stop during this wait ends the run without an error.
 
+### Throttle works on a fast-tier queue
+
+Before this change, a throttled enqueue into a fast-tier queue raised the fast-tier error with the feature
+`throttle`. Throttle only decides if Workhorse accepts an enqueue request, so it needs no state of
+the full tier (SM-928, ADR 0077). Migration 0075
+(`0075-allow-throttle-on-fast-tier-queues.sql`) moves the schema to version 74. After it,
+`enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue. The outcomes are
+`accepted` and `coalesced`, as on the full tier.
+
+A coalesced request on a fast-tier task writes no `throttled` event, because a fast-tier task
+records only the history that its queue enables. The SDK still emits the throttle log and the
+enqueue outcome metric. In a batch with a debounce or a throttle member, a fast-tier rejection of
+one member now reports the position of that member in the batch. Debounce on a fast-tier queue is
+still rejected.
+
+The migration does not raise the SDK compatibility floor, which stays at schema 73. No SDK
+statement changes. The migration changes no stored data.
+
 ## 0.9.0 — 2026-10-20
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, and JVM artifacts release from one source commit.

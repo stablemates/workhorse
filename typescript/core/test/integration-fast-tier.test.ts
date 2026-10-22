@@ -22,6 +22,20 @@ async function outcomeCounts(ids: readonly string[]) {
   return result.rows;
 }
 
+/** The key of the shared tier lock that lock_queue_tiers_v1 takes for one queue. */
+function tierLock(queueName: string): string {
+  return `hashtextextended('workhorse:queue-tier:' || '${queueName}', 0)`;
+}
+
+function throttleLockRequest(queueName: string) {
+  return {
+    queue: queueName,
+    type: "digest",
+    payload: {},
+    throttle: { key: queueName, scope: "throttle-lock", windowMs: 60_000 },
+  };
+}
+
 async function runUntil(worker: Worker, done: () => Promise<boolean>): Promise<void> {
   const controller = new AbortController();
   const run = worker.run(controller.signal);
@@ -77,6 +91,134 @@ describe("fast task tier", () => {
       [id],
     );
     expect(stored.rows[0]).toEqual({ count: 1 });
+  });
+
+  it("throttles a fast-tier enqueue and writes no throttled event", async () => {
+    await makeFast("fast-throttle");
+    const throttle = { key: "digest", scope: "fast-throttle", windowMs: 60_000 };
+    const eventCount = async (taskId: string) =>
+      (
+        await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM workhorse.task_event WHERE task_id = $1",
+          [taskId],
+        )
+      ).rows[0]?.count;
+
+    const first = await queue.enqueueWithResult(
+      "digest",
+      { n: 1 },
+      { queue: "fast-throttle", throttle },
+    );
+    expect(first.outcome).toBe("accepted");
+    const runtime = await pool.query(
+      "SELECT count(*)::integer AS count FROM workhorse.fast_task_runtime WHERE task_id = $1",
+      [first.taskId],
+    );
+    expect(runtime.rows[0]).toEqual({ count: 1 });
+
+    await expect(
+      queue.enqueueWithResult("digest", { n: 1 }, { queue: "fast-throttle", throttle }),
+    ).resolves.toEqual({ taskId: first.taskId, outcome: "coalesced" });
+    await expect(eventCount(first.taskId)).resolves.toBe(0);
+
+    // A finished fast-tier task still coalesces until the window ends, and still writes no event.
+    const worker = new Worker(queue, { workerId: "throttled", queue: "fast-throttle" }).handle(
+      "digest",
+      () => ({ ok: true }),
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await expect(outcomeCounts([first.taskId])).resolves.toEqual([
+      { task_id: first.taskId, state: "succeeded", attempt: 1 },
+    ]);
+    const batch = await queue.enqueueManyWithResults([
+      { type: "plain", payload: {}, options: { queue: "fast-throttle" } },
+      { type: "digest", payload: { n: 1 }, options: { queue: "fast-throttle", throttle } },
+    ]);
+    expect(batch[0]?.outcome).toBe("accepted");
+    expect(batch[1]).toEqual({ taskId: first.taskId, outcome: "coalesced" });
+    await expect(eventCount(first.taskId)).resolves.toBe(0);
+
+    // A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+    const rejected = await queue
+      .enqueueManyWithResults([
+        { type: "plain", payload: {}, options: { queue: "fast-throttle" } },
+        {
+          type: "keyed",
+          payload: {},
+          options: {
+            queue: "fast-throttle",
+            concurrencyKey: "tenant-a",
+            throttle: { ...throttle, key: "keyed" },
+          },
+        },
+      ])
+      .catch((error: unknown) => error);
+    expect(rejected).toBeInstanceOf(FastTierUnsupportedError);
+    expect(rejected).toMatchObject({
+      queue: "fast-throttle",
+      feature: "concurrency keys",
+      ordinal: 2,
+    });
+    // A throttle member makes a plain member run alone too, with the same ordinal rule.
+    const plainRejected = await queue
+      .enqueueManyWithResults([
+        { type: "digest", payload: { n: 1 }, options: { queue: "fast-throttle", throttle } },
+        {
+          type: "keyed",
+          payload: {},
+          options: { queue: "fast-throttle", concurrencyKey: "tenant-a" },
+        },
+      ])
+      .catch((error: unknown) => error);
+    expect(plainRejected).toBeInstanceOf(FastTierUnsupportedError);
+    expect(plainRejected).toMatchObject({
+      queue: "fast-throttle",
+      feature: "concurrency keys",
+      ordinal: 2,
+    });
+  });
+
+  it("locks the tiers of a throttle batch in name order before its first member", async () => {
+    const blocker = await pool.connect();
+    const caller = await pool.connect();
+    let call: Promise<unknown> | undefined;
+    try {
+      // A tier change holds the tier lock of the first queue in name order.
+      await blocker.query("BEGIN");
+      await blocker.query(`SELECT pg_advisory_xact_lock(${tierLock("throttle-lock-a")})`);
+      const callerPid = (await caller.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      call = caller.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
+        JSON.stringify([
+          throttleLockRequest("throttle-lock-b"),
+          throttleLockRequest("throttle-lock-a"),
+        ]),
+      ]);
+      await vi.waitFor(
+        async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [callerPid],
+          );
+          expect(waiting.rows[0]!.blocked).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      // The batch waits before its first member, so it holds no lock on the later queue.
+      const free = await blocker.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(${tierLock("throttle-lock-b")}) AS locked`,
+      );
+      expect(free.rows[0]).toEqual({ locked: true });
+      await blocker.query("ROLLBACK");
+      await expect(call).resolves.toMatchObject({
+        rows: [{ outcome: "accepted" }, { outcome: "accepted" }],
+      });
+    } finally {
+      await blocker.query("ROLLBACK");
+      await call?.catch(() => undefined);
+      blocker.release();
+      caller.release();
+    }
   });
 
   it("refuses a tier change while the queue holds live tasks", async () => {

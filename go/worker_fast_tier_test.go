@@ -152,6 +152,47 @@ func TestFastQueueRejectsFullTierEnqueueFeatures(t *testing.T) {
 	}
 }
 
+func TestFastQueueThrottlesAnEnqueueAndWritesNoThrottledEvent(t *testing.T) {
+	pool := fastTierPool(t, "fast-throttle")
+	ctx := context.Background()
+	makeFastQueue(t, pool, "go-fast-throttle")
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-fast-throttle")
+	throttle := workhorse.Throttle{Key: "digest", Scope: "go-fast-throttle", WindowMS: 60_000}
+	options := workhorse.EnqueueOptions{Throttle: &throttle}
+
+	first, err := queue.EnqueueWithResult(ctx, "digest", map[string]any{"n": 1}, options)
+	if err != nil || first.Outcome != workhorse.EnqueueAccepted {
+		t.Fatalf("first throttled enqueue returned %#v, %v", first, err)
+	}
+	second, err := queue.EnqueueWithResult(ctx, "digest", map[string]any{"n": 1}, options)
+	if err != nil || second.Outcome != workhorse.EnqueueCoalesced || second.TaskID != first.TaskID {
+		t.Fatalf("second throttled enqueue returned %#v, %v", second, err)
+	}
+	var events int
+	if err := pool.QueryRow(
+		ctx, "SELECT count(*)::integer FROM workhorse.task_event WHERE task_id = $1", first.TaskID,
+	).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("fast-tier throttle wrote %d task events", events)
+	}
+
+	// A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+	_, err = queue.EnqueueManyWithResults(ctx, []workhorse.EnqueueRequest{
+		{Type: "plain", Payload: map[string]any{}},
+		{Type: "keyed", Payload: map[string]any{}, Options: workhorse.EnqueueOptions{
+			ConcurrencyKey: "tenant-a",
+			Throttle:       &workhorse.Throttle{Key: "keyed", Scope: "go-fast-throttle", WindowMS: 60_000},
+		}},
+	})
+	var keyed *workhorse.FastTierUnsupportedError
+	if !errors.As(err, &keyed) || keyed.Queue != "go-fast-throttle" || keyed.Feature != "concurrency keys" ||
+		keyed.Ordinal != 2 {
+		t.Fatalf("keyed throttle batch returned %v", err)
+	}
+}
+
 func TestQueueTierChangeRequiresAnEmptyQueue(t *testing.T) {
 	pool := fastTierPool(t, "fast-tier-change")
 	ctx := context.Background()
