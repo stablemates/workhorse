@@ -83,11 +83,59 @@ if [ -n "$go_tag_commit" ]; then
   exit 1
 fi
 
+# Print `owner/repo` for the GitHub repository that origin names in the configuration, or nothing
+# if origin is not one github.com URL or has another push URL. The script pushes the tag to origin,
+# so the CI query must name the same repository. `GH_REPO` and the `{owner}/{repo}` placeholder of
+# `gh` can name another one. Git pushes to every URL of a remote, so a second URL also stops reuse.
+origin_github_repository() {
+  url=$(git config --get-all remote.origin.url) || return 0
+  push_urls=$(git config --get-all remote.origin.pushurl) || push_urls=$url
+  if [ "$(printf '%s\n' "$url" | wc -l)" -ne 1 ] || [ "$push_urls" != "$url" ]; then
+    return 0
+  fi
+  printf '%s\n' "$url" | sed -n -E \
+    -e 's#^(https://|ssh://git@|git@)github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$#\2/\3#' \
+    -e 't github' -e 'd' -e ':github' -e 's#\.git$##' -e 'p'
+}
+
+# Print the URL of a successful `CI` push run on main for the commit in the repository, or nothing
+# if GitHub has no such run or cannot answer. A canceled, failed, or unfinished run is not success,
+# because a maintainer can cancel a main run. `gh` prints one line per run, and awk checks each
+# field, so a loose filter on the GitHub side cannot select another run.
+successful_main_ci_run() {
+  if [ -z "$2" ] || ! command -v gh >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! runs=$(gh api --hostname github.com --method GET "repos/$2/actions/workflows/ci.yml/runs" \
+    -f head_sha="$1" -f branch=main -f event=push -f status=completed -f per_page=100 \
+    --jq '.workflow_runs[] | [.head_sha, .head_branch, .event, .path, .status, .conclusion, .html_url] | @tsv' \
+    2>/dev/null); then
+    return 0
+  fi
+  printf '%s\n' "$runs" | awk -F '\t' -v commit="$1" -v runs="https://github.com/$2/actions/runs/" '
+    $1 == commit && $2 == "main" && $3 == "push" && $4 == ".github/workflows/ci.yml" &&
+      $5 == "completed" && $6 == "success" && index($7, runs) == 1 &&
+      substr($7, length(runs) + 1) ~ /^[0-9]+$/ { print $7; exit }
+  '
+}
+
 pnpm go:release-check "$version"
 
-pnpm db:reset:test
-pnpm db:reset:test-packed
-pnpm check
+# ADR 0043 and ADR 0102 make the successful main CI push run of the candidate the release gate. That
+# run executes every CI job, so the full local check repeats it. The script then runs only the Go
+# checks. Without such a run, the script runs the full check.
+ci_run=$(successful_main_ci_run "$head_commit" "$(origin_github_repository)")
+if [ -n "$ci_run" ]; then
+  echo "HEAD $head_commit passed the main CI run $ci_run. Running only the Go checks."
+  pnpm db:reset:test
+  pnpm go:test
+  pnpm go:vuln
+else
+  echo "No successful main CI run for HEAD $head_commit. Running the full pnpm check."
+  pnpm db:reset:test
+  pnpm db:reset:test-packed
+  pnpm check
+fi
 
 require_clean_worktree "The release gate changed tracked files; review them before tagging."
 

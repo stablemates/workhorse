@@ -512,8 +512,10 @@ An attestation rehearsal job proves on every run, dry runs included, that the pi
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It also requires that `HEAD` is an
 ancestor of `origin/main`, and that `vX.Y.Z` and `python/vX.Y.Z` on origin point to `HEAD`. It
-rehearses the module release, resets the test database, runs `pnpm check`, creates an annotated
-tag, and pushes that tag to `origin`.
+rehearses the module release and resets the test database. If the `origin` repository has a
+successful `main` CI push run for exactly `HEAD`, the script runs only `pnpm go:test` and
+`pnpm go:vuln`. If not, it runs `pnpm check`. It then creates an annotated tag and pushes that tag
+to `origin`.
 
 ## What SemVer governs
 
@@ -1023,8 +1025,17 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
    Next, it stages a file module proxy that serves `HEAD:go` as `vX.Y.Z`. It then runs
    `pnpm release:verify go` against that proxy, so a post-publish check the module cannot satisfy
    fails before the tag.
-5. The script runs `pnpm check`, creates `go/vX.Y.Z` on `HEAD`, and pushes the tag only after the
-   gate passes.
+5. The script asks GitHub with `gh api` for a successful run of the `CI` workflow on `main` for
+   exactly `HEAD`, with the `push` event. A push run executes every CI job, and ADR 0043 and ADR 0102
+   make it the release gate. The query names the github.com repository of the `origin` URL, so
+   `GH_REPO` cannot change it.
+   1. If such a run exists, the script prints its URL. It then runs only `pnpm go:test` and
+      `pnpm go:vuln`.
+   2. If no such run exists, the script runs the full `pnpm check`. A canceled, failed, or
+      unfinished run does not count. The script also runs the full check in these conditions:
+      `gh` is missing or fails, `origin` is not one github.com URL, or `origin` has a different or
+      a second push URL.
+6. The script creates `go/vX.Y.Z` on `HEAD`, and pushes the tag only after the gate passes.
 
 ### Rust crate
 
