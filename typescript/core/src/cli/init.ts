@@ -12,6 +12,12 @@ export interface DetectedProject {
   framework: "hono" | "express" | "fastify" | "next" | "none";
   typescript: boolean;
   packageManager: PackageManager;
+  /**
+   * The major version of the installed `@prisma/client`. `initializeProject` reads it only for a
+   * Prisma project. When it is absent or below 7, the Prisma template uses the Prisma 6
+   * constructor.
+   */
+  prismaMajor?: number;
 }
 
 /** A package manager whose `workhorse` invocation the next steps can print. */
@@ -55,6 +61,41 @@ async function readLockfileManager(directory: string): Promise<PackageManager | 
     if (present) return packageManager;
   }
   return null;
+}
+
+/**
+ * Read the `package.json` of an installed package, as Node.js resolution finds it from `directory`:
+ * in `node_modules` of the directory or of a parent directory. Returns `null` when no directory
+ * holds the package, or when its manifest cannot be read.
+ */
+async function readInstalledPackage(
+  directory: string,
+  name: string,
+): Promise<{ version?: unknown } | null> {
+  let current = path.resolve(directory);
+  for (;;) {
+    try {
+      return JSON.parse(
+        await readFile(path.join(current, "node_modules", name, "package.json"), "utf8"),
+      ) as { version?: unknown };
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+}
+
+/** The major of a semantic version such as `7.10.1`, or `null` when the text is not one. */
+function parseMajor(version: unknown): number | null {
+  if (typeof version !== "string") return null;
+  const match = /^(\d+)\./.exec(version.trim());
+  return match ? Number(match[1]) : null;
+}
+
+/** The command that adds one dependency with this package manager. */
+function addCommand(packageManager: PackageManager, name: string): string {
+  return packageManager === "npm" ? `npm install ${name}` : `${packageManager} add ${name}`;
 }
 
 /**
@@ -125,10 +166,18 @@ export function renderWorkerConfig(project: DetectedProject): string {
       break;
     }
     case "prisma": {
-      adapterImport =
-        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@stablemates/workhorse-prisma";';
+      // Prisma 7 removes the `datasources` option and requires a driver adapter.
+      const prisma7 = (project.prismaMajor ?? 6) >= 7;
+      adapterImport = prisma7
+        ? 'import { PrismaPg } from "@prisma/adapter-pg";\nimport { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@stablemates/workhorse-prisma";'
+        : 'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@stablemates/workhorse-prisma";';
+      const constructor = prisma7
+        ? `new PrismaClient({
+      adapter: new PrismaPg({ connectionString: databaseUrl }),
+    })`
+        : "new PrismaClient({ datasources: { db: { url: databaseUrl } } })";
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
-    const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    const database = ${constructor};
     return createPrismaAdapter(database, {
       defaultQueue: QUEUE,
       pool,
@@ -296,6 +345,25 @@ export async function initializeProject(
 ): Promise<InitResult> {
   const packageJson = await readPackageJson(directory);
   const project = detectProject(packageJson, await readLockfileManager(directory));
+  const prismaSteps: string[] = [];
+  if (project.orm === "prisma") {
+    const installed = await readInstalledPackage(directory, "@prisma/client");
+    const major = parseMajor(installed?.version);
+    if (major === null) {
+      prismaSteps.push(
+        "Check the Prisma client: init could not read the installed @prisma/client version.",
+        "  The file uses the Prisma 6 constructor. On Prisma 7, use a driver adapter:",
+        "  https://workhorse.run/docs/prisma#create-the-adapter",
+      );
+    } else {
+      project.prismaMajor = major;
+      if (major >= 7 && (await readInstalledPackage(directory, "@prisma/adapter-pg")) === null) {
+        prismaSteps.push(
+          `Install the driver adapter:  ${addCommand(project.packageManager, "@prisma/adapter-pg")}`,
+        );
+      }
+    }
+  }
   const fileName =
     options.fileName ?? (project.typescript ? "workhorse.config.ts" : "workhorse.config.js");
   const configPath = path.join(directory, fileName);
@@ -318,6 +386,7 @@ export async function initializeProject(
     written,
     project,
     nextSteps: [
+      ...prismaSteps,
       `Install the schema:  ${run} workhorse schema install`,
       `Run the workers:     ${run} workhorse worker --config ${fileName.replace(/\.ts$/, ".js")}`,
       "Mount the dashboard in your web tier:",

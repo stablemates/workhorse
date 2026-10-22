@@ -20,6 +20,19 @@ upgrade steps.
 
 ## Unreleased
 
+### `workhorse init` writes a Prisma 7 client on Prisma 7
+
+Before this change, `workhorse init` always wrote the Prisma 6 constructor
+`new PrismaClient({ datasources: ... })`. Prisma 7 has no `datasources` option and requires a
+driver adapter. Thus a worker file that `init` wrote for a Prisma 7 project failed when it started
+(SM-1590).
+
+- `init` now reads the major of the installed `@prisma/client`. On Prisma 7, the worker file creates
+  the client with `PrismaPg` from `@prisma/adapter-pg`. It keeps the same `pool` and `close`.
+- If `@prisma/adapter-pg` is not installed, `init` prints the command that installs it.
+- On Prisma 6, the worker file does not change. If `init` cannot read the installed version, it
+  writes the Prisma 6 file and prints a note.
+
 ### A checkpoint input fingerprint does not depend on earlier JSON parses
 
 Before this change, `checkpointInputFingerprint` wrote the input with `JSON.stringify` and read it

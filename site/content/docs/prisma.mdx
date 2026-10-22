@@ -114,9 +114,17 @@ export default defineWorkerProcess({
 This example uses the Prisma 6 constructor. On Prisma 7, create `database` with a driver adapter,
 as [Create the adapter](#create-the-adapter) shows.
 
-Start the process with `workhorse worker --config <compiled file>`. If `workhorse init` finds
-Prisma, it writes this file for you, in the Prisma 6 form. [Worker processes](/docs/worker-processes)
-tells you more.
+Start the process with `workhorse worker --config <compiled file>`. [Worker
+processes](/docs/worker-processes) tells you more.
+
+If `workhorse init` finds Prisma, it writes this file for you. It reads the version of the installed
+`@prisma/client` package and writes the constructor of that major:
+
+- On Prisma 6, the file uses the Prisma 6 constructor that this example shows.
+- On Prisma 7, the file creates the client with `PrismaPg`, and keeps the same `pool` and `close`.
+  If `@prisma/adapter-pg` is not installed, `init` prints the command that installs it.
+- If `init` cannot read the version, the file uses the Prisma 6 constructor, and `init` prints a
+  note. Install your dependencies before you run `init` to prevent this.
 
 If you cannot give a pool, set `sharedHeartbeats` on the worker. The worker then sends heartbeats
 through Prisma and polls for new tasks.
