@@ -150,6 +150,30 @@ class WorkerFastTierDatabaseTest {
     }
   }
 
+  /**
+   * Closes {@code worker} after a drain with a zero grace, and waits until no task of {@code
+   * taskIds} is active. After the interrupt, a batch has one unwind window of 250 ms to settle. On
+   * a loaded host, the settle can take longer, and close throws {@link ShutdownIncompleteException}
+   * while the batch still settles (SM-1563, as SM-1543). The drain stops only the lease renewal of
+   * an attempt that it abandons. Every other error of close still fails the test.
+   */
+  private static void closeAndWaitUntilSettled(Worker worker, List<UUID> taskIds) {
+    try {
+      worker.close();
+    } catch (ShutdownIncompleteException slow) {
+      // The batch settles after the unwind window. The wait below sees its outcome.
+    }
+    waitUntil(
+        "every member settled",
+        () -> {
+          try {
+            return !fullStates(taskIds).containsValue("active");
+          } catch (SQLException error) {
+            throw new IllegalStateException(error);
+          }
+        });
+  }
+
   /** Runs the worker on its own thread until {@code condition} holds, then closes it. */
   private static void runUntil(Worker worker, String what, BooleanSupplier condition) {
     worker.start();
@@ -497,6 +521,13 @@ class WorkerFastTierDatabaseTest {
     }
   }
 
+  /**
+   * The drain interrupts both members of a running batch. The member that waits for the batch keeps
+   * its outcome, and does not give its task back.
+   *
+   * <p>The test waits for the settled states, and not for close ({@link
+   * #closeAndWaitUntilSettled}).
+   */
   @Test
   void aWaitingMemberKeepsItsOutcomeThroughTheDrainInterrupt() throws Exception {
     List<UUID> taskIds =
@@ -528,12 +559,17 @@ class WorkerFastTierDatabaseTest {
     worker.start();
     assertTrue(entered.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the batch started");
 
-    worker.close();
+    closeAndWaitUntilSettled(worker, taskIds);
 
     assertEquals(
         Map.of(taskIds.get(0), "succeeded", taskIds.get(1), "succeeded"), fullStates(taskIds));
   }
 
+  /**
+   * The drain interrupts a member that has not dispatched the batch yet. The member passes the
+   * interrupt to the handler. The test waits for the settled states, and not for close ({@link
+   * #closeAndWaitUntilSettled}).
+   */
   @Test
   void aMemberThatTheDrainInterruptedBeforeItDispatchedPassesTheInterruptToTheHandler()
       throws Exception {
@@ -594,7 +630,7 @@ class WorkerFastTierDatabaseTest {
     assertTrue(decoding.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the slow member decodes");
     Thread.sleep(200);
 
-    worker.close();
+    closeAndWaitUntilSettled(worker, taskIds);
 
     assertEquals(List.of(true), interrupted, "the handler received the drain interrupt");
     assertEquals(List.of("succeeded"), fullStates(taskIds).values().stream().distinct().toList());

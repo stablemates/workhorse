@@ -1044,9 +1044,25 @@ class WorkerDatabaseTest {
    * handler waited 20 s for a cancellation. On a loaded host, {@code runOnce} thus did not return
    * in 20 s (SM-1562). With one attempt, the recovery ends the task, and the next claim finds no
    * task.
+   *
+   * <p>The attempt must hold its lease until the lock. On a loaded host, the rounds can fail for
+   * one lease before the lock, and the attempt loses its lease with no busy round. The test then
+   * waited 20 s for a renewal that never came (SM-1563). Now a run counts only if the test took the
+   * lock before the local window ended, and the worker logged a busy round. Only a round under the
+   * lock is busy. Otherwise the test runs the scenario again with a new task, up to five times.
    */
   @Test
   void endsAnAttemptWhoseLeaseStaysBusyAtTheEndOfItsLeaseWindow() throws Exception {
+    for (int tries = 1; !holdsTheRowUntilTheLeaseWindowEnds(); tries++) {
+      assertTrue(tries < 5, "precondition not met: each attempt lost its lease before the lock");
+    }
+  }
+
+  /**
+   * One run of the busy-lease scenario. Returns false, and asserts nothing about the lease window,
+   * if no round was busy, or if the test took the lock after the local window ended.
+   */
+  private boolean holdsTheRowUntilTheLeaseWindowEnds() throws Exception {
     long leaseMs = 800;
     long intervalMs = 100;
     UUID taskId = enqueue("held", Map.of(), EnqueueOptions.builder().maxAttempts(1));
@@ -1055,8 +1071,10 @@ class WorkerDatabaseTest {
     AtomicLong renewedAt = new AtomicLong();
     AtomicReference<@Nullable CancellationReason> reason = new AtomicReference<>();
     AtomicReference<@Nullable Worker> self = new AtomicReference<>();
+    BusyRounds busyRounds = new BusyRounds();
     Worker worker =
         worker()
+            .logger(busyRounds)
             .lease(Duration.ofMillis(leaseMs))
             .heartbeat(Duration.ofMillis(intervalMs))
             .handle(
@@ -1081,8 +1099,16 @@ class WorkerDatabaseTest {
     try (Connection blocker = ScratchDatabase.connect()) {
       var run = runner.submit(worker::runOnce);
       assertTrue(started.await(20, TimeUnit.SECONDS), "the handler started");
-      Instant claimed = expiresAt(taskId);
-      waitUntil("a round renewed the lease", () -> expiresAt(taskId).isAfter(claimed));
+      @Nullable Instant claimed = leaseExpiry(taskId);
+      waitUntil(
+          "a round renewed the lease, or the attempt ended",
+          () -> {
+            if (cancelledAt.get() != 0) {
+              return true;
+            }
+            @Nullable Instant now = leaseExpiry(taskId);
+            return now == null || (claimed != null && now.isAfter(claimed));
+          });
       blocker.setAutoCommit(false);
       try (PreparedStatement lock =
           blocker.prepareStatement(
@@ -1091,13 +1117,19 @@ class WorkerDatabaseTest {
         lock.execute();
       }
       lockedAt = System.nanoTime();
-      Instant locked = expiresAt(taskId);
+      @Nullable Instant locked = leaseExpiry(taskId);
       waitUntil("the handler was cancelled", () -> cancelledAt.get() != 0);
-      Instant busy = expiresAt(taskId);
+      @Nullable Instant busy = leaseExpiry(taskId);
       blocker.commit();
       assertTrue(run.get(20, TimeUnit.SECONDS), "the worker ran the task");
-      assertEquals(locked, busy, "a busy round renewed the stored lease");
       assertEquals(1, status(taskId).attempt(), "one attempt ran");
+      if (busyRounds.count.get() == 0
+          || lockedAt - (renewedAt.get() + TimeUnit.MILLISECONDS.toNanos(leaseMs)) >= 0) {
+        // The local window ended before the lock, so the scenario did not run.
+        return false;
+      }
+      assertNotNull(locked, "the task held a lease at the lock");
+      assertEquals(locked, busy, "a busy round renewed the stored lease");
     } finally {
       runner.shutdownNow();
     }
@@ -1118,6 +1150,70 @@ class WorkerDatabaseTest {
     assertTrue(
         elapsedMs < leaseMs + 2_000,
         "the attempt ended " + elapsedMs + " ms after the last accepted round");
+    return true;
+  }
+
+  /**
+   * A logger that counts the heartbeat rounds that found the task's row busy. It passes each record
+   * on to the logger of the worker.
+   */
+  private static final class BusyRounds implements System.Logger {
+    final AtomicInteger count = new AtomicInteger();
+    private final System.Logger next = System.getLogger(Worker.class.getName());
+
+    @Override
+    public String getName() {
+      return next.getName();
+    }
+
+    @Override
+    public boolean isLoggable(Level level) {
+      return true;
+    }
+
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String message,
+        @Nullable Throwable thrown) {
+      countBusy(message);
+      next.log(level, bundle, message, thrown);
+    }
+
+    // The worker logs through log(Level, String), which reaches this method.
+    @Override
+    public void log(
+        Level level,
+        java.util.@Nullable ResourceBundle bundle,
+        @Nullable String format,
+        @Nullable Object... parameters) {
+      countBusy(format);
+      next.log(level, bundle, format, parameters);
+    }
+
+    private void countBusy(@Nullable String message) {
+      String text = String.valueOf(message);
+      if (text.contains("event.name=workhorse.task.heartbeat_rejected")
+          && text.contains("workhorse.heartbeat.status=busy")) {
+        count.incrementAndGet();
+      }
+    }
+  }
+
+  /** The stored lease expiry of {@code taskId}, or null after the task left its runtime row. */
+  private static @Nullable Instant leaseExpiry(UUID taskId) {
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = ?::uuid")) {
+      statement.setString(1, taskId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next() ? result.getTimestamp(1).toInstant() : null;
+      }
+    } catch (SQLException error) {
+      throw new AssertionError(error);
+    }
   }
 
   private static Instant expiresAt(UUID taskId) {
