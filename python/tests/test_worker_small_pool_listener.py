@@ -39,6 +39,9 @@ POLLING_ONLY = "workhorse.worker.polling_only"
 WAIT_SECONDS = 10
 POOL_TIMEOUT_SECONDS = 30
 STOP_SECONDS = 15
+# After the stop, each connection of the pool must come back within this time. A pool with
+# min_size=0 can open a new connection here, which can take more than 1 s on a busy host.
+RETURN_SECONDS = 5
 DOMAINS = ("sync", "psycopg", "asyncpg")
 
 
@@ -113,10 +116,14 @@ def warnings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, dict[str, 
 class Run:
     """One worker on a fresh pool of `size` connections, with the shared heartbeat opt-out."""
 
-    def __init__(self, database_url: str, domain: str, size: int) -> None:
+    def __init__(
+        self, database_url: str, domain: str, size: int, resize_to: int | None = None
+    ) -> None:
         self.database_url = database_url
         self.domain = domain
         self.size = size
+        # The maximum size that the pool gets after the worker is constructed, before it runs.
+        self.resize_to = resize_to
         self.queue = f"small-pool-{domain}-{size}-{uuid4().hex[:8]}"
         self.handled = Handled(3)
         self.errors: list[BaseException] = []
@@ -163,6 +170,8 @@ def run_sync(run: Run, between: Callable[[], None]) -> None:
         run.pool = pool
         worker = Worker(pool, **run.options()).handle(TASK_TYPE, handler)
         run.worker = worker
+        if run.resize_to is not None:
+            pool.resize(min_size=0, max_size=run.resize_to)
 
         def target() -> None:
             try:
@@ -180,8 +189,8 @@ def run_sync(run: Run, between: Callable[[], None]) -> None:
         assert not thread.is_alive(), "the worker did not stop"
         # After the stop, the pool lends every connection at once.
         with ExitStack() as held:
-            for _ in range(run.size):
-                held.enter_context(pool.connection(timeout=1)).execute("SELECT 1")
+            for _ in range(run.resize_to or run.size):
+                held.enter_context(pool.connection(timeout=RETURN_SECONDS)).execute("SELECT 1")
 
 
 async def run_async(run: Run, between: Callable[[], None]) -> None:
@@ -206,6 +215,8 @@ async def run_async(run: Run, between: Callable[[], None]) -> None:
         )
         await pool.open()
         worker = AsyncWorker.from_psycopg(pool, **run.options())
+        if run.resize_to is not None:
+            await pool.resize(min_size=0, max_size=run.resize_to)
     else:
         pool = await asyncpg.create_pool(
             run.database_url,
@@ -228,12 +239,16 @@ async def run_async(run: Run, between: Callable[[], None]) -> None:
                 run.errors.append(error)
         # After the stop, the pool lends every connection at once.
         async with AsyncExitStack() as held:
-            for _ in range(run.size):
+            for _ in range(run.resize_to or run.size):
                 if run.domain == "psycopg":
-                    connection = await held.enter_async_context(pool.connection(timeout=1))
+                    connection = await held.enter_async_context(
+                        pool.connection(timeout=RETURN_SECONDS)
+                    )
                     await connection.execute("SELECT 1")
                 else:
-                    connection = await held.enter_async_context(pool.acquire(timeout=1))
+                    connection = await held.enter_async_context(
+                        pool.acquire(timeout=RETURN_SECONDS)
+                    )
                     await connection.fetchval("SELECT 1")
     finally:
         task.cancel()
@@ -299,3 +314,28 @@ async def test_the_opt_out_polls_on_a_pool_of_one_and_listens_on_a_pool_of_two(
     await complete_three_tasks(pair, listens)
     assert seen == [1]
     assert len(warnings) == 1, warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", ("sync", "psycopg"))
+async def test_the_opt_out_reads_the_pool_size_again_before_the_listener_starts(
+    database_url: str, domain: str, warnings: list[tuple[str, str, dict[str, Any]]]
+) -> None:
+    # SM-1677: the worker is constructed on a pool of 2, and the application then resizes the pool
+    # to 1 before the run. The worker reads the current size, so it polls and warns once, and no
+    # listener holds the only connection. asyncpg has no resize, so it is not in this test.
+    resized = Run(database_url, domain, 2, resize_to=1)
+    await complete_three_tasks(resized)
+    assert resized.handled.listeners == [0, 0, 0]
+    assert not resized.listening().is_set()
+    assert warnings == [
+        (
+            "WARN",
+            "Worker has no notification listener and dispatches by polling",
+            {
+                "workhorse.worker.id": resized.queue,
+                "workhorse.worker.queues": (resized.queue,),
+                "workhorse.worker.pool_max_size": 1,
+            },
+        )
+    ]
