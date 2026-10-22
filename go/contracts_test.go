@@ -20,7 +20,8 @@ type contractFixture struct {
 }
 
 // unheldContractNumbers lists the kinds of number a Go value cannot hold. A json.Number holds every
-// fraction and every integer exactly, so Go runs every instance of the shared table.
+// fraction and every integer exactly, so Go holds exactFraction, exactInteger, and exactBigInteger
+// and runs every instance of the shared table.
 var unheldContractNumbers = map[string]bool{}
 
 func TestContractSchemaProfile(t *testing.T) {

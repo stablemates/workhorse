@@ -270,8 +270,17 @@ without the `$schema` keywords. The profile allows only Draft 2020-12, so the co
 result.
 
 `protocol/v1/contracts.json` gives such instances as JSON text in `json`. An instance marks the
-kind of number it needs in `needs`, `exactFraction` or `exactInteger`, and each runner skips the
-kinds its SDK cannot hold. A case can also give its schema as JSON text in `schemaJson`, and each
+kind of number it needs in `needs`, and each runner skips the kinds its SDK cannot hold (ADR 0039):
+
+| Kind              | Numbers                                                              | Runners that skip it           |
+| ----------------- | -------------------------------------------------------------------- | ------------------------------ |
+| `exactFraction`   | A fraction that a double cannot hold.                                | TypeScript, Python, Ruby, Rust |
+| `exactInteger`    | An integer that a double cannot hold, from -2^63 to 2^64 - 1.        | TypeScript                     |
+| `exactBigInteger` | An integer that a double cannot hold, below -2^63 or above 2^64 - 1. | TypeScript, Rust               |
+
+A `serde_json::Value` holds an `i64` or a `u64` exactly. It reads a larger integer as an `f64` and
+refuses an integer outside the `f64` range, so the Rust runner skips `exactBigInteger` (SM-1597). A
+case can also give its schema as JSON text in `schemaJson`, and each
 runner reads it the way the SDK reads a stored schema. `contracts/schema-constants-keep-exact-decimals`
 pins schema constants that a double or a `u64` cannot hold.
 

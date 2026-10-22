@@ -75,8 +75,8 @@ writes, so a worker that redacts locally cannot produce a different shape from P
 Go compile every accepted document and reject the same remote references, dynamic applicators,
 unevaluated applicators, and custom keywords before validating the shared instances. An instance
 can give its value as JSON text in `json`, so each runner reads it through its own value path. An
-instance with `needs` set to `exactFraction` or `exactInteger` runs only in the SDKs that can hold
-that kind of number exactly (ADR 0039).
+instance with `needs` set to `exactFraction`, `exactInteger`, or `exactBigInteger` runs only in the
+SDKs that can hold that kind of number exactly (ADR 0039).
 
 `v1/checkpoint-fingerprints.json` holds the vectors of the checkpoint input fingerprint (ADR
 0098). The fingerprint is the SHA-256 digest of the RFC 8785 text of an input. Each vector has an

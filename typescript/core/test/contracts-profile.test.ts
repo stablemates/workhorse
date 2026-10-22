@@ -11,11 +11,11 @@ interface Fixture {
   instances?: { value?: Json; json?: string; needs?: NumberNeed; valid: boolean }[];
 }
 
-type NumberNeed = "exactFraction" | "exactInteger";
+type NumberNeed = "exactFraction" | "exactInteger" | "exactBigInteger";
 
 // A TypeScript value holds every number as a double, so it cannot hold a fraction or an integer
 // that a double cannot hold. The shared table marks those instances.
-const UNHELD_NUMBERS = new Set<NumberNeed>(["exactFraction", "exactInteger"]);
+const UNHELD_NUMBERS = new Set<NumberNeed>(["exactFraction", "exactInteger", "exactBigInteger"]);
 
 const fixtures = JSON.parse(
   await readFile(new URL("../../../protocol/v1/contracts.json", import.meta.url), "utf8"),

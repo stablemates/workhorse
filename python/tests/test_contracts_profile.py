@@ -20,8 +20,9 @@ FIXTURES: list[dict[str, Any]] = json.loads(
 # passes fails the run, so an entry cannot outlive its gap.
 UNSUPPORTED: dict[str, str] = {}
 
-# A Python value holds an exact int, but json.loads reads a fraction as a float, so Python cannot
-# hold a fraction that a double cannot hold. The shared table marks those instances.
+# A Python int is exact at any size, so Python holds exactInteger and exactBigInteger. json.loads
+# reads a fraction as a float, so Python cannot hold exactFraction. The shared table marks those
+# instances.
 UNHELD_NUMBERS = frozenset({"exactFraction"})
 
 

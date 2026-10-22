@@ -230,9 +230,10 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
 
 // ----- contracts -----------------------------------------------------------------------------
 
-/// The kinds of number a `serde_json::Value` cannot hold. It holds an `i64` or a `u64` exactly, but
-/// it reads a fraction as an `f64`.
-const UNHELD_CONTRACT_NUMBERS: &[&str] = &["exactFraction"];
+/// The kinds of number a `serde_json::Value` cannot hold. It holds an `i64` or a `u64` exactly, so it
+/// holds `exactInteger`. It reads a fraction or a larger integer as an `f64`, and it refuses an
+/// integer outside the `f64` range.
+const UNHELD_CONTRACT_NUMBERS: &[&str] = &["exactFraction", "exactBigInteger"];
 
 /// A contract fixture compiles its schema the way `Queue::sync_contracts` does, then checks each
 /// instance's verdict. A schema in JSON text reads the way a schema that PostgreSQL stores does.
