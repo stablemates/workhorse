@@ -145,7 +145,8 @@ final class Runner {
 
   /**
    * The kinds of number a JVM value cannot hold. An exact tree holds a {@code BigDecimal} and a
-   * {@code BigInteger}, so the JVM runs every instance.
+   * {@code BigInteger}, so the JVM holds {@code exactFraction}, {@code exactInteger}, and {@code
+   * exactBigInteger} and runs every instance.
    */
   private static final Set<String> UNHELD_CONTRACT_NUMBERS = Set.of();
 

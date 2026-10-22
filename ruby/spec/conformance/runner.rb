@@ -125,7 +125,7 @@ module Conformance
     # ----- contracts ---------------------------------------------------------------------------
 
     # The kinds of number a Ruby value cannot hold. JSON.parse reads a fraction as a Float, but an
-    # Integer is exact.
+    # Integer is exact at any size, so Ruby holds exactInteger and exactBigInteger.
     UNHELD_CONTRACT_NUMBERS = %w[exactFraction].freeze
 
     # A contract fixture compiles its schema the way `Queue#sync_contracts` does, then checks each

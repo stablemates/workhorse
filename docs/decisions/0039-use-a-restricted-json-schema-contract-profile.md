@@ -158,11 +158,33 @@ read keeps each number token of the stored text instead (SM-1541).
 so each runner reads it through its own value path. An instance whose number only some SDKs can
 hold names the kind in `needs`: `exactFraction` or `exactInteger`. Each runner lists the kinds its
 SDK cannot hold and skips only those instances. A case can give its schema as JSON text in `schemaJson`, and
-each runner reads it the way its SDK reads a stored schema.
+each runner reads it the way its SDK reads a stored schema. The amendment below splits
+`exactInteger` into two kinds.
 
 A contract that relied on the old answers changes its results. A result that `multipleOf` refused
 for a fraction can now pass. In Python and Ruby, an integer above 2^53 can now get the other answer
 against a fraction-typed bound or constant. The task keeps its contract version. A worker checks a result against that version with the new rule.
+
+## Amendment: an integer outside the 64-bit range has its own kind (2026-10-22)
+
+Before this amendment, `exactInteger` marked every integer that a double cannot hold. The Rust
+runner claimed that kind, because a `serde_json::Value` holds an `i64` or a `u64` exactly. But it
+reads a larger integer as an `f64`, and it refuses an integer outside the `f64` range. A case with
+an integer of 310 digits therefore failed in Rust (SM-1597).
+
+The `needs` vocabulary now has three kinds:
+
+| Kind              | Numbers                                                              |
+| ----------------- | -------------------------------------------------------------------- |
+| `exactFraction`   | A fraction that a double cannot hold.                                |
+| `exactInteger`    | An integer that a double cannot hold, from -2^63 to 2^64 - 1.        |
+| `exactBigInteger` | An integer that a double cannot hold, below -2^63 or above 2^64 - 1. |
+
+Each runner lists the kinds its SDK cannot hold. TypeScript skips all three. Python and Ruby skip
+`exactFraction`. Rust skips `exactFraction` and `exactBigInteger`. Go and the JVM skip none.
+
+A runner skips an instance only by its kind. It does not skip an instance that its SDK fails to
+read. That rule would hide a real gap that a later SDK change makes.
 
 ## Consequences
 
