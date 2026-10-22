@@ -26,6 +26,7 @@ public sealed class ScratchDatabase : IAsyncLifetime
     private const int DropAttempts = 40;
     private static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1", "[::1]"];
 
+    private NpgsqlConnectionStringBuilder? _connectionString;
     private NpgsqlDataSource? _admin;
     private NpgsqlDataSource? _dataSource;
     private string? _skipReason;
@@ -45,6 +46,19 @@ public sealed class ScratchDatabase : IAsyncLifetime
 
             return _dataSource ?? throw new InvalidOperationException("The fixture did not start.");
         }
+    }
+
+    /// <summary>
+    /// A new data source for the scratch database whose connection string <paramref name="configure"/>
+    /// changes. Npgsql removes the password from <c>ConnectionString</c>, so a test cannot copy it
+    /// from <see cref="DataSource"/>. The caller disposes the data source.
+    /// </summary>
+    public NpgsqlDataSource CreateDataSource(Action<NpgsqlConnectionStringBuilder> configure)
+    {
+        _ = DataSource;
+        var builder = new NpgsqlConnectionStringBuilder(_connectionString!.ConnectionString);
+        configure(builder);
+        return NpgsqlDataSource.Create(builder);
     }
 
     /// <inheritdoc />
@@ -79,7 +93,8 @@ public sealed class ScratchDatabase : IAsyncLifetime
             await create.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
-        _dataSource = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = Name });
+        _connectionString = new NpgsqlConnectionStringBuilder(builder.ConnectionString) { Database = Name };
+        _dataSource = NpgsqlDataSource.Create(_connectionString);
         var schema = await File.ReadAllTextAsync(SchemaPath()).ConfigureAwait(false);
         await using (var install = _dataSource.CreateCommand(schema))
         {

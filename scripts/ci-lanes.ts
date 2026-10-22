@@ -160,7 +160,11 @@ export const FILTERED_LANES = {
   },
   "spring-boot": { sources: ["jvm/**"], inputs: javaInputs },
   "spring-boot-snapshot": { sources: ["jvm/**"], inputs: javaInputs },
-  dotnet: { sources: ["dotnet/**"], inputs: ["dotnet/**"] },
+  // The exception test checks the C# exception set against Ruby's errors.rb class for class.
+  dotnet: {
+    sources: ["dotnet/**"],
+    inputs: ["dotnet/**", "ruby/lib/stablemates/workhorse/errors.rb"],
+  },
 } as const satisfies Record<string, FilteredLane>;
 
 /**
