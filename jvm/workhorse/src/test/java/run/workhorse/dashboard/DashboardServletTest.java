@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
 import run.workhorse.ConnectionSource;
+import run.workhorse.Queue;
 import run.workhorse.internal.Json;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
@@ -402,6 +405,55 @@ class DashboardServletTest {
               Map.of("Host", "localhost:" + server.port()),
               "".getBytes(StandardCharsets.UTF_8));
       assertEquals(200, response.status(), response.text());
+    }
+  }
+
+  // SM-1531: a stored value without a payload contract can hold integers of 131,072 digits, the
+  // most that PostgreSQL stores. Seven of them fit under the payload limit of 1 MiB. The dashboard
+  // writes them back without a BigInteger parse.
+  @Test
+  void readsAStoredValueWithLongIntegersWithoutParsingThem() throws Exception {
+    UUID id = new Queue(source).enqueue("dashboard.long-integers", Map.of()).taskId();
+    StringBuilder stored = new StringBuilder("[");
+    for (int index = 0; index < 7; index++) {
+      String digits = String.valueOf(index + 1).repeat(Json.MAX_NUMBER_LENGTH);
+      stored.append(index == 0 ? "" : ",").append(index % 2 == 0 ? "" : "-").append(digits);
+    }
+    String payload = stored.append("]").toString();
+    Connection connection = source.acquire();
+    try (PreparedStatement update =
+        connection.prepareStatement("UPDATE workhorse.task SET payload = ?::jsonb WHERE id = ?")) {
+      update.setString(1, payload);
+      update.setObject(2, id);
+      assertEquals(1, update.executeUpdate());
+    } finally {
+      source.release(connection, false);
+    }
+
+    // The old read parsed each integer into a BigInteger. Its time is the reference, so the bound
+    // holds on a slow or busy host too.
+    long started = System.nanoTime();
+    String expected = Json.write(Json.parse(payload));
+    long parsed = System.nanoTime() - started;
+
+    String body = "{\"json\":{\"id\":\"" + id + "\",\"kind\":\"payload\"}}";
+    try (TestServer server = new TestServer("", builder().build())) {
+      long fastest = Long.MAX_VALUE;
+      for (int attempt = 0; attempt < 3; attempt++) {
+        started = System.nanoTime();
+        TestServer.Response response = server.post("/workhorse/rpc/dashboard/taskValue", body);
+        fastest = Math.min(fastest, System.nanoTime() - started);
+        assertEquals(200, response.status());
+        var value = Json.object(Json.object(Json.parseForWrite(response.text())).get("json"));
+        assertEquals(expected, Json.write(value.get("value")));
+      }
+      assertTrue(
+          fastest * 4 < parsed,
+          "the dashboard read took "
+              + Duration.ofNanos(fastest).toMillis()
+              + " ms, and the BigInteger parse alone took "
+              + Duration.ofNanos(parsed).toMillis()
+              + " ms");
     }
   }
 }

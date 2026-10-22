@@ -201,4 +201,31 @@ class JsonTest {
     }
     assertEquals(0.5, Json.parseExact("0.5" + "0".repeat(16_382)));
   }
+
+  // SM-1531: the dashboard writes a stored value back without a BigInteger parse.
+  @Test
+  void aParseForWriteWritesWhatTheDefaultParseWrites() {
+    String digits = "1234567890".repeat(13_107) + "12";
+    for (String text :
+        List.of(
+            "[0,-0,1,-1,9223372036854775807,-9223372036854775808,9223372036854775808]",
+            "[-9223372036854775809,9999999999999999999,10000000000000000000,-99999999999999999999]",
+            "{\"a\":{\"b\":[" + digits + ",-" + digits + "]},\"c\":1e2,\"d\":-0.5e-3}",
+            "{\"a\":1,\"a\":12345678901234567890123}",
+            "\"\\u00e9\\/\"",
+            digits)) {
+      assertEquals(Json.write(Json.parse(text)), Json.write(Json.parseForWrite(text)), text);
+    }
+    assertEquals(digits, Json.write(Json.parseForWrite(digits)));
+    assertEquals(9_223_372_036_854_775_807L, Json.parseForWrite("9223372036854775807"));
+  }
+
+  @Test
+  void aParseForWriteRefusesWhatTheDefaultParseRefuses() {
+    for (String text :
+        List.of("1".repeat(Json.MAX_NUMBER_LENGTH + 1), "01", "[1,]", "1e400", "-", "1 2")) {
+      assertThrows(IllegalArgumentException.class, () -> Json.parse(text), text);
+      assertThrows(IllegalArgumentException.class, () -> Json.parseForWrite(text), text);
+    }
+  }
 }

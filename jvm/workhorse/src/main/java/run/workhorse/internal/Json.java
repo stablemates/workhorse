@@ -15,11 +15,12 @@ import org.jspecify.annotations.Nullable;
  * <p>A tree value is a {@code Map<String, @Nullable Object>} in source order, a {@code
  * List<@Nullable Object>}, a {@code Long} or a {@code BigInteger} for an integer, a {@code Double}
  * for a number with a fraction or an exponent, a {@code String}, a {@code Boolean}, or {@code
- * null}. A tree from {@link #parseExact(String)} can also hold a {@code BigDecimal}. The parser is
- * strict: it refuses a token that is not JSON, a lone surrogate, and trailing text. A duplicate
- * object key keeps the last value, as PostgreSQL's {@code jsonb} does. It also refuses a number
- * token that is longer than a limit, because {@code new BigInteger(String)} takes time that grows
- * with the square of the number of digits.
+ * null}. A tree from {@link #parseExact(String)} can also hold a {@code BigDecimal}, and a tree
+ * from {@link #parseForWrite(String)} can hold the token of a long integer. The parser is strict:
+ * it refuses a token that is not JSON, a lone surrogate, and trailing text. A duplicate object key
+ * keeps the last value, as PostgreSQL's {@code jsonb} does. It also refuses a number token that is
+ * longer than a limit, because {@code new BigInteger(String)} takes time that grows with the square
+ * of the number of digits.
  */
 public final class Json {
   private static final int MAX_DEPTH = 1000;
@@ -40,8 +41,32 @@ public final class Json {
   /** The most digits after the decimal point of a {@code BigDecimal} in an exact tree. */
   private static final int MAX_FRACTION_DIGITS = 16_383;
 
+  /**
+   * The most digits of an integer token that {@link #parseForWrite(String)} reads as a number. A
+   * longer token is outside the {@code long} range, because a JSON integer has no leading zero.
+   */
+  private static final int MAX_LONG_DIGITS = 19;
+
   private static final BigInteger LONG_MIN = BigInteger.valueOf(Long.MIN_VALUE);
   private static final BigInteger LONG_MAX = BigInteger.valueOf(Long.MAX_VALUE);
+
+  /** How a parse reads a number token. */
+  private enum Numbers {
+    /** A {@code Long}, a {@code BigInteger}, or a finite {@code Double}. */
+    TREE,
+    /** As {@link #TREE}, but a {@code BigDecimal} for a value that a double cannot hold. */
+    EXACT,
+    /** As {@link #TREE}, but an integer outside the {@code long} range keeps its token. */
+    WRITE,
+  }
+
+  /**
+   * An integer token that a tree from {@link #parseForWrite(String)} keeps as text. {@link
+   * #write(Object)} writes the token unchanged. Only the parser makes one, so the token is always a
+   * valid JSON integer without a leading zero, and its text equals the text of its {@code
+   * BigInteger}.
+   */
+  private record IntegerToken(String token) {}
 
   private Json() {}
 
@@ -71,8 +96,24 @@ public final class Json {
    *     double range
    */
   public static @Nullable Object parseExact(String text) {
-    Parser parser = new Parser(text, MAX_NUMBER_LENGTH, true);
+    Parser parser = new Parser(text, MAX_NUMBER_LENGTH, Numbers.EXACT);
     return parser.document();
+  }
+
+  /**
+   * Parses {@code text} into a tree that only {@link #write(Object)} reads (SM-1531).
+   *
+   * <p>The tree is the tree of {@link #parse(String)}, but an integer outside the {@code long}
+   * range keeps its token text in place of a {@code BigInteger}. {@code new BigInteger(String)}
+   * takes time that grows with the square of the number of digits, and the writer needs only the
+   * digits. So {@code write(parseForWrite(text))} equals {@code write(parse(text))}, and it is fast
+   * for a stored value with integers of 131,072 digits. A caller must not read the numbers of the
+   * tree.
+   *
+   * @throws IllegalArgumentException if {@link #parse(String)} refuses the text
+   */
+  public static @Nullable Object parseForWrite(String text) {
+    return new Parser(text, MAX_NUMBER_LENGTH, Numbers.WRITE).document();
   }
 
   /**
@@ -86,7 +127,7 @@ public final class Json {
     if (maxNumberLength < 1) {
       throw new IllegalArgumentException("maxNumberLength must be at least 1");
     }
-    return new Parser(text, maxNumberLength, false).document();
+    return new Parser(text, maxNumberLength, Numbers.TREE).document();
   }
 
   /**
@@ -126,6 +167,7 @@ public final class Json {
       case Double number -> out.append(finite(number));
       case Float number -> out.append(finite(shortest(number)));
       case BigDecimal number -> out.append(number.toString());
+      case IntegerToken number -> out.append(number.token());
       case Map<?, ?> map -> {
         out.append('{');
         boolean first = true;
@@ -211,13 +253,13 @@ public final class Json {
   private static final class Parser {
     private final String text;
     private final int maxNumberLength;
-    private final boolean exact;
+    private final Numbers numbers;
     private int position;
 
-    Parser(String text, int maxNumberLength, boolean exact) {
+    Parser(String text, int maxNumberLength, Numbers numbers) {
       this.text = text;
       this.maxNumberLength = maxNumberLength;
-      this.exact = exact;
+      this.numbers = numbers;
     }
 
     @Nullable Object document() {
@@ -413,6 +455,9 @@ public final class Json {
       }
       String token = text.substring(start, position);
       if (integer) {
+        if (numbers == Numbers.WRITE && position - unsigned > MAX_LONG_DIGITS) {
+          return new IntegerToken(token);
+        }
         BigInteger value = new BigInteger(token);
         if (value.compareTo(LONG_MIN) >= 0 && value.compareTo(LONG_MAX) <= 0) {
           return value.longValue();
@@ -420,7 +465,7 @@ public final class Json {
         return value;
       }
       double value = Double.parseDouble(token);
-      if (exact) {
+      if (numbers == Numbers.EXACT) {
         return exact(token, value);
       }
       if (!Double.isFinite(value)) {

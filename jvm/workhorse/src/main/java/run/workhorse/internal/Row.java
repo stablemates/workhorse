@@ -126,6 +126,15 @@ public final class Row {
     return value == null ? null : Json.parse(value);
   }
 
+  /**
+   * A {@code jsonb} column, parsed into a tree that only {@link Json#write(Object)} reads, or
+   * {@code null} for SQL {@code NULL}. See {@link Json#parseForWrite(String)}.
+   */
+  public @Nullable Object jsonForWrite(String column) {
+    String value = text(column);
+    return value == null ? null : Json.parseForWrite(value);
+  }
+
   private @Nullable Object value(String column) {
     if (!values.containsKey(column)) {
       throw new WorkhorseException("PostgreSQL returned no column " + column);
