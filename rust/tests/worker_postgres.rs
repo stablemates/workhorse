@@ -156,8 +156,15 @@ async fn shutdown_outcome(
 ///
 /// The handler must settle within the unwind window, so it settles and `run` returns `Ok`. A host
 /// stall of `STALL_LIMIT` or longer inside that window can push it past the window; that attempt
-/// is not judged.
-fn judged_cooperative_shutdown(outcome: &Result<(), Error>, stall: Duration) -> bool {
+/// is not judged. `returned` is how long after `began` the handler returned. If the handler
+/// returned inside the window, it honored cancellation, and only its settlement statement on a
+/// loaded database outlived the window (SM-1155). That attempt is not judged either.
+fn judged_cooperative_shutdown(
+    outcome: &Result<(), Error>,
+    stall: Duration,
+    returned: Option<Duration>,
+    grace: Duration,
+) -> bool {
     match outcome {
         Ok(()) => true,
         Err(Error::ShutdownIncomplete { abandoned: 1 }) if stall >= STALL_LIMIT => {
@@ -166,8 +173,20 @@ fn judged_cooperative_shutdown(outcome: &Result<(), Error>, stall: Duration) -> 
             );
             false
         }
+        Err(Error::ShutdownIncomplete { abandoned: 1 })
+            if returned.is_some_and(|returned| returned < grace + UNWIND_WINDOW) =>
+        {
+            eprintln!(
+                "the handler returned {returned:?} after shutdown began, but its settlement \
+                 outlived the unwind window; rerunning"
+            );
+            false
+        }
         other => {
-            panic!("a handler that honors cancellation stopped with {other:?} ({stall:?} unwind stall)")
+            panic!(
+                "a handler that honors cancellation stopped with {other:?} ({stall:?} unwind \
+                 stall, returned {returned:?} after shutdown began)"
+            )
         }
     }
 }
@@ -327,21 +346,7 @@ async fn lease_expiry(observer: &Client, task: Uuid) -> std::time::SystemTime {
 /// heartbeat intervals. A lease that keeps renewing never holds still. Recovery runs only after
 /// PostgreSQL reports the expiry has passed.
 async fn assert_lease_lapses(harness: &Harness, observer: &Client, task: Uuid) {
-    let settled = Duration::from_millis(500);
-    tokio::time::timeout(WAIT, async {
-        let mut expiry = lease_expiry(observer, task).await;
-        let mut since = tokio::time::Instant::now();
-        while since.elapsed() < settled {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let current = lease_expiry(observer, task).await;
-            if current != expiry {
-                expiry = current;
-                since = tokio::time::Instant::now();
-            }
-        }
-    })
-    .await
-    .expect("a lease kept renewing after its owner abandoned it");
+    assert_renewals_stop(observer, task).await;
     tokio::time::timeout(WAIT, async {
         while !observer
             .query_one(
@@ -357,6 +362,30 @@ async fn assert_lease_lapses(harness: &Harness, observer: &Client, task: Uuid) {
     })
     .await
     .expect("the lease never expired");
+    recover(harness, observer, task).await;
+}
+
+/// Fails unless the lease expiry of `task` holds still for five heartbeat intervals.
+async fn assert_renewals_stop(observer: &Client, task: Uuid) {
+    let settled = Duration::from_millis(500);
+    tokio::time::timeout(WAIT, async {
+        let mut expiry = lease_expiry(observer, task).await;
+        let mut since = tokio::time::Instant::now();
+        while since.elapsed() < settled {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let current = lease_expiry(observer, task).await;
+            if current != expiry {
+                expiry = current;
+                since = tokio::time::Instant::now();
+            }
+        }
+    })
+    .await
+    .expect("a lease kept renewing after its owner abandoned it");
+}
+
+/// Runs lease recovery and expects it to take the expired lease of `task`.
+async fn recover(harness: &Harness, observer: &Client, task: Uuid) {
     observer
         .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
         .await
@@ -618,16 +647,26 @@ async fn a_handler_that_returns_after_the_watchdog_settles_as_lease_lost() {
 /// The worker keeps its batch coordinator, so a member left pending would join the next batch on
 /// the same worker. Recovery hands the same task back for its next attempt, and the callback must
 /// see only that attempt.
+///
+/// Each run lingers for the full linger, so the lease must outlast it without a renewal. A lease
+/// shorter than the linger failed under host load (SM-1155). A stall longer than the lease ended
+/// the second attempt with lease loss, and the task stayed active. The test expires the dropped
+/// lease itself.
 #[tokio::test]
 async fn a_dropped_run_once_leaves_no_batch_member_for_the_next_run() {
     let Some(harness) = harness("worker_dropped_batch_member").await else { return };
     let observer = harness.database.connect().await;
-    let worker = harness.worker(WorkerOptions { concurrency: 2, ..lapsing_options() });
+    let worker = harness.worker(WorkerOptions {
+        concurrency: 2,
+        lease_duration: Duration::from_secs(30),
+        ..lapsing_options()
+    });
     let (called, mut calls) = mpsc::unbounded_channel();
     // The second member never arrives, so the first lingers until its run is dropped.
+    let linger = Duration::from_secs(10);
     worker.handle_batch(
         "rust.batch.dropped",
-        BatchOptions { max_size: 2, linger: Duration::from_secs(2) },
+        BatchOptions { max_size: 2, linger },
         move |items: Vec<BatchItem<Value>>| {
             let attempts =
                 items.iter().map(|item| (item.context.task().id, item.context.task().attempt));
@@ -652,12 +691,29 @@ async fn a_dropped_run_once_leaves_no_batch_member_for_the_next_run() {
 
     let once = worker.clone();
     let running = tokio::spawn(async move { once.run_once().await });
-    harness.wait_for(task, TaskState::Active).await;
-    // The claimed member joins its batch and lingers well inside the two-second linger.
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    // The execution joins the batch before its first heartbeat round can run, so a renewal shows
+    // that the member lingers. The member joins after the spawn. Thus the abort comes before its
+    // linger ends if the claim and the renewal arrive within half the linger.
+    tokio::time::timeout(linger / 2, async {
+        harness.wait_for(task, TaskState::Active).await;
+        let claimed = lease_expiry(&observer, task).await;
+        while lease_expiry(&observer, task).await <= claimed {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("no heartbeat round renewed the lingering member's lease within half the linger");
     running.abort();
     assert!(running.await.unwrap_err().is_cancelled());
-    assert_lease_lapses(&harness, &observer, task).await;
+    assert_renewals_stop(&observer, task).await;
+    observer
+        .execute(
+            "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() WHERE task_id = $1",
+            &[&task],
+        )
+        .await
+        .unwrap();
+    recover(&harness, &observer, task).await;
 
     assert!(worker.run_once().await.unwrap(), "the recovered task did not run");
     assert_eq!(harness.state(task).await, TaskState::Succeeded);
@@ -791,7 +847,7 @@ async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
     let pool = harness.pool();
     let worker = Worker::new(pool.clone(), options).unwrap();
     let (started, mut running_handlers) = mpsc::unbounded_channel();
-    let (cancelled, cancellation) = oneshot::channel::<tokio::time::Instant>();
+    let (cancelled, mut cancellation) = oneshot::channel::<tokio::time::Instant>();
     let cancelled = Arc::new(Mutex::new(Some(cancelled)));
     worker.handle("rust.cooperative", move |_: Value, context: HandlerContext| {
         let _ = started.send(());
@@ -823,12 +879,13 @@ async fn shutdown_with_a_locked_registry_row(harness: &Harness) -> bool {
     stop.send(()).unwrap();
     // The cleanup window also bounds the stalled deregistration.
     let (outcome, stall) = shutdown_outcome(running, grace, began).await;
-    let judged = judged_cooperative_shutdown(&outcome, stall);
+    // The handler reports its cancellation just before it returns.
+    let cancelled_after = cancellation.try_recv().ok().map(|at| at - began);
+    let judged = judged_cooperative_shutdown(&outcome, stall, cancelled_after, grace);
     if judged {
         // The stalled refresh spends the whole grace period. One deadline still bounds the
         // handler, so it sees cancellation when grace ends rather than a fresh grace period later.
-        // It reports that before it returns.
-        let cancelled_after = cancellation.await.unwrap() - began;
+        let cancelled_after = cancelled_after.expect("the handler never saw cancellation");
         assert!(
             cancelled_after >= grace,
             "the handler was cancelled before grace: {cancelled_after:?}"
@@ -1263,25 +1320,32 @@ async fn a_handler_that_honors_shutdown_cancellation_releases_its_task() {
 }
 
 /// One attempt of the test above. Returns false when a host stall leaves the attempt unjudged.
+///
+/// Each attempt has its own queue, so a task that an earlier attempt released is not claimed here.
 async fn shutdown_releases_a_cooperative_task(harness: &Harness) -> bool {
-    let task = harness.enqueue("rust.cooperative", json!({}), EnqueueOptions::default()).await;
+    let queue = format!("rust-unwind-{}", Uuid::new_v4());
+    let task = harness.enqueue("rust.cooperative", json!({}), on(&queue)).await;
     let grace = Duration::from_millis(100);
-    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..options() });
+    let worker = harness.worker(WorkerOptions { shutdown_grace_period: grace, ..serving(&queue) });
     let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let (returned, mut returns) = mpsc::unbounded_channel();
     worker.handle("rust.cooperative", move |_: Value, context: HandlerContext| {
-        let _ = started.send(());
+        let _ = started.send(context.task().id);
+        let returned = returned.clone();
         async move {
             context.cancellation().cancelled().await;
             assert_eq!(context.cancellation().reason(), Some(CancelReason::Shutdown));
+            let _ = returned.send(tokio::time::Instant::now());
             Err::<Value, _>(HandlerError::new("stopped"))
         }
     });
     let (stop, running) = run(&worker);
-    running_handlers.recv().await.unwrap();
+    assert_eq!(running_handlers.recv().await, Some(task));
     let began = tokio::time::Instant::now();
     stop.send(()).unwrap();
     let (outcome, stall) = shutdown_outcome(running, grace, began).await;
-    if !judged_cooperative_shutdown(&outcome, stall) {
+    let returned = returns.try_recv().ok().map(|at| at - began);
+    if !judged_cooperative_shutdown(&outcome, stall, returned, grace) {
         return false;
     }
     let snapshot = harness.admin.get_task(task).await.unwrap().unwrap();
@@ -2677,12 +2741,14 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     let grace = Duration::from_millis(50);
 
     // The first worker completes 20 tasks in fused batches, then every handler hangs until the
-    // worker abandons them. Their leases lapse as if the process had died.
+    // worker abandons them. The test then expires their leases as if the process had died. The
+    // lease is long, so a host stall cannot lapse a lease before the abandonment and rerun a task
+    // that completed (SM-1155).
     let started = Arc::new(AtomicUsize::new(0));
     let (record, count) = (Arc::clone(&effects), Arc::clone(&started));
     let crashing = harness.worker(WorkerOptions {
         concurrency,
-        lease_duration: Duration::from_millis(500),
+        lease_duration: Duration::from_secs(30),
         heartbeat_interval: Some(Duration::from_millis(100)),
         shutdown_grace_period: grace,
         ..serving("fast-abandon")
@@ -2709,11 +2775,19 @@ async fn an_abandoned_batching_worker_reruns_no_more_tasks_than_its_concurrency(
     stop.send(()).unwrap();
     let (outcome, _) = shutdown_outcome(run_crashing, grace, began).await;
     assert!(matches!(outcome, Err(Error::ShutdownIncomplete { .. })), "{outcome:?}");
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    harness
-        .database
-        .connect()
+    // The run has abandoned its heartbeats, and a round answers `stale` for an expired lease, so
+    // no late round renews these leases again.
+    let observer = harness.database.connect().await;
+    let expired = observer
+        .execute(
+            "UPDATE workhorse.fast_task_runtime SET expires_at = clock_timestamp()
+              WHERE queue_name = $1 AND state = 'active'",
+            &[&"fast-abandon"],
+        )
         .await
+        .unwrap();
+    assert_eq!(expired, concurrency as u64, "every hung handler holds one lease");
+    observer
         .query("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)", &[])
         .await
         .unwrap();
