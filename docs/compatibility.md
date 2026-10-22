@@ -708,23 +708,22 @@ dashboard release inside a major line.
 ### What must be true before 1.0.0
 
 Six gates hold the tag, and each is met with evidence rather than with an assertion
-([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
+([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)). 1.0.0 ships when the JVM and .NET SDKs
+land. The maintainer changed the gates on 2026-10-18, and the amendment of ADR 0056 records the
+change.
 
-1. Every governed surface above has a mechanical check in the CI `required` task. Eleven checks, one
-   per surface.
-2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
-   surface from the tag, and no outside-filed defect against a governed surface is open and
-   unaccepted. The Rust API's clock starts at the later of the commit that first landed
-   `api/rust.txt` and the last one that removed a line from it. Both minors must publish the crate
-   from a commit at or after that start, so 0.4.0 does not count
-   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md)). The Ruby API's clock
-   starts the same way at `api/ruby.txt`, and both minors must publish the gem to RubyGems. The gem
-   first publishes in 0.6.0, so 0.6.0 and 0.7.0 are the earliest pair, and both precede 1.0.0
-   ([ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)).
+1. Every governed surface has a mechanical check in the CI `required` task. Twelve checks, one per
+   surface: the eleven above, and the C# API with `dotnet-api:check` against `api/dotnet.txt`
+   ([ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)).
+2. Each governed surface has its API snapshot and one published 0.x minor that carries its
+   artifacts. A second model has written a review of its API. No outside-filed defect against a
+   governed surface is open and unaccepted. The six-week quiet period and the two-minor requirement
+   do not apply.
 3. The migration rehearsals ADR 0055 placed have run. The recovery procedure has run against a
    deliberate mid-migration failure. A fresh host has installed the candidate from the registries of
-   all six SDKs. These include Rust from crates.io, Ruby from RubyGems, and the JVM artifacts from
-   Maven Central ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
+   all seven SDKs. These include Rust from crates.io, Ruby from RubyGems, the JVM artifacts from
+   Maven Central, and the .NET packages from NuGet
+   ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
    [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
    [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)).
 4. One database has run 30 consecutive days under continuous work without being reinstalled, across
@@ -733,10 +732,20 @@ Six gates hold the tag, and each is met with evidence rather than with an assert
 5. `@stablemates/workhorse-dashboard-server` has a written security review with every High finding
    resolved. No third-party audit has taken place, and `SECURITY.md` says so.
 6. `pnpm parity:check` passes and the product operator table carries no Planned cell (WH-581
-   named four), and any Absent cell records why it is absent.
+   named four), and any Absent cell records why it is absent. Every product cell in the JVM and
+   .NET columns of [`docs/parity.md`](parity.md) reads Supported, including the embedded dashboard
+   backend.
 
-The tag date is derived from those gates rather than announced. Adoption counts, documentation
-coverage, and benchmark numbers are recorded at the tag and gate nothing.
+The tag date is derived from those gates rather than announced. The tag lands no earlier than the
+latest of four moments:
+
+1. 2026-11-02.
+2. The last day of the soak.
+3. The day the .NET SDK lands.
+4. The day the first minor publishes the JVM and .NET artifacts.
+
+Adoption counts, documentation coverage, and benchmark numbers are recorded at the tag and gate
+nothing.
 
 ## Protocol and schema compatibility
 

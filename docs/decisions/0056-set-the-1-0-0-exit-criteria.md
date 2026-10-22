@@ -11,7 +11,10 @@
   covers Ruby),
   [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (Gate 1 gains `java-api:check` and `kotlin-api:check`, Gate 2's Java
   and Kotlin clocks start where `api/java.txt` and `api/kotlin.txt` land, and Gate 3's cold install
-  covers the JVM)
+  covers the JVM),
+  [the amendment of 2026-10-22](#amendment-the-jvm-and-net-sdks-set-the-100-gates-2026-10-22)
+  (Gate 2 drops its two clocks, Gate 1 gains `dotnet-api:check`, Gate 3 and Gate 6 cover .NET, and
+  the time floor changes)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
@@ -208,3 +211,70 @@ weekly. When the two disagree, this ADR is the bar and the Board is wrong about 
 
 Nothing here gates the 0.1.0 train or the launch window. Both run to their own schedule, and the
 first gate clock cannot start until the pre-freeze work lands.
+
+## Amendment: the JVM and .NET SDKs set the 1.0.0 gates (2026-10-22)
+
+On 2026-10-18 the maintainer changed the gates of this record. SM-1360 records the decision in
+"Resolution, part 2", items 2 to 4. This amendment records those items. It supersedes the text above
+where the two disagree. It also supersedes the Gate 2 clock sections of ADR 0079, ADR 0084, and
+ADR 0103. Those records keep their text as history.
+
+### 1.0.0 ships when the JVM and .NET SDKs land
+
+The JVM SDK (ADR 0103) and the .NET SDK
+([ADR 0107](0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md))
+are in the 1.0.0 scope. When both land and the gates below are met, the maintainer can create the
+tag. The gates that only measure time relax.
+The gates that measure evidence stay.
+
+### Gate 2 has no clock
+
+Gate 2 applies to every governed surface. Each surface must have three things before the tag:
+
+1. Its committed API snapshot, which Gate 1 checks.
+2. One published 0.x minor that carries the artifacts of that surface. For example, the minor
+   publishes the NuGet packages for the C# API.
+3. A written review of its API by a second model. A second model is a model other than the one
+   that designed the surface.
+
+The six-week quiet period goes. The rule of two published minors goes. A non-additive change to a
+governed surface therefore restarts no clock. The snapshot diff still shows it in review.
+
+The rule on outside-filed defects stays. At the tag, no outside-filed defect against a governed
+surface is open and unaccepted.
+
+The per-surface clocks of ADR 0079, ADR 0084, and ADR 0103 go with the quiet period. The Rust
+crate, the Ruby gem, and the JVM artifacts each need one published minor that carries them.
+
+Evidence lives in the snapshot files, the release tag of each counted minor, the written reviews,
+and the outside-filed Issue list. The release Issue links each one.
+
+### Gates 1, 3, 4, 5, and 6 stay
+
+**Gate 1 gains `dotnet-api:check`.** The C# API is the twelfth governed surface. Its check compares
+the built assemblies with the committed snapshot `api/dotnet.txt` and runs in the CI `required` job.
+[ADR 0107](0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md) defines the surface, and SM-1626 adds the check. Gate 1 then has twelve checks.
+
+**Gate 3's cold install covers the JVM and .NET.** The fresh host follows only the site's
+installation page. It installs the JVM artifacts from Maven Central, as ADR 0103 states. It also
+builds a .NET consumer that takes the Workhorse packages from NuGet, and runs a task end to end.
+
+**Gate 4 does not change.** The soak still needs 30 consecutive days on one database.
+
+**Gate 5 does not change.**
+
+**Gate 6 needs full parity in the .NET column.** Every product cell in the .NET column of
+[`docs/parity.md`](../parity.md) must read Supported. This includes the embedded dashboard backend.
+The JVM column has the same bar from ADR 0103.
+
+### The time floor
+
+The tag lands no earlier than the latest of four moments:
+
+1. 2026-11-02, the date floor of this record. It does not change.
+2. The last day of the soak window of Gate 4.
+3. The day the .NET SDK lands.
+4. The day the first minor publishes the JVM artifacts and the .NET artifacts.
+
+The floor no longer includes six weeks after the last non-additive change to a governed surface.
+The floor stays derived, so slipping work still moves it.
