@@ -4,8 +4,10 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-10-21 connection budget acceptance analysis](benchmarks/2026-10-21-connection-budget-acceptance-analysis.md): the listener and heartbeat connections of each SDK on one pool after SM-1565, compared with the baseline, and the result of each cell against the acceptance thresholds.
+- [`results/2026-10-21-connection-budget-acceptance/`](benchmarks/results/2026-10-21-connection-budget-acceptance/): the summary of each of the eight `full`-profile artifacts, and of the Ruby and JVM fault reruns. The full artifacts and logs are attached to SM-1574 in Linear.
 - [2026-10-21 connection budget baseline analysis](benchmarks/2026-10-21-connection-budget-baseline-analysis.md): the listener and heartbeat connections of each SDK on one pool before SM-1565, and the result of each cell against the held-task thresholds.
-- [`results/2026-10-21-connection-budget-baseline/`](benchmarks/results/2026-10-21-connection-budget-baseline/): one `full`-profile artifact for each of the eight SDK variants, with load averages.
+- [`results/2026-10-21-connection-budget-baseline/`](benchmarks/results/2026-10-21-connection-budget-baseline/): the summary of the `full`-profile artifact of each of the eight SDK variants, with the result of each cell and load averages. The full artifacts and logs are attached to SM-1574 in Linear.
 - [2026-10-11 checkpoint replay analysis](benchmarks/2026-10-11-checkpoint-replay-analysis.md): what a full-tier handler pays to replay 0 to 10,000 stored checkpoints on each pass after a durable wait, for SM-1209.
 - [`results/2026-10-11-checkpoint-replay.json`](benchmarks/results/2026-10-11-checkpoint-replay.json): three sequential `full`-profile invocations of the `checkpoint-replay` scenario, with load averages.
 - [2026-09-27 dependency release guard analysis](benchmarks/2026-09-27-dependency-release-guard-analysis.md): what the pending-edge probe before a zero-counter release costs `resolve_dependents_many_v1` on PostgreSQL 18 and 15, for SM-937.
@@ -495,7 +497,7 @@ The benchmark uses the `DATABASE_URL_BENCH` database of the checkout. It drops a
 
    ```bash
    pnpm benchmark:connection-budget -- --profile full --sdk go \
-     --out docs/benchmarks/results/<date>-connection-budget-go.json
+     --out /tmp/connection-budget/go.json
    ```
 
 3. To run some cells only, give their ids to `--cells`, separated by commas.
@@ -506,6 +508,28 @@ The benchmark uses the `DATABASE_URL_BENCH` database of the checkout. It drops a
 
 Run one benchmark at a time. The driver runs one cell at a time, but it cannot see a second driver.
 `--no-build` uses the probe builds that exist. `--help` lists every option.
+
+### Record a run
+
+A result file in the repository holds the summary and the verdicts. Large raw series go to the
+Linear issue of the run as an attachment. A full artifact keeps every sample of every cell, so it is
+too large for the repository.
+
+1. Write the summary of each full artifact into `docs/benchmarks/results/`.
+
+   ```bash
+   pnpm benchmark:connection-budget:summary -- /tmp/connection-budget/go.json \
+     docs/benchmarks/results/<date>-connection-budget-<run>/go.json
+   ```
+
+   The summary keeps the provenance, the settings, the driver summary table, and each cell with its
+   result, its rules, and its key values. It names the full artifact and gives the sha256 of its
+   bytes. For a schema 4 artifact, the summary applies the rules again. It stops when a result or a
+   summary row differs from the stored one.
+
+2. Put the full artifacts and the logs into one compressed tar file. Attach that file to the Linear
+   issue of the run.
+3. In the analysis page, give the name of that file and its sha256.
 
 ### What a cell does
 
@@ -906,7 +930,8 @@ Each sample also counts the active tasks, the active tasks whose lease is not ex
 tasks whose lease has expired, and the ready tasks. It counts the `claimed` events, which grow with
 each claim, and the distinct tasks that a worker claimed. For each active task, it reads the renewal
 age, `now - heartbeat_at`, and the lease margin, `expires_at - now`, from `workhorse.task_runtime`.
-The `series` of each run keeps every sample, and `poolSeries` keeps every pool state.
+The `series` of each run keeps every sample, and `poolSeries` keeps every pool state. A summary
+keeps neither, so read the full artifact from the Linear attachment of the run.
 
 ### Find the listener and heartbeat connections
 
