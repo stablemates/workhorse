@@ -46,8 +46,11 @@ it. The handler waits for a signal named `approval`. The review service answers 
     if err != nil {
     	return nil, err
     }
-    approval, ok := value.(map[string]any)
-    if ok && approval["approved"] == true {
+    approval, err := workhorse.DecodeValue[Approval](value)
+    if err != nil {
+    	return nil, err
+    }
+    if approval.Approved {
     	publishOrder()
     }
     ```

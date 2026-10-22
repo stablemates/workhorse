@@ -206,6 +206,65 @@ type ClaimedTask struct {
 // Handler processes one claimed payload with fenced durable operations outside a transaction.
 type Handler func(context.Context, any, *HandlerContext) (any, error)
 
+// Typed adapts a handler that takes its payload as P, so the handler reads fields instead of
+// asserting types on decoded JSON. Register the result with Worker.Handle.
+//
+// The adapter encodes the decoded payload as JSON and decodes it into P with encoding/json. It
+// ignores unknown fields, and a field the payload omits keeps its zero value, so a payload contract
+// is what makes a field required. The worker reads a JSON number as a float64, so an integer
+// beyond the portable bound that docs/parity.md states reaches an integer field rounded. If the
+// payload does not decode into P, the handler does not run and the attempt fails with a
+// PayloadDecodeError under the task's retry policy.
+func Typed[P any](handler func(context.Context, P, *HandlerContext) (any, error)) Handler {
+	if handler == nil {
+		panic(nilWorkerHandlerMessage)
+	}
+	return func(ctx context.Context, payload any, durability *HandlerContext) (any, error) {
+		decoded, err := decodeValue[P](payload)
+		if err != nil {
+			return nil, &PayloadDecodeError{Err: err}
+		}
+		return handler(ctx, decoded, durability)
+	}
+}
+
+// DecodeValue decodes a value that a durable operation returned, such as a checkpoint result, a
+// signal payload, or a human wait response, into T. It applies the JSON rules of Typed.
+//
+// A durable operation returns decoded JSON, so a checkpoint whose operation returned a struct gives
+// back a map. DecodeValue encodes the value as JSON again and decodes it into T, so it also accepts
+// a value of any other type that encodes as the JSON of T.
+func DecodeValue[T any](value any) (T, error) {
+	decoded, err := decodeValue[T](value)
+	if err != nil {
+		return decoded, fmt.Errorf(undecodableValueFormat, err)
+	}
+	return decoded, nil
+}
+
+func decodeValue[T any](value any) (T, error) {
+	var decoded T
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return decoded, err
+	}
+	err = json.Unmarshal(encoded, &decoded)
+	return decoded, err
+}
+
+// PayloadDecodeError reports a task payload that the worker could not decode. The payload is not
+// valid JSON, or it does not decode into the payload type of a Typed handler. The attempt fails
+// under the task's retry policy, and the failure envelope records the name PayloadDecodeError.
+type PayloadDecodeError struct {
+	// Err is the decoding error.
+	Err error
+}
+
+func (err *PayloadDecodeError) Error() string { return fmt.Sprintf(undecodablePayloadFormat, err.Err) }
+
+// Unwrap returns the decoding error.
+func (err *PayloadDecodeError) Unwrap() error { return err.Err }
+
 // WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
 	Queue         string
@@ -2221,7 +2280,7 @@ func (worker *Worker) execute(
 	}
 	if task.payloadError != nil {
 		handler = func(context.Context, any, *HandlerContext) (any, error) {
-			return nil, fmt.Errorf(undecodablePayloadFormat, task.payloadError)
+			return nil, &PayloadDecodeError{Err: task.payloadError}
 		}
 	}
 	result, handlerError := callHandler(task.Type, handler, handlerContext, task.Payload, durability)

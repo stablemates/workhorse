@@ -195,6 +195,10 @@ puts the two in one file, so you can see the full lifecycle.
     	workhorse "github.com/stablemates/workhorse/go"
     )
 
+    type welcome struct {
+    	To string `json:"to"`
+    }
+
     func main() {
     	if err := run(); err != nil {
     		panic(err)
@@ -221,14 +225,13 @@ puts the two in one file, so you can see the full lifecycle.
     	if err != nil {
     		return err
     	}
-    	worker.Handle("email.welcome", func(
+    	worker.Handle("email.welcome", workhorse.Typed(func(
     		_ context.Context,
-    		payload any,
+    		message welcome,
     		_ *workhorse.HandlerContext,
     	) (any, error) {
-    		message := payload.(map[string]any)
-    		return map[string]any{"deliveredTo": message["to"]}, nil
-    	})
+    		return map[string]any{"deliveredTo": message.To}, nil
+    	}))
     	if _, err := worker.RunOnce(ctx); err != nil { // production uses Run(ctx)
     		return err
     	}

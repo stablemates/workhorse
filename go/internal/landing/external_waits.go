@@ -2,10 +2,13 @@ package example
 
 import (
 	"context"
-	"fmt"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+type review struct {
+	Approved bool `json:"approved"`
+}
 
 func configureRelease(worker *workhorse.Worker) {
 	worker.Handle("release.publish", func(
@@ -15,21 +18,17 @@ func configureRelease(worker *workhorse.Worker) {
 		if err != nil {
 			return nil, err
 		}
-		review, err := handler.WaitForHuman("release-approval", map[string]any{
+		response, err := handler.WaitForHuman("release-approval", map[string]any{
 			"release": release, "scan": scan,
 		})
 		if err != nil {
 			return nil, err
 		}
-		decision, ok := review.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("review must be an object")
+		decision, err := workhorse.DecodeValue[review](response)
+		if err != nil {
+			return nil, err
 		}
-		approved, ok := decision["approved"].(bool)
-		if !ok {
-			return nil, fmt.Errorf("review needs a boolean approved field")
-		}
-		return map[string]any{"published": approved}, nil
+		return map[string]any{"published": decision.Approved}, nil
 	})
 }
 

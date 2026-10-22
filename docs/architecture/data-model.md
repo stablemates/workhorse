@@ -133,7 +133,9 @@ of 1 through 200 characters.
 
 When a worker claims a task, `claim_v1` returns the raw payload to its handler. A Go worker that
 cannot decode a claimed payload skips the handler. It fails that attempt through the ordinary fenced
-failure and retry path, so `Worker.Run` keeps running.
+failure and retry path, so `Worker.Run` keeps running. The failure envelope records the name
+`PayloadDecodeError`. A `Typed` handler whose payload does not decode into its payload type fails
+the same way.
 
 `workhorse.redact_top_level_keys_v1` removes persisted keys for these reads:
 

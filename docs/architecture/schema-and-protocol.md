@@ -1516,6 +1516,17 @@ A type with a current contract serializes its `contractVersion`, `payloadMaxByte
 `go/worker.go` defines `Handler` as `func(context.Context, any, *HandlerContext) (any, error)`.
 `HandlerContext.Task` keeps the `ClaimedTask`.
 
+`Typed[P](handler)` adapts a handler that takes its payload as `P` to a `Handler`. Register the
+result with `Worker.Handle`. The adapter encodes the decoded payload as JSON and decodes it into `P`
+with `encoding/json`, which ignores unknown fields. A field that the payload omits keeps its zero
+value, so a payload contract is the way to require a field. If the payload does not decode into
+`P`, the handler does not run. The attempt then fails through the retry policy of the task with a
+`*PayloadDecodeError`.
+
+`DecodeValue[T](value)` decodes a checkpoint result, a signal payload, or a human wait response
+into `T` with the same rules. These operations return decoded JSON, so a checkpoint whose operation
+returns a struct gives back a map. A failure returns an error that wraps the `encoding/json` error.
+
 `Worker.Run` and `Worker.RunOnce` share one execution permit. Concurrent calls run one after the
 other. Thus they cannot multiply the concurrency budget or race the queue cursor.
 

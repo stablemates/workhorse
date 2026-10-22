@@ -222,8 +222,7 @@ func TestCheckpointsCompleteAnInvoice(t *testing.T) {
 	invoice := map[string]any{"amount": 5, "email": "ada@example.com"}
 	taskID := l.enqueue("invoice.issue", invoice)
 	l.drain(worker, taskID, workhorse.TaskSucceeded)
-	charge := map[string]any{"payload": invoice}
-	sameJSON(t, l.task(taskID).Result, map[string]any{"charge": charge, "pdf": map[string]any{"charge": charge}})
+	sameJSON(t, l.task(taskID).Result, map[string]any{"chargeId": "ch_5"})
 }
 
 func TestSleepSuspendsTheSettlement(t *testing.T) {

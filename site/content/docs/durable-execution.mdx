@@ -559,9 +559,10 @@ rules.
   </Tab>
   <Tab value="Go">
     ```go
-    event, err := handler.WaitForSignal("provider-event")
+    value, err := handler.WaitForSignal("provider-event")
+    event, err := workhorse.DecodeValue[ProviderEvent](value)
     review, err := handler.WaitForHuman("operator-review", map[string]any{
-    	"eventId": event.(map[string]any)["id"],
+    	"eventId": event.ID,
     })
     ```
   </Tab>
