@@ -28,6 +28,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import run.workhorse.ConnectionSource
 import run.workhorse.EnqueueOptions
 import run.workhorse.Queue
+import run.workhorse.ShutdownIncompleteException
 import run.workhorse.Worker
 import run.workhorse.testing.ScratchDataSource
 import run.workhorse.testing.ScratchDatabase
@@ -305,6 +306,13 @@ class SuspendCancellationDatabaseTest {
     )
   }
 
+  /**
+   * The drain cancels the handler's Job, but the task stays active while its checkpoint operation
+   * runs. The grace is zero, so the drain gives the handler one unwind window of 250 ms. The test
+   * holds the operation for longer than 100 ms after the cancellation. On a loaded host, the hold
+   * can last longer than that window, and close throws while the attempt still ends (SM-1563). So
+   * the test accepts that close, and then waits until the attempt gives its task back.
+   */
   @Test
   fun theDrainDoesNotReleaseATaskWhileItsCheckpointOperationRuns() {
     val taskId = enqueue("charged")
@@ -317,10 +325,19 @@ class SuspendCancellationDatabaseTest {
       }
     worker.start()
     val drain: Thread
+    // The drain thread is not the test thread, so the test asserts its error after the join.
+    val drainError = AtomicReference<Throwable?>()
     try {
       assertTrue(other.started.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the operation started")
       val job = present(observed.job.get(), "the handler ran in a Job")
-      drain = Thread.ofVirtual().start { worker.close() }
+      drain =
+        Thread.ofVirtual().start {
+          try {
+            closeAfterTheUnwindWindow(worker)
+          } catch (error: Throwable) {
+            drainError.set(error)
+          }
+        }
       waitUntil("the drain cancels the handler's Job") { job.isCancelled }
       assertFalse(observed.done.await(100, TimeUnit.MILLISECONDS), "the call waits")
       assertEquals("active", state(taskId), "the drain does not release the task yet")
@@ -328,9 +345,12 @@ class SuspendCancellationDatabaseTest {
       assertTrue(observed.done.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the handler ended")
     } finally {
       other.release.countDown()
-      worker.close()
+      closeAfterTheUnwindWindow(worker)
     }
     assertTrue(drain.join(WAIT), "the drain ended")
+    assertNull(drainError.get(), "the drain closed the worker without an error")
+    waitUntil("the attempt ended") { state(taskId) != "active" }
+    assertEquals("ready", state(taskId), "the drain gives the task back after the operation")
 
     val ended = present(other.ended.get(), "the operation ended")
     assertTrue(ended <= present(other.returned.get(), "the call returned"), "the order of the ends")
@@ -366,6 +386,18 @@ class SuspendCancellationDatabaseTest {
 
     assertTrue(observed.thrown.get() is CancellationException, "the call sees the cancellation")
     assertFalse(progressWritten(taskId), "a cancelled caller does not start the write")
+  }
+
+  /**
+   * Closes [worker], and accepts a drain whose handler ended after the unwind window. Every other
+   * error still fails the test.
+   */
+  private fun closeAfterTheUnwindWindow(worker: Worker) {
+    try {
+      worker.close()
+    } catch (slow: ShutdownIncompleteException) {
+      // The attempt still ends. The test waits for its final state in the database.
+    }
   }
 
   private fun <T : Any> present(value: T?, message: String): T =
