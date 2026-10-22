@@ -13,8 +13,8 @@ Workhorse publishes six release lines from one source commit:
 - three JVM artifacts on Maven Central for Java, Kotlin, and Spring Boot, which release together
   with one version.
 
-Each line has its own version, so each line has its own current version. This page shows all of
-them. You need them to apply the support policy below.
+Every release publishes all six lines at one version, before and after 1.0.0. This page shows the
+current version of each line. You need it to apply the support policy below.
 
 The site build reads each version on this page from the changelog of its line. Nobody types a
 version into this page, so the page always agrees with the release that it describes.
@@ -28,16 +28,16 @@ line that the defect affects. Workhorse has no maintenance branches, no backport
 support version. An older version continues to work, but it keeps the defect. To get the fix,
 upgrade to the current line.
 
-The location of the defect decides which lines get a new release:
+Each fix ships in a release train. A release train publishes the artifacts of all lines from one
+commit, in one controlled release window. The location of the defect decides which lines change:
 
-- If the defect is in the SQL schema or in the protocol that the SDKs share, each line gets the fix
-  in one release train. A release train publishes the artifacts of all lines from one commit, in one
-  controlled release window.
-- If the defect is in one SDK, only that line gets a new release. The other lines do not change.
+- If the defect is in the SQL schema or in the protocol that the SDKs share, each line gets the fix.
+- If the defect is in one SDK, the fix ships in a release train like any other release. Each other
+  line publishes the same version with no change, a version-only release.
 
 <Diagram
   name="release-lines"
-  alt="The location of the defect decides which lines get a new release"
+  alt="The location of the defect decides which lines change in a release train"
 />
 
 This policy works because each upgrade is an ordinary rolling deployment. A minor release only adds,

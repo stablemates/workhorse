@@ -574,9 +574,11 @@ The release notes announce a `dashboard/v2` transition and give its upgrade step
 backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
 and `Sunset` response headers do not apply.
 
-The six language lines float independently, and each line has its own governed surfaces. For
-example, a Go `/v2` does not move the TypeScript, Python, Rust, Ruby, or JVM major. Only a protocol
-break moves all six at once.
+Each language line has its own governed surfaces, but the six lines share one version. From 1.0.0,
+if a change needs a major release on one line, the next release is a major for every line. A line
+with no break publishes the major as a version-only release. For the Go module, each major N from 2
+also changes the module path to end in `/vN`, for example `github.com/stablemates/workhorse/go/v2`.
+[ADR 0106](decisions/0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) records the decision.
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
@@ -664,8 +666,9 @@ the command anyway is the point: the procedure is the same one every other relea
 
 All six lines publish 1.0.0 from one source commit as one release train
 ([ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md), [ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md)). A line that
-cannot clear the parity bar slips the train rather than being left behind. That synchronisation
-happens once; afterwards the six version lines float again as they do today.
+cannot clear the parity bar slips the train rather than being left behind. After 1.0.0 the six
+lines stay in lockstep, as every release before it does; see [Release train](#release-train) and
+[ADR 0106](decisions/0106-keep-the-release-lines-in-lockstep-after-1-0-0.md).
 
 At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
@@ -811,6 +814,11 @@ commits can land on `main` during the release. Thus the maintainer must create e
 candidate SHA, for example `git tag --annotate vX.Y.Z <sha>`, not on the current tip of `main`.
 Nobody may cancel the `main` CI push run of the candidate commit, because each release workflow
 requires that run to succeed.
+
+The rule does not change at a major release. If the defect is in one SDK, the fix ships in a
+release train like any other release. Each other line publishes the same version with no change, a
+version-only release. The changelog of that line states that it has no changes.
+[ADR 0106](decisions/0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) records the decision.
 
 The Rust crate and the Ruby gem have no tag of their own. Each rides the npm `v*` tag and publishes
 after npm, as [Rust crate](#rust-crate) and [Ruby gem](#ruby-gem) describe. The three JVM artifacts

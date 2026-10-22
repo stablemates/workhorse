@@ -6,6 +6,8 @@
   [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0059](0059-assemble-the-1-0-0-specification.md)
+- **Amended by:** [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the lines stay in
+  lockstep after 1.0.0)
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md),
   [ADR 0023](0023-language-sdks-and-http-boundaries.md),
   [ADR 0028](0028-flat-per-language-repository-layout.md),

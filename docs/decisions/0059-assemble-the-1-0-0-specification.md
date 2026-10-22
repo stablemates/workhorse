@@ -9,7 +9,8 @@
   [ADR 0102](0102-keep-main-open-during-a-release-by-tagging-the-candidate-commit.md) (every tag of
   the release train points to the candidate commit, and other commits can land on `main`),
   [ADR 0103](0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md) (the specification assembles eleven surfaces; the tenth is the
-  Java API and the eleventh is the Kotlin API)
+  Java API and the eleventh is the Kotlin API),
+  [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (the lines stay in lockstep after 1.0.0)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
