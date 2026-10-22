@@ -23,6 +23,8 @@
   </ItemGroup>
   <ItemGroup>
     <!-- ScratchDatabase installs the schema of this checkout. -->
+    <!-- The fixture tests read protocol/v1 of this checkout. -->
+    <AssemblyMetadata Include="WorkhorseRepository" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../'))" />
     <AssemblyMetadata Include="WorkhorseSchema" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../sql/schema/current.sql'))" />
   </ItemGroup>
   <ItemGroup>
