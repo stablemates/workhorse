@@ -13,8 +13,8 @@ public final class SqlCatalogue {
 
   public static final int MINIMUM_PROTOCOL_VERSION = 5;
   public static final int MAXIMUM_PROTOCOL_VERSION = 5;
-  public static final int MINIMUM_SCHEMA_VERSION = 73;
-  public static final int MAXIMUM_SCHEMA_VERSION = 74;
+  public static final int MINIMUM_SCHEMA_VERSION = 75;
+  public static final int MAXIMUM_SCHEMA_VERSION = 75;
 
   /** PostgreSQL's atomic enqueue batch limit. */
   public static final int MAX_ENQUEUE_BATCH_SIZE = 1000;
@@ -981,13 +981,13 @@ public final class SqlCatalogue {
           1,
           new int[] {1});
 
-  /** {@code retention_policy_preview} (internal). */
-  public static final Statement RETENTION_POLICY_PREVIEW =
+  /** {@code dashboard_retention_preview_v1} (internal). */
+  public static final Statement DASHBOARD_RETENTION_PREVIEW_V1 =
       new Statement(
-          "retention_policy_preview",
-          "SELECT\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task task\n          JOIN (\n            SELECT task_id, finished_at FROM workhorse.task_outcome\n            UNION ALL\n            SELECT task_id, finished_at FROM workhorse.fast_task_outcome\n          ) outcome ON outcome.task_id = task.id\n          WHERE ?::integer IS NOT NULL AND ?::integer IS NOT NULL\n            AND task.created_at < clock_timestamp() - make_interval(days => ?)\n            AND outcome.finished_at < clock_timestamp() - make_interval(days => ?)\n          LIMIT 10001\n        ) rows) AS terminal_tasks,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_event\n          WHERE ?::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => ?)\n          LIMIT 10001\n        ) rows) AS task_events,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.attempt_history\n          WHERE ?::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => ?)\n          LIMIT 10001\n        ) rows) AS attempt_history,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.schedule_occurrence\n          WHERE ?::integer IS NOT NULL\n            AND occurrence_at < clock_timestamp() - make_interval(days => ?)\n          LIMIT 10001\n        ) rows) AS schedule_occurrences,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_stat_bucket\n          WHERE ?::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => ?)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_hour\n          WHERE ?::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => ?)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_day\n          WHERE ?::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => ?)\n          LIMIT 10001\n        ) rows) AS statistics",
-          6,
-          new int[] {1, 2, 1, 2, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6, 6});
+          "dashboard_retention_preview_v1",
+          "SELECT workhorse.dashboard_retention_preview_v1(?::jsonb) AS result",
+          1,
+          new int[] {1});
 
   /** {@code dashboard_task_counts_v1} (internal). */
   public static final Statement DASHBOARD_TASK_COUNTS_V1 =
@@ -1465,7 +1465,7 @@ public final class SqlCatalogue {
           SYNC_RETENTION_POLICY_V1,
           OVERRIDE_RETENTION_POLICY_V1,
           REVERT_RETENTION_POLICY_V1,
-          RETENTION_POLICY_PREVIEW,
+          DASHBOARD_RETENTION_PREVIEW_V1,
           DASHBOARD_TASK_COUNTS_V1,
           DASHBOARD_TASK_FACETS_V1,
           DASHBOARD_QUEUES_V1,

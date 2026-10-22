@@ -56,8 +56,8 @@ describe("schema floor", () => {
     const floor = await floorFor(catalogues);
 
     expect({ required: floor.version, introducedBy: floor.introducedBy }).toEqual({
-      required: 73,
-      introducedBy: ["heartbeat_v2"],
+      required: 75,
+      introducedBy: ["dashboard_retention_preview_v1"],
     });
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });
@@ -73,8 +73,8 @@ describe("schema floor", () => {
     const floor = await floorFor(dashboards);
 
     expect({ required: floor.version, introducedBy: floor.introducedBy }).toEqual({
-      required: 67,
-      introducedBy: ["list_newest_task_group_events_v1"],
+      required: 75,
+      introducedBy: ["dashboard_retention_preview_v1"],
     });
     expect(manifest.schema.minimumVersion).toBeGreaterThanOrEqual(floor.version);
   });

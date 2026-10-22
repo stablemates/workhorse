@@ -141,6 +141,7 @@ export function deriveGovernedSurface(
   schema: SqlSchema,
   sources: readonly ReadSurfaceSource[],
   retainedFunctions: readonly string[] = [],
+  retainedRelations: Readonly<Record<string, GovernedRelation>> = {},
 ): GovernedSurface {
   const functions = new Map<string, GovernedFunction>();
   const relations = new Map<string, GovernedRelation>();
@@ -171,6 +172,19 @@ export function deriveGovernedSurface(
       }
       relations.set(name, { kind: relation.kind, columns: sortedRecord(columns) });
     }
+  }
+
+  // A client upgrade cannot withdraw a relation or a column a previously released client still
+  // reads, even when no current reader names it.
+  for (const [name, was] of Object.entries(retainedRelations)) {
+    const relation = schema.relations.get(name);
+    if (relation === undefined) continue;
+    const columns = new Map(Object.entries(relations.get(name)?.columns ?? {}));
+    for (const column of Object.keys(was.columns)) {
+      const type = relation.columns.get(column);
+      if (type !== undefined) columns.set(column, type);
+    }
+    relations.set(name, { kind: relation.kind, columns: sortedRecord(columns) });
   }
 
   for (const [name, overloads] of schema.functions) {

@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 5;
 export const MINIMUM_PROTOCOL_VERSION = 5;
 export const MAXIMUM_PROTOCOL_VERSION = 5;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
-export const WORKHORSE_SCHEMA_VERSION = 74;
-export const MINIMUM_SCHEMA_VERSION = 73;
-export const MAXIMUM_SCHEMA_VERSION = 74;
+export const WORKHORSE_SCHEMA_VERSION = 75;
+export const MINIMUM_SCHEMA_VERSION = 75;
+export const MAXIMUM_SCHEMA_VERSION = 75;
 export const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -218,8 +218,8 @@ export const SQL_STATEMENTS = {
     "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
   revert_retention_policy_v1:
     "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
-  retention_policy_preview:
-    "SELECT\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task task\n          JOIN (\n            SELECT task_id, finished_at FROM workhorse.task_outcome\n            UNION ALL\n            SELECT task_id, finished_at FROM workhorse.fast_task_outcome\n          ) outcome ON outcome.task_id = task.id\n          WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL\n            AND task.created_at < clock_timestamp() - make_interval(days => $1)\n            AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)\n          LIMIT 10001\n        ) rows) AS terminal_tasks,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_event\n          WHERE $3::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => $3)\n          LIMIT 10001\n        ) rows) AS task_events,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.attempt_history\n          WHERE $4::integer IS NOT NULL\n            AND occurred_at < clock_timestamp() - make_interval(days => $4)\n          LIMIT 10001\n        ) rows) AS attempt_history,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.schedule_occurrence\n          WHERE $5::integer IS NOT NULL\n            AND occurrence_at < clock_timestamp() - make_interval(days => $5)\n          LIMIT 10001\n        ) rows) AS schedule_occurrences,\n        (SELECT count(*)::integer FROM (\n          SELECT 1 FROM workhorse.task_stat_bucket\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_hour\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          UNION ALL\n          SELECT 1 FROM workhorse.task_stat_bucket_day\n          WHERE $6::integer IS NOT NULL\n            AND bucket_start < clock_timestamp() - make_interval(days => $6)\n          LIMIT 10001\n        ) rows) AS statistics",
+  dashboard_retention_preview_v1:
+    "SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result",
   dashboard_task_counts_v1: "SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
   dashboard_task_facets_v1: "SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
   dashboard_queues_v1: "SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",

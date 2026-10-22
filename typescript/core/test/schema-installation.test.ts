@@ -612,6 +612,10 @@ describe("schema installation", () => {
         version: 74,
         description: "allow throttle on fast-tier queues",
       },
+      {
+        version: 75,
+        description: "add the dashboard retention preview function",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

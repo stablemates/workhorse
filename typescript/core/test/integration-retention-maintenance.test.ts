@@ -207,6 +207,55 @@ describe("retention maintenance", () => {
     });
   });
 
+  it("merges the definition and caps each count in dashboard_retention_preview_v1", async () => {
+    // 10,001 old hourly buckets: one more than the cap.
+    await pool.query(
+      `INSERT INTO workhorse.task_stat_bucket_hour(bucket_start, queue_name, task_type, enqueued)
+       SELECT timestamptz '2020-01-01 00:00Z', 'preview-' || n, 'retention-preview-cap', 1
+         FROM generate_series(1, 10001) n`,
+    );
+    const preview = async (definition: Record<string, number | null>) =>
+      (
+        await pool.query<{
+          result: { eligible: Record<string, number>; capped: Record<string, boolean> };
+        }>("SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result", [
+          JSON.stringify({ definition }),
+        ])
+      ).rows[0]!.result;
+
+    // An absent setting keeps the effective 14 days.
+    await expect(preview({})).resolves.toMatchObject({
+      eligible: { statistics: 10_000 },
+      capped: { statistics: true },
+    });
+    // An explicit null disables the category.
+    await expect(preview({ statisticsRetentionDays: null })).resolves.toMatchObject({
+      eligible: { statistics: 0 },
+      capped: { statistics: false },
+    });
+    // A longer window than the age of the rows makes none of them eligible.
+    await expect(preview({ statisticsRetentionDays: 36_500 })).resolves.toMatchObject({
+      eligible: { statistics: 0 },
+      capped: { statistics: false },
+    });
+    await expect(preview({})).resolves.toEqual({
+      eligible: {
+        terminalTasks: expect.any(Number),
+        taskEvents: expect.any(Number),
+        attemptHistory: expect.any(Number),
+        scheduleOccurrences: expect.any(Number),
+        statistics: 10_000,
+      },
+      capped: {
+        terminalTasks: false,
+        taskEvents: false,
+        attemptHistory: false,
+        scheduleOccurrences: false,
+        statistics: true,
+      },
+    });
+  });
+
   it("persists one IANA maintenance timezone and runs daily retention once after local time", async () => {
     expect(
       await queue.syncMaintenancePolicy({

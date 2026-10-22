@@ -9,18 +9,6 @@ import { jdbcStatement } from "./sql-catalogue-jdbc.js";
  * alone. Add an entry only after a JDBC test runs the statement with real values.
  */
 const uncastPlaceholders: Record<string, Record<number, string>> = {
-  retention_policy_preview: {
-    // `make_interval(days => ?)`. make_interval has one signature, so PostgreSQL types the value as
-    // integer, the type that the `$n::integer` use of the same `$n` gives.
-    3: "make_interval days",
-    4: "make_interval days",
-    6: "make_interval days",
-    8: "make_interval days",
-    10: "make_interval days",
-    12: "make_interval days",
-    14: "make_interval days",
-    16: "make_interval days",
-  },
   sync_rate_limit_policies_v1__queue: {
     // sync_rate_limit_policies_v1 has one signature, so PostgreSQL types the values as its text
     // p_namespace and its boolean p_prune.

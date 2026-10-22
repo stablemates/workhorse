@@ -30,7 +30,6 @@ export const SHARED_INPUTS = [
   "api/telemetry.txt",
   // The SQL catalogues that scripts/generate-sql-catalogues.ts writes.
   "go/sql_catalogue_generated.go",
-  "go/dashboard/sql_catalogue_generated.go",
   "jvm/workhorse/src/main/java/run/workhorse/internal/SqlCatalogue.java",
   "python/src/workhorse/_statements.py",
   "ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb",

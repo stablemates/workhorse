@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 73
-	maximumSchemaVersion   = 74
+	minimumSchemaVersion   = 75
+	maximumSchemaVersion   = 75
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -335,70 +335,26 @@ var internalStatementRegistry = map[string]string{
          $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
          $11::integer, $12::boolean
        ) policy`,
-	"override_retention_policy_v1": `SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy`,
-	"revert_retention_policy_v1":   `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
-	"retention_policy_preview": `SELECT
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.task task
-          JOIN (
-            SELECT task_id, finished_at FROM workhorse.task_outcome
-            UNION ALL
-            SELECT task_id, finished_at FROM workhorse.fast_task_outcome
-          ) outcome ON outcome.task_id = task.id
-          WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL
-            AND task.created_at < clock_timestamp() - make_interval(days => $1)
-            AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)
-          LIMIT 10001
-        ) rows) AS terminal_tasks,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.task_event
-          WHERE $3::integer IS NOT NULL
-            AND occurred_at < clock_timestamp() - make_interval(days => $3)
-          LIMIT 10001
-        ) rows) AS task_events,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.attempt_history
-          WHERE $4::integer IS NOT NULL
-            AND occurred_at < clock_timestamp() - make_interval(days => $4)
-          LIMIT 10001
-        ) rows) AS attempt_history,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.schedule_occurrence
-          WHERE $5::integer IS NOT NULL
-            AND occurrence_at < clock_timestamp() - make_interval(days => $5)
-          LIMIT 10001
-        ) rows) AS schedule_occurrences,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.task_stat_bucket
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          UNION ALL
-          SELECT 1 FROM workhorse.task_stat_bucket_hour
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          UNION ALL
-          SELECT 1 FROM workhorse.task_stat_bucket_day
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          LIMIT 10001
-        ) rows) AS statistics`,
-	"dashboard_task_counts_v1":      `SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result`,
-	"dashboard_task_facets_v1":      `SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result`,
-	"dashboard_queues_v1":           `SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result`,
-	"dashboard_tasks_v1":            `SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result`,
-	"dashboard_tasks_cursor_v1":     `SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result`,
-	"dashboard_activity_v1":         `SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result`,
-	"dashboard_cron_v1":             `SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result`,
-	"dashboard_workers_v1":          `SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result`,
-	"dashboard_human_waits_v1":      `SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result`,
-	"dashboard_events_v1":           `SELECT workhorse.dashboard_events_v1($1::jsonb) AS result`,
-	"dashboard_event_detail_v1":     `SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result`,
-	"dashboard_task_detail_v1":      `SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result`,
-	"dashboard_checkpoint_value_v1": `SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result`,
-	"dashboard_task_value_v1":       `SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result`,
-	"dashboard_settings_v1":         `SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result`,
-	"dashboard_system_v1":           `SELECT workhorse.dashboard_system_v1($1::jsonb) AS result`,
-	"get_retention_policy_v1":       `SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy`,
+	"override_retention_policy_v1":   `SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy`,
+	"revert_retention_policy_v1":     `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
+	"dashboard_retention_preview_v1": `SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result`,
+	"dashboard_task_counts_v1":       `SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result`,
+	"dashboard_task_facets_v1":       `SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result`,
+	"dashboard_queues_v1":            `SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result`,
+	"dashboard_tasks_v1":             `SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result`,
+	"dashboard_tasks_cursor_v1":      `SELECT workhorse.dashboard_tasks_cursor_v1($1::jsonb) AS result`,
+	"dashboard_activity_v1":          `SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result`,
+	"dashboard_cron_v1":              `SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result`,
+	"dashboard_workers_v1":           `SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result`,
+	"dashboard_human_waits_v1":       `SELECT workhorse.dashboard_human_waits_v1($1::jsonb) AS result`,
+	"dashboard_events_v1":            `SELECT workhorse.dashboard_events_v1($1::jsonb) AS result`,
+	"dashboard_event_detail_v1":      `SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result`,
+	"dashboard_task_detail_v1":       `SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result`,
+	"dashboard_checkpoint_value_v1":  `SELECT workhorse.dashboard_checkpoint_value_v1($1::jsonb) AS result`,
+	"dashboard_task_value_v1":        `SELECT workhorse.dashboard_task_value_v1($1::jsonb) AS result`,
+	"dashboard_settings_v1":          `SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result`,
+	"dashboard_system_v1":            `SELECT workhorse.dashboard_system_v1($1::jsonb) AS result`,
+	"get_retention_policy_v1":        `SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy`,
 	"sync_maintenance_policy_v1": `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
          $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
          $8::boolean

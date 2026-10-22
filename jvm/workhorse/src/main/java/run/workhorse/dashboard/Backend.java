@@ -49,25 +49,6 @@ final class Backend {
    */
   private static final long QUEUE_HEALTH_TTL_NANOS = TimeUnit.SECONDS.toNanos(3);
 
-  private static final long PREVIEW_CAP = 10_000;
-  private static final List<String> RETENTION_SETTINGS =
-      List.of(
-          "taskIdentityRetentionDays",
-          "terminalOutcomeRetentionDays",
-          "taskEventRetentionDays",
-          "attemptHistoryRetentionDays",
-          "scheduleOccurrenceRetentionDays",
-          "statisticsRetentionDays");
-
-  /** Each preview count, as its result name and its column. */
-  private static final List<List<String>> PREVIEW_COUNTS =
-      List.of(
-          List.of("terminalTasks", "terminal_tasks"),
-          List.of("taskEvents", "task_events"),
-          List.of("attemptHistory", "attempt_history"),
-          List.of("scheduleOccurrences", "schedule_occurrences"),
-          List.of("statistics", "statistics"));
-
   private static final List<String> MAINTENANCE_SETTINGS =
       List.of(
           "timezone",
@@ -175,7 +156,10 @@ final class Backend {
                 SqlCatalogue.DASHBOARD_SETTINGS_V1,
                 orderedMap("writable", !readOnly, "settingsController", true)));
     procedures.put("system", (input, actor) -> result(SqlCatalogue.DASHBOARD_SYSTEM_V1, input));
-    procedures.put("previewRetentionPolicy", (input, actor) -> previewRetentionPolicy(input));
+    // The function merges the definition into the current policy and caps each count.
+    procedures.put(
+        "previewRetentionPolicy",
+        (input, actor) -> result(SqlCatalogue.DASHBOARD_RETENTION_PREVIEW_V1, input));
     procedures.put("setQueuePaused", this::setQueuePaused);
     procedures.put(
         "purgeQueue",
@@ -234,26 +218,6 @@ final class Backend {
     query.put("canCompleteHumanWait", !readOnly);
     query.put("health", queueHealth());
     return found(result(SqlCatalogue.DASHBOARD_TASK_DETAIL_V1, query), "Task not found");
-  }
-
-  private Object previewRetentionPolicy(Map<String, ? extends @Nullable Object> input) {
-    Map<String, @Nullable Object> definition = object(input, "definition");
-    Row current = one(SqlCatalogue.GET_RETENTION_POLICY_V1);
-    @Nullable Object[] days = new @Nullable Object[RETENTION_SETTINGS.size()];
-    for (int index = 0; index < days.length; index++) {
-      String name = RETENTION_SETTINGS.get(index);
-      days[index] =
-          definition.containsKey(name) ? textOf(definition.get(name)) : current.text(snake(name));
-    }
-    Row counts = one(SqlCatalogue.RETENTION_POLICY_PREVIEW, days);
-    Map<String, @Nullable Object> eligible = new LinkedHashMap<>();
-    Map<String, @Nullable Object> capped = new LinkedHashMap<>();
-    for (List<String> preview : PREVIEW_COUNTS) {
-      long count = counts.requiredLong(preview.get(1));
-      eligible.put(preview.get(0), Math.min(count, PREVIEW_CAP));
-      capped.put(preview.get(0), count > PREVIEW_CAP);
-    }
-    return orderedMap("eligible", eligible, "capped", capped);
   }
 
   private Object setQueuePaused(Map<String, ? extends @Nullable Object> input, String actor) {

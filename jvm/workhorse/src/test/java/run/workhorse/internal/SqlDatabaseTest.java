@@ -1,7 +1,6 @@
 package run.workhorse.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -22,42 +21,6 @@ import run.workhorse.testing.ScratchDatabase;
  */
 @ExtendWith(ScratchDatabase.class)
 class SqlDatabaseTest {
-  private static final List<String> RETENTION_COLUMNS =
-      List.of(
-          "terminal_tasks", "task_events", "attempt_history", "schedule_occurrences", "statistics");
-
-  @Test
-  void previewsRetentionWithAnIntegerAtEachReuseOfAParameter() throws SQLException {
-    try (Connection connection = ScratchDatabase.connect()) {
-      List<Row> rows =
-          Sql.rows(
-              connection, SqlCatalogue.RETENTION_POLICY_PREVIEW, "30", "7", "30", "30", "30", "90");
-      assertEquals(1, rows.size());
-      for (String column : RETENTION_COLUMNS) {
-        assertNotNull(rows.get(0).integer(column), column);
-      }
-    }
-  }
-
-  @Test
-  void previewsRetentionWithAnUntypedNullAtEachReuseOfAParameter() throws SQLException {
-    try (Connection connection = ScratchDatabase.connect()) {
-      List<Row> rows =
-          Sql.rows(
-              connection,
-              SqlCatalogue.RETENTION_POLICY_PREVIEW,
-              null,
-              null,
-              null,
-              null,
-              null,
-              null);
-      for (String column : RETENTION_COLUMNS) {
-        assertEquals(0, rows.get(0).integer(column), column);
-      }
-    }
-  }
-
   @Test
   void syncsRateLimitPoliciesWithAnUncastTextAndBoolean() throws SQLException {
     String namespace = "sql-" + UUID.randomUUID();
@@ -91,17 +54,17 @@ class SqlDatabaseTest {
   @Test
   void aCharacterVaryingParameterFailsWhereAnUntypedOneSucceeds() throws SQLException {
     // The binding before SM-1418. PostgreSQL types the uncast `?` as character varying, and
-    // make_interval takes no such argument.
-    SqlCatalogue.Statement statement = SqlCatalogue.RETENTION_POLICY_PREVIEW;
+    // sync_rate_limit_policies_v1 takes no such p_prune argument.
+    SqlCatalogue.Statement statement = SqlCatalogue.SYNC_RATE_LIMIT_POLICIES_V1__QUEUE;
     try (Connection connection = ScratchDatabase.connect();
         PreparedStatement prepared = connection.prepareStatement(statement.sql())) {
       // With stringtype=unspecified in DATABASE_URL_TEST, setString sends an untyped value too.
       assumeTrue(
           connection.unwrap(BaseConnection.class).getStringVarcharFlag(),
           "DATABASE_URL_TEST sets stringtype=unspecified");
-      for (int placeholder = 1; placeholder <= statement.placeholderCount(); placeholder++) {
-        prepared.setString(placeholder, "30");
-      }
+      prepared.setString(1, "sql-" + UUID.randomUUID());
+      prepared.setString(2, "[]");
+      prepared.setString(3, "true");
       SQLException error = assertThrows(SQLException.class, prepared::executeQuery);
       assertEquals("42883", error.getSQLState());
     }

@@ -136,7 +136,8 @@ cutoffs. Terminal-task pruning uses that value as its history cutoff.
 | `override_retention_policy_v1` | `Queue.overrideRetentionPolicy` | Sets selected effective values and marks them operator-owned |
 | `revert_retention_policy_v1`   | `Queue.revertRetentionPolicy`   | Restores selected application values                         |
 
-`Queue.previewRetentionPolicy` writes nothing. It counts at most 10,001 eligible rows per category.
+`Queue.previewRetentionPolicy` calls `dashboard_retention_preview_v1` and writes nothing. It counts
+at most 10,001 eligible rows per category.
 
 More detail: [Data model: `retention_policy`](../architecture/data-model.md#retention_policy).
 

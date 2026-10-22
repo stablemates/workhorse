@@ -2327,7 +2327,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 74,
+                "schemaVersion": 75,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -2700,6 +2700,36 @@
             },
             {
               "phase": "worker_registry"
+            }
+          ]
+        }
+      },
+      {
+        "id": "preview-disabled-retention",
+        "covers": ["retention-maintenance"],
+        "sql": "SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result",
+        "parameters": [
+          "{\"definition\":{\"taskIdentityRetentionDays\":null,\"terminalOutcomeRetentionDays\":null,\"taskEventRetentionDays\":null,\"attemptHistoryRetentionDays\":null,\"scheduleOccurrenceRetentionDays\":null,\"statisticsRetentionDays\":null}}"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "result": {
+                "eligible": {
+                  "terminalTasks": 0,
+                  "taskEvents": 0,
+                  "attemptHistory": 0,
+                  "scheduleOccurrences": 0,
+                  "statistics": 0
+                },
+                "capped": {
+                  "terminalTasks": false,
+                  "taskEvents": false,
+                  "attemptHistory": false,
+                  "scheduleOccurrences": false,
+                  "statistics": false
+                }
+              }
             }
           ]
         }

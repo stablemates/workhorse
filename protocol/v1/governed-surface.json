@@ -240,6 +240,10 @@
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
+    "dashboard_retention_preview_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
     "dashboard_settings_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"

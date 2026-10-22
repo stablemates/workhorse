@@ -2,34 +2,26 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-// retentionPreviewExecutor answers the policy read with 14 days for every setting and records the
-// arguments of the preview statement.
+// retentionPreviewExecutor records the statement and the arguments of the preview call.
 type retentionPreviewExecutor struct {
-	statement string
-	arguments []any
+	statements []string
+	arguments  []any
 }
 
 func (executor *retentionPreviewExecutor) Query(_ context.Context, statement string, arguments ...any) ([]workhorse.Row, error) {
-	if strings.Contains(statement, "get_retention_policy_v1()") {
-		row := workhorse.Row{}
-		for _, column := range []string{"task_identity_retention_days", "terminal_outcome_retention_days", "task_event_retention_days", "attempt_history_retention_days", "schedule_occurrence_retention_days", "statistics_retention_days"} {
-			row[column] = int32(14)
-		}
-		return []workhorse.Row{row}, nil
-	}
-	executor.statement = statement
+	executor.statements = append(executor.statements, statement)
 	executor.arguments = arguments
 	return []workhorse.Row{{"result": `{"eligible":{},"capped":{}}`}}, nil
 }
 
-func TestPreviewRetentionPolicySendsTheSharedStatementAndKeepsAnExplicitNull(t *testing.T) {
+func TestPreviewRetentionPolicyCallsTheDashboardFunctionWithTheInput(t *testing.T) {
 	executor := &retentionPreviewExecutor{}
 	service := &backend{executor: executor}
 	input := map[string]any{"definition": map[string]any{
@@ -41,13 +33,16 @@ func TestPreviewRetentionPolicySendsTheSharedStatementAndKeepsAnExplicitNull(t *
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(executor.statement, retentionPolicyPreviewStatement) {
-		t.Fatalf("preview did not send the shared retention_policy_preview statement:\n%s", executor.statement)
+	want := []string{"SELECT workhorse.dashboard_retention_preview_v1($1::jsonb) AS result"}
+	if !reflect.DeepEqual(executor.statements, want) {
+		t.Fatalf("preview statements = %#v, want %#v", executor.statements, want)
 	}
-	// An absent setting keeps the current value. The explicit null stays null, so the statement
-	// counts no terminal tasks.
-	want := []any{int32(14), nil, int32(14), int32(14), int32(14), float64(3)}
-	if !reflect.DeepEqual(executor.arguments, want) {
-		t.Fatalf("preview arguments = %#v, want %#v", executor.arguments, want)
+	// The function merges the definition, so the explicit null reaches it unchanged.
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(executor.arguments[0].(string)), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sent, input) {
+		t.Fatalf("preview input = %#v, want %#v", sent, input)
 	}
 }

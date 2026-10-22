@@ -373,38 +373,13 @@ export class RetentionMaintenanceModule extends QueueModule {
   async previewRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicyImpact> {
-    const current = await this.getRetentionPolicy();
-    const candidate = { ...current, ...definition };
-    const result = await this.context.database.query<{
-      terminal_tasks: number;
-      task_events: number;
-      attempt_history: number;
-      schedule_occurrences: number;
-      statistics: number;
-    }>(SQL_STATEMENTS["retention_policy_preview"], [
-      candidate.taskIdentityRetentionDays,
-      candidate.terminalOutcomeRetentionDays,
-      candidate.taskEventRetentionDays,
-      candidate.attemptHistoryRetentionDays,
-      candidate.scheduleOccurrenceRetentionDays,
-      candidate.statisticsRetentionDays,
-    ]);
-    const row = expectOneRow(result, "the retention policy preview");
-    const sampled = {
-      terminalTasks: Number(row.terminal_tasks),
-      taskEvents: Number(row.task_events),
-      attemptHistory: Number(row.attempt_history),
-      scheduleOccurrences: Number(row.schedule_occurrences),
-      statistics: Number(row.statistics),
-    };
-    return {
-      eligible: Object.fromEntries(
-        Object.entries(sampled).map(([key, value]) => [key, Math.min(value, 10_000)]),
-      ) as RetentionPolicyImpact["eligible"],
-      capped: Object.fromEntries(
-        Object.entries(sampled).map(([key, value]) => [key, value > 10_000]),
-      ) as RetentionPolicyImpact["capped"],
-    };
+    // dashboard_retention_preview_v1 merges the definition into the current policy. An absent or
+    // undefined setting keeps its current value, and an explicit null disables its category.
+    const result = await this.context.database.query<{ result: RetentionPolicyImpact }>(
+      SQL_STATEMENTS["dashboard_retention_preview_v1"],
+      [JSON.stringify({ definition })],
+    );
+    return expectOneRow(result, "workhorse.dashboard_retention_preview_v1").result;
   }
 
   async getRetentionPolicy(): Promise<RetentionPolicy> {

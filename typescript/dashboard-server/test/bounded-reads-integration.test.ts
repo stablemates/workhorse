@@ -281,9 +281,8 @@ describe("bounded dashboard read time", () => {
   });
 
   it("bounds the retention preview, which Admin computes, like every other dashboard read", async () => {
-    // Only the preview statement scans the task and outcome history this way.
     const host = createDashboardHost({
-      database: sleepingOn("SELECT task_id, finished_at FROM workhorse.task_outcome") as never,
+      database: sleepingOn("dashboard_retention_preview_v1") as never,
       path: "/",
       statementTimeoutMs: 150,
       authorize: () => true,
