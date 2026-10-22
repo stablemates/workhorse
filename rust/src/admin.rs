@@ -888,12 +888,14 @@ impl<E: Executor> Admin<E> {
         Ok(())
     }
 
-    /// Deletes the queue's tasks that no worker holds and returns how many tasks it deleted or
-    /// canceled. A task that a dependent in another queue waits for is canceled, not deleted.
+    /// Deletes the blocked, ready, and scheduled tasks of the queue, and returns how many tasks it
+    /// deleted or canceled. If a task outside the purge waits for a purged task, the purge cancels
+    /// that task instead of a delete. The rule also applies to a wait through other purged tasks.
+    /// The count includes the canceled tasks.
     ///
-    /// Do not call it in a transaction that already holds task row locks, for example after a
-    /// cancel or an enqueue. Two purges run one after the other, so such a transaction can
-    /// deadlock with another purge.
+    /// Do not call it in a transaction that holds task row locks, for example after a cancel or an
+    /// enqueue. Two purges run one after the other, so such a transaction can deadlock with another
+    /// purge.
     pub async fn purge_queue(&self, queue: &str, audit: &AdminAudit) -> Result<u64, Error> {
         validate_audit(audit)?;
         let rows = self

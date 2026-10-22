@@ -182,7 +182,8 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   },
   purgeQueue: {
     summary: "Purge a queue",
-    description: "Deletes the queue's pending tasks and returns deletedCount.",
+    description:
+      "Deletes the queue's blocked, ready, and scheduled tasks. It cancels a task that a task outside the purge waits for. deletedCount includes the canceled tasks.",
   },
   setWorkerPaused: {
     summary: "Pause or resume a worker",

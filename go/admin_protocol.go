@@ -620,6 +620,15 @@ func (admin *Admin) queuePause(ctx context.Context, queue string, paused bool, a
 	}
 	return nil
 }
+
+// PurgeQueue deletes the blocked, ready, and scheduled tasks of the queue, and returns how many
+// tasks it deleted or canceled. If a task outside the purge waits for a purged task, the purge
+// cancels that task instead of a delete. The rule also applies to a wait through other purged
+// tasks. The count includes the canceled tasks.
+//
+// Do not call it in a transaction that holds task row locks, for example after a cancel or an
+// enqueue. Two purges run one after the other, so such a transaction can deadlock with another
+// purge.
 func (admin *Admin) PurgeQueue(ctx context.Context, queue string, audit AdminAudit) (int, error) {
 	if err := validateAdminAudit(audit); err != nil {
 		return 0, err

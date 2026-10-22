@@ -2821,7 +2821,9 @@ sets (ADR 0101):
 4. A canceled task keeps its history and its idempotency, debounce, and throttle bindings, as
    after a cancel. Retention removes it later.
 
-The result `deleted_count` counts the deleted and the canceled tasks. The name predates ADR 0101.
+The result `deleted_count` counts the deleted and the canceled tasks. The name predates ADR 0101,
+and SM-1285 keeps it, because a rename needs a `purge_queue_v2`. No result field counts the canceled
+tasks alone.
 
 `queue_purge_request` stores:
 
@@ -2830,7 +2832,7 @@ The result `deleted_count` counts the deleted and the canceled tasks. The name p
 - a 12-character digest
 - the character length
 - actor, reason, and fingerprint
-- the original deleted count
+- the original `deleted_count`
 - request time
 
 An exact replay returns that count without deleting newer tasks. A material replay raises SQLSTATE

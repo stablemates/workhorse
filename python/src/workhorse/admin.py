@@ -545,6 +545,16 @@ class Admin(_AdminOperations):
         )
 
     def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
+        """Purge the queue, and return how many tasks the purge deleted or canceled.
+
+        The purge deletes the blocked, ready, and scheduled tasks of the queue. If a task outside
+        the purge waits for a purged task, the purge cancels that task instead of a delete. The rule
+        also applies to a wait through other purged tasks. The count includes the canceled tasks.
+
+        Do not call it in a transaction that holds task row locks, for example after a cancel or an
+        enqueue. Two purges run one after the other, so such a transaction can deadlock with another
+        purge.
+        """
         _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         try:
@@ -802,6 +812,16 @@ class AsyncAdmin(_AdminOperations):
         )
 
     async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
+        """Purge the queue, and return how many tasks the purge deleted or canceled.
+
+        The purge deletes the blocked, ready, and scheduled tasks of the queue. If a task outside
+        the purge waits for a purged task, the purge cancels that task instead of a delete. The rule
+        also applies to a wait through other purged tasks. The count includes the canceled tasks.
+
+        Do not call it in a transaction that holds task row locks, for example after a cancel or an
+        enqueue. Two purges run one after the other, so such a transaction can deadlock with another
+        purge.
+        """
         await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         try:

@@ -89,7 +89,10 @@ on the purged queue survives, as it does for the member counts of the deleted ta
 The signature and the result of `purge_queue_v1` do not change. The result column `deleted_count`,
 and `deletedCount` in the SDKs and in the CLI JSON, count the canceled tasks too, because each of
 them leaves the waiting set of the queue. The name thus no longer matches its meaning exactly.
-SM-1285 decides on a later rename or a separate count.
+SM-1285 keeps the name and the shape. A rename or a separate count of canceled tasks needs a
+`purge_queue_v2` and a change in every SDK and in the admin CLI. `docs/compatibility.md` sets this
+rule. That cost is too large for a change of name only. The documentation of each surface states
+that the count includes the canceled tasks.
 
 ## Consequences
 
@@ -101,6 +104,9 @@ SM-1285 decides on a later rename or a separate count.
   task.
 - A purge can now enqueue work and settle tasks in other queues through the outcome trigger. A
   cancel of the prerequisite does the same.
+- The purge count, `deleted_count` in SQL and `deletedCount` in the SDKs, the CLI JSON, and the
+  dashboard API, includes the canceled tasks. A caller cannot get the number of deleted tasks
+  alone from the result.
 
 ## Rejected alternatives
 
