@@ -375,9 +375,6 @@ public sealed partial class Worker : IAsyncDisposable
         }
     }
 
-    /// <summary>The context that the worker gives a handler.</summary>
-    private sealed class WorkerHandlerContext(ClaimedTask task, TaskCancellation cancellation) : HandlerContext(task, cancellation);
-
     // The members below exist for tests.
 
     /// <summary>The shared heartbeat of this worker.</summary>

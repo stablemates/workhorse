@@ -5,6 +5,7 @@ using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Contracts;
 using Workhorse.Internal.Database;
+using Workhorse.Internal.Durable;
 using Workhorse.Internal.Json;
 using Workhorse.Internal.Runtime;
 
@@ -135,15 +136,23 @@ public sealed partial class Worker
         string encoded;
         try
         {
-            var context = new WorkerHandlerContext(claimed, cancellation);
+            var queue = claimed.Queue;
+            var context = new DurableContext(this, task, arbiter, statementToken => FastTierAsync(queue, statementToken));
             var result = await registration.Invoke(context, task.Claimed.Payload).ConfigureAwait(false);
-            encoded = await EncodeResultAsync(claimed, result, token).ConfigureAwait(false);
+            // A suspended attempt ignores its result, so the worker neither encodes nor checks it.
+            encoded = arbiter.Suspended ? "null" : await EncodeResultAsync(claimed, result, token).ConfigureAwait(false);
         }
         catch (Exception error)
         {
             // Every handler exception settles the attempt. None leaves RunAsync (ADR 0107).
             if (await FinishOwnershipAsync(claimed, ownership, arbiter, token).ConfigureAwait(false))
             {
+                // A handler that threw another exception after a durable call suspended it still suspends.
+                if (arbiter.Suspended && error is not SuspensionException)
+                {
+                    DurableLog.SignalSwallowed(_logger, claimed.Id);
+                }
+
                 return;
             }
 
@@ -164,6 +173,12 @@ public sealed partial class Worker
 
         if (await FinishOwnershipAsync(claimed, ownership, arbiter, token).ConfigureAwait(false))
         {
+            // A handler that returned after a durable call suspended it still suspends (ADR 0107).
+            if (arbiter.Suspended)
+            {
+                DurableLog.SignalSwallowed(_logger, claimed.Id);
+            }
+
             return;
         }
 
@@ -365,6 +380,13 @@ public sealed partial class Worker
     private async Task<bool> FinishOwnershipAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, CancellationToken cancellationToken)
     {
         await ownership.ReleaseAsync().ConfigureAwait(false);
+        // A task that a durable write released needs nothing more from the worker, whichever
+        // outcome won: the heartbeat reports that release as a lost lease.
+        if (arbiter.Released is not null)
+        {
+            return true;
+        }
+
         switch (arbiter.Current)
         {
             case Outcome.SuspendedForWait or Outcome.SuspendedForChild or Outcome.DeadlineExceeded or Outcome.AttemptTimeout:
@@ -547,11 +569,17 @@ public sealed partial class Worker
         first is null ? second : second is null ? first : first < second ? first : second;
 
     /// <summary>Ends an attempt whose local lease window closed without an accepted renewal.</summary>
-    private static void ExpireLease(Ownership ownership, Arbiter arbiter, TaskCancellation cancellation)
+    internal static void ExpireLease(Ownership ownership, Arbiter arbiter, TaskCancellation cancellation)
     {
         arbiter.Submit(Outcome.LeaseExpired);
         // The lease leaves the heartbeat set now, so it is not renewed again (SM-1445).
         ownership.Abandon();
+        // A durable write released the task, and the suspension sets its own cancel reason.
+        if (arbiter.Released is not null)
+        {
+            return;
+        }
+
         cancellation.Cancel(CancelReason.LeaseLost);
     }
 
@@ -581,7 +609,8 @@ public sealed partial class Worker
     /// </summary>
     private static void DeliverStatus(string? status, Arbiter arbiter, TaskCancellation cancellation)
     {
-        if (status == "accepted")
+        // A durable write released the task, so a status about the released lease changes nothing.
+        if (status == "accepted" || arbiter.Released is not null)
         {
             return;
         }

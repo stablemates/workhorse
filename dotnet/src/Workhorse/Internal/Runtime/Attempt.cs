@@ -23,6 +23,7 @@ internal sealed class Arbiter
 {
     private const int None = -1;
     private int _outcome = None;
+    private int _released = None;
 
     internal Outcome? Current
     {
@@ -35,6 +36,25 @@ internal sealed class Arbiter
 
     /// <summary>Submits an outcome. Returns whether it won.</summary>
     internal bool Submit(Outcome outcome) => Interlocked.CompareExchange(ref _outcome, (int)outcome, None) == None;
+
+    /// <summary>
+    /// The suspension that a fenced durable write released the task for, or <c>null</c>. The attempt
+    /// suspends whichever outcome won, because the heartbeat reports that release as a lost lease.
+    /// </summary>
+    internal Outcome? Released
+    {
+        get
+        {
+            var released = Volatile.Read(ref _released);
+            return released == None ? null : (Outcome)released;
+        }
+    }
+
+    /// <summary>Records that a fenced durable write released the task for <paramref name="suspension"/>.</summary>
+    internal void Release(Outcome suspension) => Interlocked.CompareExchange(ref _released, (int)suspension, None);
+
+    /// <summary>Whether a durable write released the task, or a suspension won.</summary>
+    internal bool Suspended => Released is not null || Current is Outcome.SuspendedForWait or Outcome.SuspendedForChild;
 }
 
 /// <summary>
