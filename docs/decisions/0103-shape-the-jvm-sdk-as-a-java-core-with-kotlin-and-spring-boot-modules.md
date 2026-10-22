@@ -1758,3 +1758,28 @@ like other statements, as the Connection model section states.
 
 The data does not yet support a JVM capacity statement. That statement waits for a passing post-fix
 64 × 25 run, as ADR 0071 states. SM-1569 implements this amendment.
+
+## Amendment: `Admin` meets the ADR 0059 parity bar, not the TypeScript method list (2026-10-22)
+
+The Admin surface section says that `Admin` gives Java the operator capability of the other five
+SDKs. A reader can take that sentence as a promise of each operator method of every other SDK.
+SM-1532 found that only the TypeScript SDK has public methods for some operator operations, for
+example `runTaskNow`, the lineage reads, and the retention policy methods.
+
+ADR 0059 sets the 1.0.0 parity bar. Each cell of the product table in `docs/parity.md` reads
+Supported or records why it does not, and `pnpm parity:check` passes. That table has the PostgreSQL,
+Dashboard, and CLI columns. Thus an operator gets each operator capability from the dashboard and
+the CLI against any database, whatever language enqueued the work.
+
+This amendment states that bar for Java `Admin`, and thus for Kotlin and Spring callers:
+
+1. Java `Admin` covers each row of the public SDK operator table in `docs/parity.md`.
+   `pnpm parity:check` holds each Supported cell in the JVM column to its test evidence.
+2. Java `Admin` does not have to have each operator method of the TypeScript SDK. `docs/parity.md`
+   lists the operator methods that only TypeScript has.
+3. A method from that list can come to Java later, because a new method is additive. It then gets a
+   row in `docs/parity.md` and an integration test.
+
+The method block above does not change. This amendment does not decide `setQueueTier` and
+`setQueueHistory`, which TypeScript, Python, Go, and Rust have and Java does not have yet. SM-1417
+owns that decision.
