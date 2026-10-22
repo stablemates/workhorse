@@ -76,7 +76,7 @@ The purge lock has one limit. A transaction that already holds task row locks, f
 cancel or an enqueue, must not call a purge. Another purge can hold the purge lock and wait for one
 of those rows, while the transaction waits for the purge lock. PostgreSQL then aborts one of them
 with `40P01`. The admin CLI and the dashboard run a purge in its own transaction, so the limit does
-not apply to them. SM-1289 owns the limit.
+not apply to them. SM-1289 keeps the limit, as the amendment below records.
 
 A first design locked the purged tasks and their dependents in one identity order, `FOR UPDATE`.
 That protected the enqueue case, but a dependent below its prerequisite was then locked before the
@@ -107,6 +107,34 @@ that the count includes the canceled tasks.
 - The purge count, `deleted_count` in SQL and `deletedCount` in the SDKs, the CLI JSON, and the
   dashboard API, includes the canceled tasks. A caller cannot get the number of deleted tasks
   alone from the result.
+- A purge in a transaction that already holds task row locks can deadlock with another purge. The
+  amendment below keeps this limit.
+
+## Amendment: keep the purge lock limit (2026-10-22)
+
+SM-1289 keeps the limit of the purge lock. A purge does not check whether its transaction already
+holds task row locks. PostgreSQL cannot reliably tell whether the own transaction holds row locks,
+so such a check cannot be exact. `pg_locks` lists a row lock only while another transaction waits
+for it. Otherwise the lock is only in the header of the row.
+
+The admin CLI and the dashboard run a purge in its own transaction, so the limit does not apply to
+them. An `Admin` that runs in a transaction of the caller must call a purge before it locks task
+rows, or in a separate transaction.
+
+`typescript/core/test/integration-purge-transaction-deadlock.test.ts` reproduces the cycle:
+
+1. The transaction T1 cancels the task `X`, so T1 holds a lock on `X`.
+2. A purge in T2 takes the purge lock and waits for `X`.
+3. T1 then purges another queue and waits for the purge lock.
+4. PostgreSQL aborts one of them with `40P01`. The error detail names the advisory lock.
+
+The two other choices of SM-1289 have these costs:
+
+- A purge could take the purge lock only when it has a dependent in another queue. Such a purge
+  still has the cycle.
+- A refusal check cannot find the row locks of its own transaction in `pg_locks`. A check for a
+  transaction ID refuses too much, because any earlier write, also outside the task tables, gives
+  the transaction an ID.
 
 ## Rejected alternatives
 
