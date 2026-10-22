@@ -6,6 +6,7 @@ using Workhorse.Internal;
 using Workhorse.Internal.Contracts;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Json;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -149,12 +150,23 @@ public sealed partial class Queue
 
     private async Task<IReadOnlyList<EnqueueResult>> EnqueueManyAsync(Call call, IReadOnlyList<Pending> requests, CancellationToken cancellationToken)
     {
-        var rows = await SubmitAsync(
-            call,
-            requests,
-            document => Sql.RowsAsync(call.Connection, SqlCatalogue.EnqueueManyV1, [Parameters.Json(document)], cancellationToken),
-            cancellationToken).ConfigureAwait(false);
-        return EnqueueResults(rows, requests.Count);
+        using var span = QueueTelemetry.StartEnqueue(requests, _shared.DefaultQueue, static request => request.Options.Queue, static request => request.TaskType);
+        try
+        {
+            var rows = await SubmitAsync(
+                call,
+                requests,
+                document => Sql.RowsAsync(call.Connection, SqlCatalogue.EnqueueManyV1, [Parameters.Json(document)], cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+            var results = EnqueueResults(rows, requests.Count);
+            QueueTelemetry.Enqueued(span, results);
+            return results;
+        }
+        catch (Exception error)
+        {
+            QueueTelemetry.Failed(span, error);
+            throw;
+        }
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -370,6 +382,7 @@ public sealed partial class Queue
     private async Task<string> CallbackDocumentAsync(Call call, IReadOnlyList<(string Key, Pending Request)> callbacks, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
+        var trace = Instrumentation.InjectTraceContext();
         var document = new JsonObject();
         foreach (var (key, request) in callbacks)
         {
@@ -377,6 +390,11 @@ public sealed partial class Queue
             if (request.Options.RunAt is null)
             {
                 input.Remove("runAt");
+            }
+
+            if (trace is not null)
+            {
+                input["traceContext"] = trace.DeepClone();
             }
 
             await ApplyContractAsync(call, input, request.TaskType, cancellationToken).ConfigureAwait(false);
@@ -963,6 +981,15 @@ public sealed partial class Queue
     private async Task<string> SerializeRequestsAsync(Call call, IReadOnlyList<Pending> requests, CancellationToken cancellationToken)
     {
         var inputs = SerializeRequests(requests);
+        // Each task carries the trace context of the current activity, the enqueue span when one runs.
+        if (Instrumentation.InjectTraceContext() is { } trace)
+        {
+            foreach (var input in inputs)
+            {
+                input["traceContext"] = trace.DeepClone();
+            }
+        }
+
         await AssertCompatibleAsync(call, cancellationToken).ConfigureAwait(false);
         for (var index = 0; index < requests.Count; index++)
         {

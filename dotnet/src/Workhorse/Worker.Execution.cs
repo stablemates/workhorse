@@ -8,6 +8,7 @@ using Workhorse.Internal.Database;
 using Workhorse.Internal.Durable;
 using Workhorse.Internal.Json;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -64,9 +65,11 @@ public sealed partial class Worker
             return;
         }
 
+        var arbiter = new Arbiter();
+        var telemetry = WorkerTelemetry.StartAttempt(task.Task);
         try
         {
-            await ExecuteAsync(task).ConfigureAwait(false);
+            await ExecuteAsync(task, arbiter).ConfigureAwait(false);
         }
         catch (LeaseLostException)
         {
@@ -76,19 +79,28 @@ public sealed partial class Worker
         {
             // Only the worker's own statements reach here, never a handler exception. The run drains
             // and reports the first one.
+            WorkerTelemetry.HandlerError(task.Task, error.GetType().FullName ?? error.GetType().Name);
             task.Run.Errors.Enqueue(error);
             task.Run.Failed = true;
             _wake.Bump();
         }
         finally
         {
-            _active.TryRemove(task, out _);
-            ReleaseSlot(task);
-            _wake.Signal();
+            try
+            {
+                telemetry?.Finish(arbiter.Released ?? arbiter.Current);
+            }
+            finally
+            {
+                // A measurement callback of a listener can throw. The slot still goes back.
+                _active.TryRemove(task, out _);
+                ReleaseSlot(task);
+                _wake.Signal();
+            }
         }
     }
 
-    private async Task ExecuteAsync(Active task)
+    private async Task ExecuteAsync(Active task, Arbiter arbiter)
     {
         Registration? registration;
         lock (_handlers)
@@ -96,7 +108,6 @@ public sealed partial class Worker
             _handlers.TryGetValue(task.Task.Type, out registration);
         }
 
-        var arbiter = new Arbiter();
         var token = task.Run.StopPath.Token;
         if (registration is null)
         {
@@ -253,7 +264,14 @@ public sealed partial class Worker
     private async Task CompleteAsync(Active active, string encoded, Arbiter arbiter, CancellationToken cancellationToken)
     {
         var task = active.Task;
-        if (await CompleteAttemptAsync(active, encoded, cancellationToken).ConfigureAwait(false))
+        bool accepted;
+        using (var span = WorkerTelemetry.StartComplete(task))
+        {
+            accepted = await CompleteAttemptAsync(active, encoded, cancellationToken).ConfigureAwait(false);
+            WorkerTelemetry.Completed(span, task, accepted);
+        }
+
+        if (accepted)
         {
             WorkerLog.Completed(_logger, task.Id);
             arbiter.Submit(Outcome.Completed);
@@ -276,6 +294,7 @@ public sealed partial class Worker
     {
         var row = await FencedRowAsync(SqlCatalogue.ReleaseOwnedV1, task, () => [], cancellationToken).ConfigureAwait(false);
         var status = row.Text("status");
+        WorkerTelemetry.HandlerSpanOutcome(task, status);
         WorkerLog.ReleaseProcessed(_logger, task.Id, status);
         if (status == "released")
         {
@@ -301,7 +320,13 @@ public sealed partial class Worker
             delay = (int)Math.Clamp(Math.Round(chosen.TotalMilliseconds), 0, int.MaxValue);
         }
 
-        var row = await FencedRowAsync(SqlCatalogue.FailV1, task, () => [Parameters.Json(envelope), Parameters.Integer(delay)], cancellationToken).ConfigureAwait(false);
+        Row row;
+        using (var span = WorkerTelemetry.StartFailure(task, error))
+        {
+            row = await FencedRowAsync(SqlCatalogue.FailV1, task, () => [Parameters.Json(envelope), Parameters.Integer(delay)], cancellationToken).ConfigureAwait(false);
+            WorkerTelemetry.Failed(span, task, row.Text("state"));
+        }
+
         var state = row.Text("state");
         var errorType = FailureEnvelope.Name(error);
         WorkerLog.FailureProcessed(_logger, task.Id, state, errorType);
@@ -582,6 +607,7 @@ public sealed partial class Worker
             return status;
         }
 
+        WorkerTelemetry.Expired(task.Task, row);
         WorkerLog.OwnershipExpired(_logger, task.Task.Id, status);
         DeliverStatus(status, arbiter, task.Cancellation);
         return status;
@@ -635,6 +661,7 @@ public sealed partial class Worker
 
         public void Settle(string status)
         {
+            WorkerTelemetry.HeartbeatRejected(status);
             WorkerLog.HeartbeatRejected(worker._logger, task.Task.Id, status);
             // Another transaction held the row. The round renewed nothing and gave no verdict.
             if (status == "busy")

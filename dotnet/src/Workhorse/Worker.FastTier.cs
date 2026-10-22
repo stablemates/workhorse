@@ -2,6 +2,7 @@ using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -489,6 +490,13 @@ public sealed partial class Worker
         var accepted = rows.Count > 0 && rows[0].Value("accepted") is Guid[] ids ? ids.ToHashSet() : [];
         var claimed = rows.Where(row => row.Text("task_id") is not null).Select(row => ClaimedOf(row, queue, sentAt, fastClaimed: true)).ToList();
         FusedStatementHook?.Invoke(new FusedStatement(chunk.Count, sentLimit, claimed.Count));
+        // A fused claim has no claim span of its own, as on the JVM. Its metrics count as a claim's,
+        // from before the wait for the pool and before the first send, as the JVM measures them.
+        if (sentLimit > 0)
+        {
+            WorkerTelemetry.Claimed(null, queue, probedAt, claimed, 0, static entry => entry.Task, fullTier: false);
+        }
+
         // Claimed tasks go to the completions in order, each up to the slots that it reserved. A claim
         // that the gate withheld gets no task, and proves nothing about the queue.
         var offset = 0;

@@ -4,6 +4,7 @@ using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -564,15 +565,34 @@ public sealed partial class Worker
 
         var routine = Interlocked.Read(ref _routineAt);
         var routineDue = routine == Never || now - routine >= Monotonic.Millis(_routineMs);
+        // The first pass of a loop has no earlier run, so it records no drift.
+        if (last != Never)
+        {
+            WorkerTelemetry.MaintenanceDriftOf(now - last, _maintenanceMs, "tick");
+        }
+
+        if (routineDue && routine != Never)
+        {
+            WorkerTelemetry.MaintenanceDriftOf(now - routine, _routineMs, "background_routines");
+        }
+
+        using (var pass = WorkerTelemetry.StartMaintenance())
         await using (var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false))
         {
-            await Sql.RowsAsync(connection, SqlCatalogue.TickV1, [Parameters.Integer(100), Parameters.Integer(100)], CancellationToken.None)
-                .ConfigureAwait(false);
+            foreach (var row in await Sql.RowsAsync(connection, SqlCatalogue.TickV1, [Parameters.Integer(100), Parameters.Integer(100)], CancellationToken.None)
+                .ConfigureAwait(false))
+            {
+                pass.Phase(row);
+            }
+
             if (routineDue)
             {
                 Interlocked.Exchange(ref _routineAt, now);
-                await Sql.RowsAsync(connection, SqlCatalogue.RunMaintenanceV1, [Parameters.Timestamptz(DateTimeOffset.UtcNow)], CancellationToken.None)
-                    .ConfigureAwait(false);
+                foreach (var row in await Sql.RowsAsync(connection, SqlCatalogue.RunMaintenanceV1, [Parameters.Timestamptz(DateTimeOffset.UtcNow)], CancellationToken.None)
+                    .ConfigureAwait(false))
+                {
+                    pass.Phase(row);
+                }
             }
         }
 
@@ -596,8 +616,10 @@ public sealed partial class Worker
                 .ConfigureAwait(false);
         }
 
+        var now = DateTimeOffset.UtcNow;
         foreach (var row in rows)
         {
+            WorkerTelemetry.ScheduleFiredOf(row, now);
             if (row.Text("task_id") is { } taskId && _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
             {
                 var @namespace = row.Text("namespace");
