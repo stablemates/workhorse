@@ -1280,17 +1280,19 @@ describe("admin CLI task groups", () => {
     expect(human.stdout).toContain("DONE");
     expect(human.stdout).toContain(`${sealed.id}  sealed`);
     expect(human.stdout).toContain("Next page: pass --page 2");
+  });
 
-    for (const args of [
-      ["--state", "open,sealed"],
-      ["--state", "ready"],
-      ["--page", "0"],
-      ["--page", "1001"],
-      ["--limit", "101"],
-      ["--after", "1"],
-    ]) {
-      expect(runAdmin(["task-groups", ...args]).code).toBe(64);
-    }
+  // Each CLI start loads TypeScript in a new process and can take seconds on a loaded host, so each
+  // rejected option starts the CLI in its own test.
+  it.each([
+    ["--state", "open,sealed"],
+    ["--state", "ready"],
+    ["--page", "0"],
+    ["--page", "1001"],
+    ["--limit", "101"],
+    ["--after", "1"],
+  ])("rejects a task-groups option: %s %s", (...args) => {
+    expect(runAdmin(["task-groups", ...args]).code).toBe(64);
   });
 
   it("shows one task group with its counts, member tasks, and newest events", async () => {
@@ -1335,11 +1337,22 @@ describe("admin CLI task groups", () => {
     const missing = runAdmin(["task-group", "00000000-0000-0000-0000-000000000000"]);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("not found");
+  });
+
+  it("rejects a task-group identity that is not a UUID", () => {
     expect(runAdmin(["task-group", "not-a-group"]).code).toBe(64);
-    expect(runAdmin(["task-group", group.id, "--after", "-1"]).code).toBe(64);
-    expect(runAdmin(["task-group", group.id, "--after", "2147483648"]).code).toBe(64);
-    expect(runAdmin(["task-group", group.id, "--limit", "1001"]).code).toBe(64);
-    expect(runAdmin(["task-group", group.id, "--page", "2"]).code).toBe(64);
+  });
+
+  it.each([
+    ["--after", "-1"],
+    ["--after", "2147483648"],
+    ["--limit", "1001"],
+    ["--page", "2"],
+  ])("rejects a task-group option: %s %s", async (...args) => {
+    const { group } = await queue.taskGroup(groupCallbacks, (builder) =>
+      builder.add([groupMember(1)]),
+    );
+    expect(runAdmin(["task-group", group.id, ...args]).code).toBe(64);
   });
 
   it("cancels a task group with an actor and a required reason", async () => {

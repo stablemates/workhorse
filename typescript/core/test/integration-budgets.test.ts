@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { SQL_STATEMENTS } from "../src/queue/sql-catalogue.generated.js";
 import {
@@ -126,7 +125,9 @@ describe("named budgets", () => {
     await queue.enqueue("budgeted", { queue: "a" }, { queue: queueA, budget });
     const secondId = await queue.enqueue("budgeted", { queue: "b" }, { queue: queueB, budget });
 
-    const first = await queue.claim("budget-worker-a", { queue: queueA, leaseMs: 100 });
+    // A short lease can expire between two claims on a loaded host, so the lease stays live until
+    // the test expires it.
+    const first = await queue.claim("budget-worker-a", { queue: queueA, leaseMs: 30_000 });
     expect(first).toMatchObject({ payload: { queue: "a" } });
     await expect(queue.claim("budget-worker-b", { queue: queueB })).resolves.toBeNull();
 
@@ -135,7 +136,10 @@ describe("named budgets", () => {
       { name: budget, active: 1, saturated: true, blockedReady: 1, availableTokens: null },
     ]);
 
-    await sleep(120);
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+      [first!.id],
+    );
     await expect(queue.claim("budget-worker-b", { queue: queueB })).resolves.toMatchObject({
       id: secondId,
     });
