@@ -293,10 +293,17 @@ describe("supported version constants", () => {
     ]);
     const mise = parseToml(miseSource) as { tools: Record<string, string> };
     const devDependencies = rootPackage.devDependencies as Record<string, string>;
+    const dotnetVersions = [
+      ...workflow.matchAll(/dotnet-version: (\S+) # Pinned to the dotnet version in mise\.toml\./g),
+    ].map((match) => match[1]);
+    expect(dotnetVersions.length).toBeGreaterThan(1);
+    expect(new Set(dotnetVersions).size).toBe(1);
 
     expect(mise.tools).toEqual({
       // CI installs the advisory scanner itself, so `pnpm rust:vuln` runs the same release there.
       "cargo-deny": /tool: cargo-deny@(\S+)/.exec(workflow)?.[1],
+      // Every job that builds the .NET solution installs this SDK. SM-1627 adds .NET to support.json.
+      dotnet: dotnetVersions[0],
       go: manifest.toolchains.go,
       gradle: manifest.toolchains.gradle,
       java: manifest.toolchains.java,
@@ -680,6 +687,7 @@ describe("continuous integration", () => {
       "ruby",
       "jvm",
       "jvm-verification-metadata",
+      "dotnet",
       "spring-boot",
       "ruby-rails",
       "demo",
@@ -701,7 +709,7 @@ describe("continuous integration", () => {
     expect(workflow).toContain(
       "name: demo and site smoke\n    needs: plan\n    if: fromJSON(needs.plan.outputs.lanes)['demo']",
     );
-    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(6);
+    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(7);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
   });
 

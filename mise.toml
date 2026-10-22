@@ -1,5 +1,6 @@
 [tools]
 cargo-deny = "0.20.2"
+dotnet = "10.0.402"
 go = "1.26.10"
 gradle = "9.8.1"
 java = "temurin-25.0.4"

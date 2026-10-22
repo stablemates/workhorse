@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The EF Core transaction accessor (ADR 0107). -->
+  <PropertyGroup>
+    <PackageId>Workhorse.EntityFrameworkCore</PackageId>
+    <RootNamespace>Workhorse.EntityFrameworkCore</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Workhorse/Workhorse.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+</Project>

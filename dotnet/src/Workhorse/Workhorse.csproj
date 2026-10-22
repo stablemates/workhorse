@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The core: client, worker, Admin, durable context, and telemetry (ADR 0107). -->
+  <PropertyGroup>
+    <PackageId>Workhorse</PackageId>
+    <RootNamespace>Workhorse</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Only the test project sees the internals. No shipped assembly does (ADR 0107). -->
+    <InternalsVisibleTo Include="Workhorse.Tests" />
+  </ItemGroup>
+</Project>

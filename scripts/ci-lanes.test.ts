@@ -145,7 +145,16 @@ describe("the lane-input map and the repository", () => {
   });
 
   it("names each tracked file in a source directory", () => {
-    const sourceDirectories = ["dashboard/", "docs/", "go/", "jvm/", "python/", "ruby/", "rust/"];
+    const sourceDirectories = [
+      "dashboard/",
+      "docs/",
+      "dotnet/",
+      "go/",
+      "jvm/",
+      "python/",
+      "ruby/",
+      "rust/",
+    ];
     const unnamed = trackedFiles.filter(
       (file) =>
         (sourceDirectories.some((directory) => file.startsWith(directory)) ||
@@ -162,7 +171,8 @@ describe("the lane-input map and the repository", () => {
   const reference =
     /(?:^|[^\w./-])(?:\.\.\/)*((?:api|benchmarks|dashboard|docs|go|jvm|ops|protocol|python|ruby|rust|scripts|site|sql|typescript)\/[\w./-]*\w)/g;
   const commentLine = /^\s*(?:\/\/|\/\*|\*|#)/;
-  const textFile = /\.(?:go|rs|rb|py|java|kt|kts|ts|mts|js|mjs|json|toml|ya?ml|gemspec|sh)$/;
+  const textFile =
+    /\.(?:go|rs|rb|py|java|kt|kts|cs|csproj|props|ts|mts|js|mjs|json|toml|ya?ml|gemspec|sh)$/;
 
   // Paths that a source names in prose, such as a Python docstring, without reading the file.
   const mentions = new Set([
