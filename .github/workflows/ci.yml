@@ -2,7 +2,9 @@
 # docs/decisions/0083-run-each-language-suite-once-per-change.md. Pull requests and pushes run each
 # language's suite once, on the newest supported combination. Weekly runs exercise every
 # language/database combination declared in support.json, every variation of a suite, such as Go's
-# race detector and Rust without optional features, and every package check.
+# race detector and Rust without optional features, and every package check. A pull request runs a
+# lane only when it changes an input of that lane, as scripts/ci-lanes.ts maps them. A file that the
+# map does not name runs every lane.
 name: CI
 
 on:
@@ -43,10 +45,13 @@ env:
 
 jobs:
   plan:
-    name: support matrix
+    name: lane plan and support matrix
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     outputs:
+      # One boolean for each other job. Each job runs only when its value is true, and the required
+      # job holds each result to it.
+      lanes: ${{ steps.lanes.outputs.lanes }}
       typescript: ${{ steps.matrix.outputs.typescript }}
       python: ${{ steps.matrix.outputs.python }}
       go: ${{ steps.matrix.outputs.go }}
@@ -58,6 +63,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # A pull request checks out its merge commit, whose first parent is the base branch. The
+          # lane plan compares the two to list the files that the pull request changes.
+          fetch-depth: 2
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -66,10 +74,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - id: matrix
         run: pnpm --silent exec tsx scripts/ci-matrix.ts "$GITHUB_EVENT_NAME" "${{ github.event.schedule }}" >> "$GITHUB_OUTPUT"
+      - id: lanes
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: pnpm --silent exec tsx scripts/ci-lanes.ts "$GITHUB_EVENT_NAME" "$SCHEDULE" >> "$GITHUB_OUTPUT"
 
   static:
     name: format, generated files, lint, security, types
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['static']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -154,7 +167,8 @@ jobs:
 
   unit:
     name: environment-independent tests
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['unit']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -182,7 +196,8 @@ jobs:
   # image, which `gofmt` in the suite needs. See SM-1098.
   npm-release-scope:
     name: npm release test scope
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['npm-release-scope']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -210,7 +225,7 @@ jobs:
   typescript:
     name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['typescript']
     # Four cores rather than the two every other job takes. This lane carries the dashboard server,
     # the demo application, the CLI, the adapter suites and the pooling conformance lane, so it runs
     # five times the tests of the Go or Python lane. It also shares its cores with the PostgreSQL
@@ -276,7 +291,7 @@ jobs:
   python:
     name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['python']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -323,7 +338,7 @@ jobs:
   go:
     name: Go ${{ matrix.go }} (postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['go']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -371,7 +386,8 @@ jobs:
 
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['runtime-smoke']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -417,7 +433,7 @@ jobs:
   packed:
     name: packed install (node ${{ matrix.node }})
     needs: plan
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['packed']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -458,7 +474,7 @@ jobs:
   rust:
     name: Rust (postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['rust']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -521,7 +537,7 @@ jobs:
   ruby:
     name: Ruby ${{ matrix.ruby }} (postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['ruby']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -574,7 +590,7 @@ jobs:
   jvm:
     name: JVM on Java ${{ matrix.java }} (postgres ${{ matrix.postgres }})
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['jvm']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -640,7 +656,7 @@ jobs:
     # checks the file of each release consumer that jvm:package-check runs. The check takes about
     # four minutes and needs no database, so it runs in its own job beside the jvm lanes (SM-1556).
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['jvm-verification-metadata']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -672,7 +688,7 @@ jobs:
     # The jvm job tests the starter on the Spring Boot 4.0 floor. This job runs the same
     # floor-compiled starter on Spring Boot 4.1 (ADR 0103, "Floors").
     needs: plan
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['spring-boot']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -722,7 +738,7 @@ jobs:
     # A snapshot cannot have a checksum, so this lane skips dependency verification for the two
     # test class paths that take the snapshot BOM. The build refuses `stageRelease` in this lane.
     needs: plan
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['spring-boot-snapshot']
     continue-on-error: true
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
@@ -771,7 +787,7 @@ jobs:
     # The ruby job runs the adapter against Rails 8.1 on every change. The older release is a
     # variation, so it runs weekly as ADR 0083 describes.
     needs: plan
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['ruby-rails']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -812,7 +828,7 @@ jobs:
   ruby-rails-main:
     name: Ruby Active Job on Rails main
     needs: plan
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'
+    if: fromJSON(needs.plan.outputs.lanes)['ruby-rails-main']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     # Rails main previews the next release, so this job reports without blocking a merge, and the
@@ -855,7 +871,8 @@ jobs:
 
   demo:
     name: demo and site smoke
-    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['demo']
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -932,9 +949,27 @@ jobs:
     timeout-minutes: 5
     env:
       RESULTS: ${{ toJSON(needs) }}
+      LANES: ${{ needs.plan.outputs.lanes }}
     steps:
-      - name: Require every merge-gate job
-        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
+      # A lane that the plan selects must succeed, and a lane that it skips must be skipped. A
+      # failed, canceled, or unexpectedly skipped lane fails this job, and so does a failed plan.
+      - name: Require every lane that the plan selected
+        run: |
+          set -euo pipefail
+          if [ "$(echo "$RESULTS" | jq -r .plan.result)" != success ]; then
+            echo "The lane plan did not succeed." >&2
+            exit 1
+          fi
+          mismatches=$(echo "$RESULTS" | jq -c --argjson lanes "$LANES" '
+            [to_entries[] | select(.key != "plan")
+              | {job: .key, selected: $lanes[.key], result: .value.result}
+              | select(if .selected == true then .result != "success"
+                  elif .selected == false then .result != "skipped"
+                  else true end)]')
+          if [ "$mismatches" != "[]" ]; then
+            echo "These jobs do not match the lane plan: $mismatches" >&2
+            exit 1
+          fi
 
   notify:
     name: report a failed schedule

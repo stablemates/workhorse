@@ -11,6 +11,7 @@ import {
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
 import { publishedPackages } from "../../../scripts/packages.js";
+import { planLanes } from "../../../scripts/ci-lanes.js";
 import { buildCiMatrices, WEEKLY_COMPATIBILITY_SCHEDULE } from "../../../scripts/ci-matrix.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
@@ -685,17 +686,20 @@ describe("continuous integration", () => {
     ]);
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
     expect(workflow.match(/- cron:/g)).toHaveLength(1);
+    // SM-1548: every lane runs only when the lane plan selects it, and the required job holds each
+    // result to that plan. A selected lane must succeed, so a failed or canceled lane fails the
+    // check, and a lane that the plan skips passes it only as skipped.
+    for (const lane of requiredNeeds?.split(",").map((need) => need.trim()) ?? []) {
+      if (lane === "plan" || lane === "") continue;
+      expect(workflow).toContain(`    if: fromJSON(needs.plan.outputs.lanes)['${lane}']\n`);
+    }
+    expect(workflow).toContain("LANES: ${{ needs.plan.outputs.lanes }}");
+    expect(workflow).toContain('jq -r .plan.result)" != success');
+    expect(workflow).toContain('if .selected == true then .result != "success"');
+    expect(workflow).toContain('elif .selected == false then .result != "skipped"');
+    expect(workflow).toContain('if [ "$mismatches" != "[]" ]; then');
     expect(workflow).toContain(
-      "if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 4 * * 0'",
-    );
-    expect(
-      workflow.match(
-        /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
-      ),
-    ).toHaveLength(13);
-    expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
-    expect(workflow).toContain(
-      "name: demo and site smoke\n    if: github.event_name != 'schedule'",
+      "name: demo and site smoke\n    needs: plan\n    if: fromJSON(needs.plan.outputs.lanes)['demo']",
     );
     expect(workflow.match(/max-parallel: 2/g)).toHaveLength(6);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
@@ -969,7 +973,8 @@ describe("continuous integration", () => {
   });
 
   // SM-1556: the check writes the Gradle verification metadata from nothing, which takes minutes.
-  // Its own job runs it beside the jvm lanes, on every change, and the required check gates on it.
+  // Its own job runs it beside the jvm lanes, on every change to a JVM input, and the required check
+  // gates on it.
   it("checks the JVM verification metadata on the Java floor in its own gating job", async () => {
     const ci = await read(".github/workflows/ci.yml");
     const lane = (name: string) =>
@@ -977,8 +982,21 @@ describe("continuous integration", () => {
     const job = lane("jvm-verification-metadata");
     expect(job).toContain("    needs: plan\n");
     expect(job).toContain(
-      "    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'\n",
+      "    if: fromJSON(needs.plan.outputs.lanes)['jvm-verification-metadata']\n",
     );
+    // SM-1548: a pull request runs the job when it changes a JVM input or a Gradle file.
+    const files = [
+      "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
+      "jvm/gradle/verification-metadata.xml",
+      "jvm/gradle/libs.versions.toml",
+      "jvm/build.gradle.kts",
+      "jvm/release-consumer/java/gradle/verification-metadata.xml",
+    ];
+    expect(
+      files.filter(
+        (file) => !planLanes("pull_request", "", [file]).plan["jvm-verification-metadata"],
+      ),
+    ).toEqual([]);
     expect(job).toContain(
       "java-version: ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }}\n",
     );

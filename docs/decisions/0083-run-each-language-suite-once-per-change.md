@@ -3,7 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-09-28
 - **Amended by:** [SM-1138](https://linear.app/stablemates/issue/SM-1138)
-  (Ruby's package check runs on every change)
+  (Ruby's package check runs on every change),
+  [SM-1548](https://linear.app/stablemates/issue/SM-1548)
+  (a pull request runs a lane only when it changes an input of that lane)
 - **Related:** [ADR 0043](0043-public-ci-and-release-policy.md),
   [ADR 0079](0079-govern-the-rust-api-as-an-eighth-surface.md),
   [SM-970](https://linear.app/stablemates/issue/SM-970)
@@ -53,6 +55,45 @@ published gem could not load on Ruby 4.0, because `logger` had left the default 
 job checks the gem only on the Ruby that `mise.toml` pins. So without this step, no check before
 publication loaded the gem on the newest supported Ruby.
 
+_Amended by [SM-1548](https://linear.app/stablemates/issue/SM-1548)._ A pull request runs a
+language lane only when it changes an input of that lane. Before this amendment, a change to one
+guide ran the Go, Rust, Ruby, and JVM suites, and none of them read that guide.
+
+`scripts/ci-lanes.ts` holds the lane-input map. The `plan` job of `ci.yml` reads it, lists the files
+that the pull request changes, and gives each job one value that decides whether the job runs. The
+map has these parts:
+
+- Shared inputs run every lane. They are `.github/`, `scripts/`, `protocol/`, `sql/`,
+  `dashboard/v1/`, `typescript/core/`, `api/telemetry.txt`, the generated SQL and dashboard
+  catalogues of each SDK, the toolchain pins, `support.json`, and the root package files.
+- Each filtered lane names its own inputs. A lane that builds the TypeScript packages also names
+  `typescript/` and `dashboard/`.
+- The `static`, `unit`, `npm-release-scope`, and `demo` lanes run on every change, because they
+  check every language at once.
+- Documentation, the site, and static-lane configuration run only those four lanes, unless a
+  filtered lane names the file. For example, the Python lane names the guides and the site pages,
+  because its tests import each Python example in them.
+
+The map fails open. If the map names no entry for a changed file, every lane runs. If the plan
+cannot list the changed files, every lane runs. A push to `main`, `workflow_dispatch`, and the
+weekly schedule run every lane that their event runs, whatever changed.
+
+The `required` job stays the one required check. It holds the result of each job to the plan. A
+lane that the plan selects must succeed, and a lane that the plan skips must be skipped. A failed,
+canceled, or unexpectedly skipped lane fails the check, and so does a failed plan.
+
+`scripts/ci-lanes.test.ts` holds the map to `ci.yml` and to the repository. Each job of the
+workflow must have an entry, and each entry must name tracked files. The test also scans the source
+files of each filtered lane, and the scripts that the lane runs. Each tracked path that a source
+writes in full must be an input of the lane. If that path is a TypeScript program, each module
+that it imports must also be an input. If a source uses `docs`, `site`, or `benchmarks` as a
+path part, the test lists the globs that the source reads, and the lane must name them. The scans
+cannot find every read, for example a path that code builds from a variable. A contributor who adds
+such a read must add the file to the lane's inputs.
+
+A lane does not need to name an input of a check that an always-run lane also runs. For example,
+the Rust lane runs `pnpm parity:check`, and the static lane runs the same check on every change.
+
 `pnpm rust:test` runs the whole Rust workspace once with `--all-features`. It replaces the pair of
 runs that `rust:test` and `rust:integration` made in CI. `pnpm rust:integration` stays as a focused
 local command and as the list of targets that parity evidence may cite. Every target it names also
@@ -73,3 +114,10 @@ decision, the packed-install run found packaging regressions within a day. Every
 still runs its package check before it publishes, so a broken artifact cannot ship. The scheduled-failure issue from ADR 0043 reports
 it. A contributor who touches concurrent Go code or feature-gated Rust code should run
 `pnpm go:test:race` or `pnpm rust:test:no-features` before asking for review.
+
+_Amended by [SM-1548](https://linear.app/stablemates/issue/SM-1548)._ A pull request that changes
+only one SDK waits only for the lanes of that SDK and the four lanes that check every language.
+Each run also costs less. If the map omits an input that a lane reads, a change to that input skips
+the lane. A push to `main` runs every lane, but a maintainer can cancel that run, so the weekly run
+is the last check that reports the failure. The scans and the shared inputs make this omission less
+likely.
