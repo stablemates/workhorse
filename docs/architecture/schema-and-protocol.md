@@ -813,7 +813,9 @@ connection, such as a pool without `autocommit=True`, raises at once. Every star
 also a later run of the same worker, so it proves the headroom of the pool at that start. The
 listener subscribes only after both steps, and it stays best effort. Its failures go to `on_notification_error`, and the worker polls while the
 listener reconnects. With `shared_heartbeats`, only the compatibility query runs, under the pool's
-own timeout.
+own timeout. With `shared_heartbeats`, the listener subscribes only when the pool reports a
+`max_size` or `get_max_size()` of at least 2. Otherwise the run logs `workhorse.worker.polling_only`
+once and polls, in each of the three domains.
 
 **Claim gate.** The reservation is ready while it holds its connection or lends it to a round
 within that round's time. While it is not ready, the worker starts no claim. Each run has a
@@ -1892,7 +1894,9 @@ Without `shared_heartbeats: true`, it requires an Integer pool `size` of at leas
 refuses a missing or non-integer `size`. Every worker built on one pool shares one
 `Worker::Heartbeat`. That heartbeat holds one pool connection while a worker on the pool runs or a
 member remains. Each run reserves it before the worker registers, as
-[Heartbeat connection](lifecycle.md#heartbeat-connection) describes.
+[Heartbeat connection](lifecycle.md#heartbeat-connection) describes. With `shared_heartbeats: true`,
+a run subscribes to `Worker::Listener.shared(pool)` only when the pool `size` is an Integer of at
+least 2. Otherwise the run logs `workhorse.worker.polling_only` once and polls.
 
 | Option           | Default                                                 | Accepts                       |
 | ---------------- | ------------------------------------------------------- | ----------------------------- |
@@ -2744,7 +2748,14 @@ cannot delay a lease renewal. `start()` runs the worker loop on a non-daemon pla
 Workers built on one `DataSource` object share one listener, `Listener.shared(dataSource)`. The key
 is the object itself, by reference identity, never by `equals`, so a wrapper of a pool is a key of
 its own. The listener holds one connection from the `DataSource` while the `run` or `start` of any
-of these workers runs. A worker under `pollingOnly(true)` or `runOnce` does not subscribe to it. A
+of these workers runs. A worker under `pollingOnly(true)` or `runOnce` does not subscribe to it.
+Under `sharedHeartbeats(true)`, a worker subscribes only when the caller declares the pool size
+with `poolMaxSize`, and the declared size is at least 2. A `DataSource` reports no size, and the
+worker never probes it. Otherwise the worker logs `workhorse.worker.polling_only` once, with
+`workhorse.worker.pool_max_size` set to the declared size or `unknown`, and polls. The worker trusts
+the declared size. If an operator makes the pool smaller than that size, the listener can hold the
+last connection. Without the opt-out, `build()` refuses a declared size below 3 with
+`IllegalArgumentException`. A
 notification wakes each worker whose queues it names, and `*` wakes every worker. A callback that
 throws does not stop the wakes of another worker. After a listener failure, the listener calls the
 `onNotificationError` of each worker and reconnects with a backoff of 100 milliseconds through 5

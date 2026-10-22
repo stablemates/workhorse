@@ -1497,6 +1497,7 @@ run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder onNotification
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder onRegistrationError(java.util.function.Consumer<java.lang.Throwable>)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder pollInterval(java.time.Duration)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder pollingOnly(boolean)
+run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder poolMaxSize(int)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder queues(java.lang.String...)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder registryInterval(java.time.Duration)
 run.workhorse.Worker.Builder: public run.workhorse.Worker.Builder retryDelay(run.workhorse.RetryDelay)
@@ -1693,6 +1694,7 @@ run.workhorse.spring.WorkhorseProperties.QueueProperties: public java.lang.Strin
 run.workhorse.spring.WorkhorseProperties.QueueProperties: public void setDefaultQueue(java.lang.String)
 
 @NullMarked public static class run.workhorse.spring.WorkhorseProperties.WorkerProperties
+run.workhorse.spring.WorkhorseProperties.WorkerProperties: public @Nullable java.lang.Integer getPoolMaxSize()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public @Nullable java.lang.String getWorkerId()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public @Nullable java.time.Duration getHeartbeat()
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public @Nullable java.time.Duration getPollInterval()
@@ -1719,6 +1721,7 @@ run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setMainte
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setMaintenanceRoutineInterval(java.time.Duration)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setPollInterval(@Nullable java.time.Duration)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setPollingOnly(boolean)
+run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setPoolMaxSize(@Nullable java.lang.Integer)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setQueues(java.util.List<java.lang.String>)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setRegistryInterval(java.time.Duration)
 run.workhorse.spring.WorkhorseProperties.WorkerProperties: public void setScheduleCatchupLimit(int)
@@ -1747,6 +1750,7 @@ property workhorse.worker.maintenance-interval: java.time.Duration = "PT1S"
 property workhorse.worker.maintenance-routine-interval: java.time.Duration = "PT1M"
 property workhorse.worker.poll-interval: java.time.Duration
 property workhorse.worker.polling-only: java.lang.Boolean = false
+property workhorse.worker.pool-max-size: java.lang.Integer
 property workhorse.worker.queues: java.util.List<java.lang.String> = ["default"]
 property workhorse.worker.registry-interval: java.time.Duration = "PT5S"
 property workhorse.worker.schedule-catchup-limit: java.lang.Integer = 100

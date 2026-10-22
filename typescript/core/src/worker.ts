@@ -78,6 +78,7 @@ import {
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
+  workerListenerPoolMaxSize,
   workerProgressRead,
   workerQueueTierRead,
   workerWaitsRead,
@@ -2045,7 +2046,15 @@ export class Worker {
         logWarn(
           "workhorse.worker.polling_only",
           "Worker has no notification listener and dispatches by polling",
-          { ...this.workerQueueAttributes, "workhorse.worker.id": this.workerId },
+          {
+            ...this.workerQueueAttributes,
+            "workhorse.worker.id": this.workerId,
+            // An adapter can resolve its pool after the constructor, so the size is read now.
+            "workhorse.worker.pool_max_size":
+              (this.queue as { [workerListenerPoolMaxSize]?: () => number | undefined })[
+                workerListenerPoolMaxSize
+              ]?.() ?? "unknown",
+          },
         );
       }
 

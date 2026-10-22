@@ -723,6 +723,7 @@ The key of the hub is that pool object. Its capacity is `options.max`.
 - If the queryable has no pool, it stays polling-only.
 - A pool with a capacity of 1 also stays polling-only. Thus its only connection stays available
   for claims.
+- A pool that has `connect()` and no `options.max` stays polling-only, because its capacity can be 1.
 - If `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
   level once.
 

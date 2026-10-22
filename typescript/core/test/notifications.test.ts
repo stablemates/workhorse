@@ -27,7 +27,11 @@ class FakeClient extends EventEmitter {
 }
 
 function fakeDatabase(connect: () => Promise<FakeClient>): Queryable {
-  return { query: async () => ({ rows: [] }), connect } as unknown as Queryable;
+  return {
+    query: async () => ({ rows: [] }),
+    connect,
+    options: { max: 10 },
+  } as unknown as Queryable;
 }
 
 function hubSignals(): { signals: Set<AbortSignal>; restore: () => void } {

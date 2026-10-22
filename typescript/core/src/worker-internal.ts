@@ -83,6 +83,12 @@ export const workerHeartbeatReservationProblem = Symbol(
 export const workerStatementPoolCapacity = Symbol("workhorse.worker.statement-pool-capacity");
 
 /**
+ * Returns the maximum size of the pool that the queue's listener takes its connection from, or
+ * undefined when the pool reports none. The polling-only warning names it.
+ */
+export const workerListenerPoolMaxSize = Symbol("workhorse.worker.listener-pool-max-size");
+
+/**
  * Reads whether a queue is fast-tier now. A queue without a control row is full-tier. The worker
  * reads it for tasks that claim_many_v1 returned, which carry no tier marker (ADR 0077).
  */

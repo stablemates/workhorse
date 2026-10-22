@@ -112,6 +112,10 @@ PgBouncer in session mode:
 - A `Queue` on a queryable without `connect()` and without an attached pool has no listener. Its
   worker polls and logs one warning at start. This worker also has no pool for a heartbeat
   connection, so it needs `sharedHeartbeats`. The heartbeat section below explains this option.
+- With `sharedHeartbeats`, the listener can hold the only connection of a small pool. Thus the
+  worker starts the listener only when it knows the maximum size of the pool, and that size is at
+  least 2. If the worker does not know the pool's maximum size, or the size is 1, the worker polls
+  and logs one warning.
 
 <details>
 <summary>Reference: listener behavior and polling</summary>
@@ -139,13 +143,24 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 
 - A queryable without a pool stays polling-only.
 - A pool whose capacity is 1 stays polling-only.
+- A pool that has `connect()` and no `options.max` stays polling-only.
 - When `Worker.run()` starts with no subscription, it logs `workhorse.worker.polling_only` at warn
   level once.
+
+**Listener under the opt-out (every language)**
+
+- A listener in the pool starts only when the worker knows a pool maximum size of at least 2.
+- The size comes from the pool, or from the caller on the JVM: `poolMaxSize(int)` in Java,
+  `poolMaxSize` in Kotlin, and `workhorse.worker.pool-max-size` in the Spring starter.
+- No worker probes the pool for its size.
+- Otherwise the worker polls and logs `workhorse.worker.polling_only` once for each run. The record
+  carries `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`.
+- The Go worker polls when `MaxConns` is below 2. The Rust listener is outside the pool.
 
 **Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
 jitter. An explicit `pollMs` replaces that base.
 
-More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases) and [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence).
+More detail: [Operations and CLI: Polling-only cases](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence), and [Overview: Listener under the opt-out](https://github.com/stablemates/workhorse/blob/main/docs/architecture/overview.md#listener-under-the-opt-out).
 
 </details>
 
@@ -197,14 +212,14 @@ one more client for the Rust listener connection.
 <details>
 <summary>Reference: connections each language holds</summary>
 
-| Language   | Pool identity                                                                        | Listener connection                                                                                                                                          | Heartbeat connection                                                                           |
-| ---------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| TypeScript | The pool object, such as a node-postgres `Pool`.                                     | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped when `options.max` is 1 or less.                                                  | One per pool. The last holder returns it to the pool.                                          |
-| Go         | The `*pgxpool.Pool` object.                                                          | One `taskNotificationHub` per pool. Polls instead when `MaxConns` is below 2.                                                                                | One per pool. When the last holder releases it, `closeAndRemove` closes it.                    |
-| Ruby       | The pool object.                                                                     | One `Worker::Listener.shared(pool)` per pool, holding one pool connection.                                                                                   | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs or a lease remains. |
-| Python     | The pool object, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One per pool object, holding one pool connection. The domains never share.                                                                                   | One per pool object. The last worker gives it back to the pool.                                |
-| Rust       | The address that `Pool::manager()` returns.                                          | One per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2. | One per pool identity, from the pool. The last run gives it back to the pool.                  |
-| JVM        | The `DataSource` object, by reference identity.                                      | One `Listener.shared(dataSource)` per `DataSource`, holding one connection while any worker runs.                                                            | One per `DataSource`, held while any worker or attempt runs.                                   |
+| Language   | Pool identity                                                                        | Listener connection                                                                                                                                             | Heartbeat connection                                                                           |
+| ---------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| TypeScript | The pool object, such as a node-postgres `Pool`.                                     | One `TaskNotificationHub` per pool, holding one pooled connection. Skipped unless `options.max` is at least 2.                                                  | One per pool. The last holder returns it to the pool.                                          |
+| Go         | The `*pgxpool.Pool` object.                                                          | One `taskNotificationHub` per pool. Polls instead when `MaxConns` is below 2.                                                                                   | One per pool. When the last holder releases it, `closeAndRemove` closes it.                    |
+| Ruby       | The pool object.                                                                     | One `Worker::Listener.shared(pool)` per pool, holding one pool connection. Skipped unless the pool `size` is at least 2.                                        | One `Worker::Heartbeat.dedicated(pool)` per pool, held while a worker runs or a lease remains. |
+| Python     | The pool object, in each of three domains: psycopg sync, psycopg async, and asyncpg. | One per pool object, holding one pool connection. The domains never share. Skipped unless the pool reports a size of at least 2.                                | One per pool object. The last worker gives it back to the pool.                                |
+| Rust       | The address that `Pool::manager()` returns.                                          | One per pool identity, opened by `notifications::listen` from `WorkerOptions::listen_config`, outside the pool. Expected only when `max_size` is at least 2.    | One per pool identity, from the pool. The last run gives it back to the pool.                  |
+| JVM        | The `DataSource` object, by reference identity.                                      | One `Listener.shared(dataSource)` per `DataSource`, holding one connection while any worker runs. Under the opt-out, skipped unless `poolMaxSize` is 2 or more. | One per `DataSource`, held while any worker or attempt runs.                                   |
 
 - With 4 workers on one pool of 20, 18 pooled connections remain. In Rust, 19 remain, and 1 more
   client connects outside the pool.
@@ -235,8 +250,9 @@ pooled connection for a slow report query. Suppose that the heartbeat uses the s
 Thus, each pool keeps a dedicated heartbeat connection, and the heartbeat never waits for the
 shared pool. Count this connection in addition to the listener and the handler connections. The
 pool must also leave room for statements. If the pool states a size that is too small, the worker
-does not start. A Java `DataSource` does not state its size, so on the JVM the startup check is the
-only check.
+does not start. A Java `DataSource` does not state its size. On the JVM, you can declare the size
+with `poolMaxSize`, and the worker refuses a declared size that is too small. Without a declared
+size, the startup check is the only check.
 
 Every worker checks the pool when it starts. Within its startup budget, the worker first gets the
 heartbeat connection. Then it borrows one more connection for a short check, and returns it at
@@ -256,13 +272,19 @@ option `SharedHeartbeats`. Python, Rust, and Ruby name it `shared_heartbeats`. J
 `sharedHeartbeats(true)`, and Kotlin `sharedHeartbeats = true`. The heartbeat connection runs only
 self-contained statements, so it works in every pool mode.
 
+With `sharedHeartbeats`, the pool can be smaller, so the listener needs a pool of known size. If the
+worker does not know the pool's maximum size, or the size is 1, the worker polls and logs one
+warning. A Java `DataSource` does not state its size, so a JVM worker with `sharedHeartbeats(true)`
+polls unless you declare the size with `poolMaxSize`. The worker trusts that value. If you make the
+pool smaller than the declared size, the listener can hold the last connection again.
+
 <details>
 <summary>Reference: heartbeat reservation</summary>
 
 **Minimum pool.** Where the pool reports its maximum size, a dedicated heartbeat connection needs a
 pool of at least 3 connections. That leaves room for the listener and one claim. TypeScript,
-Python, and Ruby also refuse a pool whose size is unknown. A `DataSource` reports no size, so the
-JVM has no size check.
+Python, and Ruby also refuse a pool whose size is unknown. A `DataSource` reports no size. The JVM
+checks only a size that `poolMaxSize` declares.
 
 **Startup check.** The startup budget is the larger of the heartbeat interval and 5 s. One deadline
 bounds both steps, in this order:
@@ -294,7 +316,7 @@ claim at once.
 | Python     | `ValueError`                                    | `TimeoutError`                       | `shared_heartbeats`                                        |
 | Ruby       | `ArgumentError`                                 | `WorkerStartupError`                 | `shared_heartbeats`                                        |
 | Rust       | `Worker::new` returns `Error::InvalidArgument`. | `run` returns an error.              | `shared_heartbeats`                                        |
-| JVM        | None.                                           | `WorkhorseException`                 | `sharedHeartbeats(true)`, Kotlin `sharedHeartbeats = true` |
+| JVM        | `build()` throws when `poolMaxSize` is below 3. | `WorkhorseException`                 | `sharedHeartbeats(true)`, Kotlin `sharedHeartbeats = true` |
 
 A TypeScript `WorkerQueueApi` that is not a `Queue` is not checked.
 

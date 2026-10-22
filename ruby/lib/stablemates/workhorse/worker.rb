@@ -498,7 +498,7 @@ module Stablemates
         startup = nil
         claimed_any = false
         begin
-          if continuous && !@polling_only
+          if continuous && !@polling_only && pool_lends_listener?
             listener = Listener.shared(@pool).subscribe(@queues, on_wake: method(:notify),
               on_error: ->(error) { @on_notification_error&.call(error) })
           end
@@ -594,6 +594,19 @@ module Stablemates
         raise probe.error if probe.lent
 
         raise startup_error("could not borrow a connection for its readiness check", budget), cause: probe.error
+      end
+
+      # Whether the pool can lend the shared listener a connection (SM-1585). The listener holds one
+      # pooled connection while it listens. With the opt-out, a pool smaller than MIN_POOL_SIZE is
+      # allowed, so the listener starts only on a pool that reports a size of at least 2. Otherwise
+      # it could hold the only connection, and the worker polls instead. The run logs that once.
+      def pool_lends_listener?
+        size = @pool.respond_to?(:size) ? @pool.size : nil
+        return true if size.is_a?(Integer) && size >= 2
+
+        log(:warn, "workhorse.worker.polling_only", "Worker has no notification listener and dispatches by polling",
+          "workhorse.worker.queues" => @queues, "workhorse.worker.pool_max_size" => size.is_a?(Integer) ? size : "unknown")
+        false
       end
 
       def startup_error(failure, budget)

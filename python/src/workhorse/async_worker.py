@@ -719,6 +719,8 @@ class AsyncWorker:
     def _subscribe_listener(self) -> None:
         """Subscribe this run to the shared listener. The core calls this from its thread."""
         loop = self._require_loop()
+        if not self._inner._pool_lends_listener():
+            return
 
         async def subscribe() -> None:
             if not self._wants_listener or self._hub is None or self._subscription is not None:

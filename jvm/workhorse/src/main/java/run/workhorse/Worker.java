@@ -96,6 +96,12 @@ public final class Worker implements AutoCloseable {
   private static final long STARTUP_BUDGET_FLOOR_MS = 5_000;
 
   /**
+   * The smallest declared pool size that a worker with the dedicated heartbeat connection accepts:
+   * the listener, the heartbeat connection, and one connection for statements (ADR 0071, rule 4).
+   */
+  private static final int MIN_POOL_MAX_SIZE = 3;
+
+  /**
    * The wait for the listener thread to give its connection back, inside the total stop time. The
    * thread ends within one read timeout of 100 ms.
    */
@@ -157,6 +163,9 @@ public final class Worker implements AutoCloseable {
   private final Map<String, BatchCoordinator> coordinators;
   private final Heartbeat heartbeat;
   private final boolean sharedHeartbeats;
+
+  /** The pool maximum size that the caller declared, or {@code null} when it is unknown. */
+  private final @Nullable Integer poolMaxSize;
 
   /**
    * The heartbeat reservation of the latest run, or {@code null} before the first run. Only {@link
@@ -287,6 +296,19 @@ public final class Worker implements AutoCloseable {
 
   private Worker(Builder builder) {
     PgjdbcVersion.require();
+    // A DataSource reports no pool size, so only a declared size can fail this check (ADR 0071,
+    // rule 4). An unknown size leaves the check to the readiness check at startup.
+    if (!builder.sharedHeartbeats
+        && builder.poolMaxSize != null
+        && builder.poolMaxSize < MIN_POOL_MAX_SIZE) {
+      throw new IllegalArgumentException(
+          "Worker pool capacity must be at least "
+              + MIN_POOL_MAX_SIZE
+              + " (found "
+              + builder.poolMaxSize
+              + "); set sharedHeartbeats(true) to opt out");
+    }
+    this.poolMaxSize = builder.poolMaxSize;
     this.dataSource = builder.dataSource;
     this.connections = ConnectionSource.of(dataSource);
     this.queueNames = builder.queues;
@@ -934,7 +956,7 @@ public final class Worker implements AutoCloseable {
     // the pool from it. The listener starts between the two steps, so the check proves a free
     // connection beside both reserved ones. The budget is computed once, and its end moves later
     // by the time of the listener wait, which is best effort and uses none of the budget.
-    boolean listens = continuous && !pollingOnly;
+    boolean listens = continuous && !pollingOnly && poolLendsListener();
     long startupDeadline = System.nanoTime() + startupBudgetNanos();
     Heartbeat.Reservation reservation = reserveHeartbeat(run, startupDeadline, listens);
     if (reservation == null) {
@@ -981,6 +1003,9 @@ public final class Worker implements AutoCloseable {
     }
     if (!ready) {
       return false;
+    }
+    if (continuous && !pollingOnly && listener == null) {
+      logPollingOnly();
     }
     instanceId = UUID.randomUUID();
     draining = false;
@@ -1326,12 +1351,33 @@ public final class Worker implements AutoCloseable {
       }
     }
     if (!listener.isListening() && !stopRequested(run)) {
-      log(
-          System.Logger.Level.WARNING,
-          "workhorse.worker.polling_only",
-          "Worker has no notification listener and dispatches by polling",
-          Map.of("workhorse.worker.id", workerId, "workhorse.worker.queues", queueNames));
+      logPollingOnly();
     }
+  }
+
+  /**
+   * Whether the pool can lend the shared listener a connection (SM-1585). The listener holds one
+   * pooled connection while it listens. With the opt-out, a pool smaller than 3 is allowed, so the
+   * listener starts only when the caller declared a pool size of at least 2. A {@code DataSource}
+   * reports no size, and the worker never probes the pool for one. Without the opt-out, the
+   * readiness check proves the headroom.
+   */
+  private boolean poolLendsListener() {
+    return !sharedHeartbeats || (poolMaxSize != null && poolMaxSize >= 2);
+  }
+
+  private void logPollingOnly() {
+    log(
+        System.Logger.Level.WARNING,
+        "workhorse.worker.polling_only",
+        "Worker has no notification listener and dispatches by polling",
+        Map.of(
+            "workhorse.worker.id",
+            workerId,
+            "workhorse.worker.queues",
+            queueNames,
+            "workhorse.worker.pool_max_size",
+            poolMaxSize != null ? poolMaxSize : "unknown"));
   }
 
   /**
@@ -4268,6 +4314,7 @@ public final class Worker implements AutoCloseable {
     private int scheduleCatchupLimit = 100;
     private long shutdownGraceMs = 25_000;
     private boolean sharedHeartbeats;
+    private @Nullable Integer poolMaxSize;
     private @Nullable RetryDelay retryDelay;
     private @Nullable Consumer<Throwable> onRegistrationError;
     private @Nullable Consumer<Throwable> onNotificationError;
@@ -4405,6 +4452,22 @@ public final class Worker implements AutoCloseable {
      */
     public Builder sharedHeartbeats(boolean shared) {
       this.sharedHeartbeats = shared;
+      return this;
+    }
+
+    /**
+     * Declares the maximum size of the pool behind the {@code DataSource}, because a {@code
+     * DataSource} does not report it. The worker trusts the value and never probes the pool. With
+     * {@code sharedHeartbeats(true)}, the worker starts the shared listener only when the declared
+     * size is at least 2, and otherwise polls. Without the opt-out, {@link #build()} refuses a
+     * declared size below 3. If an operator makes the pool smaller than the declared size, the
+     * listener can hold the last connection. The default is unset, which means an unknown size.
+     */
+    public Builder poolMaxSize(int size) {
+      if (size < 1) {
+        throw new IllegalArgumentException("poolMaxSize must be at least 1");
+      }
+      this.poolMaxSize = size;
       return this;
     }
 
