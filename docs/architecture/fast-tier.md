@@ -13,7 +13,8 @@ A full-tier task pays for durable execution on every transition:
 If the handlers of a queue never use durable execution, the queue pays that cost for no benefit.
 The fast tier removes that cost. A fast-tier task lives in one `fast_task_runtime` row and closes
 into one `fast_task_outcome` row. It writes history only when the queue enables history ([ADR
-0077](../decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)).
+0077](../decisions/0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md)). A
+coalesced throttle request on a fast-tier task writes no `throttled` event.
 
 The tier belongs to the queue, never to a task or a worker. PostgreSQL routes every transition by
 the current tier of the queue. Thus a client calls the same public functions for both tiers.
@@ -222,7 +223,7 @@ first dashboard read.
 
 A fast-tier queue supports these features:
 
-- priority, delayed runs, and idempotency keys;
+- priority, delayed runs, idempotency keys, and throttle;
 - retry policies, deadlines, and execution timeouts;
 - heartbeats and cancellation;
 - redrive, pause, purge, and run-now.
@@ -236,16 +237,16 @@ PostgreSQL raises the rejection through
 - `DETAIL` JSON `{ queue, feature, ordinal? }`, where `ordinal` names the position of the
   offending request in a batch.
 
-| Feature text                                  | Raised by                                                       |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| `concurrency keys`, `budgets`                 | `enqueue_batch_v1`, and `redrive_v1` into a fast queue          |
-| `dependencies`, `prerequisite tasks`          | `enqueue_batch_v1`                                              |
-| `debounce`, `throttle`                        | `enqueue_debounce_v1`, `enqueue_throttle_v1`, `enqueue_many_v1` |
-| `child tasks`                                 | `create_single_child_v1` and `create_children_v1`               |
-| `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`                  |
-| `tier change`                                 | `set_queue_tier_v1` while live tasks exist                      |
-| `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue               |
-| `task groups`                                 | `add_task_group_members_v1` for a member on a fast-tier queue   |
+| Feature text                                  | Raised by                                                     |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| `concurrency keys`, `budgets`                 | `enqueue_batch_v1`, and `redrive_v1` into a fast queue        |
+| `dependencies`, `prerequisite tasks`          | `enqueue_batch_v1`                                            |
+| `debounce`                                    | `enqueue_debounce_v1`, `enqueue_many_v1`                      |
+| `child tasks`                                 | `create_single_child_v1` and `create_children_v1`             |
+| `concurrency policies`, `rate-limit policies` | Policy synchronization and `set_queue_tier_v1`                |
+| `tier change`                                 | `set_queue_tier_v1` while live tasks exist                    |
+| `batched completion`                          | `complete_many_and_claim_v1` on a full-tier queue             |
+| `task groups`                                 | `add_task_group_members_v1` for a member on a fast-tier queue |
 
 Two rejections differ from that shape:
 
@@ -283,6 +284,24 @@ decodes `DETAIL`. If a field is missing, it uses `unknown` for that field.
    into `fast_task_runtime`.
 
 It writes no `task_runtime` row and no `enqueued` event. Idempotency keys work as on the full tier.
+
+#### Throttle on a fast-tier queue
+
+Migration 0075 (schema version 74) lets `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle
+on a fast-tier queue (SM-928). Throttle converts its window into an idempotency retention, so
+`enqueue_batch_v1` settles it before any runtime row exists. The outcomes are `accepted` and
+`coalesced`, as on the full tier.
+
+- `enqueue_throttle_v1` still calls `lock_queue_tiers_v1` before it takes the key lock.
+- `enqueue_many_v1` locks the tiers of every debounce and throttle queue in name order before its
+  first member runs. Thus a batch and a tier change cannot wait for each other.
+- An accepted request updates no event, because a fast-tier task has no `enqueued` event.
+- A coalesced request appends a `throttled` event only if the retained task has neither a
+  `fast_task_runtime` row nor a `fast_task_outcome` row. The retained task decides, not the queue of
+  the request, because one scoped key can name a task on another queue.
+- `enqueue_many_v1` still rejects debounce on a fast-tier queue with `P1007` and the batch ordinal.
+- A batch with a debounce or throttle member runs its members one at a time. A `P1001` or a `P1007`
+  from one member carries the ordinal of that member in the batch.
 
 If the deadline of a request has already passed, the request closes at once through
 `fast_terminalize_deadline_v1`. The batch notifies `workhorse_tasks` once per ready queue, as a

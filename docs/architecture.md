@@ -51,6 +51,8 @@ columns, and limits of that area. For an explanation of a concept, read the
 
 - The [fast task tier](architecture/fast-tier.md#fast-tier): its settings, tables, functions,
   rejected features, and workers
+- [Throttle on a fast-tier queue](architecture/fast-tier.md#throttle-on-a-fast-tier-queue), which
+  writes no `throttled` event
 
 ### [Dashboard](architecture/dashboard.md)
 

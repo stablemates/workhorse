@@ -608,6 +608,10 @@ describe("schema installation", () => {
         version: 73,
         description: "skip a locked row in a one-lease heartbeat",
       },
+      {
+        version: 74,
+        description: "allow throttle on fast-tier queues",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

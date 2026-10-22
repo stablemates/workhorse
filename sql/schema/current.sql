@@ -7433,9 +7433,8 @@ DECLARE
   v_normalized jsonb;
   v_row record;
 BEGIN
-  IF cardinality(workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue'])) > 0 THEN
-    PERFORM workhorse.reject_fast_feature_v1(p_request->>'queue', 'throttle');
-  END IF;
+  -- Throttle works on both tiers. The tier lock comes before the key lock, as in every enqueue.
+  PERFORM workhorse.lock_queue_tiers_v1(ARRAY[p_request->>'queue']);
   IF p_request IS NULL OR jsonb_typeof(p_request) <> 'object'
      OR v_throttle IS NULL OR jsonb_typeof(v_throttle) <> 'object'
      OR v_throttle - ARRAY['key', 'scope', 'windowMs'] <> '{}'::jsonb
@@ -7501,7 +7500,14 @@ BEGIN
         'window_ms', v_window_ms, 'expires_at', v_expires_at
       )
     ) WHERE event.task_id = v_row.task_id AND event.event_type = 'enqueued';
-  ELSE
+  -- A fast-tier task writes no throttled event (ADR 0077). The retained task decides, because one
+  -- scoped key can name a task on another queue. Exactly one fast row exists for a fast-tier task.
+  ELSIF NOT EXISTS (
+          SELECT 1 FROM workhorse.fast_task_runtime runtime WHERE runtime.task_id = v_row.task_id
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM workhorse.fast_task_outcome outcome WHERE outcome.task_id = v_row.task_id
+        ) THEN
     INSERT INTO workhorse.task_event(task_id, event_type, details)
     VALUES (v_row.task_id, 'throttled', jsonb_build_object(
       'throttle', jsonb_build_object(
@@ -7531,7 +7537,7 @@ DECLARE
   v_error_detail text;
   v_contract_mismatch jsonb;
   v_fast_queue text;
-  v_fast_feature text;
+  v_fast_queues text[];
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
@@ -7634,22 +7640,23 @@ BEGIN
     RAISE EXCEPTION 'idempotency key is retained for incompatible coalescing mode';
   END IF;
 
-  -- Report a coalescing request on a fast-tier queue with its ordinal before any request runs.
-  SELECT input.request->>'queue',
-         CASE WHEN input.request ? 'debounce' THEN 'debounce' ELSE 'throttle' END,
-         input.ordinality::integer
-    INTO v_fast_queue, v_fast_feature, v_ordinal
+  -- Lock the tiers of every debounce and throttle queue in name order before any request runs.
+  -- Throttle works on both tiers, but its queues still take their tier locks here.
+  v_fast_queues := workhorse.lock_queue_tiers_v1(ARRAY(
+    SELECT DISTINCT candidate->>'queue'
+      FROM jsonb_array_elements(p_requests) candidate
+     WHERE candidate ? 'debounce' OR candidate ? 'throttle'
+  ));
+  -- Report a debounce request on a fast-tier queue with its ordinal.
+  SELECT input.request->>'queue', input.ordinality::integer
+    INTO v_fast_queue, v_ordinal
     FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
-   WHERE (input.request ? 'debounce' OR input.request ? 'throttle')
-     AND input.request->>'queue' = ANY(workhorse.lock_queue_tiers_v1(ARRAY(
-       SELECT DISTINCT candidate->>'queue'
-         FROM jsonb_array_elements(p_requests) candidate
-        WHERE candidate ? 'debounce' OR candidate ? 'throttle'
-     )))
+   WHERE input.request ? 'debounce'
+     AND input.request->>'queue' = ANY(v_fast_queues)
    ORDER BY input.ordinality
    LIMIT 1;
   IF FOUND THEN
-    PERFORM workhorse.reject_fast_feature_v1(v_fast_queue, v_fast_feature, v_ordinal);
+    PERFORM workhorse.reject_fast_feature_v1(v_fast_queue, 'debounce', v_ordinal);
   END IF;
 
   IF NOT EXISTS (
@@ -7689,14 +7696,24 @@ BEGIN
     ELSIF v_request ? 'throttle' THEN
       BEGIN
         SELECT * INTO v_row FROM workhorse.enqueue_throttle_v1(v_request);
-      EXCEPTION WHEN SQLSTATE 'P1001' THEN
-        GET STACKED DIAGNOSTICS
-          v_error_message = MESSAGE_TEXT,
-          v_error_detail = PG_EXCEPTION_DETAIL;
-        RAISE EXCEPTION USING
-          ERRCODE = 'P1001',
-          MESSAGE = v_error_message,
-          DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+      EXCEPTION
+        WHEN SQLSTATE 'P1001' THEN
+          GET STACKED DIAGNOSTICS
+            v_error_message = MESSAGE_TEXT,
+            v_error_detail = PG_EXCEPTION_DETAIL;
+          RAISE EXCEPTION USING
+            ERRCODE = 'P1001',
+            MESSAGE = v_error_message,
+            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+        -- A fast-tier rejection of the member reports the ordinal of the member in the batch.
+        WHEN SQLSTATE 'P1007' THEN
+          GET STACKED DIAGNOSTICS
+            v_error_message = MESSAGE_TEXT,
+            v_error_detail = PG_EXCEPTION_DETAIL;
+          RAISE EXCEPTION USING
+            ERRCODE = 'P1007',
+            MESSAGE = v_error_message,
+            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
       END;
       ordinal := v_ordinal;
       task_id := v_row.task_id;
@@ -7705,14 +7722,24 @@ BEGIN
     ELSE
       BEGIN
         SELECT * INTO v_row FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_request));
-      EXCEPTION WHEN SQLSTATE 'P1001' THEN
-        GET STACKED DIAGNOSTICS
-          v_error_message = MESSAGE_TEXT,
-          v_error_detail = PG_EXCEPTION_DETAIL;
-        RAISE EXCEPTION USING
-          ERRCODE = 'P1001',
-          MESSAGE = v_error_message,
-          DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+      EXCEPTION
+        WHEN SQLSTATE 'P1001' THEN
+          GET STACKED DIAGNOSTICS
+            v_error_message = MESSAGE_TEXT,
+            v_error_detail = PG_EXCEPTION_DETAIL;
+          RAISE EXCEPTION USING
+            ERRCODE = 'P1001',
+            MESSAGE = v_error_message,
+            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+        -- A fast-tier rejection of the member reports the ordinal of the member in the batch.
+        WHEN SQLSTATE 'P1007' THEN
+          GET STACKED DIAGNOSTICS
+            v_error_message = MESSAGE_TEXT,
+            v_error_detail = PG_EXCEPTION_DETAIL;
+          RAISE EXCEPTION USING
+            ERRCODE = 'P1007',
+            MESSAGE = v_error_message,
+            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
       END;
       ordinal := v_ordinal;
       task_id := v_row.task_id;
@@ -22119,10 +22146,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (70, 'lock purged runtime rows in identity order'),
   (71, 'purge a queue that holds a prerequisite of a live dependent'),
   (72, 'skip a locked row in a heartbeat'),
-  (73, 'skip a locked row in a one-lease heartbeat')
+  (73, 'skip a locked row in a one-lease heartbeat'),
+  (74, 'allow throttle on fast-tier queues')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (73) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (74) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

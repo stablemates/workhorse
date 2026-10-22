@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 73 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 74 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 73 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 74 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0074`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0075`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 73.
+- An installed version below the baseline 6 or above the current 74.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -140,7 +140,9 @@ sure that each language uses the protocol in the same way.
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 5. It accepts installed
 schema versions 73 and newer inside the major line, and client protocol 5 only. Schema version 73
-is the floor because it adds `heartbeat_v2`, which every SDK catalogue names. Schema version 72
+is the floor because it adds `heartbeat_v2`, which every SDK catalogue names. Schema version 74
+does not raise the floor: it lets `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a
+fast-tier queue, and no SDK statement changes. Schema version 72
 added `heartbeat_many_v2`, which every SDK catalogue also names
 ([ADR 0105](../decisions/0105-skip-a-locked-row-in-a-heartbeat-and-report-the-lease-as-busy.md)).
 Before that, schema version 69 was the floor because it fences a member add in

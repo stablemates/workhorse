@@ -77,6 +77,24 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
       [PG::TextEncoder::Array.new.encode(task_ids)]).getvalue(0, 0)).to eq("0")
   end
 
+  it "throttles a fast-tier enqueue and writes no throttled event" do
+    make_fast
+    throttle = W::Throttle.new(key: "digest", window: 60, scope: @queue_name)
+    first = queue.enqueue("digest", {"n" => 1}, throttle: throttle)
+    expect(first.outcome).to eq(:accepted)
+    expect(queue.enqueue("digest", {"n" => 1}, throttle: throttle))
+      .to have_attributes(task_id: first.task_id, outcome: :coalesced)
+    expect(@connection.exec_params("SELECT count(*) FROM workhorse.task_event WHERE task_id = $1",
+      [first.task_id]).getvalue(0, 0)).to eq("0")
+
+    # A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+    keyed = W::Throttle.new(key: "keyed", window: 60, scope: @queue_name)
+    expect do
+      queue.enqueue_many([W::EnqueueRequest.new(task_type: "plain", payload: {}),
+        W::EnqueueRequest.new(task_type: "keyed", payload: {}, concurrency_key: "tenant-a", throttle: keyed)])
+    end.to raise_error(W::FastTierUnsupportedError) { |error| expect(error.ordinal).to eq(2) }
+  end
+
   it "fails a fast-tier attempt that calls a durable step, before any durable write" do
     make_fast
     task_id = queue.enqueue("fast-durable", {}, max_attempts: 1).task_id

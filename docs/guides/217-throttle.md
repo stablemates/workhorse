@@ -79,7 +79,7 @@ start.
 A `coalesced` request:
 
 - creates no task, runtime row, ready sequence, or notification;
-- appends one `throttled` event to the kept task;
+- appends one `throttled` event to the kept task, unless that task is on the fast tier;
 - emits a `workhorse.task.throttled` debug log;
 - increments `workhorse.tasks.enqueue.outcomes`.
 
@@ -180,8 +180,8 @@ A request with `throttle` cannot also set:
 - `dependencies`.
 
 The SDK and `enqueue_throttle_v1` reject these combinations. If idempotency or debounce holds the
-key and its window is open, `enqueue_throttle_v1` raises an error. A fast-tier queue rejects
-throttle.
+key and its window is open, `enqueue_throttle_v1` raises an error. A fast-tier queue accepts
+throttle, but a coalesced request on a fast-tier task writes no `throttled` event.
 
 More detail: [Task lifecycle: Keyed throttle](../architecture/lifecycle.md#keyed-throttle).
 

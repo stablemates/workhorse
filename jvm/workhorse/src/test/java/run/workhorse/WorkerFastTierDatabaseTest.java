@@ -294,6 +294,51 @@ class WorkerFastTierDatabaseTest {
     assertThrows(IllegalArgumentException.class, () -> worker().concurrency(2).cohorts(3).build());
   }
 
+  @Test
+  void throttlesAFastTierEnqueueAndWritesNoThrottledEvent() throws SQLException {
+    makeFast();
+    Throttle throttle = new Throttle("digest", Duration.ofMinutes(1), queueName);
+    EnqueueResult first =
+        queue.enqueue(
+            "digest",
+            Map.of("n", 1),
+            EnqueueOptions.builder().queue(queueName).throttle(throttle).build());
+    EnqueueResult second =
+        queue.enqueue(
+            "digest",
+            Map.of("n", 1),
+            EnqueueOptions.builder().queue(queueName).throttle(throttle).build());
+
+    assertEquals(EnqueueOutcome.ACCEPTED, first.outcome());
+    assertEquals(new EnqueueResult(first.taskId(), EnqueueOutcome.COALESCED, null), second);
+    assertEquals(
+        List.of("0"),
+        column(
+            "SELECT count(*) FROM workhorse.task_event WHERE task_id = ?::uuid",
+            first.taskId().toString()));
+
+    // A member that runs alone reports a fast-tier rejection with its ordinal in the batch.
+    FastTierUnsupportedException rejected =
+        assertThrows(
+            FastTierUnsupportedException.class,
+            () ->
+                queue.enqueueMany(
+                    List.of(
+                        EnqueueRequest.of(
+                            "plain", Map.of(), EnqueueOptions.builder().queue(queueName).build()),
+                        EnqueueRequest.of(
+                            "keyed",
+                            Map.of(),
+                            EnqueueOptions.builder()
+                                .queue(queueName)
+                                .concurrencyKey("tenant-a")
+                                .throttle(new Throttle("keyed", Duration.ofMinutes(1), queueName))
+                                .build()))));
+    assertEquals(queueName, rejected.queue());
+    assertEquals("concurrency keys", rejected.feature());
+    assertEquals(2L, rejected.ordinal());
+  }
+
   // Batch delivery.
 
   @Test
