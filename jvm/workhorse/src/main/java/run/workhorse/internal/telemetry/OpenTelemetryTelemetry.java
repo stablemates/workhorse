@@ -2,8 +2,11 @@ package run.workhorse.internal.telemetry;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
+import io.opentelemetry.api.logs.Logger;
+import io.opentelemetry.api.logs.LoggerBuilder;
 import io.opentelemetry.api.metrics.DoubleCounter;
 import io.opentelemetry.api.metrics.DoubleHistogram;
 import io.opentelemetry.api.metrics.LongCounter;
@@ -20,7 +23,9 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -150,6 +155,32 @@ public final class OpenTelemetryTelemetry implements Telemetry {
     }
   }
 
+  @Override
+  public void log(
+      Severity severity,
+      String event,
+      String body,
+      Map<String, ? extends @Nullable Object> attributes) {
+    if (!Names.LOG_EVENTS.contains(event)) {
+      return;
+    }
+    bound()
+        .logger
+        .logRecordBuilder()
+        .setContext(Context.current())
+        .setSeverity(
+            switch (severity) {
+              case DEBUG -> io.opentelemetry.api.logs.Severity.DEBUG;
+              case INFO -> io.opentelemetry.api.logs.Severity.INFO;
+              case WARN -> io.opentelemetry.api.logs.Severity.WARN;
+            })
+        .setSeverityText(severity.name())
+        .setEventName(event)
+        .setBody(body)
+        .setAllAttributes(attributes(attributes))
+        .emit();
+  }
+
   // The returned span owns the scope and closes it in `close`.
   @SuppressWarnings("MustBeClosedChecker")
   private TelemetrySpan start(
@@ -199,15 +230,23 @@ public final class OpenTelemetryTelemetry implements Telemetry {
       builder.put(key, ((Number) value).doubleValue());
     } else if (value instanceof Number number) {
       builder.put(key, number.longValue());
+    } else if (value instanceof List<?> list) {
+      // A list is a string array, as the TypeScript `workhorse.worker.queues` value is.
+      List<String> strings = new ArrayList<>(list.size());
+      for (Object item : list) {
+        strings.add(String.valueOf(item));
+      }
+      builder.put(AttributeKey.stringArrayKey(key), strings);
     } else {
       builder.put(key, value.toString());
     }
   }
 
-  /** The tracer and the lazily created instruments of one OpenTelemetry instance. */
+  /** The tracer, the logger, and the lazily created instruments of one OpenTelemetry instance. */
   private static final class Bound {
     final OpenTelemetry openTelemetry;
     final Tracer tracer;
+    final Logger logger;
     private final Meter meter;
     private final Map<Instrument, Object> instruments = new ConcurrentHashMap<>();
 
@@ -215,12 +254,15 @@ public final class OpenTelemetryTelemetry implements Telemetry {
       this.openTelemetry = openTelemetry;
       TracerBuilder tracers = openTelemetry.getTracerProvider().tracerBuilder(INSTRUMENTATION_NAME);
       MeterBuilder meters = openTelemetry.getMeterProvider().meterBuilder(INSTRUMENTATION_NAME);
+      LoggerBuilder loggers = openTelemetry.getLogsBridge().loggerBuilder(INSTRUMENTATION_NAME);
       if (VERSION != null) {
         tracers.setInstrumentationVersion(VERSION);
         meters.setInstrumentationVersion(VERSION);
+        loggers.setInstrumentationVersion(VERSION);
       }
       this.tracer = tracers.build();
       this.meter = meters.build();
+      this.logger = loggers.build();
     }
 
     Object instrument(Instrument instrument) {

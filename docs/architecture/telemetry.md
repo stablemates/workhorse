@@ -137,11 +137,12 @@ By default, `run.workhorse.internal.telemetry.Telemetry` reads `GlobalOpenTeleme
 telemetry does nothing and loads no OpenTelemetry code. The Kotlin module and the Spring Boot
 starter run the same Java worker.
 
-The Java worker emits the same 18 instruments as the Ruby worker. The `Instrument` enum declares
-them with the same units and descriptions, and `WorkerTelemetry` records the same attribute keys.
-Recovery uses `unknown` for the queue and the task type of a retry that its result does not
-attribute. The Java worker does not record
-`workhorse.maintenance.drift`, enqueue, cancellation, or redrive instruments.
+The Java worker emits the 18 instruments of the Ruby worker and `workhorse.maintenance.drift`. The
+`Instrument` enum declares them with the same units and descriptions, and `WorkerTelemetry` records
+the same attribute keys. Recovery uses `unknown` for the queue and the task type of a retry that its
+result does not attribute. The worker records `workhorse.maintenance.drift` with the `tick` loop and
+the `background_routines` loop. The first pass of a loop records no drift. The Java worker does not
+record enqueue, cancellation, or redrive instruments.
 
 ### Metrics observer
 
@@ -386,6 +387,29 @@ request, and `workhorse.enqueue.count`.
 The TypeScript runtime submits vendor-neutral structured records to `WorkhorseTelemetryProvider`.
 The OpenTelemetry adapter emits them through `@opentelemetry/api-logs`. The Python worker uses
 `opentelemetry._logs` for the matching worker event names.
+
+#### JVM logs
+
+The Java worker and queue emit log records through `io.opentelemetry.api.logs` of the optional
+OpenTelemetry API. `Telemetry.log` sets the event name, the severity, the severity text, and the
+body, and keeps the current context. The worker also writes each record to `System.Logger`. The
+worker maps the `System.Logger` levels to severities in this way:
+
+| `System.Logger` level | Severity |
+| --------------------- | -------- |
+| `TRACE`, `DEBUG`      | Debug    |
+| `INFO`                | Info     |
+| `WARNING`, `ERROR`    | Warning  |
+
+`Telemetry.log` emits a record only for an event name in `Names.LOG_EVENTS`, which holds the
+`WorkhorseLogEvent` union. An event that only the Java SDK has, such as
+`workhorse.worker.claims_abandoned`, goes only to `System.Logger`. The queue emits
+`workhorse.task.signal_processed` and `workhorse.task.human_wait_processed` only to OpenTelemetry.
+
+The Java SDK does not emit these TypeScript events: the enqueue, debounce, and throttle events, the
+cancellation, run-now, redrive, promotion, recovery, and policy events, the queue administration
+events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`, and
+`workhorse.worker_registry.pruned`.
 
 #### Severity coverage
 

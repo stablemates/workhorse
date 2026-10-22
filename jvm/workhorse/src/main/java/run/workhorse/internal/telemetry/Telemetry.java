@@ -4,8 +4,8 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Spans, metrics, and W3C trace context for the queue and the worker. The counterpart of Ruby's
- * {@code Telemetry} module and Python's {@code _telemetry}.
+ * Spans, metrics, log records, and W3C trace context for the queue and the worker. The counterpart
+ * of Ruby's {@code Telemetry} module and Python's {@code _telemetry}.
  *
  * <p>No signature names an OpenTelemetry type, so the queue and the worker load without the
  * optional API. {@link #global} reads {@code GlobalOpenTelemetry} on each use when the API is on
@@ -61,7 +61,24 @@ public interface Telemetry {
             Instrument instrument,
             double amount,
             Map<String, ? extends @Nullable Object> attributes) {}
+
+        @Override
+        public void log(
+            Severity severity,
+            String event,
+            String body,
+            Map<String, ? extends @Nullable Object> attributes) {}
       };
+
+  /**
+   * The severity of a log record, as the TypeScript {@code logDebug}, {@code logInfo}, and {@code
+   * logWarn} set it.
+   */
+  enum Severity {
+    DEBUG,
+    INFO,
+    WARN
+  }
 
   /**
    * The telemetry of {@code GlobalOpenTelemetry} when the OpenTelemetry API is on the class path,
@@ -115,4 +132,16 @@ public interface Telemetry {
   /** Records {@code amount} in a histogram. */
   void record(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes);
+
+  /**
+   * Emits one log record in the current context, as the TypeScript OpenTelemetry adapter emits
+   * {@code emitLog}. It sets the event name, the severity, the severity text, and the body. An
+   * {@code event} that is not in {@link Names#LOG_EVENTS} emits nothing, because {@code
+   * api/typescript.txt} governs the event names.
+   */
+  void log(
+      Severity severity,
+      String event,
+      String body,
+      Map<String, ? extends @Nullable Object> attributes);
 }

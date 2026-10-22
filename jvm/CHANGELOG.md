@@ -28,6 +28,17 @@ adds.
   `rate_limit_policy`, and the queue keeps its tier. `setQueueHistory` calls
   `Admin.setQueueHistory`. An absent setting keeps its current value (SM-966).
 
+- **The worker and the queue emit OpenTelemetry log records.** The worker and the queue emit log
+  records through the OpenTelemetry Logs API, with the TypeScript event names and attributes. These
+  include the checkpoint, progress, wait, signal, human wait, child, and worker life-cycle records.
+  The worker also adds the `workhorse.worker.registered`, `workhorse.worker.deregistered`,
+  `workhorse.handler.registered`, and `workhorse.handler.finished` records, and the
+  `workhorse.maintenance.drift` histogram. The worker still writes each record to `System.Logger`.
+  An event that only the Java SDK has stays on `System.Logger`. The `workhorse.handler.outcome` of
+  `workhorse.task.execution_finished` now uses the bounded metric values, such as `succeeded`, in
+  place of the outcome constant names. The body of `workhorse.handler.signal_swallowed` is now the
+  TypeScript body (SM-1438).
+
 ### Fixes
 
 - **A worker reads a stored contract schema with a fraction outside the double range.** Another
