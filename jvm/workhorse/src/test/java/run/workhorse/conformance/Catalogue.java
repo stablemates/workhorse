@@ -18,8 +18,12 @@ import run.workhorse.internal.Json;
  * Ruby's {@code Conformance::Catalogue}.
  */
 final class Catalogue {
-  /** Files in {@code protocol/v1} that describe fixtures rather than declare them. */
-  static final Set<String> METADATA = Set.of("manifest.json", "cron.md", "governed-surface.json");
+  /**
+   * Files in {@code protocol/v1} that describe fixtures rather than declare them, and the
+   * fingerprint vectors that the unit tests read.
+   */
+  static final Set<String> METADATA =
+      Set.of("manifest.json", "cron.md", "governed-surface.json", "checkpoint-fingerprints.json");
 
   /** Fixture files, by the category name the list uses. */
   static final List<String> CATEGORIES =

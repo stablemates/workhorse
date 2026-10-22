@@ -78,6 +78,17 @@ can give its value as JSON text in `json`, so each runner reads it through its o
 instance with `needs` set to `exactFraction` or `exactInteger` runs only in the SDKs that can hold
 that kind of number exactly (ADR 0039).
 
+`v1/checkpoint-fingerprints.json` holds the vectors of the checkpoint input fingerprint (ADR
+0098). The fingerprint is the SHA-256 digest of the RFC 8785 text of an input. Each vector has an
+input as JSON text and one outcome: the canonical text and its digest, or a refusal. The vectors
+cover key order by UTF-16 code units, escapes, control characters, number forms, exponent limits,
+the 2^53 - 1 integer limit, and lone surrogates.
+
+A refusal names its class: `loneSurrogate`, `nonFinite`, or `unsafeNumber`. An SDK can refuse an
+input when its JSON decoder reads the text or when it computes the fingerprint. The unit tests of
+all six SDKs read this file directly, and no SDK keeps a copy of the vectors. The Rust, Ruby, and
+JVM conformance runners list the file as metadata, because they do not execute it.
+
 The TypeScript verifier lives in `scripts/verify-sql-protocol.ts`. It checks compatibility before
 calling versioned PostgreSQL functions, so another language can implement the same small
 interpreter without inheriting TypeScript behavior. The TypeScript suite separately runs the

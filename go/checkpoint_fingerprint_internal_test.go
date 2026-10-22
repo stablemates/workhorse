@@ -1,54 +1,52 @@
 package workhorse
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
 
-// The shared vectors of typescript/core/test/checkpoint-fingerprint.test.ts. The last vector orders
-// keys by UTF-16 code units: U+1F600 encodes as D83D DE00, before U+FB33. 2^53 - 1 is the largest
-// number magnitude that an input can hold.
+// checkpointFingerprintVector is one vector of protocol/v1/checkpoint-fingerprints.json, which every
+// SDK must give.
+type checkpointFingerprintVector struct {
+	ID      string `json:"id"`
+	Input   string `json:"input"`
+	Digest  string `json:"digest"`
+	Refusal string `json:"refusal"`
+}
+
+// Each input is JSON text, so the raw message keeps its number tokens and its escapes.
 func TestCheckpointInputFingerprintGivesTheSharedVectors(t *testing.T) {
-	vectors := []struct {
-		input  any
-		digest string
-	}{
-		{nil, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"},
-		{true, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"},
-		{0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"},
-		{1.5, "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"},
-		{int64(maxSafeCheckpointInteger), "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"},
-		{-maxSafeCheckpointInteger, "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"},
-		{float64(maxSafeCheckpointInteger), "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"},
-		{json.Number("9007199254740991"), "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"},
-		{1e-7, "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"},
-		{"é", "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086"},
-		{[]any{}, "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
-		{map[string]any{}, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"},
-		{
-			map[string]any{"amountCents": 1000, "currency": "EUR"},
-			"f5e4dce1a6a38b7186257335fb274c4221391505f139b60596c5f57ce4924471",
-		},
-		{
-			map[string]any{"b": []any{1, map[string]any{"d": 2, "c": 3}}, "a": "x"},
-			"4bc2f0faf907fa5fdaedde9cbf7002e3cbf041208b96a4ab4ce6693fbf4bea67",
-		},
-		{
-			map[string]any{"\U0001F600": 1, "דּ": 2},
-			"2aa3f5086e32bb90ce39c508a6f40fd72e792684f130d0f3b896ea191368f1e3",
-		},
+	contents, err := os.ReadFile("../protocol/v1/checkpoint-fingerprints.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, vector := range vectors {
-		digest, err := CheckpointInputFingerprint(vector.input)
-		if err != nil {
-			t.Fatalf("input %#v: %v", vector.input, err)
+	var fixture struct {
+		Vectors []checkpointFingerprintVector `json:"vectors"`
+	}
+	if err := json.Unmarshal(contents, &fixture); err != nil || len(fixture.Vectors) == 0 {
+		t.Fatalf("read %d vectors: %v", len(fixture.Vectors), err)
+	}
+	refusals := map[string]string{
+		"loneSurrogate": invalidUTF8CheckpointInputMessage,
+		"nonFinite":     nonFiniteCheckpointInputMessage,
+		"unsafeNumber":  unsafeCheckpointInputNumberMessage,
+	}
+	for _, vector := range fixture.Vectors {
+		digest, err := CheckpointInputFingerprint(json.RawMessage(vector.Input))
+		if vector.Refusal == "" {
+			if err != nil || digest != vector.Digest {
+				t.Errorf("vector %s: digest %s, %v; want %s", vector.ID, digest, err, vector.Digest)
+			}
+			continue
 		}
-		if digest != vector.digest {
-			t.Fatalf("input %#v: digest %s, want %s", vector.input, digest, vector.digest)
+		message, known := refusals[vector.Refusal]
+		if !known || err == nil || !strings.HasPrefix(err.Error(), message) ||
+			!errors.Is(err, ErrInvalidCheckpointInput) {
+			t.Errorf("vector %s gave %q, %v; want the %s refusal", vector.ID, digest, err, vector.Refusal)
 		}
 	}
 }
@@ -106,15 +104,6 @@ func TestCheckpointInputFingerprintWritesNumbersInTheECMAScriptForm(t *testing.T
 		if text := ecmaScriptNumber(testCase.value); text != testCase.text {
 			t.Fatalf("number %v: text %s, want %s", testCase.value, text, testCase.text)
 		}
-	}
-}
-
-func TestCheckpointInputFingerprintWritesStringsInTheJSONStringifyForm(t *testing.T) {
-	var out bytes.Buffer
-	writeCanonicalString(&out, "a\"\\\b\f\n\r\t\x01\x1f\x7f <>&é")
-	want := `"a\"\\\b\f\n\r\t\u0001\u001f` + "\x7f <>&é" + `"`
-	if out.String() != want {
-		t.Fatalf("string form %q, want %q", out.String(), want)
 	}
 }
 
