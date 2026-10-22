@@ -76,7 +76,7 @@ describe("mise pin matching", () => {
 
     expect(pins.get("uv")).toBe("0.12.21");
     expect([...pins.keys()]).toEqual(
-      expect.arrayContaining(["go", "lefthook", "node", "pnpm", "python", "uv"]),
+      expect.arrayContaining(["dotnet", "go", "lefthook", "node", "pnpm", "python", "uv"]),
     );
   });
 });
@@ -249,6 +249,46 @@ describe("the JVM toolchain", () => {
       );
     },
   );
+});
+
+/** A fake `dotnet` that prints the head of `dotnet --info` for an SDK version. */
+function dotnetInfo(version: string): string {
+  return [
+    'echo ".NET SDK:"',
+    `echo " Version:           ${version}"`,
+    'echo " Commit:            a8dd0577c5"',
+  ].join("\n");
+}
+
+describe("the .NET toolchain", () => {
+  const pins: [string, string][] = [["dotnet", "10.0.402"]];
+
+  it("reads the SDK pin", async () => {
+    expect((await readPins(repositoryRoot)).get("dotnet")).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it.skipIf(!onPosix)("accepts the pinned SDK", async () => {
+    leadPath(await toolDirectory({ dotnet: dotnetInfo("10.0.402") }));
+
+    expect(await refusals("dotnet", "pinned", pins)).toEqual([]);
+  });
+
+  it.skipIf(!onPosix)("refuses an SDK that disagrees with its pin", async () => {
+    leadPath(await toolDirectory({ dotnet: dotnetInfo("11.0.100-rc.2.26504.105") }));
+
+    expect(await refusals("dotnet", "identity", pins)).toEqual([]);
+    const [refusal] = await refusals("dotnet", "pinned", pins);
+    expect(refusal).toContain("dotnet 11.0.100 does not match the mise.toml pin 10.0.402");
+    expect(refusal).toContain("mise install dotnet@10.0.402");
+  });
+
+  it.skipIf(!onPosix)("refuses a stand-in that prints only a version", async () => {
+    leadPath(await toolDirectory({ dotnet: 'echo "10.0.402"' }));
+
+    expect((await refusals("dotnet", "identity", pins))[0]).toContain(
+      "dotnet did not identify itself",
+    );
+  });
 });
 
 describe("an unpinned version", () => {

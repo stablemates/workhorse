@@ -7,6 +7,7 @@ import {
   findPythonStatementAccesses,
   type PythonSource,
 } from "./sql-catalogue-python-bindings.js";
+import { findInlineCSharpSql, renderCSharpCatalogue } from "./sql-catalogue-csharp.js";
 import { findInlineJavaSql } from "./sql-catalogue-java-inline.js";
 import { jdbcStatement } from "./sql-catalogue-jdbc.js";
 import { parseSqlSchema } from "./sql-surface.js";
@@ -48,6 +49,14 @@ const typescriptOnly = process.argv.includes("--typescript-only");
 const acceptBreaking = process.argv.includes("--accept-breaking");
 
 const governedSurfacePath = path.join(repository, "protocol/v1/governed-surface.json");
+
+// The statements that the ASP.NET Core dashboard backend calls directly, because `Admin` and
+// `Queue` have no method for them (ADR 0107). The backend owns the list, and the generator writes
+// them into DashboardSqlCatalogue.g.cs.
+const dashboardStatementsPath = path.join(
+  repository,
+  "dotnet/src/Workhorse.AspNetCore/Internal/DashboardSqlCatalogue.statements.json",
+);
 
 const breakingGuidance =
   "A supported release reads these, so removing or retyping one narrows workhorse.protocol_version " +
@@ -447,6 +456,28 @@ async function assertNoInlineTypeScriptSql(): Promise<void> {
   }
 }
 
+/** No shipped .NET project writes protocol SQL by hand (ADR 0107). */
+async function assertNoInlineCSharpSql(): Promise<void> {
+  const violations = await findInlineCSharpSql(repository);
+  if (violations.length > 0) {
+    throw new Error(`.NET SQL must come from the generated catalogue:\n${violations.join("\n")}`);
+  }
+}
+
+/** The dashboard statements, in manifest order. Each name must be a manifest statement. */
+async function readDashboardStatements(): Promise<Statement[]> {
+  const relative = path.relative(repository, dashboardStatementsPath);
+  const { statements } = JSON.parse(await readFile(dashboardStatementsPath, "utf8")) as {
+    statements: string[];
+  };
+  const wanted = new Set(statements);
+  if (wanted.size !== statements.length) throw new Error(`${relative} names a statement twice`);
+  for (const name of wanted) {
+    if (!names.has(name)) throw new Error(`${relative} names ${name}, which the manifest lacks`);
+  }
+  return (manifest.statements ?? []).filter((statement) => wanted.has(statement.name));
+}
+
 /** No JVM class writes protocol SQL by hand (ADR 0103). `findInlineJavaSql` names each place. */
 async function assertNoInlineJavaSql(): Promise<void> {
   const violations = await findInlineJavaSql(repository);
@@ -472,6 +503,7 @@ for (const statement of manifest.statements) {
 }
 if (check) await assertNoInlineTypeScriptSql();
 if (check && !typescriptOnly) await assertNoInlineJavaSql();
+if (check && !typescriptOnly) await assertNoInlineCSharpSql();
 await governSqlSurface();
 const outputs = [
   emit(
@@ -496,6 +528,35 @@ if (!typescriptOnly) {
     emit(
       "jvm/workhorse/src/main/java/run/workhorse/internal/SqlCatalogue.java",
       renderJava(manifest, manifest.statements),
+    ),
+    emit(
+      "dotnet/src/Workhorse/Internal/SqlCatalogue.g.cs",
+      renderCSharpCatalogue({
+        namespace: "Workhorse.Internal",
+        className: "SqlCatalogue",
+        summary:
+          "The protocol SQL this assembly runs, generated from <c>protocol/v1/manifest.json</c>.",
+        statements: manifest.statements,
+        constants: {
+          clientProtocolVersion: manifest.protocolVersion,
+          minimumProtocolVersion: manifest.supportedClientProtocol.minimumVersion,
+          maximumProtocolVersion: manifest.supportedClientProtocol.maximumVersion,
+          minimumSchemaVersion: manifest.schema.minimumVersion,
+          maximumSchemaVersion: manifest.schema.maximumVersion,
+          maxEnqueueBatchSize: manifest.limits.maxEnqueueBatchSize,
+          defaultTaskValueMaxBytes: manifest.limits.defaultTaskValueMaxBytes,
+        },
+      }),
+    ),
+    emit(
+      "dotnet/src/Workhorse.AspNetCore/Internal/DashboardSqlCatalogue.g.cs",
+      renderCSharpCatalogue({
+        namespace: "Workhorse.AspNetCore.Internal",
+        className: "DashboardSqlCatalogue",
+        summary:
+          "The protocol SQL that the dashboard backend calls directly, generated from <c>protocol/v1/manifest.json</c>.",
+        statements: await readDashboardStatements(),
+      }),
     ),
     emit(
       "python/src/workhorse/_statements.py",

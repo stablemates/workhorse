@@ -58,6 +58,11 @@ const probes: Record<string, ToolProbe> = {
     arguments: ["--version"],
     identity: new RegExp(String.raw`^cargo-deny ${version}`),
   },
+  // `dotnet --version` prints a bare version, which any tool can print. `--info` names the SDK.
+  dotnet: {
+    arguments: ["--info"],
+    identity: new RegExp(String.raw`^\.NET SDK:\r?\n\s+Version:\s+${version}`),
+  },
   go: { arguments: ["version"], identity: new RegExp(String.raw`^go version go${version}`) },
   // Gradle prints a banner, then a rule, then its name and version.
   gradle: {

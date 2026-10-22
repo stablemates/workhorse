@@ -31,6 +31,8 @@ export const SHARED_INPUTS = [
   // The SQL catalogues that scripts/generate-sql-catalogues.ts writes.
   "go/sql_catalogue_generated.go",
   "jvm/workhorse/src/main/java/run/workhorse/internal/SqlCatalogue.java",
+  "dotnet/src/Workhorse/Internal/SqlCatalogue.g.cs",
+  "dotnet/src/Workhorse.AspNetCore/Internal/DashboardSqlCatalogue.g.cs",
   "python/src/workhorse/_statements.py",
   "ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb",
   "rust/src/sql_catalogue_generated.rs",
@@ -158,6 +160,7 @@ export const FILTERED_LANES = {
   },
   "spring-boot": { sources: ["jvm/**"], inputs: javaInputs },
   "spring-boot-snapshot": { sources: ["jvm/**"], inputs: javaInputs },
+  dotnet: { sources: ["dotnet/**"], inputs: ["dotnet/**"] },
 } as const satisfies Record<string, FilteredLane>;
 
 /**

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The tests of every package. They see the internals of the core and of Workhorse.AspNetCore.
+    The project targets net10.0. The CI lane for .NET 11 runs the same build on the .NET 11 runtime.
+
+    xUnit v3 makes the project an executable on Microsoft.Testing.Platform. `dotnet test` on the
+    .NET 10 SDK runs that platform only after a global.json opts in, and ADR 0107 has no global.json.
+    So `pnpm dotnet:test` starts the executable with `dotnet run`.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Workhorse.Tests</RootNamespace>
+    <!-- The analyzers need the documentation file. Test code needs no public documentation. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <ProjectReference Include="../../src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- ScratchDatabase installs the schema of this checkout. -->
+    <AssemblyMetadata Include="WorkhorseSchema" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../sql/schema/current.sql'))" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

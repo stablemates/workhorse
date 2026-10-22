@@ -58,6 +58,7 @@ jobs:
       rust: ${{ steps.matrix.outputs.rust }}
       ruby: ${{ steps.matrix.outputs.ruby }}
       jvm: ${{ steps.matrix.outputs.jvm }}
+      dotnet: ${{ steps.matrix.outputs.dotnet }}
       packed: ${{ steps.matrix.outputs.packed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,6 +134,14 @@ jobs:
         with:
           distribution: temurin
           java-version: 25.0.4 # Pinned to the java version in mise.toml.
+      # `pnpm lint` runs `dotnet format` over the .NET solution and builds it with the analyzers as
+      # errors, on the SDK that mise.toml pins. The SDK goes into its own directory, so the muxer
+      # finds no other SDK of the runner image.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
       - run: pnpm install --frozen-lockfile
       # `pnpm npm:release-check` runs knip before it builds, so run knip here with no `dist/` too. A
       # knip config that loads a build output passes after the build and fails the release (SM-1292).
@@ -647,6 +656,78 @@ jobs:
       - if: matrix.java == fromJSON(needs.plan.outputs.jvm).include[0].java
         run: pnpm jvm:package-check
 
+  dotnet:
+    name: .NET ${{ matrix.dotnet }} (postgres ${{ matrix.postgres }})
+    needs: plan
+    if: fromJSON(needs.plan.outputs.lanes)['dotnet']
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.dotnet) }}
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      WORKHORSE_REQUIRE_DATABASE: "1"
+      # RuntimeTests fails when the tests run on another .NET release than the lane names.
+      WORKHORSE_DOTNET_RUNTIME: ${{ matrix.dotnet }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      # Every lane builds on the SDK that mise.toml pins. It carries the .NET 10 runtime. The SDK
+      # goes into its own directory, so the muxer finds no other SDK of the runner image.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
+      # A lane for a later release installs its .NET and ASP.NET Core runtimes beside the pinned
+      # SDK. The SDK stays the only SDK, so the build does not change (ADR 0107, "Floors").
+      - if: matrix.runtime != 'sdk'
+        env:
+          CHANNEL: ${{ matrix.dotnet }}.0
+          QUALITY: ${{ matrix.runtime }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
+          for runtime in dotnet aspnetcore; do
+            bash "$RUNNER_TEMP/dotnet-install.sh" --runtime "$runtime" --channel "$CHANNEL" --quality "$QUALITY" --install-dir "$DOTNET_ROOT"
+          done
+          dotnet --list-runtimes
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dotnet:build
+      # The tests target net10.0. A lane for a later release rolls them forward to the newest
+      # runtime, and a preview lane allows a prerelease runtime. Each database test class shares
+      # one scratch database that the tests make from DATABASE_URL_TEST.
+      - if: matrix.runtime == 'sdk'
+        run: pnpm dotnet:test
+      - if: matrix.runtime != 'sdk'
+        env:
+          DOTNET_ROLL_FORWARD_TO_PRERELEASE: ${{ matrix.runtime == 'preview' && '1' || '0' }}
+        run: pnpm dotnet:test --property:RollForward=LatestMajor
+
   jvm-verification-metadata:
     name: JVM verification metadata (Java ${{ fromJSON(needs.plan.outputs.jvm).include[0].java }})
     # Gradle refuses each plugin and library whose sha256 is not in
@@ -941,6 +1022,7 @@ jobs:
         ruby,
         jvm,
         jvm-verification-metadata,
+        dotnet,
         spring-boot,
         ruby-rails,
         demo,
@@ -991,6 +1073,7 @@ jobs:
         ruby,
         jvm,
         jvm-verification-metadata,
+        dotnet,
         spring-boot,
         ruby-rails,
         ruby-rails-main,

@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Workhorse/Workhorse.csproj" />
+    <Project Path="src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <Project Path="src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
+    <Project Path="src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Workhorse.Tests/Workhorse.Tests.csproj" />
+  </Folder>
+</Solution>
