@@ -56,7 +56,11 @@ public sealed record BatchHandlerItem<TPayload>
 /// The outcome of one batch member: <see cref="BatchSucceeded"/> or <see cref="BatchFailed"/>. A batch
 /// handler returns one for each item.
 /// </summary>
-public abstract record BatchHandlerOutcome
+/// <remarks>
+/// Only the SDK derives from this class, so the family is closed. A caller-defined outcome would reach
+/// the worker as an outcome that it does not know.
+/// </remarks>
+public abstract class BatchHandlerOutcome
 {
     private protected BatchHandlerOutcome()
     {
@@ -64,7 +68,7 @@ public abstract record BatchHandlerOutcome
 }
 
 /// <summary>Completes one batch member with a result.</summary>
-public sealed record BatchSucceeded : BatchHandlerOutcome
+public sealed class BatchSucceeded : BatchHandlerOutcome
 {
     /// <summary>Completes the member with <paramref name="result"/>, or with the JSON value <c>null</c> for <c>null</c>.</summary>
     public BatchSucceeded(object? result) => Result = result;
@@ -74,7 +78,7 @@ public sealed record BatchSucceeded : BatchHandlerOutcome
 }
 
 /// <summary>Fails one batch member's attempt. PostgreSQL then retries or fails the task by its retry policy.</summary>
-public sealed record BatchFailed : BatchHandlerOutcome
+public sealed class BatchFailed : BatchHandlerOutcome
 {
     /// <summary>Fails the member with <paramref name="error"/>.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="error"/> is <c>null</c>.</exception>

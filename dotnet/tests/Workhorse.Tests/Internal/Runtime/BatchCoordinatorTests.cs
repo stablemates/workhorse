@@ -7,7 +7,7 @@ namespace Workhorse.Tests.Internal.Runtime;
 /// <summary>The batch coordinator against a host that models the worker's active attempts.</summary>
 public sealed class BatchCoordinatorTests
 {
-    private static readonly BatchOptions LongLinger = new(2, TimeSpan.FromSeconds(60));
+    private static readonly BatchOptions LongLinger = new() { MaxSize = 2, Linger = TimeSpan.FromSeconds(60) };
 
     /// <summary>A host whose active attempts the test sets, as the worker's <c>_active</c> set.</summary>
     private sealed class Host : BatchCoordinator.IHost

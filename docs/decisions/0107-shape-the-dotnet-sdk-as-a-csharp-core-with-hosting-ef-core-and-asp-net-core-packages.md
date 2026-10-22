@@ -1489,3 +1489,45 @@ This amendment changes the EF Core row of the Floors section:
 
 The EF Core floor stays 10.0.0. A listed version that no CI job runs would state support without
 evidence. So the record states what CI runs now.
+
+## Amendment: the batch types follow the growth rules (2026-10-22)
+
+SM-1626 wrote the first `api/dotnet.txt`. The snapshot showed four public members that break
+"Public types grow only additively". Nothing is published yet, so the SM-1613 coordinator changed
+all four before the freeze.
+
+1. `Checkpoints.InputFingerprint` has two overloads: `InputFingerprint<T>(T input)` and
+   `InputFingerprint<T>(T input, JsonSerializerOptions options)`. The one-argument overload uses
+   the SDK default options. The two-argument overload refuses a `null` `options` with
+   `ArgumentNullException`, so a caller cannot get the defaults through `null`. Before, one method
+   had the optional parameter `JsonSerializerOptions? options = null`, which rule 3 does not allow.
+2. `DashboardRpcException` has two constructors: `(int status, string code, string message)` and
+   `(int status, string code, string message, object? details)`. Before, one constructor had the
+   optional parameter `object? data = null`. The parameter now has the name of the `Details`
+   property.
+3. `BatchOptions` is a `sealed record` with `public required int MaxSize { get; init; }` and
+   `public required TimeSpan Linger { get; init; }`, as rule 1 requires. Before, it had a
+   constructor with two parameters and get-only properties. `Worker.HandleBatch` checks the bounds
+   when it registers the handler. It throws the same exceptions with the same messages as the
+   constructor did.
+4. `BatchHandlerOutcome` is an abstract class with a `private protected` constructor, and
+   `BatchSucceeded` and `BatchFailed` are sealed classes, as `TaskTimelineEntry` and its derived
+   classes are. Before, `BatchHandlerOutcome` was an abstract record. The compiler gave it a
+   protected copy constructor, so a caller could derive a record from it through
+   `base(existing)`. The family was then open, and a caller-defined outcome would reach the worker
+   as an outcome that it does not know. No test or caller compares two outcomes, so the classes
+   have no value equality.
+
+This amendment supersedes the record forms of `BatchHandlerOutcome`, `BatchSucceeded`, and
+`BatchFailed` in "Amendment: a batch handler returns one outcome for each member". The members and
+the behavior of that amendment do not change.
+
+`PublicRecordTests` in `Workhorse.Tests` holds the rule for the next change. It fails when a public
+record of the four packages has a public or protected constructor with a parameter. This includes a
+positional record and the copy constructor of a record that is not sealed.
+
+Rejected alternatives:
+
+- Accepting the constructor form of `BatchOptions` in an amendment. One public record would then
+  follow different rules from every other record.
+- Keeping the outcome family open. The worker can settle only the outcomes that it knows.

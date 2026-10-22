@@ -8,6 +8,9 @@
   <Folder Name="/demo/">
     <Project Path="demo/Workhorse.DemoWorker/Workhorse.DemoWorker.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Workhorse.ApiSnapshot/Workhorse.ApiSnapshot.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Workhorse.Tests/Workhorse.Tests.csproj" />
     <Project Path="tests/Workhorse.AspNetCore.Tests/Workhorse.AspNetCore.Tests.csproj" />

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Writes api/dotnet.txt from the built assemblies of the four packages (ADR 0107, "Governed surface
+    and release"). `pnpm dotnet-api:generate` and `pnpm dotnet-api:check` run it. The project is a
+    repository tool and never ships.
+
+    The project references each package, so the build puts each package assembly next to the tool.
+    The tool reads those files with System.Reflection.Metadata and loads none of them.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Workhorse.ApiSnapshot</RootNamespace>
+    <!-- The analyzers need the documentation file. The tool has no public documentation. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <ProjectReference Include="../../src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+  </ItemGroup>
+</Project>

@@ -170,7 +170,7 @@ export const FILTERED_LANES = {
   // The exception test checks the C# exception set against Ruby's errors.rb class for class.
   dotnet: {
     sources: ["dotnet/**"],
-    inputs: ["dotnet/**", "ruby/lib/stablemates/workhorse/errors.rb"],
+    inputs: ["dotnet/**", "api/dotnet.txt", "ruby/lib/stablemates/workhorse/errors.rb"],
   },
 } as const satisfies Record<string, FilteredLane>;
 

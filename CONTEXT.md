@@ -101,8 +101,8 @@ It is the absence of a qualifier, not a tier above one.
 _Avoid as a stability label_: GA, general availability, production-ready, battle-tested
 
 **Governed surface**:
-One of the eleven artifacts SemVer covers: the SQL protocol and schema, the TypeScript, Python, Go,
-Rust, Ruby, Java, and Kotlin APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the
+One of the twelve artifacts SemVer covers: the SQL protocol and schema, the TypeScript, Python, Go,
+Rust, Ruby, Java, Kotlin, and C# APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the
 OpenTelemetry instrument, span, and attribute names. Everything else is internal and may change in
 any release.
 _Avoid_: Public API, public interface, stable API
