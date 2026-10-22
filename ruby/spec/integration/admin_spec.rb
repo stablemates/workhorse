@@ -217,6 +217,33 @@ RSpec.describe "Admin against PostgreSQL" do
       .to raise_error(W::PurgeIdempotencyConflictError)
   end
 
+  it "moves a queue between tiers and sets its history" do
+    tier = lambda do
+      @connection.exec_params("SELECT tier FROM workhorse.queue_control WHERE queue_name = $1",
+        [@queue_name]).first&.fetch("tier")
+    end
+
+    expect(admin.set_queue_tier(@queue_name, :fast, audit: audit)).to eq(:fast)
+    expect(tier.call).to eq("fast")
+    expect(admin.set_queue_history(@queue_name, record_attempts: true))
+      .to eq(W::QueueHistory.new(record_attempts: true, record_claims: false))
+    expect(admin.set_queue_history(@queue_name, record_claims: true))
+      .to eq(W::QueueHistory.new(record_attempts: true, record_claims: true)), "a nil setting keeps its value"
+    expect(admin.set_queue_history(@queue_name, record_attempts: false))
+      .to eq(W::QueueHistory.new(record_attempts: false, record_claims: true))
+
+    queue.enqueue("t", {})
+    expect { admin.set_queue_tier(@queue_name, :full, audit: audit) }
+      .to raise_error(W::FastTierUnsupportedError) { |error|
+        expect(error).to have_attributes(queue: @queue_name, feature: "tier change")
+      }
+    expect(tier.call).to eq("fast")
+
+    admin.purge_queue(@queue_name, audit: audit)
+    expect(admin.set_queue_tier(@queue_name, :full, audit: audit)).to eq(:full)
+    expect(tier.call).to eq("full")
+  end
+
   it "joins the caller's transaction" do
     dead = dead_letter
     rollback = Class.new(StandardError)

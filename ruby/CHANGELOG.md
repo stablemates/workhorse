@@ -5,6 +5,15 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### `Admin` moves a queue between tiers and sets its history
+
+`Admin#set_queue_tier(queue, tier, audit:)` moves a queue to the `:fast` or `:full` tier and returns
+the tier after the change. If the tier differs and the queue holds a live task, the method raises
+`FastTierUnsupportedError`.
+`Admin#set_queue_history(queue, record_attempts: nil, record_claims: nil)` chooses the history a
+fast-tier queue records. A `nil` setting keeps its current value. The method returns a
+`QueueHistory`. The other SDKs already have these controls (SM-1417).
+
 ### A worker on a pool of 1 polls under the opt-out
 
 Before this change, a worker with `shared_heartbeats: true` started the shared listener on any pool.

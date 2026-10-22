@@ -642,6 +642,9 @@ public final class Admin {
   public void pauseQueue(String queue, AdminAudit audit);
   public void resumeQueue(String queue, AdminAudit audit);
   public long purgeQueue(String queue, AdminAudit audit);          // tasks deleted or canceled
+  public QueueTier setQueueTier(String queue, QueueTier tier, AdminAudit audit);
+  public QueueHistory setQueueHistory(String queue, @Nullable Boolean recordAttempts,
+      @Nullable Boolean recordClaims);
 
   public Optional<TaskGroup> getTaskGroup(UUID groupId);
   public TaskGroupMemberPage listTaskGroupMembers(UUID groupId, long after, int limit);
@@ -655,8 +658,8 @@ public final class Admin {
 The query records hold the keywords of Ruby's methods with their defaults. For example,
 `TaskQuery` has the queue, the type, the states, the creation range, the limit, the cursor, and the
 payload projection. Each `int limit` above also has an overload without it, with Ruby's default.
-Every control takes an `AdminAudit`. `Admin` rejects a blank audit field before it calls PostgreSQL, as Python does. Each
-page carries the cursor for the next page. `Admin` has no `health` method, because `Queue.health`
+Every control except `setQueueHistory` takes an `AdminAudit`. `Admin` rejects a blank audit field
+before it calls PostgreSQL, as Python does. Each page carries the cursor for the next page. `Admin` has no `health` method, because `Queue.health`
 reads the same snapshot.
 
 ### Embedded dashboard backend
@@ -1780,6 +1783,18 @@ This amendment states that bar for Java `Admin`, and thus for Kotlin and Spring 
 3. A method from that list can come to Java later, because a new method is additive. It then gets a
    row in `docs/parity.md` and an integration test.
 
-The method block above does not change. This amendment does not decide `setQueueTier` and
-`setQueueHistory`, which TypeScript, Python, Go, and Rust have and Java does not have yet. SM-1417
-owns that decision.
+This amendment does not decide `setQueueTier` and `setQueueHistory`. SM-1417 owns that decision.
+
+SM-1417 adds both controls to Java `Admin`, and the method block above lists them. TypeScript,
+Python, Go, and Rust already have them, and each SDK supports the fast tier. The controls follow
+those SDKs:
+
+1. `setQueueTier` takes a `QueueTier` (`FAST` or `FULL`) and an `AdminAudit`, and returns the tier
+   after the change. PostgreSQL records the actor and the reason, but not the request ID.
+2. If the requested tier differs from the current tier and the queue holds a live task,
+   `setQueueTier` throws `FastTierUnsupportedException`. A tier never changes under a live task.
+3. `setQueueHistory` takes no audit. A `null` setting keeps its current value. The method returns a
+   `QueueHistory` record with both settings after the change.
+4. Each control has a caller form with a `Connection`. The Kotlin module adds `setQueueTierSuspend`
+   and `setQueueHistorySuspend`.
+5. The public SDK operator table in `docs/parity.md` has the row "Queue tier and history controls".

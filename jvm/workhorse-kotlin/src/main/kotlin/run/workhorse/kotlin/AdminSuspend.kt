@@ -16,6 +16,8 @@ import run.workhorse.DeadLetterPage
 import run.workhorse.DeadLetterQuery
 import run.workhorse.HumanWaitPage
 import run.workhorse.HumanWaitQuery
+import run.workhorse.QueueHistory
+import run.workhorse.QueueTier
 import run.workhorse.RedriveFilter
 import run.workhorse.RedriveResult
 import run.workhorse.SignalWaitPage
@@ -214,6 +216,42 @@ public suspend fun Admin.purgeQueueSuspend(
 ): Long =
   client(connection) {
     if (connection == null) purgeQueue(queue, audit) else purgeQueue(connection, queue, audit)
+  }
+
+/**
+ * Moves the queue [queue] to [tier], and returns the tier after the change. Throws
+ * [run.workhorse.FastTierUnsupportedException] if the tier differs and the queue holds a live task.
+ */
+public suspend fun Admin.setQueueTierSuspend(
+  queue: String,
+  tier: QueueTier,
+  audit: AdminAudit,
+  connection: Connection? = null,
+): QueueTier =
+  client(connection) {
+    if (connection == null) {
+      setQueueTier(queue, tier, audit)
+    } else {
+      setQueueTier(connection, queue, tier, audit)
+    }
+  }
+
+/**
+ * Chooses the history the queue [queue] records. A `null` setting keeps its current value, and the
+ * result reports both settings after the change.
+ */
+public suspend fun Admin.setQueueHistorySuspend(
+  queue: String,
+  recordAttempts: Boolean? = null,
+  recordClaims: Boolean? = null,
+  connection: Connection? = null,
+): QueueHistory =
+  client(connection) {
+    if (connection == null) {
+      setQueueHistory(queue, recordAttempts, recordClaims)
+    } else {
+      setQueueHistory(connection, queue, recordAttempts, recordClaims)
+    }
   }
 
 /** The task group [groupId], or `null` when it does not exist. */

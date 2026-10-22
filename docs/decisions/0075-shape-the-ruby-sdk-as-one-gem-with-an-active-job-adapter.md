@@ -467,12 +467,14 @@ module Stablemates::Workhorse
     def pause_queue(queue, audit:); end
     def resume_queue(queue, audit:); end
     def purge_queue(queue, audit:); end
+    def set_queue_tier(queue, tier, audit:); end            # :fast or :full
+    def set_queue_history(queue, record_attempts: nil, record_claims: nil); end
   end
 end
 ```
 
-Every control takes an `AdminAudit`. `Admin` rejects a blank audit field before it calls
-PostgreSQL, as Python does. The query keywords mirror Python's query fields, and each page carries
+Every control except `set_queue_history` takes an `AdminAudit`. `Admin` rejects a blank audit
+field before it calls PostgreSQL, as Python does. The query keywords mirror Python's query fields, and each page carries
 the cursor for the next page. `Admin` has no `health` method, because `Queue#health` reads the same
 snapshot.
 
@@ -1010,6 +1012,17 @@ This amendment states that bar for Ruby `Admin`:
 3. A method from that list can come to Ruby later, because a new method is additive. It then gets a
    row in `docs/parity.md` and an integration test.
 
-The method block above does not change. This amendment does not decide `set_queue_tier` and
-`set_queue_history`, which TypeScript, Python, Go, and Rust have and Ruby does not have yet. SM-1417
-owns that decision.
+This amendment does not decide `set_queue_tier` and `set_queue_history`. SM-1417 owns that
+decision.
+
+SM-1417 adds both controls to Ruby `Admin`, and the method block above lists them. TypeScript,
+Python, Go, and Rust already have them, and each SDK supports the fast tier. The controls follow
+those SDKs:
+
+1. `set_queue_tier` takes `:fast` or `:full` and an `AdminAudit`, and returns the tier after the
+   change. PostgreSQL records the actor and the reason, but not the request ID.
+2. If the requested tier differs from the current tier and the queue holds a live task,
+   `set_queue_tier` raises `FastTierUnsupportedError`. A tier never changes under a live task.
+3. `set_queue_history` takes no audit. A `nil` setting keeps its current value. The method returns
+   a `QueueHistory` with both settings after the change.
+4. The public SDK operator table in `docs/parity.md` has the row "Queue tier and history controls".

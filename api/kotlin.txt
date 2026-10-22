@@ -36,6 +36,8 @@ run.workhorse.kotlin: public suspend fun run.workhorse.Admin.redriveManySuspend(
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.redriveSuspend(sourceTaskId: java.util.UUID, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.RedriveResult
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.repairTaskGroupDriftSuspend(audit: run.workhorse.AdminAudit, limit: Int = 1000, connection: java.sql.Connection? = null): List<run.workhorse.TaskGroupRepair>
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.resumeQueueSuspend(queue: String, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): Unit
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.setQueueHistorySuspend(queue: String, recordAttempts: Boolean? = null, recordClaims: Boolean? = null, connection: java.sql.Connection? = null): run.workhorse.QueueHistory
+run.workhorse.kotlin: public suspend fun run.workhorse.Admin.setQueueTierSuspend(queue: String, tier: run.workhorse.QueueTier, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.QueueTier
 run.workhorse.kotlin: public suspend fun run.workhorse.Admin.setWorkerPausedSuspend(workerId: String, paused: Boolean, audit: run.workhorse.AdminAudit, connection: java.sql.Connection? = null): run.workhorse.WorkerPauseResult?
 run.workhorse.kotlin: public suspend fun run.workhorse.Queue.addToTaskGroupSuspend(groupId: java.util.UUID, requests: List<run.workhorse.EnqueueRequest>, connection: java.sql.Connection? = null): List<run.workhorse.EnqueueResult>
 run.workhorse.kotlin: public suspend fun run.workhorse.Queue.assertCompatibleSuspend(connection: java.sql.Connection? = null): Unit
