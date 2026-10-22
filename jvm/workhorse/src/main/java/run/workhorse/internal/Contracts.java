@@ -49,9 +49,23 @@ public final class Contracts {
     return decode(rows.get(0));
   }
 
+  /**
+   * The schema document of a contract definition row, with every number exact.
+   *
+   * <p>jsonb keeps all the digits of a number that another SDK synchronized. {@link
+   * Json#parse(String)} reads a fraction as a {@code Double}, so the contract would compare a
+   * rounded constant.
+   *
+   * @throws IllegalArgumentException if the column holds no strict JSON value
+   */
+  public static @Nullable Object storedSchema(Row row) {
+    String text = row.text("schema");
+    return text == null ? null : Json.parseExact(text);
+  }
+
   private static PayloadContract decode(Row row) {
     try {
-      Map<String, @Nullable Object> schema = Json.object(row.json("schema"));
+      Map<String, @Nullable Object> schema = Json.object(storedSchema(row));
       if (schema == null || !schema.containsKey("payload")) {
         throw invalidDefinition(null);
       }

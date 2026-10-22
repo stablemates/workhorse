@@ -142,19 +142,23 @@ hold never reaches its validator, so no SDK changes a value to make it fit. Type
 replace the library's `multipleOf`. Python also replaces the bound, `const`, `enum`, and
 `uniqueItems` keywords. Ruby compares each Float through the decimal of `Float#to_s`.
 
-Two limits stay until SM-1541 removes them:
+A schema number is exact in every SDK. Another SDK can store a constant that a double cannot
+hold, such as `"maximum": 9007199254740995`, and PostgreSQL keeps all its digits. Each SDK reads a
+stored schema from its jsonb text and keeps each schema number exact, also a number that its own
+values cannot hold. The TypeScript, Python, and Rust drivers parse `jsonb` into doubles, so these
+SDKs select `schema::text`. Rust also replaces the bound, `multipleOf`, `const`, `enum`, and
+`uniqueItems` keywords of jsonschema-rs, which compared an integer above 2^53 with the binary value
+of a fraction-typed constant.
 
-1. TypeScript, Python, Ruby, and Rust read a schema constant that a double cannot hold as a double.
-   Such a constant comes only from an SDK that holds it exactly, and PostgreSQL keeps all its digits.
-2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in
-   `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `const`, `enum`, and
-   `uniqueItems`.
+Rust does not turn on the `serde_json` `arbitrary_precision` feature. A Cargo feature changes the
+`Number` type for every crate in an application, and the SDK does not control that choice. The Rust
+read keeps each number token of the stored text instead (SM-1541).
 
 `protocol/v1/contracts.json` pins the rule. An instance can give its value as JSON text in `json`,
 so each runner reads it through its own value path. An instance whose number only some SDKs can
 hold names the kind in `needs`: `exactFraction` or `exactInteger`. Each runner lists the kinds its
-SDK cannot hold and skips only those instances. The Rust runner lists the second limit in
-`rust/tests/conformance/expected-unsupported.json`.
+SDK cannot hold and skips only those instances. A case can give its schema as JSON text in `schemaJson`, and
+each runner reads it the way its SDK reads a stored schema.
 
 A contract that relied on the old answers changes its results. A result that `multipleOf` refused
 for a fraction can now pass. In Python and Ruby, an integer above 2^53 can now get the other answer

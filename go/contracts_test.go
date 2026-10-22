@@ -9,6 +9,7 @@ import (
 type contractFixture struct {
 	ID          string `json:"id"`
 	Schema      any    `json:"schema"`
+	SchemaJSON  string `json:"schemaJson"`
 	SchemaError bool   `json:"schemaError"`
 	Instances   []struct {
 		Value any    `json:"value"`
@@ -35,7 +36,14 @@ func TestContractSchemaProfile(t *testing.T) {
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
-			validator, err := compileContractSchema(fixture.Schema)
+			// A schema in JSON text reads the way a schema that PostgreSQL stores does.
+			schema := fixture.Schema
+			if fixture.SchemaJSON != "" {
+				if err := decodeContractJSON([]byte(fixture.SchemaJSON), &schema); err != nil {
+					t.Fatal(err)
+				}
+			}
+			validator, err := compileContractSchema(schema)
 			if fixture.SchemaError {
 				if err == nil {
 					t.Fatal("expected schema error")

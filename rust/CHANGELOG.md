@@ -11,6 +11,22 @@ adds.
 
 ## Unreleased
 
+### A contract compares every number as an exact decimal
+
+Before this change, the Rust SDK read a stored contract schema into a `serde_json::Value`, which
+reads a fraction, and an integer outside `i64` and `u64`, as an `f64`. jsonschema-rs also compared
+an integer above 2^53 with the binary value of a fraction-typed constant. Thus
+`1152921504606846980` failed `{"maximum": 1.152921504606847e18}`, although PostgreSQL stores the
+constant as `1152921504606847000`. Now the SDK reads the stored schema as jsonb text and keeps each
+number token (SM-1541, ADR 0039). `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`,
+`multipleOf`, `const`, `enum`, and `uniqueItems` compare exact decimals, also in a schema that you
+give to `compile_contract_schema`. The SDK does not turn on the `serde_json` `arbitrary_precision`
+feature, and `contracts/numbers-compare-exact-decimals` leaves the expected-unsupported list.
+
+A custom `EnqueueTransport` now gets the contract query with its `schema` column declared as
+`EnqueueColumnType::Text`. A transport that decodes each column by its declared kind needs no
+change.
+
 ### Workers on one pool share one heartbeat connection and one listener connection
 
 Before this change, each worker took its own heartbeat connection from its pool and opened its own

@@ -1844,10 +1844,10 @@ module Stablemates
           rows = @executor.rows(SqlCatalogue::GET_CONTRACT_DEFINITION_V1, [task.type, version])
           raise ContractUnavailableError.new(task.type, version) unless rows.one?
 
-          document = Values.parse_json(rows.first["schema"])
+          document = Contracts.parse_schema(rows.first["schema"])
           raise ContractUnavailableError.new(task.type, version) unless document.is_a?(Hash) && document.key?("result")
 
-          schema = ContractSchema.new(document["result"])
+          schema = ContractSchema.stored(document["result"])
           @contracts[[task.type, version]] = schema
         end
         raise ContractValidationError.new(task.type, version, "result") unless schema.valid?(result)

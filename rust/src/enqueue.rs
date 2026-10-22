@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::compatibility::{check_compatibility, CompatibilityCode, CompatibilityState};
 use crate::contracts::{
-    compile_contract_schema, serialize_contracts, ContractCache, PayloadContract, TaskTypeContracts,
+    compile_stored_member, serialize_contracts, ContractCache, PayloadContract, TaskTypeContracts,
+    CONTRACT_DEFINITION_TEXT,
 };
 use crate::queue::{
     default_scope, non_empty, stamp_contract, task_input, timestamp, trace_context,
@@ -407,7 +408,8 @@ const ENQUEUE_COLUMNS: &[EnqueueColumn] = &[
     EnqueueColumn { name: "reason", kind: EnqueueColumnType::Text, nullable: true },
 ];
 const CONTRACT_COLUMNS: &[EnqueueColumn] = &[
-    EnqueueColumn { name: "schema", kind: EnqueueColumnType::Json, nullable: false },
+    // The jsonb text, so that a schema number keeps every digit.
+    EnqueueColumn { name: "schema", kind: EnqueueColumnType::Text, nullable: false },
     EnqueueColumn { name: "version", kind: EnqueueColumnType::Text, nullable: false },
     EnqueueColumn { name: "payload_max_bytes", kind: EnqueueColumnType::Int, nullable: false },
     EnqueueColumn { name: "result_max_bytes", kind: EnqueueColumnType::Int, nullable: false },
@@ -498,7 +500,7 @@ pub(crate) async fn load_contract_version<T: EnqueueTransport>(
     let rows = query(
         transport,
         EnqueueQuery {
-            statement: sql::GET_CONTRACT_DEFINITION_V1,
+            statement: CONTRACT_DEFINITION_TEXT.as_str(),
             binds: vec![EnqueueBind::Text(Some(task_type)), EnqueueBind::Text(version)],
             columns: CONTRACT_COLUMNS,
         },
@@ -509,11 +511,10 @@ pub(crate) async fn load_contract_version<T: EnqueueTransport>(
         [row] => row,
         _ => return Err(invalid_result()),
     };
-    let Some(EnqueueValue::Json(schema)) = row.get("schema") else {
+    let Some(EnqueueValue::Text(schema)) = row.get("schema") else {
         return Err(invalid_result());
     };
-    let validator =
-        schema.get("payload").ok_or_else(invalid_result).and_then(compile_contract_schema)?;
+    let validator = compile_stored_member(schema, "payload")?.ok_or_else(invalid_result)?;
     Ok(Some(Arc::new(PayloadContract {
         version: text(row, "version")?.into(),
         validator,

@@ -228,24 +228,48 @@ give. `type` with `integer`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiv
 
 | SDK        | Exact integer      | Exact fraction | Decimal comparison                                                                               |
 | ---------- | ------------------ | -------------- | ------------------------------------------------------------------------------------------------ |
-| TypeScript | up to 2^53         | no             | `compileContractSchema` replaces Ajv's `multipleOf` with a division of the decimals.             |
+| TypeScript | up to 2^53         | no             | `compileContractSchema` replaces Ajv's bounds, `multipleOf`, `const`, and `enum`.                |
 | Python     | yes                | no             | `compile_contract_schema` replaces the bounds, `multipleOf`, `const`, `enum`, and `uniqueItems`. |
 | Go         | yes, `json.Number` | yes            | `decodeContractJSON` decodes with `UseNumber`; the library compares exact rationals.             |
-| Rust       | `i64` and `u64`    | no             | jsonschema-rs divides the decimals in `multipleOf`.                                              |
+| Rust       | `i64` and `u64`    | no             | `compile_contract_schema` replaces the bounds, `multipleOf`, `const`, `enum`, and `uniqueItems`. |
 | Ruby       | yes                | no             | `ContractSchema` compares a Float through `Rational(Float#to_s)`.                                |
 | JVM        | yes                | `BigDecimal`   | `ContractSchema` compares a `BigDecimal` of each number.                                         |
 
-A value that an SDK cannot hold never reaches its validator. Two limits stay until SM-1541:
+A value that an SDK cannot hold never reaches its validator. A schema number is different: each
+SDK reads a stored schema from its jsonb text and keeps every schema number exact, also a number
+that its own values cannot hold. The `serde_json` `arbitrary_precision` feature stays off.
 
-1. TypeScript, Python, Ruby, and Rust read a stored schema constant that a double cannot hold as a
-   double.
-2. Rust compares an integer above 2^53 with the binary value of a fraction-typed constant in the
-   bound keywords, `const`, `enum`, and `uniqueItems`.
+| SDK        | Stored schema read                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `loadContract` selects `schema::text`. `parseStoredContractSchema` keeps the text of a number a double cannot hold. |
+| Python     | The SDK selects `schema::text`. `parse_stored_schema` reads a fraction a float cannot hold as a `Decimal`.          |
+| Go         | `decodeContractJSON` decodes the column with `UseNumber`.                                                           |
+| Rust       | The SDK selects `schema::text`. `compile_stored_contract_schema` keeps each number token.                           |
+| Ruby       | `Contracts.parse_schema` reads a fraction a Float cannot hold as a Rational.                                        |
+| JVM        | `Contracts.storedSchema` reads the column with `Json.parseExact`.                                                   |
+
+The TypeScript, Python, and Rust drivers parse `jsonb` into doubles, so these SDKs wrap
+`get_contract_definition_v1` in a statement that selects `schema::text`. In Rust, a schema object
+whose constant a `Value` cannot hold gets a `$workhorse.exact` index for the keyword factories. The
+profile check runs on the schema without that key and refuses the key in an application schema.
+
+The meta-schema check in TypeScript and Rust sees a double, not the exact text. Thus a stored
+number outside the double range becomes the largest finite double, and a non-zero number that
+rounds to zero becomes the smallest positive double. Each keeps the sign of the token. A stored
+`"multipleOf": 1e-400` therefore stays valid. Python reads an integer with a fraction part, such as
+`9007199254740993.0`, as an `int`, so a count keyword such as `maxLength` accepts it. The JVM
+refuses a stored fraction outside the double range (SM-1593).
+
+python-jsonschema validates a subschema that names `$schema` with the library validator of that
+dialect, which does not have the exact keywords. Thus `compile_contract_schema` compiles a copy
+without the `$schema` keywords. The profile allows only Draft 2020-12, so the copy gives the same
+result.
 
 `protocol/v1/contracts.json` gives such instances as JSON text in `json`. An instance marks the
 kind of number it needs in `needs`, `exactFraction` or `exactInteger`, and each runner skips the
-kinds its SDK cannot hold. `rust/tests/conformance/expected-unsupported.json` lists
-`contracts/numbers-compare-exact-decimals` for the second limit.
+kinds its SDK cannot hold. A case can also give its schema as JSON text in `schemaJson`, and each
+runner reads it the way the SDK reads a stored schema. `contracts/schema-constants-keep-exact-decimals`
+pins schema constants that a double or a `u64` cannot hold.
 
 #### Contract validation at enqueue and completion
 

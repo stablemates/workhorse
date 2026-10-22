@@ -156,7 +156,12 @@ final class Runner {
   static void runContract(Map<String, @Nullable Object> fixture) {
     ContractSchema schema;
     try {
-      schema = new ContractSchema(fixture.get("schema"));
+      // A schema in JSON text reads the way a schema that PostgreSQL stores does.
+      schema =
+          new ContractSchema(
+              fixture.get("schemaJson") instanceof String text
+                  ? Json.parseExact(text)
+                  : fixture.get("schema"));
     } catch (IllegalArgumentException | WorkhorseException error) {
       if (Boolean.TRUE.equals(fixture.get("schemaError"))) {
         return;

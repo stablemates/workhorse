@@ -261,7 +261,11 @@ fn mismatch(task_types: Value) -> Vec<EnqueueRow> {
 
 fn contract(version: &str) -> Vec<EnqueueRow> {
     vec![row(&[
-        ("schema", EnqueueValue::Json(json!({"payload": {"type":"object", "required":["id"]}}))),
+        // The contract query reads the schema as jsonb text, so that each number stays exact.
+        (
+            "schema",
+            EnqueueValue::Text(r#"{"payload": {"type": "object", "required": ["id"]}}"#.into()),
+        ),
         ("version", EnqueueValue::Text(version.into())),
         ("payload_max_bytes", EnqueueValue::Int(4096)),
         ("result_max_bytes", EnqueueValue::Int(2048)),

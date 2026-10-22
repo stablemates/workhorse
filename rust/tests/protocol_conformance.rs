@@ -19,7 +19,9 @@ use serde_json::{json, Value};
 use support::ScratchDatabase;
 use tokio_postgres::Client;
 use workhorse::compatibility::{check_compatibility, read_compatibility_state};
-use workhorse::contracts::{compile_contract_schema, TaskContractVersion, TaskTypeContracts};
+use workhorse::contracts::{
+    compile_contract_schema, compile_stored_contract_schema, TaskContractVersion, TaskTypeContracts,
+};
 use workhorse::{
     EnqueueOptions, Error as ClientError, Idempotency, Queue, RetryPolicy, ScheduleCatchupPolicy,
     ScheduleDefinition, ScheduledTask,
@@ -231,9 +233,12 @@ fn report(outcomes: &BTreeMap<String, Outcome>) {
 const UNHELD_CONTRACT_NUMBERS: &[&str] = &["exactFraction"];
 
 /// A contract fixture compiles its schema the way `Queue::sync_contracts` does, then checks each
-/// instance's verdict.
+/// instance's verdict. A schema in JSON text reads the way a schema that PostgreSQL stores does.
 fn run_contract(fixture: &Value) -> Result<(), String> {
-    let compiled = compile_contract_schema(&fixture["schema"]);
+    let compiled = match fixture["schemaJson"].as_str() {
+        Some(text) => compile_stored_contract_schema(text),
+        None => compile_contract_schema(&fixture["schema"]),
+    };
     if fixture["schemaError"].as_bool() == Some(true) {
         return match compiled {
             Err(_) => Ok(()),

@@ -131,7 +131,7 @@ module Conformance
     # instance's verdict.
     def self.run_contract(fixture)
       schema = begin
-        Stablemates::Workhorse::ContractSchema.new(fixture["schema"])
+        contract_schema(fixture)
       rescue ArgumentError, Stablemates::Workhorse::Error => e
         return if fixture["schemaError"] == true
 
@@ -150,6 +150,14 @@ module Conformance
         value = instance.key?("json") ? JSON.parse(instance["json"]) : instance["value"]
         raise Failure, "instance #{index}: expected valid = #{expected}" unless schema.valid?(value) == expected
       end
+    end
+
+    # A schema in JSON text reads the way a schema that PostgreSQL stores does.
+    def self.contract_schema(fixture)
+      return Stablemates::Workhorse::ContractSchema.new(fixture["schema"]) unless fixture.key?("schemaJson")
+
+      stored = Stablemates::Workhorse::Contracts.parse_schema(fixture["schemaJson"])
+      Stablemates::Workhorse::ContractSchema.stored(stored)
     end
 
     # ----- interpreter -------------------------------------------------------------------------

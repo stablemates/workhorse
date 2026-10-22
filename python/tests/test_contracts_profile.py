@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from workhorse._contracts import compile_contract_schema
+from workhorse._contracts import compile_contract_schema, parse_stored_schema
 from workhorse.types import Json
 
 FIXTURES: list[dict[str, Any]] = json.loads(
@@ -38,11 +39,15 @@ UNHELD_NUMBERS = frozenset({"exactFraction"})
     ],
 )
 def test_contract_schema_profile(fixture: dict[str, Any]) -> None:
+    # A schema in JSON text reads the way a schema that PostgreSQL stores does.
+    schema = (
+        parse_stored_schema(fixture["schemaJson"]) if "schemaJson" in fixture else fixture["schema"]
+    )
     if fixture.get("schemaError"):
         with pytest.raises((TypeError, ValueError)):
-            compile_contract_schema(fixture["schema"])
+            compile_contract_schema(schema)
         return
-    validator = compile_contract_schema(fixture["schema"])
+    validator = compile_contract_schema(schema)
     for instance in fixture.get("instances", []):
         if instance.get("needs") in UNHELD_NUMBERS:
             continue
@@ -94,3 +99,12 @@ def test_multiple_of_divides_exactly_beyond_the_decimal_context_precision() -> N
     assert compile_contract_schema({"multipleOf": 3}).is_valid(123456789012345678901234567890)
     assert not compile_contract_schema({"multipleOf": 11}).is_valid(123456789012345678901234567890)
     assert compile_contract_schema({"multipleOf": 0.01}).is_valid(10**40 + 0.0)
+
+
+def test_parse_stored_schema_keeps_a_fraction_a_float_cannot_hold() -> None:
+    schema = parse_stored_schema('{"minimum": 0.30000000000000000001, "maximum": 1.5}')
+    assert schema == {"minimum": Decimal("0.30000000000000000001"), "maximum": 1.5}
+    assert isinstance(cast(dict[str, Json], schema)["maximum"], float)
+    validator = compile_contract_schema(schema)
+    assert not validator.is_valid(0.3)
+    assert validator.is_valid(0.30000000000000004)

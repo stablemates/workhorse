@@ -439,7 +439,7 @@ impl Inner {
     ) -> Result<Arc<crate::contracts::ContractSchema>, Error> {
         let rows = self
             .statements()
-            .rows(sql::GET_CONTRACT_DEFINITION_V1, &[&task.task_type, &Some(version)])
+            .rows(&crate::contracts::CONTRACT_DEFINITION_TEXT, &[&task.task_type, &Some(version)])
             .await?;
         let [row] = rows.as_slice() else {
             return Err(Error::ContractUnavailable {
@@ -447,9 +447,12 @@ impl Inner {
                 version: version.into(),
             });
         };
-        let schema: Value = row.try_get("schema")?;
-        let result = schema.get("result").cloned().unwrap_or(Value::Bool(true));
-        Ok(Arc::new(crate::contracts::compile_contract_schema(&result)?))
+        let schema: String = row.try_get("schema")?;
+        let result = crate::contracts::compile_stored_member(&schema, "result")?;
+        match result {
+            Some(result) => Ok(Arc::new(result)),
+            None => Ok(Arc::new(crate::contracts::compile_contract_schema(&Value::Bool(true))?)),
+        }
     }
 
     /// Returns an owned task to its queue without consuming an attempt.

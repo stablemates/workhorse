@@ -346,5 +346,42 @@
       { "json": "{\"large\": 1152921504606846980}", "needs": "exactInteger", "valid": true },
       { "json": "{\"large\": 1152921504606847001}", "needs": "exactInteger", "valid": false }
     ]
+  },
+  {
+    "id": "schema-constants-keep-exact-decimals",
+    "schemaJson": "{\"type\": \"object\", \"properties\": {\"limit\": {\"maximum\": 9007199254740995}, \"huge\": {\"maximum\": 18446744073709551617}, \"floor\": {\"minimum\": 0.30000000000000000001}, \"above\": {\"exclusiveMinimum\": 0.99999999999999999999}, \"below\": {\"exclusiveMaximum\": 2.00000000000000000001}, \"step\": {\"multipleOf\": 0.01000000000000000001}, \"id\": {\"const\": 9007199254740993}, \"nested\": {\"const\": {\"n\": [9007199254740993]}}, \"wide\": {\"const\": {\"n\": [18446744073709551617]}}, \"ratio\": {\"enum\": [0.10000000000000000001, 7]}, \"tiny\": {\"multipleOf\": 1e-400}, \"vast\": {\"maximum\": 1e309}, \"code\": {\"maxLength\": 9007199254740993.0}, \"pinned\": {\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"maximum\": 0.29999999999999999999, \"multipleOf\": 0.01000000000000000001}}}",
+    "instances": [
+      { "json": "{\"limit\": 9007199254740994}", "valid": true },
+      { "json": "{\"limit\": 9007199254740996}", "valid": false },
+      { "json": "{\"huge\": 18446744073709551615}", "needs": "exactInteger", "valid": true },
+      { "json": "{\"huge\": 18446744073709552000}", "valid": false },
+      { "json": "{\"floor\": 0.3}", "valid": false },
+      { "json": "{\"floor\": 0.30000000000000004}", "valid": true },
+      { "json": "{\"above\": 1}", "valid": true },
+      { "json": "{\"above\": 0.99999999999999999999}", "needs": "exactFraction", "valid": false },
+      { "json": "{\"below\": 2}", "valid": true },
+      { "json": "{\"below\": 2.00000000000000000001}", "needs": "exactFraction", "valid": false },
+      { "json": "{\"step\": 1}", "valid": false },
+      { "json": "{\"step\": 0.02000000000000000002}", "needs": "exactFraction", "valid": true },
+      { "json": "{\"id\": 9007199254740992}", "valid": false },
+      { "json": "{\"id\": 9007199254740993}", "needs": "exactInteger", "valid": true },
+      { "json": "{\"nested\": {\"n\": [9007199254740992]}}", "valid": false },
+      {
+        "json": "{\"nested\": {\"n\": [9007199254740993]}}",
+        "needs": "exactInteger",
+        "valid": true
+      },
+      { "json": "{\"wide\": {\"n\": [18446744073709552000]}}", "valid": false },
+      { "json": "{\"ratio\": 0.1}", "valid": false },
+      { "json": "{\"ratio\": 7.0}", "valid": true },
+      { "json": "{\"ratio\": 0.10000000000000000001}", "needs": "exactFraction", "valid": true },
+      { "json": "{\"tiny\": 1}", "valid": true },
+      { "json": "{\"tiny\": 0.5}", "valid": true },
+      { "json": "{\"vast\": 1.7976931348623157e308}", "valid": true },
+      { "json": "{\"code\": \"x\"}", "valid": true },
+      { "json": "{\"pinned\": 0.3}", "valid": false },
+      { "json": "{\"pinned\": 0}", "valid": true },
+      { "json": "{\"pinned\": 0.0}", "valid": true }
+    ]
   }
 ]

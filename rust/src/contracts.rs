@@ -1,12 +1,14 @@
 //! Versioned payload contracts: the Workhorse JSON Schema profile, compilation, and sync.
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use serde_json::{json, Map, Value};
 
 use crate::queue::Executor;
 use crate::sql_catalogue_generated as sql;
 use crate::Error;
+
+mod exact;
 
 /// One version of a task type's payload and result contract.
 #[derive(Clone, Debug, PartialEq)]
@@ -183,17 +185,64 @@ fn check_profile<'a>(
 
 /// Checks a schema against the Workhorse contract profile and compiles it as Draft 2020-12.
 ///
-/// `format` is an annotation, and only bundled local references resolve.
+/// `format` is an annotation, and only bundled local references resolve. Every keyword compares
+/// the decimal of each number exactly.
 pub fn compile_contract_schema(schema: &Value) -> Result<ContractSchema, Error> {
     check_contract_profile(schema).map_err(Error::InvalidArgument)?;
-    jsonschema::options()
+    build(schema, &exact::ExactValues::default())
+}
+
+/// Compiles a schema from the JSON text that PostgreSQL stores, and keeps every number exact.
+///
+/// jsonb keeps all the digits of a number that another SDK synchronized. A `Value` cannot hold a
+/// fraction that an `f64` cannot hold, or an integer outside `i64` and `u64`, so the keywords
+/// compare the decimal of each stored token instead.
+#[doc(hidden)]
+pub fn compile_stored_contract_schema(text: &str) -> Result<ContractSchema, Error> {
+    let schema = exact::parse(text)
+        .map_err(|error| Error::invalid(format!("invalid contract schema: {error}")))?;
+    compile_exact(&schema)
+}
+
+/// Compiles the `member` schema of a stored contract document, or returns `None` when the
+/// document has no such member.
+pub(crate) fn compile_stored_member(
+    document: &str,
+    member: &str,
+) -> Result<Option<ContractSchema>, Error> {
+    let document = exact::parse(document)
+        .map_err(|error| Error::invalid(format!("invalid contract definition: {error}")))?;
+    document.member(member).map(compile_exact).transpose()
+}
+
+fn compile_exact(schema: &exact::Exact) -> Result<ContractSchema, Error> {
+    check_contract_profile(&schema.to_value()).map_err(Error::InvalidArgument)?;
+    let mut values = Vec::new();
+    let annotated = exact::schema_value(schema, &mut values);
+    build(&annotated, &Arc::new(values))
+}
+
+fn build(schema: &Value, exact: &exact::ExactValues) -> Result<ContractSchema, Error> {
+    let options = jsonschema::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .should_validate_formats(false)
-        .with_base_uri("urn:workhorse:contract")
+        .with_base_uri("urn:workhorse:contract");
+    exact::with_exact_keywords(options, exact)
         .build(schema)
         .map(ContractSchema)
         .map_err(|error| Error::invalid(format!("invalid contract schema: {error}")))
 }
+
+/// `get_contract_definition_v1` with its schema as jsonb text. A driver parses jsonb into a
+/// `Value`, and the text keeps the exact decimal of each schema number.
+pub(crate) static CONTRACT_DEFINITION_TEXT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT contract.version, contract.schema::text AS schema, contract.payload_max_bytes, \
+         contract.result_max_bytes, contract.payload_redact_keys, contract.result_redact_keys \
+         FROM ({}) contract",
+        sql::GET_CONTRACT_DEFINITION_V1
+    )
+});
 
 /// The current contract PostgreSQL holds for one task type.
 pub(crate) struct PayloadContract {

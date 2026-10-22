@@ -23,6 +23,14 @@ reports no size, the worker polls. Each run then logs `workhorse.worker.polling_
 severity. The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
 `workhorse.worker.pool_max_size`. Without the opt-out, nothing changes.
 
+### A contract compares a stored schema number with all its digits
+
+Before this change, the Python SDK read a stored contract schema with `json.loads`, which reads a
+fraction as a float. Another SDK can store `"minimum": 0.30000000000000000001`, which a float cannot
+hold. The Python SDK then accepted `0.3`. Now the SDK reads the stored schema as jsonb text, and a
+fraction that a float cannot hold stays a `Decimal` (SM-1541, ADR 0039). The contract keywords
+compare it exactly.
+
 ### Workers on one pool share one listener and one heartbeat connection
 
 Before this change, each Python worker took its own listener connection and its own heartbeat

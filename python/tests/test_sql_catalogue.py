@@ -43,6 +43,8 @@ def test_production_sql_literals_live_in_the_generated_catalogue() -> None:
         Path("dashboard/_backend.py"),
         # The transaction around a heartbeat round sets timeouts, and calls no protocol function.
         Path("_heartbeat_round.py"),
+        # The contract read wraps get_contract_definition_v1 to select its schema as jsonb text.
+        Path("_contracts.py"),
     }
     violations: list[str] = []
 

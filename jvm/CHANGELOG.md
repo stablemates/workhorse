@@ -42,6 +42,11 @@ adds.
   `workhorse.worker.queues`, and `workhorse.worker.pool_max_size`, the declared size or `unknown`.
   The warning for a listener that does not listen at startup carries the same attributes. A worker
   with `pollingOnly(true)` logs no warning.
+- **A contract compares a stored schema fraction with all its digits.** Before this release, the
+  SDK read a stored contract schema with the parse that reads a fraction as a `Double`. Another SDK
+  can store `"minimum": 0.30000000000000000001`, which a double cannot hold, and the SDK then
+  accepted `0.3`. Now the payload and result contract reads keep each schema number exact, and
+  `ContractSchema` compares the `BigDecimal` (SM-1541, ADR 0039).
 - **Workers on one `DataSource` no longer lose leases on a small pool.** Before this release, each
   worker held its own listener connection. When a HikariCP pool had fewer connections than
   workers, the listener connections filled the pool. The shared heartbeat then waited up to 30 s,
