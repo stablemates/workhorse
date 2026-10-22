@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 interface Support {
+  /** `prerelease` lists the releases that have not shipped. CI tests each at its newest preview. */
+  readonly dotnet: { readonly tested: readonly number[]; readonly prerelease?: readonly number[] };
   readonly go: { readonly minimum: string };
   readonly java: { readonly tested: readonly number[] };
   readonly node: { readonly tested: readonly number[] };
@@ -21,21 +23,22 @@ export const WEEKLY_COMPATIBILITY_SCHEDULE = "17 4 * * 0";
  * and `preview` name the quality that the lane installs beside that SDK, and the tests roll forward
  * to it.
  */
-export type DotnetRuntime = "sdk" | "ga" | "preview";
+type DotnetRuntime = "sdk" | "ga" | "preview";
 
 /**
- * The .NET releases that CI tests, oldest first (ADR 0107, "Floors"). Each package targets
- * `net10.0`. The SDK of mise.toml builds the packages and carries the .NET 10 runtime. .NET 11 is
- * at a release candidate until it ships, so its lane installs the newest preview runtime. SM-1627
- * moves this list to support.json.
+ * The .NET releases that CI tests, oldest first (ADR 0107, "Floors"). Each package targets the
+ * floor. The SDK of mise.toml builds the packages and carries the runtime of the floor, so the floor
+ * lane runs on it. A later release that has shipped installs its newest release runtime, and a
+ * release in `prerelease` installs its newest preview runtime.
  */
-export const DOTNET_TESTED: readonly {
-  readonly dotnet: number;
-  readonly runtime: DotnetRuntime;
-}[] = [
-  { dotnet: 10, runtime: "sdk" },
-  { dotnet: 11, runtime: "preview" },
-];
+function dotnetReleases(
+  dotnet: Support["dotnet"],
+): { readonly dotnet: number; readonly runtime: DotnetRuntime }[] {
+  return dotnet.tested.map((release, index) => ({
+    dotnet: release,
+    runtime: index === 0 ? "sdk" : dotnet.prerelease?.includes(release) ? "preview" : "ga",
+  }));
+}
 
 export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
@@ -73,7 +76,9 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
   const newestPostgres = support.postgres.tested.at(-1);
   const newestPython = support.python.tested.at(-1);
   const newestRuby = support.ruby.tested.at(-1);
+  const dotnet = dotnetReleases(support.dotnet);
   if (
+    dotnet.length === 0 ||
     oldestJava === undefined ||
     newestJava === undefined ||
     newestNode === undefined ||
@@ -102,7 +107,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       },
       // A change runs every .NET release that CI tests (ADR 0107, "Floors").
       dotnet: {
-        include: DOTNET_TESTED.map((release) => ({ ...release, postgres: newestPostgres })),
+        include: dotnet.map((release) => ({ ...release, postgres: newestPostgres })),
       },
       packed: { include: [{ node: newestNode }] },
     };
@@ -129,7 +134,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
       include: crossProduct("java", support.java.tested, "postgres", support.postgres.tested),
     },
     dotnet: {
-      include: DOTNET_TESTED.flatMap((release) =>
+      include: dotnet.flatMap((release) =>
         support.postgres.tested.map((postgres) => ({ ...release, postgres })),
       ),
     },

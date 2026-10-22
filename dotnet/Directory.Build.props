@@ -16,4 +16,18 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <!--
+    Every restore audits the direct and the transitive packages against the GitHub advisories that
+    nuget.org serves, and each finding is an error, whatever its severity (ADR 0107, "Floors").
+    NU1900 says that the advisory data did not load. TreatWarningsAsErrors would make it an error, so
+    it is exempt here, and a build from the package cache works without the network. The floor
+    consumer of `pnpm dotnet:vuln` removes the exemption.
+  -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900</WarningsNotAsErrors>
+  </PropertyGroup>
 </Project>

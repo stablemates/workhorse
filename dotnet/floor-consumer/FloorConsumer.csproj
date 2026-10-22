@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The floor consumer of `pnpm dotnet:vuln` (ADR 0107, "Floors"). It references the four packages
+    and nothing else, so its restore resolves each shipped dependency at its floor, as a caller who
+    asks for nothing more gets it. It has no code, and it is not in the solution.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- The scan refuses a restore that could not load or did not get the advisory data. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors.Replace('NU1900', ''))</WarningsNotAsErrors>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1900;NU1905</WarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <ProjectReference Include="../src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+  </ItemGroup>
+</Project>
