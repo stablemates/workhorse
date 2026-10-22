@@ -255,10 +255,17 @@ module Conformance
         raise Failure, "#{location} expected error #{field} #{Matcher.render(expected[field])}, " \
           "received #{Matcher.render(actual[field])}"
       end
-      return unless expected.key?("detail")
-      raise Failure, "#{location} expected error detail, received none" unless actual.key?("detail")
+      if expected.key?("detail")
+        raise Failure, "#{location} expected error detail, received none" unless actual.key?("detail")
 
-      Matcher.assert_value(expected["detail"], actual["detail"], references, "#{location}.detail")
+        Matcher.assert_value(expected["detail"], actual["detail"], references, "#{location}.detail")
+      end
+      # P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+      return unless expected.key?("hint")
+      raise Failure, "#{location} expected error hint, received none" unless actual.key?("hint")
+
+      hint = actual["hint"].is_a?(String) ? JSON.parse(actual["hint"]) : actual["hint"]
+      Matcher.assert_value(expected["hint"], hint, references, "#{location}.hint")
     end
 
     # ----- scenarios ---------------------------------------------------------------------------

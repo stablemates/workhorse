@@ -32,10 +32,12 @@ namespace Workhorse;
 /// </para>
 /// <para>
 /// Npgsql gives PostgreSQL's error detail only when the connection string sets
-/// <c>Include Error Detail=true</c>. Without it, an exception keeps its type, but its typed fields,
+/// <c>Include Error Detail=true</c>. From schema version 77, PostgreSQL also sends a copy of the
+/// detail in the hint of the error, which Npgsql does not hide. So the typed fields of an exception,
 /// such as <see cref="FastTierUnsupportedException.Queue"/>, and the <c>Details</c> of a
-/// <see cref="DiagnosedException"/> are empty or <c>"unknown"</c>. <c>Admin</c> does not change the
-/// connection string.
+/// <see cref="DiagnosedException"/> are filled with the default settings. On schema version 76
+/// without that setting, they are empty or <c>"unknown"</c>, and the exception keeps its type.
+/// <c>Admin</c> does not change the connection string.
 /// </para>
 /// </remarks>
 public sealed class Admin
@@ -555,7 +557,7 @@ public sealed class Admin
     /// </summary>
     /// <exception cref="FastTierUnsupportedException">
     /// The tier differs and the queue holds a live task, or a policy of the queue does not support
-    /// the fast tier. Its <c>Queue</c> and <c>Feature</c> need <c>Include Error Detail=true</c>.
+    /// the fast tier. Its <c>Queue</c> and <c>Feature</c> name the queue and the refused change.
     /// </exception>
     public Task<QueueTier> SetQueueTierAsync(string queue, QueueTier tier, AdminAudit audit, CancellationToken cancellationToken = default)
     {

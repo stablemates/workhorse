@@ -11,14 +11,6 @@ namespace Workhorse.AspNetCore;
 public sealed class DashboardOptions
 {
     /// <summary>The database. Each procedure call uses one connection from it and opens no transaction.</summary>
-    /// <remarks>
-    /// A refused <c>setQueueTier</c> answers <c>live_tasks</c>, <c>concurrency_policy</c>, or
-    /// <c>rate_limit_policy</c> only when the connection string sets <c>Include Error Detail=true</c>,
-    /// because Npgsql otherwise removes the PostgreSQL detail that names the cause. Without it, a
-    /// refused switch answers 500, and the log names the cause and the setting.
-    /// <see cref="DashboardEndpointRouteBuilderExtensions.MapWorkhorseDashboard"/> logs a warning
-    /// when the setting is off.
-    /// </remarks>
     public required NpgsqlDataSource DataSource { get; init; }
 
     /// <summary>

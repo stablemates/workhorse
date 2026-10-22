@@ -55,7 +55,7 @@ interface SqlStep {
   sql: string;
   parameters?: JsonValue[];
   expect?: { rows: JsonValue[] };
-  error?: { code: string; message: string; detail?: JsonValue };
+  error?: { code: string; message: string; detail?: JsonValue; hint?: JsonValue };
   capture?: Record<string, string>;
 }
 
@@ -451,8 +451,8 @@ export interface InterpreterFixture {
   }[];
   errors: {
     id: string;
-    expect: { code: string; message: string; detail?: JsonValue };
-    actual: { code: string; message: string; detail?: JsonValue };
+    expect: { code: string; message: string; detail?: JsonValue; hint?: JsonValue };
+    actual: { code: string; message: string; detail?: JsonValue; hint?: JsonValue };
   }[];
 }
 
@@ -746,7 +746,7 @@ function isTimestamp(value: string): boolean {
 
 export function assertProtocolErrorValue(
   expected: NonNullable<SqlStep["error"]>,
-  actual: { code?: unknown; message?: unknown; detail?: unknown },
+  actual: { code?: unknown; message?: unknown; detail?: unknown; hint?: unknown },
   location: string,
   references: Map<string, JsonValue>,
 ): void {
@@ -764,6 +764,14 @@ export function assertProtocolErrorValue(
       references,
     );
   }
+  // P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+  if (expected.hint !== undefined) {
+    if (actual.hint === undefined || actual.hint === null) {
+      throw new Error(`${location} expected error hint, received none`);
+    }
+    const hint = typeof actual.hint === "string" ? JSON.parse(actual.hint) : actual.hint;
+    assertFixtureValue(expected.hint, normalizeFixtureValue(hint), `${location}.hint`, references);
+  }
 }
 
 function assertDatabaseError(
@@ -774,7 +782,7 @@ function assertDatabaseError(
   references: Map<string, JsonValue>,
 ): void {
   if (!error || typeof error !== "object") throw annotate(error, scenario, step);
-  const value = error as { code?: unknown; message?: unknown; detail?: unknown };
+  const value = error as { code?: unknown; message?: unknown; detail?: unknown; hint?: unknown };
   assertProtocolErrorValue(expected, value, `${scenario}/${step}`, references);
 }
 

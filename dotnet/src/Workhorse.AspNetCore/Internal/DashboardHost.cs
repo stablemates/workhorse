@@ -9,7 +9,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Npgsql;
 
 namespace Workhorse.AspNetCore.Internal;
 
@@ -122,11 +121,6 @@ internal sealed partial class DashboardHost
         _json = options.Json ?? DefaultJson;
         _dataSource = options.DataSource;
         _logger = logger;
-        if (!new NpgsqlConnectionStringBuilder(options.DataSource.ConnectionString).IncludeErrorDetail)
-        {
-            LogErrorDetailOff(_logger);
-        }
-
         _backend = new Backend(
             options.DataSource,
             options.Environment,
@@ -818,11 +812,6 @@ internal sealed partial class DashboardHost
 
         return allowed.ToFrozenSet(StringComparer.Ordinal);
     }
-
-    [LoggerMessage(
-        Level = LogLevel.Warning,
-        Message = "workhorse dashboard: the data source does not set Include Error Detail=true, so a refused setQueueTier answers 500 instead of its cause")]
-    private static partial void LogErrorDetailOff(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "workhorse dashboard: the authorizer failed")]
     private static partial void LogAuthorizerFailed(ILogger logger, Exception error);

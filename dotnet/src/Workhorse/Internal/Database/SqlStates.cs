@@ -60,32 +60,43 @@ internal static partial class SqlStates
     [GeneratedRegex("^Workhorse claims require read committed isolation, not (.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex Isolation();
 
-    /// <summary>The JSON detail of PostgreSQL as members, or no members when it is absent or not an object.</summary>
-    private static Dictionary<string, JsonElement> Details(PostgresException? error)
+    /// <summary>
+    /// The JSON detail of PostgreSQL as members. Npgsql hides DETAIL unless the connection string
+    /// sets <c>Include Error Detail=true</c>, so when DETAIL is not a JSON object the members come
+    /// from HINT, which holds a copy of the same JSON for P1001 to P1010 (ADR 0107). No members
+    /// when neither field holds a JSON object.
+    /// </summary>
+    private static Dictionary<string, JsonElement> Details(PostgresException? error) =>
+        Members(error?.Detail) ?? Members(error?.Hint) ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+    /// <summary>The members of <paramref name="text"/>, or <c>null</c> when it is not a JSON object.</summary>
+    private static Dictionary<string, JsonElement>? Members(string? text)
     {
-        var details = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        if (string.IsNullOrEmpty(error?.Detail))
+        if (string.IsNullOrEmpty(text))
         {
-            return details;
+            return null;
         }
 
         try
         {
-            using var document = JsonDocument.Parse(error.Detail);
-            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            using var document = JsonDocument.Parse(text);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                foreach (var property in document.RootElement.EnumerateObject())
-                {
-                    details[property.Name] = property.Value.Clone();
-                }
+                return null;
             }
+
+            var members = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                members[property.Name] = property.Value.Clone();
+            }
+
+            return members;
         }
         catch (JsonException)
         {
-            details.Clear();
+            return null;
         }
-
-        return details;
     }
 
     private static string? Member(Dictionary<string, JsonElement> fields, string key) =>

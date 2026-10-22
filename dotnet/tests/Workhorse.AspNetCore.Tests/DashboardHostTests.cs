@@ -150,46 +150,48 @@ public sealed class DashboardHostTests(ScratchDatabase database)
         Assert.Contains(server.Logs.Records, record => record.Error is not null && Describe(record.Error).Contains("127.0.0.1", StringComparison.Ordinal));
     }
 
+    // Npgsql hides the PostgreSQL DETAIL by default. The core reads the cause of a refused switch
+    // from the copy in the HINT, so the default data source names each guard (ADR 0107).
     [Fact]
-    public async Task WarnsAtStartupWhenTheDataSourceHidesTheErrorDetail()
+    public async Task NamesEachRefusedTierSwitchWithTheDefaultDataSource()
     {
-        await using (var hidden = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard("/workhorse", Options())))
+        var token = TestContext.Current.CancellationToken;
+        var live = $"dashboard-tier-live-{Guid.NewGuid():N}";
+        var concurrency = $"dashboard-tier-concurrency-{Guid.NewGuid():N}";
+        var rate = $"dashboard-tier-rate-{Guid.NewGuid():N}";
+        await using (var seed = database.DataSource.CreateBatch())
         {
-            Assert.Contains(hidden.Logs.Records, record => record.Message.Contains("Include Error Detail=true", StringComparison.Ordinal));
+            seed.BatchCommands.Add(new NpgsqlBatchCommand(
+                "SELECT count(*) FROM workhorse.enqueue_many_v1(jsonb_build_array(jsonb_build_object('queue',$1::text,'type','t','payload','{}'::jsonb)))")
+            {
+                Parameters = { new NpgsqlParameter { Value = live } },
+            });
+            seed.BatchCommands.Add(new NpgsqlBatchCommand(
+                "INSERT INTO workhorse.concurrency_policy(queue_name,namespace,max_active,max_active_per_key) VALUES ($1,'dashboard-test',7,2)")
+            {
+                Parameters = { new NpgsqlParameter { Value = concurrency } },
+            });
+            seed.BatchCommands.Add(new NpgsqlBatchCommand(
+                """
+                INSERT INTO workhorse.rate_limit_policy(queue_name,namespace,rate_limit,rate_interval_ms,rate_burst,per_key_limit,per_key_interval_ms,per_key_burst)
+                  VALUES ($1,'dashboard-test',10,1000,12,3,2000,4)
+                """)
+            {
+                Parameters = { new NpgsqlParameter { Value = rate } },
+            });
+            await seed.ExecuteNonQueryAsync(token);
         }
 
-        await using var detailed = database.CreateDataSource(builder => builder.IncludeErrorDetail = true);
-        var options = new DashboardOptions { DataSource = detailed, Authorize = Options().Authorize };
-        await using var shown = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard("/workhorse", options));
-        Assert.DoesNotContain(shown.Logs.Records, record => record.Message.Contains("Include Error Detail", StringComparison.Ordinal));
-    }
-
-    // Until SM-1638 lets the core read the cause without the detail, a refused switch on a data
-    // source without Include Error Detail answers 500. The log names the cause and the setting.
-    [Fact]
-    public async Task AnswersARefusedTierSwitchWith500WithoutTheErrorDetail()
-    {
-        var queue = $"dashboard-tier-{Guid.NewGuid():N}";
-        await using (var policy = database.DataSource.CreateCommand(
-            """
-            INSERT INTO workhorse.rate_limit_policy(queue_name,namespace,rate_limit,rate_interval_ms,rate_burst,per_key_limit,per_key_interval_ms,per_key_burst)
-              VALUES ($1,'dashboard-test',10,1000,12,3,2000,4)
-            """))
-        {
-            policy.Parameters.Add(new NpgsqlParameter { Value = queue });
-            await policy.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
-        }
-
+        Assert.False(new NpgsqlConnectionStringBuilder(database.DataSource.ConnectionString).IncludeErrorDetail);
         await using var server = await DashboardServer.StartAsync(app => app.MapWorkhorseDashboard("/workhorse", Options()));
-        var response = await server.PostAsync(
-            "/workhorse/rpc/dashboard/setQueueTier",
-            $"{{\"json\":{{\"queue\":\"{queue}\",\"tier\":\"fast\",\"audit\":{{\"actor\":\"a\",\"reason\":\"r\",\"requestId\":\"q\"}}}}}}");
-        Assert.Equal(500, response.Status);
-        Assert.Equal("{\"json\":{\"defined\":false,\"code\":\"INTERNAL_SERVER_ERROR\",\"status\":500,\"message\":\"Internal server error\"}}", response.Text);
-        Assert.Contains(server.Logs.Records, record =>
-            record.Error is InvalidOperationException { InnerException: FastTierUnsupportedException } error
-            && error.Message.Contains(queue, StringComparison.Ordinal)
-            && error.Message.Contains("Include Error Detail=true", StringComparison.Ordinal));
+        foreach (var (queue, status) in new[] { (live, "live_tasks"), (concurrency, "concurrency_policy"), (rate, "rate_limit_policy") })
+        {
+            var response = await server.PostAsync(
+                "/workhorse/rpc/dashboard/setQueueTier",
+                $"{{\"json\":{{\"queue\":\"{queue}\",\"tier\":\"fast\",\"audit\":{{\"actor\":\"a\",\"reason\":\"r\",\"requestId\":\"q\"}}}}}}");
+            Assert.Equal(200, response.Status);
+            Assert.Equal($"{{\"json\":{{\"status\":\"{status}\",\"tier\":null}}}}", response.Text);
+        }
     }
 
     [Fact]

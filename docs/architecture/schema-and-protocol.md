@@ -14,7 +14,7 @@ installation from one version to the next.
 
 ### Current version and baseline
 
-The current schema version is 76 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
+The current schema version is 77 (`WORKHORSE_SCHEMA_VERSION`) and the migration baseline is 6
 (`WORKHORSE_SCHEMA_BASELINE_VERSION`). `sql/releases/0006.sql` contains the baseline clean-install
 artifact, which is the 0.2.0 schema.
 
@@ -38,10 +38,10 @@ function or give that suffix a different meaning.
 
 The current migration plan has one contract step. `0025-add-a-fast-task-tier.sql` moves schema 24 to
 25 and retires protocols 1 through 4. Thus, on an older installation, `migrateSchema` stops at
-schema 24, and `contractSchema` applies step 25. The additive steps 26 through 76 follow. A second
+schema 24, and `contractSchema` applies step 25. The additive steps 26 through 77 follow. A second
 `migrateSchema` run then completes the plan.
 
-Their files run from `0026` to `0077`. File number `0035` was reserved and never used. Thus, from
+Their files run from `0026` to `0078`. File number `0035` was reserved and never used. Thus, from
 `0036` on, the number of a file is one above the version that it produces.
 
 Step 25 ships without the usual retention window, as
@@ -119,7 +119,7 @@ version. The runner reports `Workhorse migration <file> failed part-way and roll
 
 Each of these fails without running a migration:
 
-- An installed version below the baseline 6 or above the current 76.
+- An installed version below the baseline 6 or above the current 77.
 - A version no step starts from.
 - A `workhorse.schema_version` table without exactly one row.
 
@@ -198,6 +198,23 @@ Its matching rules:
 - Exact JSON surrounds typed placeholders for UUIDs, timestamps, and integers.
 - Captured values keep identity and fence relationships across later steps.
 - Structured errors pin SQLSTATE, message, canonical JSON detail, and deterministic digests.
+- A structured error can also pin `hint`. The runner parses the HINT as JSON and matches it with
+  the rules of `detail`.
+
+#### Diagnostic details in DETAIL and HINT
+
+SQLSTATE `P1001` to `P1010`, apart from `P1004`, carry their structured fields as one JSON object
+in DETAIL. DETAIL is the authoritative field, and every SDK reads it. From schema version 77, each
+of these errors also sets HINT to the same JSON text. Npgsql, the .NET driver, hides DETAIL unless
+the connection string sets `Include Error Detail=true`, but it does not hide HINT. So the .NET SDK
+reads HINT when DETAIL is not a JSON object. `P1004` carries no DETAIL and no HINT.
+
+Each raise site builds the JSON text once, in the variable `v_diagnostic`, and passes it to both
+fields. `typescript/core/test/schema-sqlstates.test.ts` fails when a `P1001` to `P1010` raise in
+`sql/schema/current.sql` does not do that. The four structured errors in `protocol/v1/scenarios.json`
+pin `hint` beside `detail`, so every language runner checks that PostgreSQL sends it
+([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md),
+"Amendment: HINT carries the diagnostic details").
 
 ### Interpreter fixture
 

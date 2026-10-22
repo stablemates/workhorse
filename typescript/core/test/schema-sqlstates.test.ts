@@ -51,4 +51,21 @@ describe("Workhorse SQLSTATE registry", () => {
       Object.fromEntries([...actual].map(([code, meanings]) => [code, [...meanings]])),
     ).toEqual(registry);
   });
+
+  it("copies the DETAIL of every P1001 to P1010 raise into HINT", async () => {
+    const schema = await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8");
+    // Npgsql hides DETAIL by default, so the .NET SDK reads the same JSON from HINT (ADR 0107).
+    // P1004 carries no DETAIL. Every other raise passes one variable to both fields.
+    const raises = [...schema.matchAll(/ERRCODE\s*=\s*'(P\d{4})'[^;]*;/g)];
+    const leaseLost = raises.filter(([, code]) => code === "P1004").map(([statement]) => statement);
+    const diagnosed = raises.filter(([, code]) => code !== "P1004").map(([statement]) => statement);
+    expect(leaseLost).toHaveLength(3);
+    expect(diagnosed).toHaveLength(19);
+    expect(leaseLost.filter((statement) => /DETAIL|HINT/.test(statement))).toEqual([]);
+    expect(
+      diagnosed.filter(
+        (statement) => !/DETAIL = v_diagnostic,\s*HINT = v_diagnostic;$/.test(statement),
+      ),
+    ).toEqual([]);
+  });
 });

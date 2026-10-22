@@ -1400,8 +1400,8 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0077 and leaves the schema at
-   version 76.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0078 and leaves the schema at
+   version 77.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
@@ -1412,6 +1412,7 @@ error:
 | `0075-allow-throttle-on-fast-tier-queues.sql`           | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue         |
 | `0076-add-the-dashboard-retention-preview-function.sql` | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document           |
 | `0077-fence-the-worker-deregistration-by-instance.sql`  | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller |
+| `0078-copy-the-diagnostic-details-into-hint.sql`        | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                           |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1419,7 +1420,10 @@ schema version 76 adds. If the schema is below version 76, a new worker refuses 
 refuses each mutation, and a new dashboard host refuses each request. Thus the migrations must run
 before the first new process starts.
 
-A 0.9 process keeps working on schema version 76. Its dashboard host still sends its own retention
+Schema version 77 does not raise the floor. Migration 0078 changes only the HINT of the P1001 to
+P1010 errors, and DETAIL does not change.
+
+A 0.9 process keeps working on schema version 77. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

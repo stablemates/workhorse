@@ -123,7 +123,9 @@ public sealed class QueueEnqueueTests(ScratchDatabase database)
             new EnqueueRequest { TaskType = "third", Payload = 3 },
             new EnqueueRequest { TaskType = "fourth", Payload = 4, Options = new EnqueueOptions { Queue = fast, Dependencies = dependencies } },
         ], Token));
-        Assert.Equal("unknown", error.Queue);
+        Assert.Equal(fast, error.Queue);
+        Assert.Equal("dependencies", error.Feature);
+        Assert.Equal(2, error.Ordinal);
         Assert.Equal(2, await CountAsync(database, queueName));
         Assert.Equal(0, await CountAsync(database, fast));
     }

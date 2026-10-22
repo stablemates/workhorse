@@ -9,10 +9,12 @@ namespace Workhorse;
 /// DETAIL of PostgreSQL, one entry for each member.
 /// </summary>
 /// <remarks>
-/// Npgsql hides the DETAIL of an error unless the connection string sets
-/// <c>Include Error Detail=true</c>. The SDK does not change the connection string of the caller.
-/// Without that setting, <see cref="Details"/> is empty, and each typed member that reads it has its
-/// fallback value. The exception type and its SQLSTATE do not depend on the setting.
+/// PostgreSQL also sends a copy of the JSON in the HINT of the error, from schema version 77. Npgsql
+/// hides the DETAIL unless the connection string sets <c>Include Error Detail=true</c>, but it does
+/// not hide the HINT. So the SDK reads the HINT when the DETAIL is hidden, and the members are filled
+/// with the default Npgsql settings. On schema version 76 without that setting, PostgreSQL sends no
+/// HINT. Then <see cref="Details"/> is empty, and each typed member that reads it has its fallback
+/// value. The exception type and its SQLSTATE do not depend on the setting or the schema version.
 /// </remarks>
 public class DiagnosedException : WorkhorseException
 {
@@ -29,8 +31,8 @@ public class DiagnosedException : WorkhorseException
     }
 
     /// <summary>
-    /// The JSON DETAIL of PostgreSQL. It is empty when PostgreSQL sent none, when the DETAIL is not
-    /// a JSON object, or when the connection string does not set <c>Include Error Detail=true</c>.
+    /// The JSON DETAIL of PostgreSQL, or its copy in the HINT when Npgsql hides the DETAIL. It is
+    /// empty when neither field holds a JSON object.
     /// </summary>
     public IReadOnlyDictionary<string, JsonElement> Details { get; }
 
@@ -144,13 +146,13 @@ public sealed class TaskGroupClosedException : DiagnosedException
     {
     }
 
-    /// <summary>The group, or <c>null</c> when the detail has none. The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>.</summary>
+    /// <summary>The group, or <c>null</c> when the detail has none.</summary>
     public Guid? GroupId => Uuid("groupId");
 
-    /// <summary>The state of the group, or <c>null</c> when the detail has none or an unknown one. The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>.</summary>
+    /// <summary>The state of the group, or <c>null</c> when the detail has none or an unknown one.</summary>
     public TaskGroupState? State => Internal.Wire.Optional<TaskGroupState>(String("state"));
 
-    /// <summary>Why the group refused, or <c>null</c> when the detail has none or an unknown one. The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>.</summary>
+    /// <summary>Why the group refused, or <c>null</c> when the detail has none or an unknown one.</summary>
     public TaskGroupClosedReason? Reason => Internal.Wire.Optional<TaskGroupClosedReason>(String("reason"));
 }
 
@@ -163,16 +165,16 @@ public sealed class TaskGroupLimitExceededException : DiagnosedException
     {
     }
 
-    /// <summary>The group, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The group, or <c>null</c> when the detail has none.</summary>
     public Guid? GroupId => Uuid("groupId");
 
-    /// <summary>The member limit, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The member limit, or <c>null</c> when the detail has none.</summary>
     public long? Limit => Number("limit");
 
-    /// <summary>The member count before the add, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The member count before the add, or <c>null</c> when the detail has none.</summary>
     public long? Total => Number("total");
 
-    /// <summary>The number of tasks the add requested, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The number of tasks the add requested, or <c>null</c> when the detail has none.</summary>
     public long? Requested => Number("requested");
 }
 
@@ -187,15 +189,15 @@ public sealed class TaskGroupMembershipConflictException : DiagnosedException
     {
     }
 
-    /// <summary>The group, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The group, or <c>null</c> when the detail has none.</summary>
     public Guid? GroupId => Uuid("groupId");
 
-    /// <summary>The existing task that idempotency returned, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The existing task that idempotency returned, or <c>null</c> when the detail has none.</summary>
     public Guid? TaskId => Uuid("taskId");
 
-    /// <summary>The 1-based position of the request in the add, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The 1-based position of the request in the add, or <c>null</c> when the detail has none.</summary>
     public long? Ordinal => Number("ordinal");
 
-    /// <summary>The group that the existing task belongs to, or <c>null</c> The value comes from the DETAIL, which needs <c>Include Error Detail=true</c>; without it the value is <c>null</c>.</summary>
+    /// <summary>The group that the existing task belongs to, or <c>null</c> when the detail has none.</summary>
     public Guid? MemberOf => Uuid("memberOf");
 }

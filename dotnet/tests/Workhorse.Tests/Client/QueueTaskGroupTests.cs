@@ -88,14 +88,16 @@ public sealed class QueueTaskGroupTests(ScratchDatabase database)
     }
 
     [Fact]
-    public async Task ASealedGroupRefusesAnAddWithFallbackDetailsByDefault()
+    public async Task ASealedGroupRefusesAnAddWithItsDetailsByDefault()
     {
+        // Npgsql hides the DETAIL by default, so the details come from the HINT (ADR 0107).
         var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = UniqueName("closed") });
         var group = await queue.TaskGroupAsync(new TaskGroupCallbacks(), _ => { }, Token);
         var error = await Assert.ThrowsAsync<TaskGroupClosedException>(() =>
             queue.AddToTaskGroupAsync(group.Group.Id, [new EnqueueRequest { TaskType = "late" }], Token));
-        Assert.Null(error.GroupId);
-        Assert.Null(error.Reason);
+        Assert.Equal(group.Group.Id, error.GroupId);
+        Assert.Equal(TaskGroupClosedReason.Finished, error.Reason);
+        Assert.Equal(TaskGroupState.Finished, error.State);
     }
 
     [Fact]

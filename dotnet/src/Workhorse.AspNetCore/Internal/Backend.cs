@@ -209,32 +209,27 @@ internal sealed class Backend
             "full" => QueueTier.Full,
             var other => throw new ArgumentException($"tier must be fast or full, not {other}"),
         };
-        var queue = Text(input, "queue");
         try
         {
-            var result = await _admin.SetQueueTierAsync(queue, tier, Audit(input, actor), cancellationToken).ConfigureAwait(false);
+            var result = await _admin.SetQueueTierAsync(Text(input, "queue"), tier, Audit(input, actor), cancellationToken).ConfigureAwait(false);
             return Write(new JsonObject { ["status"] = "set", ["tier"] = Snake(result) });
         }
-        catch (FastTierUnsupportedException error)
+        catch (FastTierUnsupportedException error) when (TierRefusal(error) is { } status)
         {
-            return Write(new JsonObject { ["status"] = TierRefusal(queue, error), ["tier"] = null });
+            return Write(new JsonObject { ["status"] = status, ["tier"] = null });
         }
     }
 
-    /// <summary>The <c>setQueueTier</c> status that names the guard of <c>set_queue_tier_v1</c>.</summary>
-    /// <exception cref="InvalidOperationException">
-    /// The exception names no known guard. Npgsql removes the PostgreSQL detail that names it unless
-    /// the connection string sets <c>Include Error Detail=true</c>.
-    /// </exception>
-    internal static string TierRefusal(string queue, FastTierUnsupportedException error) => error.Feature switch
+    /// <summary>
+    /// The <c>setQueueTier</c> status that names the guard of <c>set_queue_tier_v1</c>, or <c>null</c>
+    /// when the exception names no known guard. Then the exception propagates, as in the JVM backend.
+    /// </summary>
+    internal static string? TierRefusal(FastTierUnsupportedException error) => error.Feature switch
     {
         "tier change" => "live_tasks",
         "concurrency policies" => "concurrency_policy",
         "rate-limit policies" => "rate_limit_policy",
-        var feature => throw new InvalidOperationException(
-            $"set_queue_tier_v1 refused the switch of queue {queue} for the feature \"{feature}\". "
-            + "Set Include Error Detail=true on the dashboard data source so that the dashboard can name the cause.",
-            error),
+        _ => null,
     };
 
     /// <summary>Chooses the history that a fast-tier queue records. An absent setting keeps its current value.</summary>

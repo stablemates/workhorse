@@ -621,6 +621,10 @@ describe("schema installation", () => {
         version: 76,
         description: "fence the worker deregistration by instance",
       },
+      {
+        version: 77,
+        description: "copy the diagnostic details into hint",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
