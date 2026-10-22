@@ -12,7 +12,8 @@
       "go": "Error",
       "rust": "Error",
       "ruby": "StandardError",
-      "java": "Exception"
+      "java": "Exception",
+      "csharp": "Exception"
     },
     "forbiddenNameCharacters": ["*", ".", "<", " "]
   },
