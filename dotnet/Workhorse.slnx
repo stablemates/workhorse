@@ -5,6 +5,9 @@
     <Project Path="src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
     <Project Path="src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
   </Folder>
+  <Folder Name="/demo/">
+    <Project Path="demo/Workhorse.DemoWorker/Workhorse.DemoWorker.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Workhorse.Tests/Workhorse.Tests.csproj" />
     <Project Path="tests/Workhorse.AspNetCore.Tests/Workhorse.AspNetCore.Tests.csproj" />

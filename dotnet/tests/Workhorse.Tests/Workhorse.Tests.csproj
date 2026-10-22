@@ -20,6 +20,8 @@
     <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
     <ProjectReference Include="../../src/Workhorse.EntityFrameworkCore/Workhorse.EntityFrameworkCore.csproj" />
     <ProjectReference Include="../../src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj" />
+    <!-- The demo worker tests run the demo program against a scratch database. -->
+    <ProjectReference Include="../../demo/Workhorse.DemoWorker/Workhorse.DemoWorker.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- ScratchDatabase installs the schema of this checkout. -->

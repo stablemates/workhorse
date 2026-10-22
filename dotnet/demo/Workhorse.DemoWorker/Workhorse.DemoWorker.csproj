@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The .NET counterpart of the demo worker programs. It runs on the Generic Host with
+    Workhorse.Hosting, as a .NET application does. The demo does not start it (SM-1630, SM-1680).
+    Workhorse.Tests runs it against a scratch database.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Workhorse.DemoWorker</RootNamespace>
+    <!-- The worker formats no culture-specific text. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Workhorse/Workhorse.csproj" />
+    <ProjectReference Include="../../src/Workhorse.Hosting/Workhorse.Hosting.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Workhorse.Tests" />
+  </ItemGroup>
+</Project>
