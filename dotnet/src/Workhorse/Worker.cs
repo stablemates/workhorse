@@ -318,7 +318,7 @@ public sealed partial class Worker : IAsyncDisposable
         _runGate.Release();
     }
 
-    private void Register(string taskType, Func<HandlerContext, string, Task<object?>> invoke)
+    private void Register(string taskType, Func<HandlerContext, string, Task<object?>> invoke, BatchCoordinator? batch = null)
     {
         if (string.IsNullOrEmpty(taskType))
         {
@@ -332,7 +332,7 @@ public sealed partial class Worker : IAsyncDisposable
                 throw new InvalidOperationException("A handler registers before the worker's first run");
             }
 
-            _handlers[taskType] = new Registration(invoke);
+            _handlers[taskType] = new Registration(invoke, batch);
         }
     }
 
@@ -348,7 +348,8 @@ public sealed partial class Worker : IAsyncDisposable
         return [.. names.Distinct(StringComparer.Ordinal)];
     }
 
-    private sealed record Registration(Func<HandlerContext, string, Task<object?>> Invoke);
+    /// <summary>A handler, and the coordinator of a batch handler.</summary>
+    private sealed record Registration(Func<HandlerContext, string, Task<object?>> Invoke, BatchCoordinator? Batch);
 
     private void OnRegistrationError(Exception error)
     {

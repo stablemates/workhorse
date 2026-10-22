@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
@@ -11,14 +12,19 @@ public sealed partial class Worker
     private const int NotificationClaimDelayMs = 50;
     private static readonly JsonElement JsonNull = JsonDocument.Parse("null").RootElement.Clone();
 
+    /// <summary>The cohort of a plain claim that fills the whole worker.</summary>
+    private const int Whole = -1;
+
     /// <summary>
-    /// Guards the slot accounting, which handler tasks share with the dispatch loop. A slot is busy
-    /// while its task is admitted, and reserved while a claim for it is in flight. The accounting
-    /// outlives a run, so a handler that an incomplete stop abandoned keeps its slot in the next run.
+    /// Guards the slot accounting, the queue tiers, and the claim order, which handler tasks share
+    /// with the dispatch loop and with fast-tier completions.
     /// </summary>
     private readonly Lock _stateLock = new();
-    private int _busy;
-    private int _reserved;
+
+    /// <summary>The claim order that dispatch gave each admitted task. A batch coordinator sorts by it.</summary>
+    private readonly ConcurrentDictionary<(Guid TaskId, long FenceToken), long> _claimOrder = new();
+    private Slots? _slotState;
+    private long _dispatchSequence;
     private long _nextQueue;
     private int _notified;
     private volatile Listener.Subscription? _listener;
@@ -26,22 +32,29 @@ public sealed partial class Worker
     /// <summary>Whether the latest run's listener listens now. A test reads it.</summary>
     internal bool ListeningForTests => _listener is { IsListening: true };
 
-    /// <summary>One plain claim and the slots that it reserved.</summary>
-    private sealed record ClaimPlan(int Limit);
+    /// <summary>The slot accounting. It outlives a run, so a handler that an incomplete stop abandoned keeps its slot.</summary>
+    private Slots SlotState => _slotState ??= new Slots(Concurrency, _refillBatch, Cohorts);
+
+    /// <summary>
+    /// One plain claim: its limit, its cohort (<see cref="Whole"/> for the whole worker), and the
+    /// slots that it reserved in that cohort.
+    /// </summary>
+    private sealed record ClaimPlan(int Limit, int Cohort, int CohortLimit);
 
     /// <summary>What one claim returned.</summary>
     private sealed record ClaimResult(ClaimPlan Plan, List<Claimed> Claimed, long WakeVersion, Exception? Error);
 
-    /// <summary>One claimed task, its payload text, and the monotonic time that its claim left.</summary>
-    private sealed record Claimed(ClaimedTask Task, string Payload, long StartedAt);
+    /// <summary>
+    /// One claimed task, its payload text, the monotonic time that its claim left, and whether a
+    /// fast-tier statement claimed it. Only such a task completes through the fused statement.
+    /// </summary>
+    private sealed record Claimed(ClaimedTask Task, string Payload, long StartedAt, bool FastClaimed = false);
 
     /// <summary>The claims that started and have not answered. A test reads it.</summary>
     internal int ClaimsInFlight;
 
     /// <summary>The claims that have answered. A test reads it to know that a claim found nothing.</summary>
     internal int ClaimsAnswered;
-
-    private int FreeSlots => Concurrency - _busy - _reserved;
 
     /// <summary>
     /// Keeps the slots full without one serial claim round trip for each task (ADR 0076). A claim
@@ -181,21 +194,22 @@ public sealed partial class Worker
             // to return. A claim that returns later is not run: its leases expire.
             var now = Monotonic.Now();
             var claimDeadline = Math.Min(now + Math.Max(run.Deadline - now, UnwindWindowNanos), run.Deadline + UnwindWindowNanos);
-            while (inFlight > 0)
+            // A fused claim of a fast-tier completion holds leases too, so the wait covers it.
+            while (inFlight > 0 || Volatile.Read(ref run.FusedClaims) > 0)
             {
                 if (!run.Results.TryDequeue(out var result))
                 {
                     var remaining = claimDeadline - Monotonic.Now();
                     if (remaining <= 0)
                     {
-                        WorkerLog.ClaimsAbandoned(_logger, inFlight);
+                        WorkerLog.ClaimsAbandoned(_logger, inFlight + Volatile.Read(ref run.FusedClaims));
                         CloseClaims(run);
                         ReleaseLateClaims(run);
                         break;
                     }
 
                     _wake.Reset();
-                    if (run.Results.IsEmpty)
+                    if (run.Results.IsEmpty && (inFlight > 0 || Volatile.Read(ref run.FusedClaims) > 0))
                     {
                         await _wake.WaitAsync(Math.Min(remaining, IdleCheckNanos)).ConfigureAwait(false);
                     }
@@ -253,23 +267,90 @@ public sealed partial class Worker
             var plan = Plan(inFlight, run);
             if (plan is not null)
             {
-                _reserved += plan.Limit;
+                SlotState.Reserve(plan);
             }
 
             return plan;
         }
     }
 
-    /// <summary>Plans the next claim, or returns <c>null</c>. The caller holds the state lock.</summary>
+    /// <summary>
+    /// Plans the next plain claim, or returns <c>null</c>. With one cohort, or while a queue answers
+    /// on the full tier, a claim takes every free slot of the worker (ADR 0076, rules 1 to 9 and 15).
+    /// Otherwise one claim at a time leaves, for the roomiest cohort (rule 14). The caller holds the
+    /// state lock.
+    /// </summary>
     private ClaimPlan? Plan(int inFlight, RunState run)
     {
-        var free = FreeSlots;
-        if (free <= 0 || !run.GateOpen || (inFlight > 0 && free < _refillBatch))
+        var slots = SlotState;
+        var free = slots.Free;
+        if (free <= 0 || !run.GateOpen)
         {
             return null;
         }
 
-        return new ClaimPlan(free);
+        if (Cohorts == 1 || _fullTierUntil.Count > 0)
+        {
+            return inFlight > 0 && free < _refillBatch ? null : new ClaimPlan(free, Whole, free);
+        }
+
+        if (inFlight > 0)
+        {
+            return null;
+        }
+
+        var cohort = slots.Roomiest();
+        var cohortLimit = Math.Min(free, slots.CohortFree(cohort));
+        if (_queues.All(_fastTierQueues.Contains))
+        {
+            return cohortLimit > 0 ? new ClaimPlan(cohortLimit, cohort, cohortLimit) : null;
+        }
+
+        // A claim that still has to learn a queue's tier reserves every free slot, so a queue that
+        // answers on the full tier fills them all.
+        return new ClaimPlan(free, cohort, Math.Max(0, cohortLimit));
+    }
+
+    /// <summary>
+    /// Gives a claimed task a slot and a handler task. The caller holds the state lock, so the slot
+    /// and the reservation that it came from change together. The task joins
+    /// <paramref name="cohort"/> while that cohort has a free slot, and the roomiest cohort
+    /// otherwise. A claimed task always runs, even after a stop or a pause, because its lease is
+    /// already held.
+    /// </summary>
+    private void Admit(Claimed claimed, int cohort, RunState run)
+    {
+        var slots = SlotState;
+        var chosen = cohort == Whole || slots.CohortFree(cohort) <= 0 ? slots.Roomiest() : cohort;
+        slots.Busy[chosen]++;
+        slots.BusyTotal++;
+        // Dispatch assigns the claim order here. A batch coordinator cannot read the arrival order off
+        // its own lock, because handler tasks reach that lock in thread-pool order.
+        _claimOrder[(claimed.Task.Id, claimed.Task.FenceToken)] = _dispatchSequence++;
+        var task = new Active(claimed, run) { Cohort = chosen };
+        _active[task] = 0;
+        _ = Task.Run(() => RunClaimedTaskAsync(task));
+    }
+
+    /// <summary>Frees the slot of an attempt that ended or never started.</summary>
+    private void ReleaseSlot(Active task)
+    {
+        lock (_stateLock)
+        {
+            var slots = SlotState;
+            slots.Busy[task.Cohort]--;
+            slots.BusyTotal--;
+            if (task.HandedOver)
+            {
+                task.HandedOver = false;
+                slots.HandedOver[task.Cohort]--;
+                slots.HandedOverTotal--;
+            }
+
+            _claimOrder.TryRemove((task.Task.Id, task.Task.FenceToken), out _);
+        }
+
+        LeaveBatch(task.Task);
     }
 
     /// <summary>Admits the tasks that one claim returned, and records whether it made progress.</summary>
@@ -277,11 +358,11 @@ public sealed partial class Worker
     {
         lock (_stateLock)
         {
-            _reserved -= result.Plan.Limit;
+            SlotState.Unreserve(result.Plan);
             // A claimed task holds a lease, so it runs even when the loop stops or failed.
             foreach (var claimed in result.Claimed)
             {
-                Admit(claimed, run);
+                Admit(claimed, result.Plan.Cohort, run);
             }
 
             SettleClaimProgress(run, result.Claimed, result.WakeVersion, result.Error);
@@ -361,7 +442,8 @@ public sealed partial class Worker
                 var withdrawn = (delayed && (StopRequested(run) || IsPaused)) || !run.GateOpen;
                 if (!withdrawn)
                 {
-                    await ClaimAcrossQueuesAsync(run, plan.Limit, claimed).ConfigureAwait(false);
+                    await ClaimAcrossQueuesAsync(run, plan.Limit, claimed, plan.Cohort == Whole ? plan.Limit : plan.CohortLimit)
+                        .ConfigureAwait(false);
                 }
             }
             catch (Exception failure)
@@ -384,14 +466,21 @@ public sealed partial class Worker
 
     /// <summary>
     /// Claims from each queue at most once, one queue further on each call. A later queue's error
-    /// keeps the leases already taken. The gate is read again before each queue.
+    /// keeps the leases already taken. The gate is read again before each queue. Fast-tier queues
+    /// together give at most <paramref name="fastLimit"/> tasks, the free slots of one cohort.
     /// </summary>
-    private async Task ClaimAcrossQueuesAsync(RunState run, int limit, List<Claimed> claimed)
+    private async Task ClaimAcrossQueuesAsync(RunState run, int limit, List<Claimed> claimed, int fastLimit)
     {
         var start = (int)(Interlocked.Increment(ref _nextQueue) % _queues.Length);
         for (var offset = 0; offset < _queues.Length && claimed.Count < limit && run.GateOpen; offset++)
         {
             var queue = _queues[(start + offset) % _queues.Length];
+            if (await ClaimFastAsync(run, queue, Math.Min(limit, fastLimit) - claimed.Count).ConfigureAwait(false) is { } fast)
+            {
+                claimed.AddRange(fast);
+                continue;
+            }
+
             // The local lease window starts when the claim goes out, after the wait for the pool, so a
             // slow pool cannot spend the lease before PostgreSQL grants it.
             var startedAt = 0L;
@@ -422,9 +511,12 @@ public sealed partial class Worker
                 }
             }
 
-            claimed.AddRange(rows.Select(row => new Claimed(ClaimedTaskOf(row, queue), row.Text("payload") ?? "null", startedAt)));
+            claimed.AddRange(rows.Select(row => ClaimedOf(row, queue, startedAt, fastClaimed: false)));
         }
     }
+
+    private static Claimed ClaimedOf(Row row, string queue, long startedAt, bool fastClaimed) =>
+        new(ClaimedTaskOf(row, queue), row.Text("payload") ?? "null", startedAt, fastClaimed);
 
     private static ClaimedTask ClaimedTaskOf(Row row, string queue) => new()
     {
@@ -498,7 +590,100 @@ public sealed partial class Worker
         {
             lock (_stateLock)
             {
-                _reserved -= late.Plan.Limit;
+                SlotState.Unreserve(late.Plan);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The worker's slot accounting, which the dispatch loop and fast-tier completions share. Every
+    /// field changes under the state lock. A slot is busy while its task is admitted, reserved while a
+    /// claim for it is in flight, and handed over once a completion claimed a task into it. A
+    /// handed-over slot counts as free, because the task that fills it is already admitted. On the
+    /// fast tier the slots split into cohorts (ADR 0076, rule 10).
+    /// </summary>
+    private sealed class Slots
+    {
+        internal Slots(int concurrency, int refillBatch, int cohorts)
+        {
+            Concurrency = concurrency;
+            RefillBatch = refillBatch;
+            // The first cohorts take the remainder, so sizes differ by at most one slot.
+            Capacity = [.. Enumerable.Range(0, cohorts).Select(cohort => (concurrency / cohorts) + (cohort < concurrency % cohorts ? 1 : 0))];
+            Busy = new int[cohorts];
+            HandedOver = new int[cohorts];
+            Reserved = new int[cohorts];
+            Claims = new int[cohorts];
+        }
+
+        internal int Concurrency { get; }
+
+        internal int RefillBatch { get; }
+
+        internal int[] Capacity { get; }
+
+        internal int[] Busy { get; }
+
+        internal int[] HandedOver { get; }
+
+        internal int[] Reserved { get; }
+
+        /// <summary>The plain claims in flight for each cohort.</summary>
+        internal int[] Claims { get; }
+
+        internal int BusyTotal { get; set; }
+
+        internal int HandedOverTotal { get; set; }
+
+        internal int ReservedTotal { get; set; }
+
+        /// <summary>The plain claims in flight for the whole worker.</summary>
+        internal int WholeClaims { get; set; }
+
+        internal int Free => Concurrency - BusyTotal + HandedOverTotal - ReservedTotal;
+
+        internal int CohortFree(int cohort) => Capacity[cohort] - Busy[cohort] + HandedOver[cohort] - Reserved[cohort];
+
+        /// <summary>The cohort with the most free slots, the lowest index on a tie.</summary>
+        internal int Roomiest()
+        {
+            var best = 0;
+            for (var cohort = 1; cohort < Capacity.Length; cohort++)
+            {
+                if (CohortFree(cohort) > CohortFree(best))
+                {
+                    best = cohort;
+                }
+            }
+
+            return best;
+        }
+
+        internal void Reserve(ClaimPlan plan)
+        {
+            ReservedTotal += plan.Limit;
+            if (plan.Cohort == Whole)
+            {
+                WholeClaims++;
+            }
+            else
+            {
+                Claims[plan.Cohort]++;
+                Reserved[plan.Cohort] += plan.CohortLimit;
+            }
+        }
+
+        internal void Unreserve(ClaimPlan plan)
+        {
+            ReservedTotal -= plan.Limit;
+            if (plan.Cohort == Whole)
+            {
+                WholeClaims--;
+            }
+            else
+            {
+                Claims[plan.Cohort]--;
+                Reserved[plan.Cohort] -= plan.CohortLimit;
             }
         }
     }

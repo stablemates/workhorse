@@ -41,6 +41,11 @@ public sealed partial class Worker
         /// <summary>Set by the drain for an attempt that still runs at the end of the unwind window.</summary>
         internal volatile bool Abandoned;
 
+        /// <summary>The slot cohort of the attempt. A fused completion hands its slot over under the state lock.</summary>
+        internal int Cohort;
+
+        internal bool HandedOver;
+
         /// <summary>Starts the attempt, unless the drain abandoned it first.</summary>
         internal bool Begin() => Interlocked.CompareExchange(ref _state, Started, Queued) == Queued;
 
@@ -50,26 +55,6 @@ public sealed partial class Worker
 
     /// <summary>The attempts that the worker admitted and that have not ended. A test reads it.</summary>
     internal int ActiveAttempts => _active.Count;
-
-    /// <summary>
-    /// Gives a claimed task a slot and a handler task. The caller holds the state lock. A claimed task
-    /// always runs, even after a stop or a pause, because its lease is already held.
-    /// </summary>
-    private void Admit(Claimed claimed, RunState run)
-    {
-        _busy++;
-        var task = new Active(claimed, run);
-        _active[task] = 0;
-        _ = Task.Run(() => RunClaimedTaskAsync(task));
-    }
-
-    private void ReleaseSlot()
-    {
-        lock (_stateLock)
-        {
-            _busy--;
-        }
-    }
 
     private async Task RunClaimedTaskAsync(Active task)
     {
@@ -98,7 +83,7 @@ public sealed partial class Worker
         finally
         {
             _active.TryRemove(task, out _);
-            ReleaseSlot();
+            ReleaseSlot(task);
             _wake.Signal();
         }
     }
@@ -136,8 +121,7 @@ public sealed partial class Worker
         string encoded;
         try
         {
-            var queue = claimed.Queue;
-            var context = new DurableContext(this, task, arbiter, statementToken => FastTierAsync(queue, statementToken));
+            var context = new DurableContext(this, task, arbiter, TierRead(task));
             var result = await registration.Invoke(context, task.Claimed.Payload).ConfigureAwait(false);
             // A suspended attempt ignores its result, so the worker neither encodes nor checks it.
             encoded = arbiter.Suspended ? "null" : await EncodeResultAsync(claimed, result, token).ConfigureAwait(false);
@@ -182,7 +166,7 @@ public sealed partial class Worker
             return;
         }
 
-        await CompleteAsync(claimed, encoded, arbiter, token).ConfigureAwait(false);
+        await CompleteAsync(task, encoded, arbiter, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -266,10 +250,10 @@ public sealed partial class Worker
         _ => false,
     };
 
-    private async Task CompleteAsync(ClaimedTask task, string encoded, Arbiter arbiter, CancellationToken cancellationToken)
+    private async Task CompleteAsync(Active active, string encoded, Arbiter arbiter, CancellationToken cancellationToken)
     {
-        var row = await FencedRowAsync(SqlCatalogue.CompleteV1, task, () => [Parameters.Json(encoded)], cancellationToken).ConfigureAwait(false);
-        if (row.Boolean("accepted") == true)
+        var task = active.Task;
+        if (await CompleteAttemptAsync(active, encoded, cancellationToken).ConfigureAwait(false))
         {
             WorkerLog.Completed(_logger, task.Id);
             arbiter.Submit(Outcome.Completed);

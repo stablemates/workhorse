@@ -74,6 +74,9 @@ public sealed partial class Worker
         internal Exception? ClaimError;
         internal Task? Maintenance;
 
+        /// <summary>The fused claims of fast-tier completions in flight. It changes under the state lock.</summary>
+        internal int FusedClaims;
+
         /// <summary>The end of the shutdown grace, or 0 until the run stops claiming.</summary>
         internal long Deadline;
 
@@ -764,6 +767,8 @@ public sealed partial class Worker
     /// </summary>
     private async Task<int> DrainAsync(RunState run, long deadline, long end)
     {
+        // A lingering batch cannot grow once claims stop, so it runs as soon as its members arrive.
+        FlushBatches();
         await WaitUntilIdleAsync(deadline).ConfigureAwait(false);
         // A task that the thread pool never started has no handler to unwind, so its release starts
         // before the unwind window. No handler ran, so the task goes back without an attempt.
@@ -773,7 +778,7 @@ public sealed partial class Worker
             if (task.AbandonUnstarted())
             {
                 _active.TryRemove(task, out _);
-                ReleaseSlot();
+                ReleaseSlot(task);
                 unstarted.Add(task);
             }
         }

@@ -1359,3 +1359,59 @@ This amendment changes the order:
 The settlement uses the worker's own connection and no scoped service. So a handler sees no
 difference. A hook in the core that disposes the scope after the settlement was rejected. It adds
 public surface to the core, and it has no observable effect.
+
+## Amendment: a batch handler returns one outcome for each member (2026-10-22)
+
+The Worker surface section shows a batch handler that returns a `Task`. SM-1621 found that a `Task`
+cannot give each member its own outcome. Ruby and Java return one outcome for each member. The
+shared fixture `priority-ordered-mixed-batch` needs a batch in which one member fails and the others
+succeed. This amendment supersedes the `HandleBatch` line of that section.
+
+```csharp
+public void HandleBatch<TPayload>(string taskType, BatchOptions options,
+    Func<IReadOnlyList<BatchHandlerItem<TPayload>>, CancellationToken,
+        Task<IReadOnlyList<BatchHandlerOutcome>>> handler);
+public void HandleBatch<TPayload>(IBatchHandler<TPayload> handler, BatchOptions options);
+
+public interface IBatchHandler<TPayload>
+{
+    string TaskType { get; }
+    Task<IReadOnlyList<BatchHandlerOutcome>> HandleAsync(
+        IReadOnlyList<BatchHandlerItem<TPayload>> items, CancellationToken cancellationToken);
+}
+
+public sealed record BatchHandlerItem<TPayload>
+{
+    public TPayload Payload { get; }
+    public BatchHandlerContext Context { get; }
+}
+
+public abstract record BatchHandlerOutcome;        // only the SDK derives from it
+public sealed record BatchSucceeded : BatchHandlerOutcome
+{
+    public BatchSucceeded(object? result);
+    public object? Result { get; }
+}
+public sealed record BatchFailed : BatchHandlerOutcome
+{
+    public BatchFailed(Exception error);           // refuses null
+    public Exception Error { get; }
+}
+```
+
+Each record follows "Public types grow only additively": it has no positional parameters and no
+public `Deconstruct`. Only the worker creates a `BatchHandlerItem`.
+
+1. The handler returns one outcome for each item, in item order. `BatchSucceeded` completes the
+   member with its result. `BatchFailed` fails the member's attempt, and PostgreSQL then retries or
+   fails the task by its retry policy.
+2. If the handler throws, every member fails with the exception. If it returns `null`, a list of the
+   wrong length, or a `null` element, every member fails with a `WorkhorseException` that names the
+   problem, as in Java.
+3. The worker cancels the batch token after it cancels the token of every member. If the handler then
+   throws an `OperationCanceledException` of the batch token, each member settles as if its own token
+   was cancelled. So a batch that stops for the shutdown returns its members to their queue.
+
+The SM-1613 coordinator chose this form during SM-1621. The rejected alternative kept the `Task`
+result and gave each item a `Succeed` and a `Fail` method. An item without a call would then succeed
+with `null`, so a missing outcome would not be an error.
