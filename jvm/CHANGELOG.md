@@ -23,6 +23,12 @@ adds.
 
 ### Fixes
 
+- **A worker reads a stored contract schema with a fraction outside the double range.** Another
+  SDK can synchronize a schema such as `{"maximum": 1000…0.1}` with 310 digits before the point.
+  Before this change, the JVM refused that constant, so it could not load the payload contract.
+  Now `Contracts.storedSchema` reads the schema with `Json.parseSchema`, which keeps the constant as
+  a `BigDecimal`, and `ContractSchema` compares it exactly. The value paths still refuse such a
+  fraction (SM-1593).
 - **The dashboard reads a stored long integer without a `BigInteger` parse.** A stored value
   without a payload contract can hold integers of 131,072 digits. Before this change, each
   dashboard read parsed such an integer into a `BigInteger`, which took about 0.2 s for each

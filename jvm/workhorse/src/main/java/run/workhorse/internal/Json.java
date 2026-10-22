@@ -15,12 +15,12 @@ import org.jspecify.annotations.Nullable;
  * <p>A tree value is a {@code Map<String, @Nullable Object>} in source order, a {@code
  * List<@Nullable Object>}, a {@code Long} or a {@code BigInteger} for an integer, a {@code Double}
  * for a number with a fraction or an exponent, a {@code String}, a {@code Boolean}, or {@code
- * null}. A tree from {@link #parseExact(String)} can also hold a {@code BigDecimal}, and a tree
- * from {@link #parseForWrite(String)} can hold the token of a long integer. The parser is strict:
- * it refuses a token that is not JSON, a lone surrogate, and trailing text. A duplicate object key
- * keeps the last value, as PostgreSQL's {@code jsonb} does. It also refuses a number token that is
- * longer than a limit, because {@code new BigInteger(String)} takes time that grows with the square
- * of the number of digits.
+ * null}. A tree from {@link #parseExact(String)} or {@link #parseSchema(String)} can also hold a
+ * {@code BigDecimal}, and a tree from {@link #parseForWrite(String)} can hold the token of a long
+ * integer. The parser is strict: it refuses a token that is not JSON, a lone surrogate, and
+ * trailing text. A duplicate object key keeps the last value, as PostgreSQL's {@code jsonb} does.
+ * It also refuses a number token that is longer than a limit, because {@code new
+ * BigInteger(String)} takes time that grows with the square of the number of digits.
  */
 public final class Json {
   private static final int MAX_DEPTH = 1000;
@@ -56,6 +56,8 @@ public final class Json {
     TREE,
     /** As {@link #TREE}, but a {@code BigDecimal} for a value that a double cannot hold. */
     EXACT,
+    /** As {@link #EXACT}, but a fraction outside the double range is a {@code BigDecimal} too. */
+    SCHEMA,
     /** As {@link #TREE}, but an integer outside the {@code long} range keeps its token. */
     WRITE,
   }
@@ -98,6 +100,22 @@ public final class Json {
   public static @Nullable Object parseExact(String text) {
     Parser parser = new Parser(text, MAX_NUMBER_LENGTH, Numbers.EXACT);
     return parser.document();
+  }
+
+  /**
+   * Parses a stored contract schema into a tree that keeps the value of every number (SM-1593).
+   *
+   * <p>The tree is the tree of {@link #parseExact(String)}, but a fraction outside the double range
+   * is a {@code BigDecimal}. {@link #parseExact(String)} refuses such a fraction to protect a value
+   * path. A schema is not a value: {@code ContractSchema} compares each constant as a {@code
+   * BigDecimal}, and no SDK reads a schema constant back as a value. A value path must not use this
+   * parse.
+   *
+   * @throws IllegalArgumentException if the text is not one strict JSON value, or if it holds a
+   *     number token that is too long or outside the {@code numeric} range
+   */
+  public static @Nullable Object parseSchema(String text) {
+    return new Parser(text, MAX_NUMBER_LENGTH, Numbers.SCHEMA).document();
   }
 
   /**
@@ -465,7 +483,7 @@ public final class Json {
         return value;
       }
       double value = Double.parseDouble(token);
-      if (numbers == Numbers.EXACT) {
+      if (numbers == Numbers.EXACT || numbers == Numbers.SCHEMA) {
         return exact(token, value);
       }
       if (!Double.isFinite(value)) {
@@ -493,8 +511,9 @@ public final class Json {
         return value;
       }
       // PostgreSQL writes such a value back with its fraction digits, and parse() refuses that text
-      // (SM-1537). A decimal without a fraction reads back as an integer.
-      if (decimal.scale() > 0 && !Double.isFinite(value)) {
+      // (SM-1537). A decimal without a fraction reads back as an integer. A schema constant is not
+      // read back as a value, so a schema keeps the decimal (SM-1593).
+      if (numbers == Numbers.EXACT && decimal.scale() > 0 && !Double.isFinite(value)) {
         throw error("a fraction outside the double range");
       }
       return decimal;

@@ -160,7 +160,7 @@ final class Runner {
       schema =
           new ContractSchema(
               fixture.get("schemaJson") instanceof String text
-                  ? Json.parseExact(text)
+                  ? Json.parseSchema(text)
                   : fixture.get("schema"));
     } catch (IllegalArgumentException | WorkhorseException error) {
       if (Boolean.TRUE.equals(fixture.get("schemaError"))) {

@@ -176,6 +176,24 @@ class JsonTest {
     assertEquals(new BigInteger(integer), Json.parse(integer));
   }
 
+  // SM-1593: a schema constant is not read back as a value, so a schema parse keeps the decimal.
+  @Test
+  void aSchemaParseKeepsAFractionThatTheExactParseRefuses() {
+    String integer = "1" + "0".repeat(309);
+    for (String text : List.of(integer + ".1", "-" + integer + ".5", "1.5e400")) {
+      assertEquals(new BigDecimal(text), Json.parseSchema(text), text);
+      assertThrows(IllegalArgumentException.class, () -> Json.parse(text), text);
+    }
+    assertThrows(IllegalArgumentException.class, () -> Json.parseExact(integer + ".1"));
+    String text = "{\"a\":[1.5,12345678901234567.89," + integer + ",0.30000000000000000001]}";
+    assertEquals(Json.write(Json.parseExact(text)), Json.write(Json.parseSchema(text)));
+    for (String outside : List.of("1e131072", "1e-16384", "0.5" + "0".repeat(16_383))) {
+      IllegalArgumentException error =
+          assertThrows(IllegalArgumentException.class, () -> Json.parseSchema(outside), outside);
+      assertTrue(error.getMessage().endsWith("a number outside the numeric range"), outside);
+    }
+  }
+
   @Test
   void theDefaultParseStillGivesADouble() {
     assertEquals(1.2345678901234568E16, Json.parse("12345678901234567.89"));
