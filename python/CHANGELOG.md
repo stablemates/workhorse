@@ -34,6 +34,10 @@ reports no size, the worker polls. Each run then logs `workhorse.worker.polling_
 severity. The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
 `workhorse.worker.pool_max_size`. Without the opt-out, nothing changes.
 
+The worker reads the pool size at the start of each run, just before the listener subscribes. It
+does not keep the size from construction. Thus, if the application resizes the pool to 1 after it
+constructs the worker, the worker polls and does not start the listener (SM-1677).
+
 ### A contract compares a stored schema number with all its digits
 
 Before this change, the Python SDK read a stored contract schema with `json.loads`, which reads a

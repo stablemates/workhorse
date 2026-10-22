@@ -359,6 +359,16 @@ def _dispatch_refill_batch(concurrency: int) -> int:
     return -(-concurrency // 4)
 
 
+def _reported_pool_size(pool: object) -> object:
+    """The maximum size that the pool reports now, from ``max_size`` or ``get_max_size()``."""
+    capacity = getattr(pool, "max_size", None)
+    if capacity is None:
+        get_max_size = getattr(pool, "get_max_size", None)
+        if callable(get_max_size):
+            capacity = get_max_size()
+    return capacity
+
+
 def _dispatch_cohorts(concurrency: int, spare_connections: int | None = None) -> int:
     """Slot cohorts a worker without a cohorts option uses (ADR 0076, rule 11).
 
@@ -1390,11 +1400,7 @@ class Worker:
         _executor: _SyncRowExecutor | None = None,
         _heartbeat_executor_factory: _HeartbeatExecutorFactory | None = None,
     ) -> None:
-        capacity = getattr(pool, "max_size", None)
-        if capacity is None:
-            get_max_size = getattr(pool, "get_max_size", None)
-            if callable(get_max_size):
-                capacity = get_max_size()
+        capacity = _reported_pool_size(pool)
         if not shared_heartbeats and (not isinstance(capacity, int) or capacity < 3):
             found = "unknown" if capacity is None else str(capacity)
             raise ValueError(
@@ -1448,10 +1454,6 @@ class Worker:
         self.poll_ms = resolved_poll_ms
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
         self._pool = pool
-        # The maximum size that the pool reports, or None when it reports none.
-        self._pool_max_size = (
-            capacity if isinstance(capacity, int) and not isinstance(capacity, bool) else None
-        )
         self._shared_heartbeats = shared_heartbeats
         self._notification_wake = Event()
         self._notification_listening = Event()
@@ -3401,8 +3403,18 @@ class Worker:
         pool smaller than 3 is allowed, so the listener starts only on a pool that reports a
         maximum size of at least 2. Otherwise it could hold the only connection, and the worker
         polls instead. The run logs that once.
+
+        The worker reads the size again here, just before the listener subscribes, because the
+        application can resize the pool after it constructs the worker (SM-1677). Without the
+        opt-out, the constructor already refused a pool smaller than 3.
         """
-        if self._pool_max_size is not None and self._pool_max_size >= 2:
+        if not self._shared_heartbeats:
+            return True
+        reported = _reported_pool_size(self._pool)
+        capacity = (
+            reported if isinstance(reported, int) and not isinstance(reported, bool) else None
+        )
+        if capacity is not None and capacity >= 2:
             return True
         _emit_log(
             "WARN",
@@ -3411,9 +3423,7 @@ class Worker:
             {
                 "workhorse.worker.id": self.worker_id,
                 "workhorse.worker.queues": self.queues,
-                "workhorse.worker.pool_max_size": (
-                    "unknown" if self._pool_max_size is None else self._pool_max_size
-                ),
+                "workhorse.worker.pool_max_size": "unknown" if capacity is None else capacity,
             },
         )
         return False

@@ -823,7 +823,8 @@ listener subscribes only after both steps, and it stays best effort. Its failure
 listener reconnects. With `shared_heartbeats`, only the compatibility query runs, under the pool's
 own timeout. With `shared_heartbeats`, the listener subscribes only when the pool reports a
 `max_size` or `get_max_size()` of at least 2. Otherwise the run logs `workhorse.worker.polling_only`
-once and polls, in each of the three domains.
+once and polls, in each of the three domains. The worker reads that size at each start, just before
+the listener subscribes, so a resize after construction applies (SM-1677).
 
 **Claim gate.** The reservation is ready while it holds its connection or lends it to a round
 within that round's time. While it is not ready, the worker starts no claim. Each run has a
