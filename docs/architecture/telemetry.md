@@ -454,7 +454,8 @@ successful configuration changes at info.
 
 - `workhorse.handler.signal_swallowed` carries bounded task and worker identity plus
   `workhorse.handler.outcome`. It never carries the swallowed value or error.
-- `workhorse.worker.polling_only` carries `workhorse.worker.id` and `workhorse.worker.queues`. A
+- `workhorse.worker.polling_only` carries `workhorse.worker.id`, `workhorse.worker.queues`, and
+  `workhorse.worker.pool_max_size`, the pool maximum size that the worker found or `unknown`. A
   `Worker.run()` that starts without a notification subscription emits it once.
 
 #### Log record attributes

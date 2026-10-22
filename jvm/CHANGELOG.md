@@ -13,6 +13,25 @@ adds.
 
 ### Fixes
 
+- **A worker with `sharedHeartbeats(true)` no longer starves a pool of 1.** Before this change,
+  the worker started the shared listener on any `DataSource`. On a pool of 1, the listener held the
+  only connection. The compatibility check then waited for the pool timeout, 30 s in HikariCP, and
+  the run failed with an error that did not name the cause. A pool without a timeout waited forever
+  (SM-1585). A `DataSource` reports no size, and the worker does not probe it. Thus, with
+  `sharedHeartbeats(true)`, the worker now starts the listener only when the caller declares a pool
+  size of at least 2. Otherwise the worker polls. This changes behavior: a worker under the opt-out
+  without a declared size now polls, also on a large pool.
+- **New option `poolMaxSize(int)`** on `Worker.Builder` declares the maximum size of the pool behind
+  the `DataSource`. Kotlin sets `poolMaxSize`, and the Spring starter reads
+  `workhorse.worker.pool-max-size`. The worker trusts the value. With `sharedHeartbeats(true)`, a
+  declared size of at least 2 keeps the listener. Without the opt-out, `build()` throws
+  `IllegalArgumentException` for a declared size below 3. If an operator makes the pool smaller
+  than the declared size, the listener can hold the last connection again.
+- **The worker warns when it polls.** A worker that starts without the listener now logs
+  `workhorse.worker.polling_only` once, at warn level. The record carries `workhorse.worker.id`,
+  `workhorse.worker.queues`, and `workhorse.worker.pool_max_size`, the declared size or `unknown`.
+  The warning for a listener that does not listen at startup carries the same attributes. A worker
+  with `pollingOnly(true)` logs no warning.
 - **Workers on one `DataSource` no longer lose leases on a small pool.** Before this release, each
   worker held its own listener connection. When a HikariCP pool had fewer connections than
   workers, the listener connections filled the pool. The shared heartbeat then waited up to 30 s,

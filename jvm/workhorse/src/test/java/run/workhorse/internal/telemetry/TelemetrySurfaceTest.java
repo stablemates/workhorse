@@ -110,6 +110,7 @@ class TelemetrySurfaceTest {
           "workhorse.worker.draining",
           "workhorse.worker.id",
           "workhorse.worker.paused",
+          "workhorse.worker.pool_max_size",
           "workhorse.worker.queues",
           "workhorse.worker.state");
 

@@ -57,11 +57,18 @@ async function abortableSleep(durationMs: number, signal: AbortSignal): Promise<
   }
 }
 
+/** The maximum size that the listener's pool reports, or undefined when it reports none. */
+export function listenerPoolMaxSize(database: Queryable): number | undefined {
+  return connectionPoolOf(database)?.options?.max;
+}
+
 // The pool a listener can use, or undefined when the database has none or can spare no connection.
+// The listener holds one connection while it listens, so the pool must report a maximum size of at
+// least 2. A pool that hides its size could have only one connection (SM-1585).
 function listeningPool(database: Queryable): ConnectionPool | undefined {
   const pool = connectionPoolOf(database);
   const capacity = pool?.options?.max;
-  return pool !== undefined && (capacity === undefined || capacity > 1) ? pool : undefined;
+  return pool !== undefined && capacity !== undefined && capacity > 1 ? pool : undefined;
 }
 
 async function connect(pool: ConnectionPool): Promise<NotificationClient> {

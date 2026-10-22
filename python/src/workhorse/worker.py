@@ -1446,6 +1446,10 @@ class Worker:
         self.poll_ms = resolved_poll_ms
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
         self._pool = pool
+        # The maximum size that the pool reports, or None when it reports none.
+        self._pool_max_size = (
+            capacity if isinstance(capacity, int) and not isinstance(capacity, bool) else None
+        )
         self._shared_heartbeats = shared_heartbeats
         self._notification_wake = Event()
         self._notification_listening = Event()
@@ -3375,12 +3379,39 @@ class Worker:
         self, hub: _PoolHub | None
     ) -> _NotificationSubscription | None:
         """Subscribe to the listener that every worker on the pool shares (ADR 0071, rule 1)."""
-        if not self._listens or hub is None:
+        if not self._listens or hub is None or not self._pool_lends_listener():
             return None
         listener = cast(_SharedTaskNotificationListener, hub.listener)
         return listener.subscribe(
-            self.queues, self._wake_from_notification, self._on_notification_error
+            self.queues,
+            self._wake_from_notification,
+            self._on_notification_error,
+            self._set_notification_listening,
         )
+
+    def _pool_lends_listener(self) -> bool:
+        """Whether the pool can lend the shared listener a connection (SM-1585).
+
+        The listener holds one pooled connection for as long as it listens. With the opt-out, a
+        pool smaller than 3 is allowed, so the listener starts only on a pool that reports a
+        maximum size of at least 2. Otherwise it could hold the only connection, and the worker
+        polls instead. The run logs that once.
+        """
+        if self._pool_max_size is not None and self._pool_max_size >= 2:
+            return True
+        _emit_log(
+            "WARN",
+            "workhorse.worker.polling_only",
+            "Worker has no notification listener and dispatches by polling",
+            {
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.queues": self.queues,
+                "workhorse.worker.pool_max_size": (
+                    "unknown" if self._pool_max_size is None else self._pool_max_size
+                ),
+            },
+        )
+        return False
 
     def _admit_claimed_task(
         self, task: ClaimedTask, claim_sent_at: float, cohort: int | None

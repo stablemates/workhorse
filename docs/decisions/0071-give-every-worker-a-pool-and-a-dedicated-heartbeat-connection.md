@@ -14,6 +14,9 @@
   measured envelope, and the acceptance thresholds.
 - **Amended:** 2026-10-21 (SM-1573): Every SDK issue of the SM-1565 amendment has shipped. Notes
   mark the paragraphs of the decision that the SM-1565 amendment supersedes.
+- **Amended:** 2026-10-22 (SM-1585): under the opt-out, a worker starts a pool-fed listener only when
+  it knows a pool maximum size of at least 2, from the pool's report or the caller's declaration. An
+  unknown size means polling.
 
 ## Context
 

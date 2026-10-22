@@ -110,6 +110,7 @@ run.workhorse.kotlin.WorkerScope: public var onNotificationError: ((Throwable) -
 run.workhorse.kotlin.WorkerScope: public var onRegistrationError: ((Throwable) -> Unit)? = null
 run.workhorse.kotlin.WorkerScope: public var pollInterval: java.time.Duration? = null
 run.workhorse.kotlin.WorkerScope: public var pollingOnly: Boolean? = null
+run.workhorse.kotlin.WorkerScope: public var poolMaxSize: Int? = null
 run.workhorse.kotlin.WorkerScope: public var queues: List<String>? = null
 run.workhorse.kotlin.WorkerScope: public var registryInterval: java.time.Duration? = null
 run.workhorse.kotlin.WorkerScope: public var retryDelay: run.workhorse.RetryDelay? = null

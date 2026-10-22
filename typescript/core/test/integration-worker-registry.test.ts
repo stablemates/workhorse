@@ -1520,9 +1520,11 @@ describe("worker registry", () => {
       removeListener: vi.fn<() => void>(),
       release: vi.fn<(error?: Error) => void>(),
     };
+    // The pool states its size, so the worker starts the listener under the opt-out (SM-1585).
     const pendingListenerDatabase = {
       query: pool.query.bind(pool),
       connect: async () => listener,
+      options: { max: 2 },
     };
     const pendingQueue = new Queue(pendingListenerDatabase);
     const claim = vi.spyOn(pendingQueue, "claimMany");

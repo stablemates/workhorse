@@ -47,6 +47,7 @@ import type {
 } from "./types.js";
 import type { BudgetMetricSnapshot, QueueMetricSnapshot } from "./telemetry.js";
 import {
+  listenerPoolMaxSize,
   subscribeToTaskNotifications,
   supportsTaskNotifications,
   type TaskNotificationSubscription,
@@ -142,6 +143,7 @@ import {
   workerHeartbeatReservation,
   workerHeartbeatReservationProblem,
   workerStatementPoolCapacity,
+  workerListenerPoolMaxSize,
   workerProgressRead,
   workerQueueTierRead,
   workerWaitsRead,
@@ -935,6 +937,10 @@ export class Queue {
 
   [workerStatementPoolCapacity](): number | undefined {
     return statementPoolCapacity(this.database);
+  }
+
+  [workerListenerPoolMaxSize](): number | undefined {
+    return listenerPoolMaxSize(this.database);
   }
 
   [workerHeartbeatReservation](heartbeatMs: number): WorkerHeartbeatChannel | undefined {

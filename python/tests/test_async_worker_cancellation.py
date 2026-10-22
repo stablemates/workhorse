@@ -40,6 +40,10 @@ class HeldCore:
     queues = ("default",)
     _connection_budget_seconds = 5.0
 
+    def _pool_lends_listener(self) -> bool:
+        # The fake pools report a max_size of 3, so the real core lends the listener a connection.
+        return True
+
     def _set_notification_listening(self, listening: bool) -> None:
         pass
 

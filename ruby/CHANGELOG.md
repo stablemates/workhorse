@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A worker on a pool of 1 polls under the opt-out
+
+Before this change, a worker with `shared_heartbeats: true` started the shared listener on any pool.
+On a pool of 1, the listener held the only connection. Registration, claims, and handler statements
+then waited for the pool timeout, and no task ran (SM-1585).
+
+Now, with `shared_heartbeats: true`, the worker starts the listener only when the pool `size` is an
+Integer of at least 2. On a pool of 1, or on a pool without a `size`, the worker polls. Each run
+then logs `workhorse.worker.polling_only` once at warn level. The message names
+`workhorse.worker.queues` and `workhorse.worker.pool_max_size`. A worker with `polling_only: true`
+logs no warning. Without the opt-out, nothing changes.
+
 ### A worker reserves its heartbeat connection at startup, and refuses to start without it
 
 Before this change, a worker took the heartbeat connection of its pool only when a task arrived,

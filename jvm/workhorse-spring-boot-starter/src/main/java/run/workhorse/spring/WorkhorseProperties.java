@@ -137,6 +137,13 @@ public class WorkhorseProperties {
      */
     private boolean sharedHeartbeats;
 
+    /**
+     * The maximum size of the pool behind the DataSource, which a DataSource does not report. With
+     * shared heartbeats, the worker listens only when this size is at least 2. Without them, a size
+     * below 3 stops the startup. Unset means an unknown size.
+     */
+    private @Nullable Integer poolMaxSize;
+
     /** Whether the starter builds the worker. */
     public boolean isEnabled() {
       return enabled;
@@ -295,6 +302,16 @@ public class WorkhorseProperties {
     /** Sets whether heartbeat rounds borrow connections. */
     public void setSharedHeartbeats(boolean sharedHeartbeats) {
       this.sharedHeartbeats = sharedHeartbeats;
+    }
+
+    /** The declared pool maximum size, or null when it is unknown. */
+    public @Nullable Integer getPoolMaxSize() {
+      return poolMaxSize;
+    }
+
+    /** Sets the declared pool maximum size. */
+    public void setPoolMaxSize(@Nullable Integer poolMaxSize) {
+      this.poolMaxSize = poolMaxSize;
     }
   }
 

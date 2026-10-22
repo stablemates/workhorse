@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### A worker on a pool of 1 polls under the opt-out
+
+Before this change, a worker with `shared_heartbeats=True` started the shared listener on any pool.
+On a pool of 1, the listener held the only connection. Registration, claims, and handler statements
+then could not borrow a connection, and the run ended with a `TimeoutError` (SM-1585).
+
+Now, with `shared_heartbeats=True`, the worker starts the listener only when the pool reports a
+`max_size` or `get_max_size()` of at least 2. This rule applies to `Worker`,
+`AsyncWorker.from_psycopg`, and `AsyncWorker.from_asyncpg`. On a pool of 1, or on a pool that
+reports no size, the worker polls. Each run then logs `workhorse.worker.polling_only` once at warn
+severity. The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
+`workhorse.worker.pool_max_size`. Without the opt-out, nothing changes.
+
 ### Workers on one pool share one listener and one heartbeat connection
 
 Before this change, each Python worker took its own listener connection and its own heartbeat

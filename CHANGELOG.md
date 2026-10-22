@@ -20,6 +20,18 @@ upgrade steps.
 
 ## Unreleased
 
+### A worker on a pool that hides its size polls under the opt-out
+
+Before this change, a worker with `sharedHeartbeats: true` started the shared listener on a pool
+that has `connect()` and no `options.max`. If that pool had only one connection, the listener held
+it. Registration and claims then waited for the pool timeout, and no task ran (SM-1585).
+
+Now, with `sharedHeartbeats: true`, the worker starts the listener only when the pool reports an
+`options.max` of at least 2. Otherwise the worker polls. The `workhorse.worker.polling_only`
+warning now also carries `workhorse.worker.pool_max_size`: the size that the worker found, or
+`unknown`. A pool that reports its size does not change. Without the opt-out, the `Worker`
+constructor still refuses a pool whose size is unknown.
+
 ### A worker waits for its heartbeat connection before it claims
 
 Before this change, a TypeScript worker started the reservation of its dedicated heartbeat

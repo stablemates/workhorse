@@ -65,6 +65,8 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
   public var scheduleCatchupLimit: Int? = null
   public var shutdownGrace: Duration? = null
   public var sharedHeartbeats: Boolean? = null
+  /** The maximum size of the pool behind the DataSource. See `Worker.Builder.poolMaxSize`. */
+  public var poolMaxSize: Int? = null
   public var cohorts: Int? = null
   public var retryDelay: RetryDelay? = null
   public var onRegistrationError: ((Throwable) -> Unit)? = null
@@ -149,6 +151,7 @@ public class WorkerScope internal constructor(private val builder: Worker.Builde
     scheduleCatchupLimit?.let(builder::scheduleCatchupLimit)
     shutdownGrace?.let(builder::shutdownGrace)
     sharedHeartbeats?.let(builder::sharedHeartbeats)
+    poolMaxSize?.let(builder::poolMaxSize)
     cohorts?.let(builder::cohorts)
     retryDelay?.let(builder::retryDelay)
     onRegistrationError?.let { listener -> builder.onRegistrationError { listener(it) } }

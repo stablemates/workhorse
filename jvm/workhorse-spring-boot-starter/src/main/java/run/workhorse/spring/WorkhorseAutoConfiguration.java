@@ -347,6 +347,10 @@ public final class WorkhorseAutoConfiguration {
       if (heartbeat != null) {
         builder.heartbeat(heartbeat);
       }
+      Integer poolMaxSize = options.getPoolMaxSize();
+      if (poolMaxSize != null) {
+        builder.poolMaxSize(poolMaxSize);
+      }
       var pollInterval = options.getPollInterval();
       if (pollInterval != null) {
         builder.pollInterval(pollInterval);
