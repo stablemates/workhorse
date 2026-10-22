@@ -1322,3 +1322,22 @@ packages always share one version.
 - **A column named `C#`.** The packages are .NET packages, and an F# caller uses the same cells.
   `.NET` matches the platform name, as `JVM` does.
 - **Columns for each package.** Every hosting, EF Core, and ASP.NET Core cell follows from the core.
+
+## Amendment: `Admin` takes no serializer options (2026-10-22)
+
+The Values and durations section says that each `Queue`, `Admin`, and `Worker` takes a
+`JsonSerializerOptions` through its options. SM-1619 found that `Admin` serializes no caller type.
+It writes only its own filter documents, and it returns each JSON value as a `JsonElement`. These
+values are payloads, results, errors, checkpoints, progress, wait contexts, and event details.
+Java and Ruby `Admin` also take no codec.
+
+This amendment changes the rule for `Admin`:
+
+1. `AdminOptions` is a `sealed record` with no property. It exists so that a later setting is
+   additive.
+2. `Admin` keeps both constructors, `new Admin(NpgsqlDataSource)` and
+   `new Admin(NpgsqlDataSource, AdminOptions)`.
+3. `Admin` returns each JSON value as a `JsonElement`. SQL `NULL` is `null`, and JSON `null` is an
+   element of kind `JsonValueKind.Null`.
+
+`Queue` and `Worker` keep the rule of the Values and durations section.
