@@ -339,9 +339,9 @@ each heartbeat round borrows a pool connection, and the listener is still shared
    gate.
 4. **Replacement.** The heartbeat asks for a replacement at once, also when no worker holds an
    active task. It retries after a backoff that grows to at most the heartbeat interval. In Python,
-   a random factor from 0.9 to 1.1 multiplies each wait, so a wait can pass the interval by up to
-   10%. When the replacement is ready, each worker on the pool identity claims at once and does not
-   wait for its next poll.
+   a random factor from 0.9 to 1.1 multiplies each wait, and the cap applies after that factor. When
+   the replacement is ready, each worker on the pool identity claims at once and does not wait for
+   its next poll.
 
 The docs recommend a pool of 3 connections plus the number of statements that run at the same
 time. No SDK checks this recommendation.

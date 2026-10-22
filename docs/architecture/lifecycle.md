@@ -1874,7 +1874,7 @@ deadline. No round starts a checkout of its own.
 
 - A Rust acquisition that reaches its bound stops, and the keeper tries again after its delay.
 - A Python attempt that reaches its bound fails. The acquirer thread then tries again after its
-  backoff.
+  backoff. The backoff has ±10% jitter, and no wait is longer than the shortest `heartbeat_ms`.
 - A JVM round that gets the connection during its bound sends nothing. A regular round then runs at
   once with a full bound.
 - In Ruby, the heartbeat thread sends no round while it has no connection. It waits for the checkout

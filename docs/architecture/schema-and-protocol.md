@@ -838,8 +838,8 @@ subscribes and when a round loses the connection. It also runs when no task is a
 - Each attempt waits at most the round bound of the shortest `heartbeat_ms` of the subscribed
   workers. While a worker waits at startup, the attempt can use the rest of that startup budget.
 - A failed attempt retries after a jittered backoff. The backoff starts at 100 ms, doubles, and is
-  capped at the shortest `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, so a
-  wait can pass that cap by up to 10%.
+  capped at the shortest `heartbeat_ms`. A random factor from 0.9 to 1.1 multiplies each wait, and
+  then the acquirer caps the wait at the shortest `heartbeat_ms`. Thus no wait passes that cap.
 - When the connection arrives, the reservation wakes the dispatcher of every subscribed worker.
 - A connection can arrive after every worker left, or after a round gave one back. The acquirer
   owns that connection and gives it back to the pool.
