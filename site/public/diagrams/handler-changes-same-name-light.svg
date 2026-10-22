@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 310" width="960" height="310" role="img" aria-labelledby="handler-changes-same-name-light-title handler-changes-same-name-light-desc">
+<title id="handler-changes-same-name-light-title">A changed operation under a stored name does not run</title>
+<desc id="handler-changes-same-name-light-desc">The old code stores a result under ship. After the task waits, the new code calls the same checkpoint with a changed operation. Workhorse returns the stored result by name and does not run the new operation.</desc>
+<defs><marker id="arrow-light" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5359"/></marker></defs>
+<rect width="960" height="310" fill="#f9fafb"/>
+<path d="M 294,140 H 328" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<path d="M 666,140 H 632" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<text x="24" y="44" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">old code</text>
+<text x="24" y="59" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">before the wait</text>
+<text x="666" y="44" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="start">new code</text>
+<text x="666" y="59" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">after the wait</text>
+<line x1="24" y1="68" x2="936" y2="68" stroke="rgba(26,32,39,0.14)"/>
+<rect x="24" y="104" width="270" height="72" rx="6" fill="#f9fafb"/>
+<rect x="24" y="104" width="270" height="72" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="159" y="138" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">checkpoint("ship", old)</text>
+<text x="159" y="152" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">stores its result</text>
+<rect x="336" y="92" width="288" height="148" rx="6" fill="#f9fafb"/>
+<rect x="336" y="92" width="288" height="148" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="480" y="120" fill="#1a2027" font-size="12" font-family="Geist" font-weight="600" text-anchor="middle">one stored row</text>
+<text x="480" y="135" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="middle">the name is the key</text>
+<path d="M 600,174 H 645 V 228 H 658" fill="none" stroke="#4e5359" stroke-width="1.2" marker-end="url(#arrow-light)"/>
+<rect x="360" y="148" width="240" height="52" rx="6" fill="#f9fafb"/>
+<rect x="360" y="148" width="240" height="52" rx="6" fill="rgba(26,32,39,0.05)" stroke="#4e5359" stroke-width="1"/>
+<text x="480" y="172" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">ship</text>
+<text x="480" y="186" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">result from old code</text>
+<rect x="666" y="104" width="270" height="72" rx="6" fill="#f9fafb"/>
+<rect x="666" y="104" width="270" height="72" rx="6" fill="#ffffff" stroke="#1a2027" stroke-width="1"/>
+<text x="801" y="138" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">checkpoint("ship", new)</text>
+<text x="801" y="152" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">same name</text>
+<rect x="666" y="202" width="270" height="52" rx="6" fill="#f9fafb"/>
+<rect x="666" y="202" width="270" height="52" rx="6" fill="rgba(213,92,19,0.08)" stroke="#aa4515" stroke-width="1.4"/>
+<text x="801" y="226" fill="#1a2027" font-size="11" font-weight="600" font-family="Geist" text-anchor="middle">returns the stored result</text>
+<text x="801" y="240" fill="#4e5359" font-size="9" font-family="Geist Mono" text-anchor="middle">new operation does not run</text>
+<text x="24" y="286" fill="#4e5359" font-size="9" font-family="Geist Mono" font-weight="400" text-anchor="start">A changed operation does not replace the value of a stored name.</text>
+</svg>

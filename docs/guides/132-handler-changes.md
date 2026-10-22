@@ -38,6 +38,16 @@ await ctx.waitForSignal("payment-cleared");
 await ctx.checkpoint("ship", () => warehouse.reserveAndShip(payload.orderId));
 ```
 
+A changed operation under a stored name also gives no error. If the old code stored `ship`
+before the wait, the new code gets that stored result, and its new operation does not run.
+
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="../../site/public/diagrams/handler-changes-same-name-narrow-dark.png">
+  <source media="(max-width: 600px)" srcset="../../site/public/diagrams/handler-changes-same-name-narrow-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../../site/public/diagrams/handler-changes-same-name-dark.png">
+  <img src="../../site/public/diagrams/handler-changes-same-name-light.png" width="960" alt="A changed operation under a stored name does not run">
+</picture>
+
 A changed absolute wait time, child request, or human-decision context is different, because
 Workhorse detects it. A changed checkpoint input is also different, if the old and the new code
 both give the input. A changed relative wait duration gives no error, and the first wake time

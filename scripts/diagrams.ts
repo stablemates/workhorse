@@ -116,6 +116,7 @@ import {
 } from "./deadlines-diagram.js";
 import { durableWaits, durableWaitsNarrow } from "./durable-waits-diagram.js";
 import { externalWaits, externalWaitsNarrow } from "./external-waits-diagram.js";
+import { handlerChangesSameName, handlerChangesSameNameNarrow } from "./handler-changes-diagram.js";
 import { tierWrites, tierWritesNarrow } from "./fast-tier-diagram.js";
 import {
   humanEnds,
@@ -225,6 +226,8 @@ export const diagrams = [
   cancellationStopNarrow,
   externalWaits,
   externalWaitsNarrow,
+  handlerChangesSameName,
+  handlerChangesSameNameNarrow,
   signalsWait,
   signalsWaitNarrow,
   signalsOnce,
