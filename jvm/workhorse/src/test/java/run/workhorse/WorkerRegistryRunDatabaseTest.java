@@ -72,7 +72,7 @@ class WorkerRegistryRunDatabaseTest {
               new Class<?>[] {Connection.class},
               (proxy, method, arguments) -> {
                 Object result = invoke(method, connection, arguments);
-                // The deregistration calls deregister_worker_v1, which this text does not match.
+                // The deregistration calls deregister_worker_v2, which this text does not match.
                 boolean registration =
                     method.getName().equals("prepareStatement")
                         && String.valueOf(arguments[0]).contains("workhorse.register_worker_v1(");

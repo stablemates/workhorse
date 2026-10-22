@@ -9,8 +9,8 @@ from typing import Literal
 PROTOCOL_VERSION = 5
 MINIMUM_PROTOCOL_VERSION = 5
 MAXIMUM_PROTOCOL_VERSION = 5
-MINIMUM_SCHEMA_VERSION = 75
-MAXIMUM_SCHEMA_VERSION = 75
+MINIMUM_SCHEMA_VERSION = 76
+MAXIMUM_SCHEMA_VERSION = 76
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -78,6 +78,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
     "deregister_worker_v1": (
         "SELECT workhorse.deregister_worker_v1(%s::text) AS deregistered",
         "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
+    ),
+    "deregister_worker_v2": (
+        "SELECT workhorse.deregister_worker_v2(%s::text, %s::uuid) AS deregistered",
+        "SELECT workhorse.deregister_worker_v2($1::text, $2::uuid) AS deregistered",
     ),
     "enqueue_many_v1": (
         "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1(%s::jsonb) ORDER BY ordinal",
@@ -724,7 +728,7 @@ STATEMENTS = StatementRegistry(
     complete=_statement("complete_v1"),
     create_child=_statement("create_child_v2"),
     create_children=_statement("create_children_v1"),
-    deregister_worker=_statement("deregister_worker_v1"),
+    deregister_worker=_statement("deregister_worker_v2"),
     enqueue_many=_statement("enqueue_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
     fail=_statement("fail_v1"),

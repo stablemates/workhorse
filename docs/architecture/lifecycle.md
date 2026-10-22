@@ -1445,8 +1445,9 @@ tasks it claims hold leases.
 A wait that passes the window still belongs to the ended run. Before a later `run()` or `runOnce()`
 of the same worker registers, it waits until every stop-path statement of the ended run has
 settled, within the startup budget. If one has not settled, the later call refuses to start and
-writes nothing. `deregister_worker_v1` deletes by worker ID only, so a late deregistration would
-otherwise delete the row and the pause state of the later run. Each `run()` writes its first
+writes nothing. Each `run()` announces a new `instanceId`, and `deregister_worker_v2` deletes the
+row only while it names that instance. A late registration write of the ended run could still
+replace the row and the pause state of the later run. Each `run()` writes its first
 registration at once, also within the registry interval of the ended run. In `runWorkerProcess`, the shutdown grace is `shutdownTimeoutMs`, 25,000
 ms by default. At the grace, the process exits with code 1, so every wait on its stop path ends by
 the grace.

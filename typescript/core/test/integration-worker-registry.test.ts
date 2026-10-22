@@ -413,6 +413,113 @@ describe("worker registry", () => {
     expect(entry).toMatchObject({ paused: false, pausedBy: null, reason: null, pausedAt: null });
   });
 
+  it("keeps the row of a later run when a stale deregistration names an ended instance", async () => {
+    const workerId = "registry-fenced-deregistration";
+    const registration = {
+      workerId,
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    };
+    const ended = randomUUID();
+    const later = randomUUID();
+    await queue.registerWorker({ ...registration, instanceId: ended });
+    await queue.registerWorker({ ...registration, instanceId: later });
+    await admin.setWorkerPaused(workerId, true, adminAudit("pause the later run"));
+
+    // The stop path of the ended run arrives late, after the later run registered.
+    await expect(queue.deregisterWorker(workerId, ended)).resolves.toBe(false);
+    const entry = (await admin.listWorkers()).find((worker) => worker.workerId === workerId);
+    expect(entry).toMatchObject({ instanceId: later, paused: true });
+
+    await expect(queue.deregisterWorker(workerId, later)).resolves.toBe(true);
+    expect((await admin.listWorkers()).some((worker) => worker.workerId === workerId)).toBe(false);
+  });
+
+  it("keeps deregister_worker_v1 deleting by worker ID only", async () => {
+    const workerId = "registry-deregistration-v1";
+    await queue.registerWorker({
+      workerId,
+      instanceId: randomUUID(),
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    });
+
+    // A released SDK sends deregister_worker_v1 without an instance, and it still deletes the row.
+    const result = await pool.query<{ deregistered: boolean }>(
+      "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
+      [workerId],
+    );
+    expect(result.rows).toEqual([{ deregistered: true }]);
+    expect((await admin.listWorkers()).some((worker) => worker.workerId === workerId)).toBe(false);
+    await expect(queue.deregisterWorker(workerId)).resolves.toBe(false);
+  });
+
+  it("removes the row by worker ID only when deregisterWorker gets no instance", async () => {
+    const workerId = "registry-unfenced-deregistration";
+    const registration = {
+      workerId,
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    };
+    await queue.registerWorker({ ...registration, instanceId: randomUUID() });
+    await queue.registerWorker({ ...registration, instanceId: randomUUID() });
+
+    // Without an instance the call is not fenced, so it removes the row of the later run too.
+    await expect(queue.deregisterWorker(workerId)).resolves.toBe(true);
+    expect((await admin.listWorkers()).some((worker) => worker.workerId === workerId)).toBe(false);
+  });
+
+  it("gives each run of one Worker a new instance that a stale stop of an earlier run cannot delete", async () => {
+    const workerId = "registry-instance-per-run";
+    const worker = new Worker(queue, {
+      workerId,
+      queue: "default",
+      pollMs: 10,
+      registryIntervalMs: 100,
+    });
+    const registeredInstance = async (): Promise<string> => {
+      let instance: string | undefined;
+      await vi.waitFor(async () => {
+        instance = (await admin.listWorkers()).find(
+          (item) => item.workerId === workerId,
+        )?.instanceId;
+        expect(instance).toBeDefined();
+      }, stallWait);
+      return instance!;
+    };
+
+    const firstRun = worker.run();
+    const first = await registeredInstance();
+    worker.stop();
+    await firstRun;
+
+    const secondRun = worker.run();
+    try {
+      const second = await registeredInstance();
+      expect(second).not.toBe(first);
+
+      // The stop path of the first run sends its deregistration after the second run registered.
+      await expect(queue.deregisterWorker(workerId, first)).resolves.toBe(false);
+      expect(await registeredInstance()).toBe(second);
+    } finally {
+      worker.stop();
+      await secondRun;
+    }
+    expect((await admin.listWorkers()).some((item) => item.workerId === workerId)).toBe(false);
+  });
+
   it("prunes only registrations whose heartbeat aged past the requested window", async () => {
     await queue.registerWorker({
       workerId: "registry-prune",

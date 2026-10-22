@@ -7,8 +7,8 @@ const (
 	ProtocolVersion        = 5
 	minimumProtocolVersion = 5
 	maximumProtocolVersion = 5
-	minimumSchemaVersion   = 75
-	maximumSchemaVersion   = 75
+	minimumSchemaVersion   = 76
+	maximumSchemaVersion   = 76
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -16,6 +16,7 @@ const (
 
 var internalStatementRegistry = map[string]string{
 	"deregister_worker_v1": `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
+	"deregister_worker_v2": `SELECT workhorse.deregister_worker_v2($1::text, $2::uuid) AS deregistered`,
 	"fire_due_schedules_v2": `SELECT namespace, schedule_name, occurrence_at, task_id
   FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)`,
 	"list_checkpoint":           `SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,

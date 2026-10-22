@@ -238,11 +238,11 @@ describe("worker heartbeat gate", () => {
 
 /**
  * A queue with one registry row per worker ID. deregisterWorker waits until the test lets it go,
- * as a statement waits for a pooled connection, and then deletes by worker ID only, as
- * deregister_worker_v1 does.
+ * as a statement waits for a pooled connection. It then deletes the row only while the row names
+ * the instance of the caller, as deregister_worker_v2 does.
  */
 function registryQueue(behavior: { holdFirstRegistration?: boolean } = {}) {
-  const rows = new Set<string>();
+  const rows = new Map<string, string>();
   const events: string[] = [];
   const held: Array<() => void> = [];
   // The first registration waits until the test answers it, and its answer says "paused".
@@ -257,29 +257,29 @@ function registryQueue(behavior: { holdFirstRegistration?: boolean } = {}) {
     heartbeatStatus: async () => "accepted",
     tick: async () => [],
     runMaintenance: async () => [],
-    registerWorker: async (registration: { workerId: string }) => {
+    registerWorker: async (registration: { workerId: string; instanceId: string }) => {
       registrations += 1;
       if (behavior.holdFirstRegistration === true && registrations === 1) {
         events.push("first register sent");
         await new Promise<void>((resolve) => {
           heldRegistrations.push(resolve);
         });
-        rows.add(registration.workerId);
+        rows.set(registration.workerId, registration.instanceId);
         events.push("first register done");
         return { paused: true };
       }
-      rows.add(registration.workerId);
+      rows.set(registration.workerId, registration.instanceId);
       events.push("register");
       return { paused: false };
     },
-    deregisterWorker: async (workerId: string) => {
+    deregisterWorker: async (workerId: string, instanceId: string) => {
       events.push("deregister sent");
       if (behavior.holdFirstRegistration !== true) {
         await new Promise<void>((resolve) => {
           held.push(resolve);
         });
       }
-      rows.delete(workerId);
+      if (rows.get(workerId) === instanceId) rows.delete(workerId);
       events.push("deregister done");
     },
   } as unknown as WorkerQueueApi;

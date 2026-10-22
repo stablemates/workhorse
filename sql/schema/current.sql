@@ -8535,6 +8535,31 @@ BEGIN
 END;
 $$;
 
+-- Remove the registration of one worker run during graceful shutdown. The row is deleted only while
+-- it still names the instance of the caller. A late deregistration of an ended run therefore cannot
+-- delete the row, and the operator pause state, that a later run of the same worker ID registered.
+-- deregister_worker_v1 stays for released SDKs and still deletes by worker ID only.
+CREATE OR REPLACE FUNCTION workhorse.deregister_worker_v2(p_worker_id text, p_instance_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted integer;
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN
+    RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  IF p_instance_id IS NULL THEN
+    RAISE EXCEPTION 'instance_id must not be null';
+  END IF;
+  DELETE FROM workhorse.worker_registry
+   WHERE worker_id = p_worker_id
+     AND instance_id = p_instance_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted > 0;
+END;
+$$;
+
 -- Request or clear an operator pause for one registered worker.
 --
 -- `requested_by` and `reason` are bounded audit attribution, never authorization; callers must
@@ -22247,10 +22272,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (72, 'skip a locked row in a heartbeat'),
   (73, 'skip a locked row in a one-lease heartbeat'),
   (74, 'allow throttle on fast-tier queues'),
-  (75, 'add the dashboard retention preview function')
+  (75, 'add the dashboard retention preview function'),
+  (76, 'fence the worker deregistration by instance')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (75) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (76) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

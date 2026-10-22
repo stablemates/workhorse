@@ -1113,6 +1113,9 @@ impl Inner {
     /// as a late statement.
     async fn stop(self: &Arc<Self>, deadline: Option<Instant>) {
         let earlier = std::mem::take(&mut *lock(&self.late));
+        // The instance of the run that stops. deregister_worker_v2 deletes the row only while it
+        // names this instance, so a late deregistration cannot delete the row of a later run.
+        let instance = *lock(&self.instance);
         let mut deregister = tokio::spawn({
             let inner = Arc::clone(self);
             async move {
@@ -1125,7 +1128,7 @@ impl Inner {
                 }
                 let statements = inner.statements();
                 if let Err(error) =
-                    statements.rows(sql::DEREGISTER_WORKER_V1, &[&inner.worker_id]).await
+                    statements.rows(sql::DEREGISTER_WORKER_V2, &[&inner.worker_id, &instance]).await
                 {
                     tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "worker deregistration failed");
                 }

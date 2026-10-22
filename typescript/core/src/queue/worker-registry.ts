@@ -46,12 +46,27 @@ export class WorkerRegistryModule extends QueueModule {
     return { paused };
   }
 
-  async deregisterWorker(workerId: string): Promise<boolean> {
-    const result = await this.context.database.query<{ deregistered: boolean }>(
-      SQL_STATEMENTS["deregister_worker_v1"],
-      [workerId],
-    );
-    const deregistered = expectOneRow(result, "workhorse.deregister_worker_v1").deregistered;
+  /**
+   * Remove one worker registration. With `instanceId`, deregister_worker_v2 removes the row only
+   * while it still names that instance. Without it, deregister_worker_v1 removes it by worker ID.
+   */
+  async deregisterWorker(workerId: string, instanceId?: string): Promise<boolean> {
+    const result =
+      instanceId === undefined
+        ? await this.context.database.query<{ deregistered: boolean }>(
+            SQL_STATEMENTS["deregister_worker_v1"],
+            [workerId],
+          )
+        : await this.context.database.query<{ deregistered: boolean }>(
+            SQL_STATEMENTS["deregister_worker_v2"],
+            [workerId, instanceId],
+          );
+    const deregistered = expectOneRow(
+      result,
+      instanceId === undefined
+        ? "workhorse.deregister_worker_v1"
+        : "workhorse.deregister_worker_v2",
+    ).deregistered;
     logDebug("workhorse.worker.deregistered", "Worker deregistered", {
       "workhorse.worker.id": workerId,
       "workhorse.worker.deregistered": deregistered,

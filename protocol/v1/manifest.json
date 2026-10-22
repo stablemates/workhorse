@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 5,
   "schema": {
-    "installedVersion": 75,
-    "minimumVersion": 75,
-    "maximumVersion": 75,
+    "installedVersion": 76,
+    "minimumVersion": 76,
+    "maximumVersion": 76,
     "baselineVersion": 6
   },
   "supportedClientProtocol": {
@@ -342,9 +342,15 @@
     },
     {
       "name": "deregister_worker_v1",
-      "pythonBinding": "deregister_worker",
       "arity": 1,
       "contract": "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "deregister_worker_v2",
+      "pythonBinding": "deregister_worker",
+      "arity": 2,
+      "contract": "SELECT workhorse.deregister_worker_v2($1::text, $2::uuid) AS deregistered",
       "catalogues": ["internal"]
     },
     {

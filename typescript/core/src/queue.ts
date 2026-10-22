@@ -402,9 +402,15 @@ export class Queue {
     return this.modules.workerRegistry.registerWorker(registration);
   }
 
-  /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
-  async deregisterWorker(workerId: string): Promise<boolean> {
-    return this.modules.workerRegistry.deregisterWorker(workerId);
+  /**
+   * Remove one worker registration. A killed worker instead ages out of the fleet view.
+   *
+   * If `instanceId` is given, the row is removed only while it still names that instance, so a late
+   * call for an ended run cannot remove the row of a later run. Without `instanceId`, the call is not
+   * fenced: it removes the row by worker ID only, also when a later run registered that row.
+   */
+  async deregisterWorker(workerId: string, instanceId?: string): Promise<boolean> {
+    return this.modules.workerRegistry.deregisterWorker(workerId, instanceId);
   }
 
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */

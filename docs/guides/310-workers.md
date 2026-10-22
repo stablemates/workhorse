@@ -426,7 +426,7 @@ When `ShutdownGracePeriod` expires, `Run` acts in this order:
 
 - The deadline cancels an in-flight claim, a fused completion claim, and the draining registration
   refresh.
-- `deregister_worker_v1` then gets at most 1,000 ms.
+- `deregister_worker_v2` then gets at most 1,000 ms.
 - After the deadline, the drain does not report an execution error that matches `context.Canceled`.
 - A handler that returns an error after its cancellation charges no attempt. `release_owned_v1`
   returns its task to the queue, and a failed release leaves the task to lease recovery.
@@ -449,7 +449,7 @@ More detail: [Schema and SQL protocol: Shutdown grace period](../architecture/sc
 - A handler that returns an error after that cancellation charges no attempt. `release_owned_v1`
   returns its task to the queue. A panic still fails the attempt.
 - `run` abandons the handlers that outlive that window and returns `Error::ShutdownIncomplete`.
-- The cleanup window covers the stop of the registry loop and the listener, `deregister_worker_v1`,
+- The cleanup window covers the stop of the registry loop and the listener, `deregister_worker_v2`,
   and the release of the heartbeat connection. It ends 1 s after the later of the deadline and the
   end of the drain.
 
@@ -575,8 +575,9 @@ operator stopped.
 
 **Claims.** `claim_v1` and the other claim functions never read `worker_registry`.
 
-**Removal.** Graceful shutdown calls `deregister_worker_v1`. `run_maintenance_v1` calls
-`prune_worker_registry_v1` with a one-minute maximum age.
+**Removal.** Graceful shutdown calls `deregister_worker_v2`. It deletes the row only while the row
+names the instance of the run that stops, so a late call cannot delete the row of a later run.
+`run_maintenance_v1` calls `prune_worker_registry_v1` with a one-minute maximum age.
 
 **Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
 scan by half the shortest maintenance interval among live registered workers. Thus, an opted-out

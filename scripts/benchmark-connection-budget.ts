@@ -220,7 +220,7 @@ const sdkVariants: Record<string, SdkVariant> = {
     unwind: {
       ms: 2_250,
       source:
-        "docs/architecture/schema-and-protocol.md, Go shutdown grace period and listener: a 250 ms unwind, deregister_worker_v1 for at most 1,000 ms, and UNLISTEN for at most 1,000 ms (go/worker.go handlerUnwindPeriod, deregistrationTimeout)",
+        "docs/architecture/schema-and-protocol.md, Go shutdown grace period and listener: a 250 ms unwind, deregister_worker_v2 for at most 1,000 ms, and UNLISTEN for at most 1,000 ms (go/worker.go handlerUnwindPeriod, deregistrationTimeout)",
     },
   },
   ruby: {
