@@ -253,6 +253,10 @@ interface AdminQueuePauseReport {
 /** What `admin purge` prints under `--json`. */
 interface AdminQueuePurgeReport {
   readonly queue: string;
+  /**
+   * How many tasks the purge deleted or canceled. The purge cancels a task that a task outside the
+   * purge waits for.
+   */
   readonly deletedCount: number;
 }
 

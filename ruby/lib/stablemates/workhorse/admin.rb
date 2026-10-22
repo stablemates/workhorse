@@ -299,12 +299,14 @@ module Stablemates
 
       def resume_queue(queue, audit:) = set_queue_paused(queue, false, audit)
 
-      # Deletes every pending task in the queue and returns how many tasks it deleted or canceled.
-      # A task that a dependent in another queue waits for is canceled, not deleted.
+      # Deletes the blocked, ready, and scheduled tasks of the queue, and returns how many tasks it
+      # deleted or canceled. If a task outside the purge waits for a purged task, the purge cancels
+      # that task instead of a delete. The rule also applies to a wait through other purged tasks.
+      # The count includes the canceled tasks.
       #
-      # Do not call it in a transaction that already holds task row locks, for example after a
-      # cancel or an enqueue. Two purges run one after the other, so such a transaction can
-      # deadlock with another purge.
+      # Do not call it in a transaction that holds task row locks, for example after a cancel or an
+      # enqueue. Two purges run one after the other, so such a transaction can deadlock with another
+      # purge.
       def purge_queue(queue, audit:)
         name(queue, "queue")
         audit(audit)
