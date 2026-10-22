@@ -93,7 +93,8 @@ put them in logs or task payloads.
 
 After the signature check, the receiver checks the account and the mode. If the event is for a
 different account or mode, the receiver replies `403`. If the receiver replies `503`, Stripe can
-send the event again.
+send the event again. If PostgreSQL is busy and acceptance cannot commit in time, the receiver also
+replies `503`.
 
 <details>
 <summary>Reference: receiver replies</summary>
@@ -109,6 +110,7 @@ send the event again.
 | Same event ID with different normalized references                        | `409`          |
 | Body too large                                                            | `413`          |
 | Database error, or too many requests                                      | `503`          |
+| Acceptance waits more than 1 second for a lock, for example at commit     | `503`          |
 
 More detail: [`stripe-invoice-paid.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/examples/stripe-invoice-paid.ts).
 

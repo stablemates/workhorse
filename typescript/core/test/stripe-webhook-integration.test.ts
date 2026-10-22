@@ -48,6 +48,20 @@ async function post(event: unknown = invoiceEvent(), overrides: Record<string, s
   return response.status;
 }
 
+/**
+ * Send an event as Stripe does: send it again after each 503, up to 10 attempts. The example gives
+ * a 503 and rolls back when acceptance cannot commit, for example when the commit waits more than
+ * the example's `lock_timeout` for a lock under load. Other statuses end the delivery.
+ */
+async function deliver(event: unknown) {
+  let status = await post(event);
+  for (let attempt = 1; attempt < 10 && status === 503; attempt += 1) {
+    await sleep(100);
+    status = await post(event);
+  }
+  return status;
+}
+
 async function counts() {
   const result = await pool.query<{
     inbox: string;
@@ -253,9 +267,9 @@ describe("Stripe durable HTTP acceptance", () => {
   });
 
   it("uses independent scoped event and business identities for changed delivery order", async () => {
-    expect(await post(invoiceEvent({ id: "evt_second", created: 1_790_966_500 }))).toBe(200);
-    expect(await post(invoiceEvent({ type: "invoice.created", data: {} }))).toBe(200);
-    expect(await post(invoiceEvent({ id: "evt_first", created: 1_790_966_300 }))).toBe(200);
+    expect(await deliver(invoiceEvent({ id: "evt_second", created: 1_790_966_500 }))).toBe(200);
+    expect(await deliver(invoiceEvent({ type: "invoice.created", data: {} }))).toBe(200);
+    expect(await deliver(invoiceEvent({ id: "evt_first", created: 1_790_966_300 }))).toBe(200);
     const inbox = await pool.query<{ id: string }>(
       "SELECT id FROM stripe_recipe.inbox ORDER BY event_created",
     );
