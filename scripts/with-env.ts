@@ -25,7 +25,8 @@
  *
  * Usage: tsx scripts/with-env.ts <command> [...arguments]
  */
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import { constants } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -49,6 +50,17 @@ const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {
   console.error("Usage: tsx scripts/with-env.ts <command> [...arguments]");
   process.exit(2);
+}
+
+// Listen before the first `await`, so a signal that arrives while the wrapper checks the checkout
+// stops the wrapper before it starts the command. After the start, the wrapper forwards the signal.
+let child: ChildProcess | undefined;
+let receivedSignal: NodeJS.Signals | undefined;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    receivedSignal ??= signal;
+    child?.kill(signal);
+  });
 }
 
 // Resolved against this file rather than the working directory: the point is to find the `.env`
@@ -84,18 +96,17 @@ for (const [key, value] of Object.entries(fileEnvironment)) {
   if (ownedVariables.has(key) || environment[key] === undefined) environment[key] = value;
 }
 
-const child = spawn(command, commandArguments, {
+if (receivedSignal) process.exit(128 + constants.signals[receivedSignal]);
+
+const started = spawn(command, commandArguments, {
   cwd: checkoutRoot,
   env: environment,
   stdio: "inherit",
 });
-
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => child.kill(signal));
-}
+child = started;
 
 const exitCode = await new Promise<number | null>((resolve, reject) => {
-  child.once("error", reject);
-  child.once("exit", resolve);
+  started.once("error", reject);
+  started.once("exit", resolve);
 });
 process.exitCode = exitCode ?? 1;

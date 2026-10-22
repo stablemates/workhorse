@@ -51,6 +51,7 @@ async function waitForProcessIds(
 }
 
 async function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolveExit, reject) => {
     child.once("error", reject);
     child.once("exit", () => resolveExit());
@@ -58,36 +59,74 @@ async function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 /**
- * Start the supervisor with fake commands that each start one nested process, send it SIGINT, and
- * return the nested processes still running when the supervisor exits.
+ * The command a script in `package.json` runs after `scripts/with-env.ts`, split into its arguments.
  *
- * The check runs as soon as the supervisor exits, with no delay, because the supervisor must not
- * report a stop while a nested process is still running.
+ * The tests start the supervisor through this command, so they prove the launcher that `pnpm demo`
+ * uses and not only the script.
  */
-async function interruptSupervisor(nestedScript: string): Promise<number[]> {
+async function launcherAfterWrapper(scriptName: string): Promise<string[]> {
+  const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const wrapper = "tsx scripts/with-env.ts ";
+  const script = manifest.scripts[scriptName] ?? "";
+  if (!script.includes(wrapper)) throw new Error(`${scriptName} does not run through ${wrapper}`);
+  return script.slice(script.indexOf(wrapper) + wrapper.length).split(" ");
+}
+
+interface Supervisor {
+  process: ReturnType<typeof spawn>;
+  processIdLog: string;
+  commandProcessIdLog: string;
+  /**
+   * Holds the process ID of the process that runs `scripts/dev.ts`, as its commands report it. A
+   * launcher such as the `tsx` CLI starts the script in a second process below the group leader.
+   */
+  scriptProcessIdLog: string;
+}
+
+/**
+ * Start the supervisor in its own process group, as `pnpm demo` does, with fake commands that each
+ * start one nested process. Run `body`, then stop whatever the body left running.
+ *
+ * `delayBeforeNestedMs` makes each command wait before it starts its nested process, as a worker
+ * does while its toolchain compiles it.
+ */
+async function withSupervisor<T>(
+  nestedScript: string,
+  body: (supervisor: Supervisor) => Promise<T>,
+  { delayBeforeNestedMs = 0 } = {},
+): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "workhorse-dev-supervisor-"));
   temporaryDirectories.add(directory);
   const processIdLog = join(directory, "descendants.txt");
   const commandProcessIdLog = join(directory, "commands.txt");
+  const scriptProcessIdLog = join(directory, "script.txt");
   const fakeCommand =
     `#!/usr/bin/env node\n` +
     `const { appendFileSync } = require("node:fs");\n` +
     `const { spawn } = require("node:child_process");\n` +
-    `const child = spawn(process.execPath, ["-e", ${JSON.stringify(nestedScript)}], { stdio: "ignore" });\n` +
+    `appendFileSync(process.env.SCRIPT_PROCESS_ID_LOG, process.ppid + "\\n");\n` +
     `appendFileSync(process.env.COMMAND_PROCESS_ID_LOG, process.pid + "\\n");\n` +
-    `appendFileSync(process.env.PROCESS_ID_LOG, child.pid + "\\n");\n` +
+    `setTimeout(() => {\n` +
+    `  const child = spawn(process.execPath, ["-e", ${JSON.stringify(nestedScript)}], { stdio: "ignore" });\n` +
+    `  appendFileSync(process.env.PROCESS_ID_LOG, child.pid + "\\n");\n` +
+    `}, ${delayBeforeNestedMs});\n` +
     `setInterval(() => {}, 1000);\n`;
   const fakeCommands = supervisedCommands.map((name) => join(directory, name));
   await Promise.all(fakeCommands.map((command) => writeFile(command, fakeCommand)));
   await Promise.all(fakeCommands.map((command) => chmod(command, 0o755)));
 
-  const supervisor = spawn(process.execPath, ["--import", "tsx", resolve("scripts/dev.ts")], {
+  const [launcher = "", ...launcherArguments] = await launcherAfterWrapper("demo:app");
+  const supervisor = spawn(launcher, launcherArguments, {
+    detached: true,
     env: {
       ...process.env,
       DATABASE_URL_SECONDARY: "",
       PATH: `${directory}:${process.env.PATH ?? ""}`,
       COMMAND_PROCESS_ID_LOG: commandProcessIdLog,
       PROCESS_ID_LOG: processIdLog,
+      SCRIPT_PROCESS_ID_LOG: scriptProcessIdLog,
       WORKHORSE_DEMO_DASHBOARD_DEV: "false",
     },
     stdio: "ignore",
@@ -95,21 +134,15 @@ async function interruptSupervisor(nestedScript: string): Promise<number[]> {
   if (supervisor.pid) spawnedProcessIds.add(supervisor.pid);
 
   try {
-    const processIds = await waitForProcessIds(
+    return await body({
+      process: supervisor,
       processIdLog,
       commandProcessIdLog,
-      supervisedProcessCount,
-    );
-    await delay(100);
-    expect((await readFile(processIdLog, "utf8")).trim().split("\n")).toHaveLength(
-      supervisedProcessCount,
-    );
-
-    supervisor.kill("SIGINT");
-    await waitForExit(supervisor);
-
-    return processIds.filter(isRunning);
+      scriptProcessIdLog,
+    });
   } finally {
+    // A stopped supervisor cannot handle a signal, so continue it first.
+    if (supervisor.pid && isRunning(supervisor.pid)) process.kill(supervisor.pid, "SIGCONT");
     if (supervisor.exitCode === null && supervisor.signalCode === null) {
       // A failed setup may leave commands this test has not seen yet. The supervisor knows every
       // group it started, so let it stop them before it is killed.
@@ -121,6 +154,41 @@ async function interruptSupervisor(nestedScript: string): Promise<number[]> {
     }
     await Promise.all([readProcessIds(processIdLog), readProcessIds(commandProcessIdLog)]);
   }
+}
+
+/** Every process a fake command logged that still runs. */
+async function leftoverProcesses({ processIdLog, commandProcessIdLog }: Supervisor) {
+  const processIds = [
+    ...(await readProcessIds(commandProcessIdLog)),
+    ...(await readProcessIds(processIdLog)),
+  ];
+  return processIds.filter(isRunning);
+}
+
+/**
+ * Start the supervisor, send it SIGINT once every nested process runs, and return the processes
+ * still running when the supervisor exits.
+ *
+ * The check runs as soon as the supervisor exits, with no delay, because the supervisor must not
+ * report a stop while a nested process is still running.
+ */
+async function interruptSupervisor(nestedScript: string): Promise<number[]> {
+  return withSupervisor(nestedScript, async (supervisor) => {
+    await waitForProcessIds(
+      supervisor.processIdLog,
+      supervisor.commandProcessIdLog,
+      supervisedProcessCount,
+    );
+    await delay(100);
+    expect((await readFile(supervisor.processIdLog, "utf8")).trim().split("\n")).toHaveLength(
+      supervisedProcessCount,
+    );
+
+    supervisor.process.kill("SIGINT");
+    await waitForExit(supervisor.process);
+
+    return leftoverProcesses(supervisor);
+  });
 }
 
 afterEach(async () => {
@@ -159,4 +227,69 @@ describe("demo development supervisor", () => {
       expect(leftover).toEqual([]);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "stops every command when SIGTERM arrives during startup",
+    async () => {
+      // The commands are still "compiling": none has started its nested process yet.
+      const result = await withSupervisor(
+        `setInterval(() => {}, 1000);`,
+        async (supervisor) => {
+          for (let attempt = 0; attempt < 250; attempt += 1) {
+            if ((await readProcessIds(supervisor.commandProcessIdLog)).length > 0) break;
+            await delay(2);
+          }
+          process.kill(-supervisor.process.pid!, "SIGTERM");
+          await waitForExit(supervisor.process);
+          return {
+            exitCode: supervisor.process.exitCode,
+            startedCommands: (await readProcessIds(supervisor.commandProcessIdLog)).length,
+            leftover: await leftoverProcesses(supervisor),
+          };
+        },
+        { delayBeforeNestedMs: 2_000 },
+      );
+
+      expect(result.startedCommands).toBeGreaterThan(0);
+      expect(result.exitCode).toBe(0);
+      expect(result.leftover).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "stops every command when its event loop is late to handle SIGTERM",
+    async () => {
+      // The `tsx` CLI sends SIGKILL to a script that does not acknowledge a signal within about
+      // 60 ms. A supervisor started that way dies here, before it can forward the signal.
+      const leftover = await withSupervisor(`setInterval(() => {}, 1000);`, async (supervisor) => {
+        await waitForProcessIds(
+          supervisor.processIdLog,
+          supervisor.commandProcessIdLog,
+          supervisedProcessCount,
+        );
+        // A stopped process models an event loop that cannot run its signal handler yet.
+        const [script = supervisor.process.pid!] = await readProcessIds(
+          supervisor.scriptProcessIdLog,
+        );
+        process.kill(script, "SIGSTOP");
+        process.kill(-supervisor.process.pid!, "SIGTERM");
+        await delay(300);
+        if (isRunning(script)) process.kill(script, "SIGCONT");
+        await waitForExit(supervisor.process);
+        return leftoverProcesses(supervisor);
+      });
+
+      expect(leftover).toEqual([]);
+    },
+  );
+
+  it("starts the supervisor and the Portless launcher without the tsx CLI", async () => {
+    for (const [scriptName, file] of [
+      ["dev", "scripts/portless.ts"],
+      ["demo:app", "scripts/dev.ts"],
+      ["demo:production", "scripts/dev.ts"],
+    ] as const) {
+      expect(await launcherAfterWrapper(scriptName)).toEqual(["node", "--import", "tsx", file]);
+    }
+  });
 });

@@ -124,13 +124,34 @@ if (mode === "development" && process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true
   });
 }
 
-const children = commands.map(({ command, arguments: arguments_, env }) =>
-  spawn(command, arguments_, {
-    detached: usesProcessGroups,
-    env,
-    stdio: "inherit",
-  }),
-);
+const children: ReturnType<typeof spawn>[] = [];
+let stopping = false;
+let shutdownRequested = false;
+let stoppedAt = 0;
+let processGroupsLeftRunning = false;
+let forceKillTimer: NodeJS.Timeout | undefined;
+
+// Each child runs in its own process group, so a signal to the supervisor's group does not reach
+// it. The supervisor must forward the signal, so it listens before it starts the first child.
+// `package.json` starts this script with `node --import tsx`, not the `tsx` CLI: the CLI sends
+// SIGKILL to a script that does not acknowledge a signal within about 60 ms, and a supervisor
+// killed that way leaves every child running.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    shutdownRequested = true;
+    stop(signal);
+  });
+}
+
+for (const { command, arguments: arguments_, env } of commands) {
+  children.push(
+    spawn(command, arguments_, {
+      detached: usesProcessGroups,
+      env,
+      stdio: "inherit",
+    }),
+  );
+}
 
 console.log(
   process.env.PORTLESS_URL
@@ -142,12 +163,6 @@ if (process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
     `Dashboard UI harness (source, hot reload) at http://localhost:${dashboardDevPort}; the demo above still serves the packaged bundle`,
   );
 }
-
-let stopping = false;
-let shutdownRequested = false;
-let stoppedAt = 0;
-let processGroupsLeftRunning = false;
-let forceKillTimer: NodeJS.Timeout | undefined;
 
 function killProcessTree(child: (typeof children)[number], signal: NodeJS.Signals): void {
   if (usesProcessGroups && child.pid) {
@@ -204,15 +219,6 @@ function stop(signal: NodeJS.Signals): void {
   }, forceKillAfterMs);
   forceKillTimer.unref();
 }
-
-process.on("SIGINT", () => {
-  shutdownRequested = true;
-  stop("SIGINT");
-});
-process.on("SIGTERM", () => {
-  shutdownRequested = true;
-  stop("SIGTERM");
-});
 
 const exitCodes = await Promise.all(
   children.map(
