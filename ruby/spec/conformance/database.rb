@@ -54,7 +54,8 @@ module Conformance
       "#{result.error_field(PG::PG_DIAG_MESSAGE_PRIMARY)} (#{code})"
     end
 
-    # The error shape the fixtures compare: SQLSTATE, primary message, and JSON detail when present.
+    # The error shape the fixtures compare: SQLSTATE, primary message, JSON detail when present, and
+    # the raw hint when present.
     def database_error(error)
       result = error.respond_to?(:result) ? error.result : nil
       code = result&.error_field(PG::PG_DIAG_SQLSTATE)
@@ -69,6 +70,8 @@ module Conformance
           raise Failure, "error detail is not JSON (#{e.message}): #{detail}"
         end
       end
+      hint = result.error_field(PG::PG_DIAG_MESSAGE_HINT)
+      actual["hint"] = hint if hint
       actual
     end
 

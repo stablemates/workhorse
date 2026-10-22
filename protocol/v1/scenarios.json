@@ -1232,6 +1232,19 @@
             "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
             "scope": "protocol",
             "storedRequestDigest": "800aa95a4a3e761d774440dfc12fb6aea8284cc3be76af49f47a2b144e60a9d6"
+          },
+          "hint": {
+            "conflictingFields": ["payload"],
+            "existingTaskId": {
+              "$ref": "conflictTask"
+            },
+            "keyDigest": "b0fd606eefe8",
+            "keyLength": 17,
+            "keyPreview": "protocol\u2026lict",
+            "ordinal": 1,
+            "rejectedRequestDigest": "d5fdb44699fa0aec5063a464465be8690df99a41cfe56f19fde6f15cab76a9df",
+            "scope": "protocol",
+            "storedRequestDigest": "800aa95a4a3e761d774440dfc12fb6aea8284cc3be76af49f47a2b144e60a9d6"
           }
         }
       }
@@ -2327,7 +2340,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 76,
+                "schemaVersion": 77,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -2943,6 +2956,10 @@
           "detail": {
             "queue": "protocol-fast",
             "feature": "batched completion"
+          },
+          "hint": {
+            "queue": "protocol-fast",
+            "feature": "batched completion"
           }
         }
       },
@@ -2975,6 +2992,11 @@
           "code": "P1007",
           "message": "fast-tier queue protocol-fast does not support concurrency keys",
           "detail": {
+            "queue": "protocol-fast",
+            "feature": "concurrency keys",
+            "ordinal": 1
+          },
+          "hint": {
             "queue": "protocol-fast",
             "feature": "concurrency keys",
             "ordinal": 1
@@ -3571,6 +3593,13 @@
           "code": "P1008",
           "message": "the task group does not accept tasks",
           "detail": {
+            "groupId": {
+              "$ref": "group"
+            },
+            "state": "sealed",
+            "reason": "sealed"
+          },
+          "hint": {
             "groupId": {
               "$ref": "group"
             },

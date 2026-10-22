@@ -20,6 +20,20 @@ upgrade steps.
 
 ## Unreleased
 
+### Each diagnosed error also carries its details in HINT
+
+Before this change, SQLSTATE `P1001` to `P1010`, apart from `P1004`, carried their structured
+fields only in DETAIL. Npgsql, the .NET driver, hides DETAIL unless the connection string sets
+`Include Error Detail=true`. That setting also shows the row values of every other DETAIL on the
+data source (SM-1638). Migration 0078 (`0078-copy-the-diagnostic-details-into-hint.sql`) moves the
+schema to version 77. After it, each of these errors also sets HINT to the same JSON text as DETAIL.
+`P1004` carries neither field. DETAIL does not change and stays the authoritative field, so the
+TypeScript, Python, Go, Rust, Ruby, and JVM SDKs keep their behavior. The C# SDK reads HINT when
+Npgsql hides DETAIL.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
+changes no stored data.
+
 ### The dashboard Queues page switches a queue's tier and history
 
 Before this change, an operator on the Queues page saw the tier and history of each queue. To

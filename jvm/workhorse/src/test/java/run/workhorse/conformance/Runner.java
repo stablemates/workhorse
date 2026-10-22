@@ -330,12 +330,26 @@ final class Runner {
                 + Matcher.render(actual.get(field)));
       }
     }
-    if (!expected.containsKey("detail")) {
+    if (expected.containsKey("detail")) {
+      check(actual.containsKey("detail"), location + " expected error detail, received none");
+      Matcher.assertValue(
+          expected.get("detail"), actual.get("detail"), references, location + ".detail");
+    }
+    // P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+    if (!expected.containsKey("hint")) {
       return;
     }
-    check(actual.containsKey("detail"), location + " expected error detail, received none");
-    Matcher.assertValue(
-        expected.get("detail"), actual.get("detail"), references, location + ".detail");
+    check(actual.containsKey("hint"), location + " expected error hint, received none");
+    @Nullable Object hint = actual.get("hint");
+    if (hint instanceof String text) {
+      try {
+        hint = Json.parse(text);
+      } catch (IllegalArgumentException parse) {
+        throw new Failure(
+            location + " error hint is not JSON (" + parse.getMessage() + "): " + text);
+      }
+    }
+    Matcher.assertValue(expected.get("hint"), hint, references, location + ".hint");
   }
 
   // ----- scenarios ---------------------------------------------------------------------------

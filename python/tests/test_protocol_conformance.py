@@ -235,6 +235,8 @@ def assert_database_error(
     }
     if error.diag.message_detail is not None:
         actual["detail"] = json.loads(error.diag.message_detail)
+    if error.diag.message_hint is not None:
+        actual["hint"] = error.diag.message_hint
     assert_error_value(expected, actual, references, f"{scenario}/{step}")
 
 
@@ -249,6 +251,11 @@ def assert_error_value(
     if "detail" in expected:
         assert "detail" in actual, f"{location} detail"
         assert_value(expected["detail"], actual["detail"], references, f"{location}.detail")
+    # P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+    if "hint" in expected:
+        assert "hint" in actual, f"{location} hint"
+        hint = json.loads(actual["hint"]) if isinstance(actual["hint"], str) else actual["hint"]
+        assert_value(expected["hint"], hint, references, f"{location}.hint")
 
 
 def read_pointer(value: Any, pointer: str) -> Any:

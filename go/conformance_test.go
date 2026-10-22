@@ -66,6 +66,7 @@ type protocolErrorExpectation struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Detail  any    `json:"detail"`
+	Hint    any    `json:"hint"`
 }
 
 type interpreterFixture struct {
@@ -728,6 +729,9 @@ func assertProtocolDatabaseError(
 			t.Fatalf("%s detail: %v", location, err)
 		}
 	}
+	if databaseError.Hint != "" {
+		actual.Hint = databaseError.Hint
+	}
 	if err := matchProtocolErrorValue(expected, actual, references, location); err != nil {
 		t.Fatal(err)
 	}
@@ -745,14 +749,33 @@ func matchProtocolErrorValue(
 	if actual.Message != expected.Message {
 		return fmt.Errorf("%s message: expected %q, received %q", location, expected.Message, actual.Message)
 	}
-	if expected.Detail == nil {
+	if expected.Detail != nil {
+		normalized, err := normalizeProtocolValue(actual.Detail)
+		if err != nil {
+			return fmt.Errorf("%s detail: %w", location, err)
+		}
+		if err := matchFixtureValue(expected.Detail, normalized, references, location+".detail"); err != nil {
+			return err
+		}
+	}
+	// P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+	if expected.Hint == nil {
 		return nil
 	}
-	normalized, err := normalizeProtocolValue(actual.Detail)
-	if err != nil {
-		return fmt.Errorf("%s detail: %w", location, err)
+	if actual.Hint == nil {
+		return fmt.Errorf("%s expected error hint, received none", location)
 	}
-	return matchFixtureValue(expected.Detail, normalized, references, location+".detail")
+	hint := actual.Hint
+	if text, ok := hint.(string); ok {
+		if err := decodeJSON([]byte(text), &hint); err != nil {
+			return fmt.Errorf("%s hint: %w", location, err)
+		}
+	}
+	normalized, err := normalizeProtocolValue(hint)
+	if err != nil {
+		return fmt.Errorf("%s hint: %w", location, err)
+	}
+	return matchFixtureValue(expected.Hint, normalized, references, location+".hint")
 }
 
 func readFixturePointer(value any, pointer string) (any, error) {

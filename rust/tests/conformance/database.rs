@@ -28,7 +28,8 @@ pub fn describe(error: &tokio_postgres::Error) -> String {
     }
 }
 
-/// The error shape the fixtures compare: SQLSTATE, primary message, and JSON detail when present.
+/// The error shape the fixtures compare: SQLSTATE, primary message, JSON detail when present, and
+/// the raw hint when present.
 pub fn database_error(error: &tokio_postgres::Error) -> Result<Value, String> {
     let database = error
         .as_db_error()
@@ -40,6 +41,9 @@ pub fn database_error(error: &tokio_postgres::Error) -> Result<Value, String> {
         let detail = serde_json::from_str(detail)
             .map_err(|parse| format!("error detail is not JSON ({parse}): {detail}"))?;
         actual.insert("detail".to_owned(), detail);
+    }
+    if let Some(hint) = database.hint() {
+        actual.insert("hint".to_owned(), Value::String(hint.to_owned()));
     }
     Ok(Value::Object(actual))
 }

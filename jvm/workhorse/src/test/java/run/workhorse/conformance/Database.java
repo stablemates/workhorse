@@ -135,7 +135,7 @@ final class Database {
     return server.getMessage() + " (" + server.getSQLState() + ")";
   }
 
-  /** The error shape the fixtures compare: SQLSTATE, primary message, and JSON detail. */
+  /** The error shape the fixtures compare: SQLSTATE, primary message, JSON detail, and raw hint. */
   static Map<String, @Nullable Object> databaseError(PSQLException error) {
     ServerErrorMessage server = error.getServerErrorMessage();
     if (server == null || server.getSQLState() == null) {
@@ -151,6 +151,10 @@ final class Database {
       } catch (IllegalArgumentException parse) {
         throw new Failure("error detail is not JSON (" + parse.getMessage() + "): " + detail);
       }
+    }
+    String hint = server.getHint();
+    if (hint != null) {
+      actual.put("hint", hint);
     }
     return actual;
   }

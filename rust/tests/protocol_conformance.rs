@@ -376,6 +376,23 @@ fn assert_error_value(
             .ok_or_else(|| format!("{location} expected error detail, received none"))?;
         assert_value(detail, actual, references, &format!("{location}.detail"))?;
     }
+    // P1001 to P1010 copy their DETAIL JSON into HINT, for drivers that hide DETAIL.
+    if let Some(hint) = expected.get("hint") {
+        let actual = actual
+            .get("hint")
+            .ok_or_else(|| format!("{location} expected error hint, received none"))?;
+        let parsed;
+        let actual = match actual {
+            Value::String(text) => {
+                parsed = serde_json::from_str::<Value>(text).map_err(|parse| {
+                    format!("{location} error hint is not JSON ({parse}): {text}")
+                })?;
+                &parsed
+            }
+            other => other,
+        };
+        assert_value(hint, actual, references, &format!("{location}.hint"))?;
+    }
     Ok(())
 }
 

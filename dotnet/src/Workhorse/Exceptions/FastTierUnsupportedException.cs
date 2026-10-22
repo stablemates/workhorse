@@ -2,10 +2,11 @@ namespace Workhorse;
 
 /// <summary>SQLSTATE <c>P1007</c>: a request and the tier of a queue disagree (ADR 0077).</summary>
 /// <remarks>
-/// PostgreSQL sends the queue, the feature, and the position in the DETAIL of the error. Npgsql
-/// hides the DETAIL unless the connection string sets <c>Include Error Detail=true</c>. Without it,
-/// <see cref="Queue"/> and <see cref="Feature"/> are <c>unknown</c>, and <see cref="Ordinal"/> is
-/// <c>null</c>.
+/// PostgreSQL sends the queue, the feature, and the position in the DETAIL of the error, and from
+/// schema version 77 a copy in the HINT. Npgsql hides the DETAIL unless the connection string sets
+/// <c>Include Error Detail=true</c>, so the SDK reads the HINT then. On schema version 76 without
+/// that setting, <see cref="Queue"/> and <see cref="Feature"/> are <c>unknown</c>, and
+/// <see cref="Ordinal"/> is <c>null</c>.
 /// </remarks>
 public sealed class FastTierUnsupportedException : WorkhorseException
 {
@@ -18,12 +19,12 @@ public sealed class FastTierUnsupportedException : WorkhorseException
         Ordinal = ordinal;
     }
 
-    /// <summary>The fast-tier queue, or <c>unknown</c> without <c>Include Error Detail=true</c>.</summary>
+    /// <summary>The fast-tier queue, or <c>unknown</c> when the error names none.</summary>
     public string Queue { get; }
 
-    /// <summary>The feature that the queue does not support, or <c>unknown</c> without <c>Include Error Detail=true</c>.</summary>
+    /// <summary>The feature that the queue does not support, or <c>unknown</c> when the error names none.</summary>
     public string Feature { get; }
 
-    /// <summary>The 1-based position of the rejected request in an enqueue batch, or <c>null</c>. It is <c>null</c> without <c>Include Error Detail=true</c>.</summary>
+    /// <summary>The 1-based position of the rejected request in an enqueue batch, or <c>null</c> when the error names none.</summary>
     public long? Ordinal { get; }
 }

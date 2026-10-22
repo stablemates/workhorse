@@ -1415,3 +1415,62 @@ public `Deconstruct`. Only the worker creates a `BatchHandlerItem`.
 The SM-1613 coordinator chose this form during SM-1621. The rejected alternative kept the `Task`
 result and gave each item a `Succeed` and a `Fail` method. An item without a call would then succeed
 with `null`, so a missing outcome would not be an error.
+
+## Amendment: HINT carries the diagnostic details (2026-10-22)
+
+SQLSTATE `P1001` to `P1010`, apart from `P1004`, carry their structured fields as one JSON object in
+DETAIL. Npgsql hides DETAIL unless the connection string sets `Include Error Detail=true`, and the
+Connection model section says that the SDK does not change that string. So, with the default
+settings, every C# `DiagnosedException.Details` was empty, and `FastTierUnsupportedException.Queue`
+and `.Feature` were `unknown`. An `Admin.SetQueueTierAsync` refusal named no queue and no feature.
+The dashboard procedure `setQueueTier` could not choose its `dashboard/v1` status, so it gave a
+500 response. SM-1638 records this amendment.
+
+SM-1638 verified these facts with Npgsql 10.0.3 against PostgreSQL:
+
+1. Npgsql hides only DETAIL, on `PostgresException.Detail` and on `PostgresNotice.Detail`. The
+   redaction text also goes into `Message`, `ToString()`, and `Data`. `MessageText`, `Hint`,
+   `Where`, and the schema, table, column, data type, and constraint names stay visible.
+2. Npgsql keeps no copy of the real DETAIL, so the SDK cannot recover it after the error.
+3. `Include Error Detail=true` shows every DETAIL of the data source in exception messages and logs.
+   For example, a unique violation shows the duplicate key value, and a check violation shows the
+   whole failing row. The setting does not hide a parameter value that PostgreSQL puts in the
+   message text. That value shows with either setting.
+4. The TypeScript, Python, Go, Rust, Ruby, and Java SDKs read DETAIL. None reads HINT, and no
+   Workhorse function set HINT.
+5. `MessageText` holds fields only for `P1007` and `P1005`, and not all of them. Every other code has
+   a fixed message.
+
+This amendment adds these rules:
+
+1. Migration 0078 moves the schema from 76 to 77. Each raise and re-raise of `P1001` to `P1010`
+   also sets HINT to the same JSON text as DETAIL. Each site builds the text once, in
+   `v_diagnostic`, and passes it to both fields. `P1004` carries neither field.
+2. DETAIL does not change and stays the authoritative field. The six other SDKs keep reading it.
+3. `SqlStates.Translate` reads DETAIL. If DETAIL is not a JSON object, it reads HINT. So the typed
+   fields and `Details` are filled with the default Npgsql settings. On schema 76 without
+   `Include Error Detail=true`, they keep their fallback values, and the exception keeps its type.
+4. The four structured errors in `protocol/v1/scenarios.json` pin `hint` beside `detail`. Each
+   language runner compares it. `schema-sqlstates.test.ts` holds every raise site in
+   `sql/schema/current.sql`.
+5. The SDK compatibility floor stays at schema 76, because no SDK statement changes. Each generated
+   catalogue changes only its maximum schema version, from 76 to 77.
+
+The change does not affect Gate 1. No function signature changes and no function is added, so
+`protocol/v1/governed-surface.json` does not change, and `pnpm sql-catalogues:check` passes. The
+migration is additive: it adds no line that removes or retypes anything. With these rules, the
+`Queue`, `Admin`, and dashboard cells of the .NET column get their fields with the default settings,
+as Gate 6 asks. The dashboard follow-up removes its 500 path for a refused tier change.
+
+These options were rejected:
+
+- **Keep the documented limit.** The fields, and the dashboard status, would depend on a host
+  setting. That setting shows the row values of the host's own errors in its logs.
+- **Read stable fields from `MessageText`.** That covers only `P1007` and `P1005`, and `Details`
+  stays empty. A message change would break the parse silently.
+- **Give the dashboard its own data source with the setting.** A second data source with other
+  error settings surprises the host, and it fixes only the dashboard. The SDK cannot clone the
+  data source of the caller, because `NpgsqlDataSource.ConnectionString` drops the password.
+- **Put the JSON in another visible field.** The schema, table, column, data type, and constraint
+  fields name database objects. A tool or a driver can misread JSON in them. HINT is the only
+  visible free-text field.

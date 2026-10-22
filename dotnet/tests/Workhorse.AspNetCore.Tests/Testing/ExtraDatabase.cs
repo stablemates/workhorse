@@ -40,11 +40,9 @@ internal sealed class ExtraDatabase : IAsyncDisposable
         await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{name}\"", cancellationToken);
         await ExecuteAsync(admin, $"CREATE DATABASE \"{name}\"", cancellationToken);
 
-        // A refused setQueueTier names its cause only with the PostgreSQL detail.
         var dataSource = scratch.CreateDataSource(builder =>
         {
             builder.Database = name;
-            builder.IncludeErrorDetail = true;
             builder.CommandTimeout = 300;
         });
         var database = new ExtraDatabase(admin, dataSource, name);

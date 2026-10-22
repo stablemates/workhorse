@@ -545,6 +545,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "fence the worker deregistration by instance",
     kind: "additive",
   },
+  {
+    fromVersion: 76,
+    toVersion: 77,
+    file: "0078-copy-the-diagnostic-details-into-hint.sql",
+    description: "copy the diagnostic details into hint",
+    kind: "additive",
+  },
 ];
 
 /**

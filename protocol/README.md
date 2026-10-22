@@ -15,6 +15,11 @@ then classifies a change against it. The generator adds to the file and never dr
 
 `v1/scenarios.json` is an ordered list of raw PostgreSQL calls. Each step supplies SQL, positional
 parameters, canonical result rows, optional captured values, and optional structured error fields.
+A structured error pins `code`, `message`, and optionally `detail` and `hint`. SQLSTATE `P1001` to
+`P1010`, apart from `P1004`, carry their fields as a JSON object in DETAIL, and DETAIL stays
+authoritative. From schema version 77, each also sets HINT to the same JSON text, because Npgsql
+hides DETAIL by default. A runner parses an expected `hint` as JSON and matches it as it matches
+`detail`.
 Objects containing only `$ref` reuse a captured value. Objects containing only `$type` accept a
 dynamic PostgreSQL value of `uuid`, `timestamp`, `integer`, or `string` while all surrounding JSON
 remains exact.

@@ -475,9 +475,11 @@ public sealed class AdminDatabaseTests
         Assert.Equal(new QueueHistory { RecordAttempts = false, RecordClaims = true }, await _admin.SetQueueHistoryAsync(_queue, false, null, Token));
 
         await _seed.EnqueueAsync("t", new JsonObject());
-        await Assert.ThrowsAsync<FastTierUnsupportedException>(() => _admin.SetQueueTierAsync(_queue, QueueTier.Full, Audit(), Token));
-        // Npgsql gives the DETAIL of an error only with Include Error Detail, and the exception reads
-        // its queue and feature from that DETAIL.
+        // Npgsql hides the DETAIL of an error by default, so the exception reads its queue and
+        // feature from the copy in the HINT. With Include Error Detail, it reads them from the DETAIL.
+        var refused = await Assert.ThrowsAsync<FastTierUnsupportedException>(() => _admin.SetQueueTierAsync(_queue, QueueTier.Full, Audit(), Token));
+        Assert.Equal(_queue, refused.Queue);
+        Assert.Equal("tier change", refused.Feature);
         await using (var detailed = _database.CreateDataSource(builder => builder.IncludeErrorDetail = true))
         {
             var rejected = await Assert.ThrowsAsync<FastTierUnsupportedException>(

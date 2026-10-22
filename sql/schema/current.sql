@@ -755,17 +755,21 @@ CREATE OR REPLACE FUNCTION workhorse.reject_self_task_dependency_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_diagnostic text;
 BEGIN
   IF NEW.dependent_task_id = NEW.prerequisite_task_id THEN
+    v_diagnostic := jsonb_build_object(
+      'dependentTaskId', NEW.dependent_task_id,
+      'prerequisiteTaskId', NEW.prerequisite_task_id,
+      'cycleTaskIds', jsonb_build_array(NEW.dependent_task_id, NEW.prerequisite_task_id),
+      'truncated', false
+    )::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1003',
       MESSAGE = 'dependency cycle rejected',
-      DETAIL = jsonb_build_object(
-        'dependentTaskId', NEW.dependent_task_id,
-        'prerequisiteTaskId', NEW.prerequisite_task_id,
-        'cycleTaskIds', jsonb_build_array(NEW.dependent_task_id, NEW.prerequisite_task_id),
-        'truncated', false
-      )::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   RETURN NEW;
 END;
@@ -781,6 +785,7 @@ SET jit = off
 SET plan_cache_mode = force_generic_plan
 AS $$
 DECLARE
+  v_diagnostic text;
   v_component_task_id text;
   v_cycle uuid[];
   v_fan_out_root uuid;
@@ -877,15 +882,17 @@ BEGIN
      ORDER BY cardinality(reachable.path)
      LIMIT 1;
     IF v_cycle IS NOT NULL THEN
+      v_diagnostic := jsonb_build_object(
+        'dependentTaskId', v_cycle[1],
+        'prerequisiteTaskId', v_cycle[2],
+        'cycleTaskIds', to_jsonb(v_cycle[1:101]),
+        'truncated', cardinality(v_cycle) > 101
+      )::text;
       RAISE EXCEPTION USING
         ERRCODE = 'P1003',
         MESSAGE = 'dependency cycle rejected',
-        DETAIL = jsonb_build_object(
-          'dependentTaskId', v_cycle[1],
-          'prerequisiteTaskId', v_cycle[2],
-          'cycleTaskIds', to_jsonb(v_cycle[1:101]),
-          'truncated', cardinality(v_cycle) > 101
-        )::text;
+        DETAIL = v_diagnostic,
+        HINT = v_diagnostic;
     END IF;
   END IF;
   SELECT dependency.dependent_task_id INTO v_limit_task_id
@@ -900,14 +907,16 @@ BEGIN
      ORDER BY dependency.dependent_task_id
      LIMIT 1;
   IF v_limit_task_id IS NOT NULL THEN
+    v_diagnostic := jsonb_build_object(
+      'taskId', v_limit_task_id,
+      'limit', 'prerequisites',
+      'max', 100
+    )::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1005',
       MESSAGE = 'a task accepts at most 100 prerequisite dependencies',
-      DETAIL = jsonb_build_object(
-        'taskId', v_limit_task_id,
-        'limit', 'prerequisites',
-        'max', 100
-      )::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   SELECT dependency.prerequisite_task_id INTO v_limit_task_id
       FROM workhorse.task_dependency dependency
@@ -919,14 +928,16 @@ BEGIN
      ORDER BY dependency.prerequisite_task_id
      LIMIT 1;
   IF v_limit_task_id IS NOT NULL THEN
+    v_diagnostic := jsonb_build_object(
+      'taskId', v_limit_task_id,
+      'limit', 'dependents',
+      'max', 100
+    )::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1005',
       MESSAGE = 'a task accepts at most 100 dependent tasks',
-      DETAIL = jsonb_build_object(
-        'taskId', v_limit_task_id,
-        'limit', 'dependents',
-        'max', 100
-      )::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   SELECT array_agg(DISTINCT inserted.prerequisite_task_id) INTO v_prerequisites
     FROM inserted_dependencies inserted
@@ -1053,14 +1064,16 @@ BEGIN
        ORDER BY reachable.root_task_id
        LIMIT 1;
       IF v_fan_out_root IS NOT NULL THEN
+        v_diagnostic := jsonb_build_object(
+          'taskId', v_fan_out_root,
+          'limit', 'unresolved_dependents',
+          'max', 100
+        )::text;
         RAISE EXCEPTION USING
           ERRCODE = 'P1005',
           MESSAGE = 'a task accepts at most 100 unresolved transitive dependent tasks',
-          DETAIL = jsonb_build_object(
-            'taskId', v_fan_out_root,
-            'limit', 'unresolved_dependents',
-            'max', 100
-          )::text;
+          DETAIL = v_diagnostic,
+          HINT = v_diagnostic;
       END IF;
     END IF;
   END IF;
@@ -6228,15 +6241,19 @@ CREATE OR REPLACE FUNCTION workhorse.reject_fast_feature_v1(
 ) RETURNS void
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_diagnostic text;
 BEGIN
+  v_diagnostic := (
+    jsonb_build_object('queue', p_queue_name, 'feature', p_feature)
+    || CASE WHEN p_ordinal IS NULL THEN '{}'::jsonb
+       ELSE jsonb_build_object('ordinal', p_ordinal) END
+  )::text;
   RAISE EXCEPTION USING
     ERRCODE = 'P1007',
     MESSAGE = format('fast-tier queue %s does not support %s', p_queue_name, p_feature),
-    DETAIL = (
-      jsonb_build_object('queue', p_queue_name, 'feature', p_feature)
-      || CASE WHEN p_ordinal IS NULL THEN '{}'::jsonb
-         ELSE jsonb_build_object('ordinal', p_ordinal) END
-    )::text;
+    DETAIL = v_diagnostic,
+    HINT = v_diagnostic;
 END;
 $$;
 
@@ -6329,6 +6346,7 @@ RETURNS TABLE (ordinal integer, task_id uuid, accepted boolean)
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_diagnostic text;
   v_count integer;
   v_now timestamptz := clock_timestamp();
   v_request jsonb;
@@ -6669,12 +6687,14 @@ BEGIN
              )
        LIMIT 1;
       IF FOUND THEN
+        v_diagnostic := jsonb_build_object(
+          'feature', 'dependencies', 'taskId', v_fast_task_id, 'ordinal', v_ordinal
+        )::text;
         RAISE EXCEPTION USING
           ERRCODE = 'P1007',
           MESSAGE = format('fast-tier task %s cannot be a prerequisite', v_fast_task_id),
-          DETAIL = jsonb_build_object(
-            'feature', 'dependencies', 'taskId', v_fast_task_id, 'ordinal', v_ordinal
-          )::text;
+          DETAIL = v_diagnostic,
+          HINT = v_diagnostic;
       END IF;
       -- An edge starts pending unless its prerequisite is terminal and its policy releases. The
       -- dependent's counter starts at that count and falls as the pending edges resolve.
@@ -6823,20 +6843,22 @@ BEGIN
             INTO v_conflicting_fields
             FROM jsonb_object_keys(v_fingerprint) field
            WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+          v_diagnostic := jsonb_build_object(
+            'scope', v_scope,
+            'keyPreview', v_key_preview,
+            'keyDigest', v_key_digest,
+            'keyLength', v_key_length,
+            'existingTaskId', v_existing.task_id,
+            'ordinal', v_ordinal,
+            'conflictingFields', to_jsonb(v_conflicting_fields),
+            'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+            'rejectedRequestDigest', v_request_digest
+          )::text;
           RAISE EXCEPTION USING
             ERRCODE = 'P1001',
             MESSAGE = 'enqueue idempotency conflict with a retained request',
-            DETAIL = jsonb_build_object(
-              'scope', v_scope,
-              'keyPreview', v_key_preview,
-              'keyDigest', v_key_digest,
-              'keyLength', v_key_length,
-              'existingTaskId', v_existing.task_id,
-              'ordinal', v_ordinal,
-              'conflictingFields', to_jsonb(v_conflicting_fields),
-              'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
-              'rejectedRequestDigest', v_request_digest
-            )::text;
+            DETAIL = v_diagnostic,
+            HINT = v_diagnostic;
         END IF;
         task_id := v_existing.task_id;
         v_is_new := false;
@@ -7529,6 +7551,7 @@ RETURNS TABLE (ordinal integer, task_id uuid, outcome text, reason text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_diagnostic text;
   v_request jsonb;
   v_ordinal integer;
   v_row record;
@@ -7701,19 +7724,23 @@ BEGIN
           GET STACKED DIAGNOSTICS
             v_error_message = MESSAGE_TEXT,
             v_error_detail = PG_EXCEPTION_DETAIL;
+          v_diagnostic := (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
           RAISE EXCEPTION USING
             ERRCODE = 'P1001',
             MESSAGE = v_error_message,
-            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+            DETAIL = v_diagnostic,
+            HINT = v_diagnostic;
         -- A fast-tier rejection of the member reports the ordinal of the member in the batch.
         WHEN SQLSTATE 'P1007' THEN
           GET STACKED DIAGNOSTICS
             v_error_message = MESSAGE_TEXT,
             v_error_detail = PG_EXCEPTION_DETAIL;
+          v_diagnostic := (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
           RAISE EXCEPTION USING
             ERRCODE = 'P1007',
             MESSAGE = v_error_message,
-            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+            DETAIL = v_diagnostic,
+            HINT = v_diagnostic;
       END;
       ordinal := v_ordinal;
       task_id := v_row.task_id;
@@ -7727,19 +7754,23 @@ BEGIN
           GET STACKED DIAGNOSTICS
             v_error_message = MESSAGE_TEXT,
             v_error_detail = PG_EXCEPTION_DETAIL;
+          v_diagnostic := (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
           RAISE EXCEPTION USING
             ERRCODE = 'P1001',
             MESSAGE = v_error_message,
-            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+            DETAIL = v_diagnostic,
+            HINT = v_diagnostic;
         -- A fast-tier rejection of the member reports the ordinal of the member in the batch.
         WHEN SQLSTATE 'P1007' THEN
           GET STACKED DIAGNOSTICS
             v_error_message = MESSAGE_TEXT,
             v_error_detail = PG_EXCEPTION_DETAIL;
+          v_diagnostic := (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
           RAISE EXCEPTION USING
             ERRCODE = 'P1007',
             MESSAGE = v_error_message,
-            DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
+            DETAIL = v_diagnostic,
+            HINT = v_diagnostic;
       END;
       ordinal := v_ordinal;
       task_id := v_row.task_id;
@@ -7884,6 +7915,7 @@ CREATE OR REPLACE FUNCTION workhorse.redrive_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_diagnostic text;
   v_task workhorse.task%ROWTYPE;
   v_source_state text;
   v_source_attempt integer;
@@ -7930,19 +7962,21 @@ BEGIN
         INTO v_conflicting_fields
         FROM jsonb_object_keys(v_fingerprint) field
        WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+      v_diagnostic := jsonb_build_object(
+        'sourceTaskId', p_source_task_id,
+        'existingTargetTaskId', v_existing.target_task_id,
+        'requestIdPreview', v_request_id_preview,
+        'requestIdDigest', v_request_id_digest,
+        'requestIdLength', v_request_id_length,
+        'conflictingFields', to_jsonb(v_conflicting_fields),
+        'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+        'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
+      )::text;
       RAISE EXCEPTION USING
         ERRCODE = 'P1002',
         MESSAGE = 'redrive request conflict with a retained request',
-        DETAIL = jsonb_build_object(
-          'sourceTaskId', p_source_task_id,
-          'existingTargetTaskId', v_existing.target_task_id,
-          'requestIdPreview', v_request_id_preview,
-          'requestIdDigest', v_request_id_digest,
-          'requestIdLength', v_request_id_length,
-          'conflictingFields', to_jsonb(v_conflicting_fields),
-          'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
-          'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
-        )::text;
+        DETAIL = v_diagnostic,
+        HINT = v_diagnostic;
     END IF;
     RETURN QUERY
     SELECT 'replayed'::text, p_source_task_id, v_existing.target_task_id,
@@ -8286,6 +8320,8 @@ CREATE OR REPLACE FUNCTION workhorse.set_queue_tier_v1(
 RETURNS text
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_diagnostic text;
 BEGIN
   IF p_queue_name IS NULL OR p_queue_name = '' THEN
     RAISE EXCEPTION 'queue_name must not be empty';
@@ -8312,10 +8348,12 @@ BEGIN
      ) OR EXISTS (
        SELECT 1 FROM workhorse.fast_task_runtime runtime WHERE runtime.queue_name = p_queue_name
      ) THEN
+    v_diagnostic := jsonb_build_object('queue', p_queue_name, 'feature', 'tier change')::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1007',
       MESSAGE = format('queue %s has live tasks, so its tier cannot change', p_queue_name),
-      DETAIL = jsonb_build_object('queue', p_queue_name, 'feature', 'tier change')::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   IF p_tier = 'fast' THEN
     IF EXISTS (
@@ -8885,6 +8923,7 @@ RETURNS TABLE (deleted_count integer, replayed boolean, requested_at timestamptz
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_diagnostic text;
   v_existing workhorse.queue_purge_request%ROWTYPE;
   v_fingerprint jsonb;
   v_conflicting_fields text[];
@@ -8931,18 +8970,20 @@ BEGIN
         INTO v_conflicting_fields
         FROM jsonb_object_keys(v_fingerprint) field
        WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+      v_diagnostic := jsonb_build_object(
+        'queue', p_queue_name,
+        'requestIdPreview', v_request_id_preview,
+        'requestIdDigest', v_request_id_digest,
+        'requestIdLength', v_request_id_length,
+        'conflictingFields', to_jsonb(v_conflicting_fields),
+        'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+        'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
+      )::text;
       RAISE EXCEPTION USING
         ERRCODE = 'P1006',
         MESSAGE = 'queue purge request conflict with a retained request',
-        DETAIL = jsonb_build_object(
-          'queue', p_queue_name,
-          'requestIdPreview', v_request_id_preview,
-          'requestIdDigest', v_request_id_digest,
-          'requestIdLength', v_request_id_length,
-          'conflictingFields', to_jsonb(v_conflicting_fields),
-          'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
-          'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
-        )::text;
+        DETAIL = v_diagnostic,
+        HINT = v_diagnostic;
     END IF;
     RETURN QUERY SELECT v_existing.deleted_count, true, v_existing.requested_at;
     RETURN;
@@ -9941,6 +9982,7 @@ LANGUAGE plpgsql
 AS $$
 #variable_conflict use_column
 DECLARE
+  v_diagnostic text;
   v_accepted uuid[];
   v_control workhorse.queue_control%ROWTYPE;
   v_first boolean := true;
@@ -9971,10 +10013,12 @@ BEGIN
   SELECT * INTO v_control FROM workhorse.queue_control control
    WHERE control.queue_name = p_queue_name;
   IF NOT FOUND OR v_control.tier <> 'fast' THEN
+    v_diagnostic := jsonb_build_object('queue', p_queue_name, 'feature', 'batched completion')::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1007',
       MESSAGE = format('queue %s is not a fast-tier queue', p_queue_name),
-      DETAIL = jsonb_build_object('queue', p_queue_name, 'feature', 'batched completion')::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   v_accepted := workhorse.fast_complete_many_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results);
   IF p_limit > 0 AND NOT v_control.paused THEN
@@ -17862,6 +17906,7 @@ LANGUAGE plpgsql
 AS $$
 #variable_conflict use_column
 DECLARE
+  v_diagnostic text;
   v_group workhorse.task_group%ROWTYPE;
   v_member workhorse.task_runtime%ROWTYPE;
   v_lock_task_id uuid;
@@ -17949,12 +17994,14 @@ BEGIN
     WHEN v_group.state = 'sealed' AND p_member_task_id IS NULL THEN 'sealed'
   END;
   IF v_refusal IS NOT NULL THEN
+    v_diagnostic := jsonb_build_object(
+      'groupId', p_group_id, 'state', v_group.state, 'reason', v_refusal
+    )::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1008',
       MESSAGE = 'the task group does not accept tasks',
-      DETAIL = jsonb_build_object(
-        'groupId', p_group_id, 'state', v_group.state, 'reason', v_refusal
-      )::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
 
   -- A fast-tier task records no outcome row that a group could count (ADR 0077).
@@ -17987,13 +18034,15 @@ BEGIN
       SELECT member.group_id INTO v_member_group_id
         FROM workhorse.task_group_member member WHERE member.task_id = v_row.task_id;
       IF v_member_group_id IS DISTINCT FROM p_group_id THEN
+        v_diagnostic := jsonb_build_object(
+          'groupId', p_group_id, 'taskId', v_row.task_id, 'ordinal', v_row.ordinal,
+          'memberOf', v_member_group_id
+        )::text;
         RAISE EXCEPTION USING
           ERRCODE = 'P1010',
           MESSAGE = 'enqueue idempotency returned a task that is not a member of the task group',
-          DETAIL = jsonb_build_object(
-            'groupId', p_group_id, 'taskId', v_row.task_id, 'ordinal', v_row.ordinal,
-            'memberOf', v_member_group_id
-          )::text;
+          DETAIL = v_diagnostic,
+          HINT = v_diagnostic;
       END IF;
     END IF;
     ordinal := v_row.ordinal;
@@ -18007,13 +18056,15 @@ BEGIN
   SELECT COALESCE(sum(shard.total_count), 0)::integer INTO v_total
     FROM workhorse.task_group_shard shard WHERE shard.group_id = p_group_id;
   IF v_total + cardinality(v_new_task_ids) > workhorse.task_group_member_limit_v1() THEN
+    v_diagnostic := jsonb_build_object(
+      'groupId', p_group_id, 'limit', workhorse.task_group_member_limit_v1(),
+      'total', v_total, 'requested', cardinality(v_new_task_ids)
+    )::text;
     RAISE EXCEPTION USING
       ERRCODE = 'P1009',
       MESSAGE = 'a task group accepts at most 100000 member tasks',
-      DETAIL = jsonb_build_object(
-        'groupId', p_group_id, 'limit', workhorse.task_group_member_limit_v1(),
-        'total', v_total, 'requested', cardinality(v_new_task_ids)
-      )::text;
+      DETAIL = v_diagnostic,
+      HINT = v_diagnostic;
   END IF;
   INSERT INTO workhorse.task_group_member(task_id, group_id, position, added_at)
   SELECT added.task_id, p_group_id, v_total + added.ordinality::integer, v_now
@@ -22273,10 +22324,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (73, 'skip a locked row in a one-lease heartbeat'),
   (74, 'allow throttle on fast-tier queues'),
   (75, 'add the dashboard retention preview function'),
-  (76, 'fence the worker deregistration by instance')
+  (76, 'fence the worker deregistration by instance'),
+  (77, 'copy the diagnostic details into hint')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (76) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (77) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
