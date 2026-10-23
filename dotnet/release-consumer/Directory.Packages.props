@@ -1,0 +1,9 @@
+<Project>
+  <!--
+    The consumer states its own package versions, so it takes no version of
+    dotnet/Directory.Packages.props. This file stops MSBuild before it reaches that file.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

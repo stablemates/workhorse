@@ -24,6 +24,31 @@
     <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
   <!--
+    The package metadata of the four packages (ADR 0107, "Governed surface and release"). Each
+    package carries dotnet/PACKAGE.md as its README, the license expression, and SourceLink to the
+    commit that it builds. A project with IsPackable false takes these settings and packs nothing.
+    The symbol package holds the portable PDB files. A CI build, and every release check, sets
+    ContinuousIntegrationBuild, so each PDB names the files under /_/ and not under the checkout.
+  -->
+  <PropertyGroup>
+    <Authors>Stablemates</Authors>
+    <Copyright>Copyright 2026 Stablemates</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://workhorse.run</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>workhorse;postgresql;task-queue;background-jobs;durable-execution</PackageTags>
+    <RepositoryUrl>https://github.com/stablemates/workhorse</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)PACKAGE.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+  <!--
     Every restore audits the direct and the transitive packages against the GitHub advisories that
     nuget.org serves, and each finding is an error, whatever its severity (ADR 0107, "Floors").
     NU1900 says that the advisory data did not load. TreatWarningsAsErrors would make it an error, so

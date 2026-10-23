@@ -1037,7 +1037,8 @@ describe("continuous integration", () => {
     // which npm performs from 11.5.1 and Node 22 does not ship. A token in this workflow would be
     // readable by everything the step runs, and there is no longer one to read.
     expect(workflow).not.toContain("NODE_AUTH_TOKEN:");
-    // Maven Central has no trusted publishing, so its job is the one that reads secrets.
+    // Maven Central has no trusted publishing, so its job is the one that reads secrets. The nuget
+    // job reads only the profile name that NuGet/login needs, and no key.
     const withoutCentral =
       workflow.slice(0, workflow.indexOf("\n  maven-central:")) +
       workflow.slice(workflow.indexOf("\n  github-release:"));
@@ -1143,7 +1144,7 @@ describe("continuous integration", () => {
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
     const job = workflow.slice(
       workflow.indexOf("\n  maven-central:"),
-      workflow.indexOf("\n  github-release:"),
+      workflow.indexOf("\n  nuget:"),
     );
     const steps = job.split(/\n      - /);
     const stepReading = (secret: string) =>
@@ -1194,6 +1195,62 @@ describe("continuous integration", () => {
     expect(await read("scripts/upload-maven-central.ts")).toContain(
       'publishingType: "USER_MANAGED"',
     );
+  });
+
+  it("prepares the nuget job in the protected nuget environment and keeps it off until SM-1441", async () => {
+    const workflow = await read(".github/workflows/release.yml");
+    const ci = await read(".github/workflows/ci.yml");
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const job = workflow.slice(
+      workflow.indexOf("\n  nuget:"),
+      workflow.indexOf("\n  github-release:"),
+    );
+    const steps = job.split(/\n      - /);
+    const release = workflow.slice(workflow.indexOf("\n  github-release:"));
+
+    // The dry run: the CI .NET lane packs, checks, and runs the consumer, and reads no secret.
+    expect(scripts["dotnet:package-check"]).toContain("scripts/check-dotnet-release.ts");
+    expect(ci).toContain(
+      "- if: matrix.runtime == 'sdk' && matrix.postgres == fromJSON(needs.plan.outputs.dotnet).include[0].postgres\n        run: pnpm dotnet:package-check\n",
+    );
+    expect(ci).not.toContain("secrets.NUGET");
+    expect(ci).not.toContain("NuGet/login");
+
+    // The job is off: its condition starts with a literal false, so no run starts it, enters the
+    // nuget environment, or asks for a token. github-release does not wait for a skipped job.
+    expect(job).toContain(
+      "if: false && startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true",
+    );
+    expect(job).toContain("SM-1441");
+    expect(release).not.toMatch(/needs: \[[^\]]*nuget/);
+    expect(workflow.replaceAll(/^\s*#.*$/gm, "").match(/dotnet nuget push/g)).toHaveLength(1);
+    expect(workflow.replaceAll(/^\s*#.*$/gm, "").match(/NuGet\/login@/g)).toHaveLength(1);
+
+    expect(job).toContain("needs: publish");
+    expect(job).toContain("environment: nuget");
+    expect(job).toContain("id-token: write");
+    expect(job).toContain("contents: read");
+    expect(job).not.toContain("contents: write");
+    expect(job).not.toContain("cache: pnpm");
+    expect(job).toContain('if [ "v$dotnet" != "$GITHUB_REF_NAME" ]; then');
+    expect(job).toContain('echo "publish=false" >> "$GITHUB_OUTPUT"');
+    expect(job).not.toContain("exit 1");
+    expect(job).toContain(
+      'pnpm dotnet:package-check --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/nuget"',
+    );
+    // The job reads one secret, the profile name of SM-1441, and passes it only to NuGet/login.
+    // Only the push step receives the one-hour key.
+    expect(new Set([...job.matchAll(/secrets\.(\w+)/g)].map((match) => match[1]))).toEqual(
+      new Set(["NUGET_USER"]),
+    );
+    const login = steps.filter((step) => step.includes("uses: NuGet/login@"));
+    expect(login).toHaveLength(1);
+    expect(login[0]).toContain("user: ${{ secrets.NUGET_USER }}");
+    const key = steps.filter((step) => step.includes("steps.login.outputs.NUGET_API_KEY"));
+    expect(key).toHaveLength(1);
+    expect(key[0]).toContain("dotnet nuget push");
+    expect(key[0]).toContain("--skip-duplicate");
+    expect(key[0]).not.toContain("pnpm");
   });
 
   it("announces the GitHub release only after every registry on the v* tag succeeds", async () => {

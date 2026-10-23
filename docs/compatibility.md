@@ -1286,6 +1286,64 @@ repository performs them.
    `MAVEN_SIGNING_KEY`, and `MAVEN_SIGNING_PASSWORD`. [Publication credentials](#publication-credentials)
    describes each one.
 
+### .NET packages
+
+The .NET SDK has four packages for nuget.org: `Workhorse`, `Workhorse.Hosting`,
+`Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`
+([ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)).
+The four always carry one version, the train version that `dotnet/Directory.Build.props` sets. Like
+the crate, the gem, and the JVM artifacts, they have no tag of their own and publish from the npm
+`v*` tag. nuget.org does not serve them yet. The `nuget` job of `.github/workflows/release.yml` is
+prepared, and it is off until the maintainer finishes SM-1441.
+
+`pnpm dotnet:package-check` is the dry run. It publishes nothing and reads no secret. The CI
+`dotnet` job runs it on the first entry of its matrix on every .NET change.
+
+1. `dotnet pack` of `dotnet/Workhorse.slnx` writes the four packages and their `.snupkg` symbol
+   packages after a full build with `ContinuousIntegrationBuild`. Each other project sets
+   `IsPackable` to `false`, so the demo worker, the tools, the consumers, and the tests pack nothing.
+2. Package validation runs in the pack. Before the first publish, nuget.org has no version of the
+   packages, so validation checks each package against its own target framework. After the first
+   publish, the check sets `PackageValidationBaselineVersion` to the newest published version below
+   the train version, and validation fails on a breaking change from it. The check refuses the
+   packages if their newest published versions differ.
+3. The check refuses a file other than the four packages and their symbol packages, and a version
+   other than the train version or the `--tag` version. It also refuses a dependency on another
+   Workhorse package at another version. Each nuspec must have the license expression `Apache-2.0`,
+   the README `dotnet/PACKAGE.md`, the project URL, and the repository URL and the commit of the
+   build. Each PDB must have a SourceLink map to that commit and no path in the checkout.
+4. The check restores `dotnet/release-consumer` in a temporary directory with an empty package
+   folder. Its `nuget.config` takes `Workhorse` and `Workhorse.*` only from the packed files. The
+   consumer prints the informational version of each package assembly. With PostgreSQL available,
+   it enqueues one task, and the hosted worker of `Workhorse.Hosting` runs it.
+
+`pnpm dotnet:release-check` runs `pnpm dotnet:lint`, `pnpm dotnet-api:check`, `pnpm dotnet:vuln`,
+and then the dry run.
+
+When the `nuget` job is on, it works in this sequence after npm publishes:
+
+1. It compares the version in `dotnet/Directory.Build.props` with the tag. A mismatch writes a
+   notice and publishes nothing. The job also writes a notice and publishes nothing while the
+   `nuget` environment has no `NUGET_USER` secret.
+2. It runs `pnpm dotnet:package-check` with the tag, and keeps the packages that the consumer ran.
+3. `NuGet/login` exchanges the OIDC identity of the `nuget` job for a nuget.org API key that is valid for
+   one hour. nuget.org mints it only for the trusted publishing policy of this repository,
+   `release.yml`, and the `nuget` environment. The repository stores no key.
+4. `dotnet nuget push --skip-duplicate` pushes `Workhorse` first and then the other three packages.
+   Each push also sends the symbol package. nuget.org signs each package, so the `nuget` job adds no
+   author signature.
+
+nuget.org never deletes a published version. It can only unlist one. The required reviewer of the
+`nuget` environment is therefore the person between the push and a permanent version.
+
+The condition of the `nuget` job starts with `false &&`, so no run starts it. To turn it on after SM-1441, the
+maintainer removes `false &&` and adds `nuget` to the `needs` of the `github-release` job, in one
+pull request. Until then `github-release` does not wait for the `nuget` job, because GitHub would
+then skip the GitHub release too. SM-1441 lists the maintainer steps: the nuget.org
+organization `stablemates`, the prefix `Workhorse.*`, the trusted publishing policy, and the
+protected `nuget` environment with the `NUGET_USER` secret. Nothing in this repository performs
+them.
+
 ### Release tags
 
 Each tag prefix publishes a fixed set of packages:

@@ -1,0 +1,6 @@
+<Project>
+  <!--
+    The consumer builds as an application does, so it takes no setting of dotnet/Directory.Build.props.
+    This file stops MSBuild before it reaches that file.
+  -->
+</Project>
