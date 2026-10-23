@@ -14,6 +14,7 @@ import {
 } from "../core.js";
 import { activityChartModel, type ActivityChartModel } from "../presentation-policy.js";
 import { displayTimeZone, formatExact, getDateTimeFormatter } from "../preferences.js";
+import { storeValue } from "../browser-storage.js";
 import { formatCount } from "../count-format.js";
 import type { TaskLocationState } from "../task-location.js";
 
@@ -114,14 +115,14 @@ export default function TasksActivityChart({
     const next = activityPeriods.includes(value as ActivityPeriod)
       ? (value as ActivityPeriod)
       : "1h";
-    localStorage.setItem("workhorse-activity-period", next);
+    storeValue("workhorse-activity-period", next);
     updateLocation({ period: next });
   };
   const changeGroupBy = (value: string) => {
     const next = activityGroupings.some((grouping) => grouping.value === value)
       ? (value as ActivityGroupBy)
       : "task";
-    localStorage.setItem("workhorse-activity-group", next);
+    storeValue("workhorse-activity-group", next);
     updateLocation({ group: next });
   };
 

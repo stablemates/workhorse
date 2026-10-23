@@ -62,6 +62,8 @@ columns, and limits of that area. For an explanation of a concept, read the
 - The embedded [Python](architecture/dashboard.md#python-backend),
   [Go](architecture/dashboard.md#go-backend), and [JVM](architecture/dashboard.md#jvm-backend)
   backends
+- The SPA [browser preferences](architecture/dashboard.md#browser-preferences) and their defaults
+  when browser storage fails
 
 ### [Telemetry](architecture/telemetry.md)
 

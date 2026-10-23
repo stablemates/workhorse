@@ -1,3 +1,4 @@
+import { readStoredValue, storeValue } from "../browser-storage.js";
 import { createRefreshRequests } from "../refresh-requests.js";
 import {
   createDashboardPollingClock,
@@ -108,7 +109,7 @@ const applyNothing = () => undefined;
 
 export const refreshStorageKey = "workhorse-auto-refresh";
 export function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
-  const stored = localStorage.getItem(refreshStorageKey);
+  const stored = readStoredValue(refreshStorageKey);
   return dashboardRefreshIntervals.some((option) => option.value === stored)
     ? (stored as DashboardRefreshIntervalValue)
     : defaultDashboardRefreshInterval;
@@ -231,7 +232,7 @@ export function useDashboardController(
   const changeSystemWindow = useCallback(
     (nextWindow: DashboardSystemWindow) => {
       setSystemWindow(nextWindow);
-      localStorage.setItem(systemWindowStorageKey, nextWindow);
+      storeValue(systemWindowStorageKey, nextWindow);
       const parameters = new URLSearchParams(window.location.search);
       if (nextWindow === "1h") parameters.delete("period");
       else parameters.set("period", nextWindow);
@@ -244,7 +245,7 @@ export function useDashboardController(
   );
   const changeRefreshInterval = useCallback((value: DashboardRefreshIntervalValue) => {
     setRefreshInterval(value);
-    localStorage.setItem(refreshStorageKey, value);
+    storeValue(refreshStorageKey, value);
   }, []);
   const requestId = useRef(0);
   const shouldDiscardBackgroundRefresh = refreshController.shouldDiscardBackground;

@@ -7,7 +7,12 @@
     <link rel="icon" type="image/svg+xml" />
     <script>
       (() => {
-        const stored = localStorage.getItem("workhorse-theme-scheme");
+        let stored = null;
+        try {
+          stored = localStorage.getItem("workhorse-theme-scheme");
+        } catch {
+          // A browser that blocks site storage gets the system color scheme.
+        }
         const scheme =
           stored === "light" || stored === "dark"
             ? stored

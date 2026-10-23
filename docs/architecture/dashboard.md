@@ -886,6 +886,34 @@ precision and a `Z` suffix. Every backend returns a procedure document as Postgr
 payloads, results, checkpoints, progress, and event details keep their stored text, including
 strings that look like timestamps.
 
+### Browser preferences
+
+The SPA keeps display preferences in the browser's `localStorage`. These preferences change only
+the display, so the dashboard must work when the browser does not let it read or write storage.
+For example, a browser policy can block site data for the dashboard origin.
+
+| Key                            | Preference                                 | Default             |
+| ------------------------------ | ------------------------------------------ | ------------------- |
+| `workhorse-theme-scheme`       | Color theme, `light` or `dark`             | System color scheme |
+| `workhorse-timezone`           | Display time zone, or `system`             | Browser time zone   |
+| `workhorse-auto-refresh`       | Automatic refresh interval                 | `15s`               |
+| `workhorse-system-window`      | Time window on the System page             | `1h`                |
+| `workhorse-activity-period`    | Activity chart period                      | `1h`                |
+| `workhorse-activity-group`     | Activity chart grouping                    | `task`              |
+| `workhorse-task-chart-visible` | Activity chart visibility on the task page | Visible             |
+| `workhorse-task-drawer-width`  | Task drawer width in pixels                | `780`               |
+
+`dashboard/app/src/browser-storage.ts` is the only SPA module that calls `localStorage`. Its
+`readStoredValue` returns `null` when a read throws, so the caller uses the default. If a write
+throws, `storeValue` keeps the value in a module map for the current page session. A later
+`readStoredValue` for that key returns the map value before it reads `localStorage`, so an old
+stored value cannot replace the change. A successful write removes the key from the map.
+
+An `oxlint` `no-restricted-globals` rule rejects `localStorage`, `window.localStorage`, and
+`globalThis.localStorage` in other SPA source modules. The inline theme script in
+`dashboard/app/browser/index.html` runs before the SPA modules load. It catches a failed read and
+uses the system color scheme.
+
 ### Human waits
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`.

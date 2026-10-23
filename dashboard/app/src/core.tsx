@@ -14,6 +14,7 @@ import type {
   DashboardTaskGroupDetail,
   DashboardTaskGroupsPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import { readStoredValue } from "./browser-storage.js";
 import { formatCount } from "./count-format.js";
 import {
   ArrowCounterClockwise,
@@ -137,7 +138,7 @@ export const SystemOutcomeChart = lazy(async () => {
   };
 });
 export function readStoredSystemWindow(): DashboardSystemWindow {
-  const stored = localStorage.getItem(systemWindowStorageKey) as DashboardSystemWindow | null;
+  const stored = readStoredValue(systemWindowStorageKey) as DashboardSystemWindow | null;
   return stored && systemWindows.includes(stored) ? stored : "1h";
 }
 export type ActivityGroupBy = "queue" | "worker" | "task" | "status";
@@ -262,8 +263,8 @@ export function readLocation(basePath = ""): {
         ? "/tasks"
         : window.location.pathname;
   const route = pageRoutes.has(pathname as PageRoute) ? (pathname as PageRoute) : "/tasks";
-  const storedPeriod = localStorage.getItem("workhorse-activity-period") as ActivityPeriod | null;
-  const storedGroup = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
+  const storedPeriod = readStoredValue("workhorse-activity-period") as ActivityPeriod | null;
+  const storedGroup = readStoredValue("workhorse-activity-group") as ActivityGroupBy | null;
   return {
     route,
     events: parseEventsLocation(window.location.search),

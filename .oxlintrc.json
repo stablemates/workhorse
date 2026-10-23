@@ -13,5 +13,34 @@
   },
   "env": {
     "builtin": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["dashboard/app/src/**/*.ts", "dashboard/app/src/**/*.tsx"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "globals": [
+              {
+                "name": "localStorage",
+                "message": "A browser can throw on storage access. Use readStoredValue and storeValue from dashboard/app/src/browser-storage.ts."
+              }
+            ],
+            "checkGlobalObject": true
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "dashboard/app/src/browser-storage.ts",
+        "dashboard/app/src/**/*.test.ts",
+        "dashboard/app/src/**/*.test.tsx"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    }
+  ]
 }

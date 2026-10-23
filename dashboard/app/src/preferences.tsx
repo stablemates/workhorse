@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { readStoredValue, storeValue } from "./browser-storage.js";
 
 /**
  * Display timezone preference. Timestamps are stored and transported as UTC ISO
@@ -18,7 +19,7 @@ export function getDateTimeFormatter(options: Intl.DateTimeFormatOptions): Intl.
   return formatter;
 }
 function readStoredTimeZone(): string | null {
-  const stored = localStorage.getItem(timeZoneStorageKey);
+  const stored = readStoredValue(timeZoneStorageKey);
   if (!stored || stored === "system") return null;
   try {
     return getDateTimeFormatter({ timeZone: stored }).resolvedOptions().timeZone;
@@ -28,7 +29,7 @@ function readStoredTimeZone(): string | null {
 }
 export function setDisplayTimeZone(zone: string | null): void {
   displayTimeZone = zone;
-  localStorage.setItem(timeZoneStorageKey, zone ?? "system");
+  storeValue(timeZoneStorageKey, zone ?? "system");
   for (const listener of timeZoneListeners) listener();
 }
 export function subscribeTimeZone(listener: () => void): () => void {
