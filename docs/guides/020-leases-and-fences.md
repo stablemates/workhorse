@@ -136,8 +136,10 @@ interval is 10 s.
    database answers in time, so PostgreSQL renews the lease before it expires at 40 s.
 
 A very short heartbeat interval gives a short deadline. On a loaded host, that deadline can be
-shorter than one round needs, and the worker can then renew no lease. Do not set an interval below
-the supported minimum.
+shorter than one round needs, and the worker can then renew no lease. Then no heartbeat reports a
+[cancel request](120-cancellation.md) to the worker, and the request can wait until the lease
+expires. Do not set an interval
+below the supported minimum.
 
 After the handler returns, the worker must still check the result and write the completion. This
 write can wait for a connection from a busy pool. In TypeScript, Python, and Go, the worker renews
@@ -224,6 +226,10 @@ that do not meet the rule.
 Python, Go, Rust, Ruby, and JVM SDKs. Its round deadline is 75 ms. Below 100 ms, the worker accepts
 the interval and its behavior does not change. On a loaded host, each round can then miss its
 deadline, and the worker can renew no lease.
+
+If no heartbeat of a lease succeeds, no heartbeat reports a cancel request for it. The local timer
+of a deadline or an execution timeout does not use the heartbeat. Its `expire_owned_v1` call can
+still return `cancel_requested`. If no such timer fires first, the lease watchdog ends the attempt.
 
 A round on the reserved connection sends one transaction for every worker on the pool. Its one
 `heartbeat_pool_v1` statement calls `heartbeat_many_v2` for each batch of up to 100 leases of one

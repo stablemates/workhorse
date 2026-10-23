@@ -243,8 +243,10 @@ lease, and its heartbeat holds no row lock after the deadline. Only a commit tha
 already started can still finish later. The next round tries again.
 
 A very short heartbeat interval gives a short deadline. On a loaded host, that deadline can be
-shorter than one round needs, and the worker can then renew no lease. Do not set an interval below
-the supported minimum.
+shorter than one round needs, and the worker can then renew no lease. Then no heartbeat reports a
+[cancel request](/docs/cancellation) to the worker, and the request can wait until the lease
+expires. Do not set an interval
+below the supported minimum.
 
 The worker also renews the lease while it checks the result of a handler and writes the completion.
 In TypeScript, Python, and Go, a slow final write thus cannot give finished work to recovery. For
