@@ -1474,3 +1474,18 @@ These options were rejected:
 - **Put the JSON in another visible field.** The schema, table, column, data type, and constraint
   fields name database objects. A tool or a driver can misread JSON in them. HINT is the only
   visible free-text field.
+
+## Amendment: CI tests EF Core 10 until the Npgsql provider for EF Core 11 ships (2026-10-22)
+
+The Floors section says that CI tests EF Core 10 and 11. SM-1627 found that no CI job resolves
+EF Core 11. The test project gets EF Core through `Npgsql.EntityFrameworkCore.PostgreSQL` 10.0.3,
+which needs EF Core 10. The .NET 11 CI job changes only the runtime, so it also runs EF Core 10.
+
+This amendment changes the EF Core row of the Floors section:
+
+1. CI tests EF Core 10 only. `support.json` lists `10.0` as the only tested EF Core version.
+2. [SM-1678](https://linear.app/stablemates/issue/SM-1678) adds an EF Core 11 CI job after the
+   Npgsql provider for EF Core 11 ships. That CI job then adds `11.0` to `support.json`.
+
+The EF Core floor stays 10.0.0. A listed version that no CI job runs would state support without
+evidence. So the record states what CI runs now.

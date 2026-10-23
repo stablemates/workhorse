@@ -1,5 +1,6 @@
 {
   "install": {
+    "dotnet": "dotnet add package Workhorse",
     "go": "go get github.com/stablemates/workhorse/go",
     "gradle": "implementation(\"run.workhorse:workhorse:0.9.0\")",
     "maven": "<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.9.0</version></dependency>",
@@ -19,6 +20,30 @@
       },
       "minimum": "8.0",
       "tested": ["8.0", "8.1"]
+    },
+    "aspnetcore": {
+      "endOfLife": {
+        "10": "2028-11-14",
+        "11": null
+      },
+      "minimum": 10,
+      "tested": [10, 11]
+    },
+    "dotnet": {
+      "endOfLife": {
+        "10": "2028-11-14",
+        "11": null
+      },
+      "minimum": 10,
+      "prerelease": [11],
+      "tested": [10, 11]
+    },
+    "efcore": {
+      "endOfLife": {
+        "10.0": "2028-11-10"
+      },
+      "minimum": "10.0",
+      "tested": ["10.0"]
     },
     "go": {
       "minimum": "1.25.0"
@@ -42,6 +67,9 @@
       },
       "minimum": 22,
       "tested": [22, 24]
+    },
+    "npgsql": {
+      "minimum": "10.0.3"
     },
     "pgjdbc": {
       "minimum": "42.7.12"

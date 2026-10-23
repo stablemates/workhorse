@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { buildCiMatrices, DOTNET_TESTED, WEEKLY_COMPATIBILITY_SCHEDULE } from "./ci-matrix.js";
+import { buildCiMatrices, WEEKLY_COMPATIBILITY_SCHEDULE } from "./ci-matrix.js";
 
 type Support = Parameters<typeof buildCiMatrices>[0];
 const { support } = JSON.parse(
@@ -36,36 +36,53 @@ describe("the JVM lane", () => {
   });
 });
 
+/** The .NET lanes of one pull request, for a `dotnet` entry of support.json. */
+function dotnetLanes(dotnet: Support["dotnet"]) {
+  return buildCiMatrices({ ...support, dotnet }, "pull_request").dotnet.include;
+}
+
 describe("the .NET lane", () => {
-  // ADR 0107 "Floors": CI tests .NET 10 and 11, and .NET 11 at its newest release candidate until
-  // it ships.
-  it("tests .NET 10 on the pinned SDK and .NET 11 on its preview runtime", () => {
-    expect(DOTNET_TESTED).toEqual([
-      { dotnet: 10, runtime: "sdk" },
-      { dotnet: 11, runtime: "preview" },
+  // ADR 0107 "Floors": CI tests every .NET release that support.json lists, and a release that has
+  // not shipped at its newest release candidate.
+  const postgres = testedPostgres.at(-1)!;
+  const lanes = support.dotnet.tested.map((dotnet, index) => ({
+    dotnet,
+    runtime:
+      index === 0 ? "sdk" : (support.dotnet.prerelease ?? []).includes(dotnet) ? "preview" : "ga",
+  }));
+
+  it("tests the floor on the pinned SDK and each later release on its own runtime", () => {
+    expect(dotnetLanes({ tested: [10, 11], prerelease: [11] })).toEqual([
+      { dotnet: 10, runtime: "sdk", postgres },
+      { dotnet: 11, runtime: "preview", postgres },
+    ]);
+    // When .NET 11 ships, support.json removes it from `prerelease`, and its lane installs the
+    // newest release runtime.
+    expect(dotnetLanes({ tested: [10, 11] })).toEqual([
+      { dotnet: 10, runtime: "sdk", postgres },
+      { dotnet: 11, runtime: "ga", postgres },
     ]);
   });
 
   it("tests every .NET release weekly, against every PostgreSQL", () => {
     const weekly = buildCiMatrices(support, "schedule", WEEKLY_COMPATIBILITY_SCHEDULE);
 
-    expect(weekly.dotnet.include.map(({ dotnet }) => dotnet)).toEqual(
-      [10, 11].flatMap((dotnet) => testedPostgres.map(() => dotnet)),
-    );
     expect(weekly.dotnet.include).toEqual(
-      DOTNET_TESTED.flatMap((release) =>
-        testedPostgres.map((postgres) => ({ ...release, postgres })),
+      lanes.flatMap(({ dotnet, runtime }) =>
+        testedPostgres.map((each) => ({ dotnet, runtime, postgres: each })),
       ),
     );
   });
 
-  it("tests .NET 10 and 11 on each change", () => {
-    const postgres = testedPostgres.at(-1);
+  it("tests every .NET release on each change", () => {
     for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-      expect(buildCiMatrices(support, event).dotnet.include).toEqual([
-        { dotnet: 10, runtime: "sdk", postgres },
-        { dotnet: 11, runtime: "preview", postgres },
-      ]);
+      expect(buildCiMatrices(support, event).dotnet.include).toEqual(
+        lanes.map(({ dotnet, runtime }) => ({ dotnet, runtime, postgres })),
+      );
     }
+  });
+
+  it("refuses an empty .NET list", () => {
+    expect(() => dotnetLanes({ tested: [] })).toThrow("CI support lists cannot be empty");
   });
 });

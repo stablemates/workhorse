@@ -25,19 +25,23 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime     | Supported         | Minimum | End of life                                                    | Notes                                                                                           |
-| ----------- | ----------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Node.js     | 22, 24            | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
-| Python      | 3.12–3.14         | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
-| Go          | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
-| Rust        | 1.89 and newer    | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
-| Ruby        | 3.3, 3.4, 4.0     | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
-| Active Job  | 8.0, 8.1          | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
-| Java        | 21, 25, 27        | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
-| Kotlin      | 2.2 and newer     | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
-| Spring Boot | 4.0, 4.1          | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
-| PgJDBC      | 42.7.12 and newer | 42.7.12 | No date; the dependency range rule applies                     | The JDBC driver of every JVM module.                                                            |
-| PostgreSQL  | 15, 16, 17, 18    | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.                                         |
+| Runtime      | Supported         | Minimum | End of life                                                    | Notes                                                                                           |
+| ------------ | ----------------- | ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Node.js      | 22, 24            | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.                                          |
+| Python       | 3.12–3.14         | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel.                                         |
+| Go           | 1.25 and newer    | 1.25    | No date; Go supports its two most recent releases              | pgx v5.11.0 is the minimum and the tested version.                                              |
+| Rust         | 1.89 and newer    | 1.89    | No date; Rust supports only its latest stable release          | Tokio with `tokio-postgres` 0.7 and `deadpool-postgres`.                                        |
+| Ruby         | 3.3, 3.4, 4.0     | 3.3     | 3.3: 2027-03-31, 3.4: not announced, 4.0: not announced        | `pg` 1.6 alone, behind `connection_pool`, or Active Record.                                     |
+| Active Job   | 8.0, 8.1          | 8.0     | 8.0: 2026-11-07, 8.1: 2027-10-10                               | The Rails adapter. Rails dates are the end of security support.                                 |
+| Java         | 21, 25, 27        | 21      | 21: 2029-12, 25: 2031-09, 27: 2027-03                          | Every JVM module compiles with `--release 21`. The dates are Temurin support.                   |
+| Kotlin       | 2.2 and newer     | 2.2     | No date; the Kotlin compiler drops a language version          | `workhorse-kotlin` sets language and API version 2.2. kotlinx-coroutines 1.10.2 is the minimum. |
+| Spring Boot  | 4.0, 4.1          | 4.0     | 4.0: 2026-12-31, 4.1: 2027-07-31                               | The starter. The dates are the end of open-source support.                                      |
+| PgJDBC       | 42.7.12 and newer | 42.7.12 | No date; the dependency range rule applies                     | The JDBC driver of every JVM module.                                                            |
+| .NET         | 10, 11            | 10      | 10: 2028-11-14, 11: not announced                              | Every package targets `net10.0`. `Microsoft.Extensions.*` 10.0.0 is the minimum.                |
+| Npgsql       | 10.0.3 and newer  | 10.0.3  | No date; the dependency range rule applies                     | The driver of every .NET package.                                                               |
+| EF Core      | 10.0              | 10.0    | 10.0: 2028-11-10                                               | `Workhorse.EntityFrameworkCore`. EF Core Relational 10.0.0 is the minimum.                      |
+| ASP.NET Core | 10, 11            | 10      | 10: 2028-11-14, 11: not announced                              | `Workhorse.AspNetCore`. The installed runtime supplies the patches.                             |
+| PostgreSQL   | 15, 16, 17, 18    | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed.                                         |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. It also runs the packed-package test on the newest
@@ -110,10 +114,34 @@ The core declares the Jakarta Servlet API as an optional dependency for the dash
 floor is Jakarta Servlet 6.0. CI tests the dashboard backend in the Tomcat release that the newest
 tested Spring Boot line manages.
 
+The .NET SDK has four packages: `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`,
+and `Workhorse.AspNetCore`. NuGet does not serve them yet. After the first publish, a project adds
+the core with `dotnet add package Workhorse`, and `support.json` states that command as
+`install.dotnet`. Every package targets `net10.0`, and a .NET 11 application runs it without a
+second target. A local build uses the .NET SDK that `mise.toml` pins, which carries the .NET 10
+runtime. Pull requests and pushes run the .NET suite on .NET 10 and on .NET 11, against the newest
+PostgreSQL. The weekly schedule runs every tested .NET release against every supported PostgreSQL
+major.
+[ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+records these floors.
+
+The .NET 11 CI job installs the .NET and ASP.NET Core runtimes of .NET 11 beside the pinned SDK, and
+the tests run on them. Until .NET 11 ships, that CI job installs its newest release candidate, and
+`support.json` lists 11 under `dotnet.prerelease`. Microsoft states the end of support of a release
+when the release ships. Until then, the table says "not announced" for .NET 11.
+
+NuGet resolves the lowest version that a range allows. Each package states each dependency as a
+floor without an upper bound, so a caller who asks for nothing more gets the floor. The floors are
+Npgsql 10.0.3, `Microsoft.Extensions.*` 10.0.0, and EF Core Relational 10.0.0. CI tests EF Core 10
+only, because no CI job resolves the Npgsql provider for EF Core 11 yet. SM-1678 adds that CI job
+after the provider ships. ASP.NET Core is a shared framework. The installed runtime supplies its
+patches, so its floor is a major version. An operator must run a serviced .NET 10 or .NET 11
+runtime.
+
 ### Raising a floor
 
-Raising the Node.js, Python, Go, Ruby, Active Job, Java, Kotlin, Spring Boot, or PostgreSQL minimum
-is a **minor** release. It is never a major and never a patch. With one exception, it is the only
+Raising the Node.js, Python, Go, Ruby, Active Job, Java, Kotlin, Spring Boot, .NET, EF Core,
+ASP.NET Core, or PostgreSQL minimum is a **minor** release. It is never a major and never a patch. With one exception, it is the only
 way a version leaves the table above. The exception is a Java release that is not long-term: Temurin
 ends its support before the Java floor. ADR 0103 tests the Java floor and the newest Java release,
 so the newest release then replaces it in the table. [ADR
@@ -124,23 +152,28 @@ governs](#what-semver-governs); this rule governs it instead.
 A floor rises only when the version being dropped has reached its **upstream end of life**. The
 upstream project's own schedule is the authority and this repository keeps no competing one:
 
-| Runtime     | End of life is                                             | Published at                                                                                |
-| ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Node.js     | Past the release's published end-of-life date              | [nodejs/Release](https://github.com/nodejs/Release)                                         |
-| Python      | Past the version's published end-of-life date              | [Python developer guide](https://devguide.python.org/versions/)                             |
-| Go          | Older than the two releases the Go project supports        | [Go release policy](https://go.dev/doc/devel/release#policy)                                |
-| Ruby        | Past the branch's published end-of-life date               | [Ruby maintenance branches](https://www.ruby-lang.org/en/downloads/branches/)               |
-| Active Job  | Past the Rails release's security support                  | [Rails maintenance policy](https://rubyonrails.org/maintenance)                             |
-| Java        | Past the Temurin release's end of availability             | [Adoptium support roadmap](https://adoptium.net/support/)                                   |
-| Kotlin      | The Kotlin compiler no longer accepts the language version | [Kotlin evolution principles](https://kotlinlang.org/docs/kotlin-evolution-principles.html) |
-| Spring Boot | Past the line's end of open-source support                 | [Spring Boot support](https://spring.io/projects/spring-boot#support)                       |
-| PostgreSQL  | Past the major's community end-of-life date                | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/)                     |
+| Runtime      | End of life is                                             | Published at                                                                                |
+| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Node.js      | Past the release's published end-of-life date              | [nodejs/Release](https://github.com/nodejs/Release)                                         |
+| Python       | Past the version's published end-of-life date              | [Python developer guide](https://devguide.python.org/versions/)                             |
+| Go           | Older than the two releases the Go project supports        | [Go release policy](https://go.dev/doc/devel/release#policy)                                |
+| Ruby         | Past the branch's published end-of-life date               | [Ruby maintenance branches](https://www.ruby-lang.org/en/downloads/branches/)               |
+| Active Job   | Past the Rails release's security support                  | [Rails maintenance policy](https://rubyonrails.org/maintenance)                             |
+| Java         | Past the Temurin release's end of availability             | [Adoptium support roadmap](https://adoptium.net/support/)                                   |
+| Kotlin       | The Kotlin compiler no longer accepts the language version | [Kotlin evolution principles](https://kotlinlang.org/docs/kotlin-evolution-principles.html) |
+| Spring Boot  | Past the line's end of open-source support                 | [Spring Boot support](https://spring.io/projects/spring-boot#support)                       |
+| .NET         | Past the release's end of support                          | [.NET support policy](https://dotnet.microsoft.com/platform/support/policy/dotnet-core)     |
+| EF Core      | Past the release's end of support                          | [EF Core releases](https://learn.microsoft.com/ef/core/what-is-new/)                        |
+| ASP.NET Core | Past the .NET release's end of support                     | [.NET support policy](https://dotnet.microsoft.com/platform/support/policy/dotnet-core)     |
+| PostgreSQL   | Past the major's community end-of-life date                | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/)                     |
 
 `support.json` records that date for every listed Node.js, Python, Ruby, Active Job, Java, Spring
-Boot, and PostgreSQL version, and the `End of life` column above publishes it. Go is the exception:
+Boot, .NET, EF Core, ASP.NET Core, and PostgreSQL version, and the `End of life` column above
+publishes it. Go is the exception:
 its policy is relative to whatever the current release is, so there is no published date to
 transcribe and none is recorded. Kotlin has no date for the same reason: a newer compiler ends a
-language version when it drops it. Node.js, PostgreSQL, Ruby, Rails, and Spring Boot publish a day.
+language version when it drops it. Node.js, PostgreSQL, Ruby, Rails, Spring Boot, .NET, and EF Core
+publish a day.
 The Python developer guide publishes only a month until a version retires, and the Adoptium support
 roadmap publishes only a month for each Temurin release. A month-precision entry stands for that
 whole month.
@@ -148,7 +181,9 @@ whole month.
 Ruby names a branch's end only once the branch enters security maintenance. Until then its
 `support.json` date is `null`, and the table says "not announced" rather than guessing. The floor
 always carries a date, because it retires first. Active Job follows its Rails release, and the
-date is the end of that release's security support.
+date is the end of that release's security support. Microsoft states the end of a .NET release
+only when it ships, so a .NET release in `dotnet.prerelease` is the only .NET entry with a `null`
+date. ASP.NET Core follows its .NET release.
 
 Convenience is not a reason. A runtime still supported upstream keeps its place in the table even
 when dropping it would simplify the code or shorten the matrix.
@@ -166,8 +201,9 @@ releases, and every package manager in these ecosystems reports that as a resolu
 
 ### Moving a dependency range
 
-`pg`, Psycopg, asyncpg, pgx, PgJDBC, and the Jakarta Servlet API move under the same rule, in
-either direction, and every move is a minor:
+`pg`, Psycopg, asyncpg, pgx, PgJDBC, the Jakarta Servlet API, Npgsql, and the
+`Microsoft.Extensions.*` packages move under the same rule, in either direction, and every move is a
+minor:
 
 - **Raising a floor inside the declared major range** — a minor.
 - **Widening the range to admit a new upstream major** — a minor, once CI exercises it.
@@ -190,8 +226,9 @@ names, so no equivalent exists on the TypeScript or Python lines.
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
 covers npm, `pnpm python:vuln` covers PyPI, `pnpm go:vuln` covers the Go module, and
-`pnpm rust:vuln` covers the Rust crate, `pnpm ruby:vuln` covers the Ruby gem, and `pnpm jvm:vuln`
-covers the three JVM artifacts. `pnpm check` runs all six, and so does the `static` task in
+`pnpm rust:vuln` covers the Rust crate, `pnpm ruby:vuln` covers the Ruby gem, `pnpm jvm:vuln`
+covers the three JVM artifacts, and `pnpm dotnet:vuln` covers the four .NET packages. `pnpm check`
+runs all seven, and so does the `static` task in
 `.github/workflows/ci.yml`. The release workflow runs `pnpm ruby:vuln` again inside
 `pnpm ruby:release-check`.
 
@@ -271,7 +308,23 @@ Each query batch therefore also asks about a canary module with a known advisory
 report that advisory, or if OSV does not answer, the script refuses the run. The refusal names the
 database and no acceptance entry as stale.
 
-`pnpm tooling:vuln` audits the build and publication tooling, in a lane separate from the six
+Every restore of a .NET project runs NuGet Audit. `dotnet/Directory.Build.props` sets `NuGetAudit`,
+`NuGetAuditMode` to `all`, and `NuGetAuditLevel` to `low`, and makes NU1901 to NU1904 errors. So
+each advisory against a direct or a transitive package fails the restore, whatever its severity.
+That includes the test packages, such as `Microsoft.Extensions.Hosting` and
+`Npgsql.EntityFrameworkCore.PostgreSQL`. NU1900 says that the advisory data did not load. It stays a
+warning in a build, so that a build from the package cache works without the network.
+
+`pnpm dotnet:vuln` runs `scripts/audit-dotnet-dependencies.ts`. The floor consumer in
+`dotnet/floor-consumer/` references the four packages and nothing else. So its restore resolves each
+shipped dependency at the floor that `dotnet/Directory.Packages.props` states, as a caller gets it.
+The consumer makes NU1900 and NU1905 errors, so its restore fails when the advisory data does not
+load. The script refuses a shipped dependency that the consumer does not resolve at its floor. Then
+it runs `dotnet list package --vulnerable --include-transitive`, and fails on every advisory that
+the listing reports. It also refuses a listing that did not read the advisories of nuget.org. The
+.NET scan has no acceptance list. An advisory fails the scan until a raised floor fixes it.
+
+`pnpm tooling:vuln` audits the build and publication tooling, in a lane separate from the seven
 production gates. [ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)
 records why. The lane runs `pnpm audit` over the whole workspace, development dependencies included.
 It runs `pip-audit` over the uv export with every dependency group, and separately over
@@ -520,13 +573,15 @@ to `origin`.
 ## What SemVer governs
 
 SemVer says a major release may break the public API. It does not say which artifact is the public
-API, and Workhorse ships eleven of them. Each surface below is governed, and each states in one
+API, and Workhorse ships twelve of them. Each surface below is governed, and each states in one
 sentence what a breaking change is for it. Anything not on this list is internal and may change in
 any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision, and
 [ADR 0079](decisions/0079-govern-the-rust-api-as-an-eighth-surface.md),
-[ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md), and
-[ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
-add the Rust, Ruby, Java, and Kotlin APIs.
+[ADR 0084](decisions/0084-govern-the-ruby-api-as-a-ninth-surface.md),
+[ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md),
+and
+[ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+add the Rust, Ruby, Java, Kotlin, and C# APIs.
 
 | Governed surface                                    | A breaking change is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Enforced by                                                 |
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -538,18 +593,19 @@ add the Rust, Ruby, Java, and Kotlin APIs.
 | Ruby API                                            | The same for code that runs rather than compiles, across the public constants under `Stablemates::Workhorse` and the Active Job adapter, with their `Data` members and method signatures. A `:nodoc:` constant is private.                                                                                                                                                                                                                                                                                            | `ruby-api:check`, against `api/ruby.txt`                    |
 | Java API                                            | The same, across every public and protected declaration in an exported package of `workhorse` and `workhorse-spring-boot-starter`, with its signature and nullness. It also covers every `workhorse.*` property with its type and default. `run.workhorse.internal` is not exported. A new last component of a public record is not breaking, because the record keeps its earlier canonical constructor; a record pattern that names all components of a public Workhorse record is outside this promise (ADR 0103). | `java-api:check`, against `api/java.txt`                    |
 | Kotlin API                                          | The same, across every public declaration of `workhorse-kotlin`, with its default arguments, `suspend` modifiers, and reified type parameters.                                                                                                                                                                                                                                                                                                                                                                        | `kotlin-api:check`, against `api/kotlin.txt`                |
+| C# API                                              | The same, across every public and protected type and member of `Workhorse`, `Workhorse.Hosting`, `Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore`, with its signature, nullability, and default values. It also covers every `Workhorse:*` configuration key with its type and default. A new `required` property and a new abstract member of an interface that callers implement are breaking (ADR 0107).                                                                                                | `dotnet-api:check`, against `api/dotnet.txt`                |
 | `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                                                                                                                                                                                                                                                                                                                                                         | `cli-surface:check`, against `api/cli.txt`                  |
 | `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                                                                                                                                                                                                                                                                                                                                                        | `dashboard-spec:check`, which classifies the change         |
 | OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                                                                                                                                                                                                                                                                                                                                                     | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` task, so no promise rests on review alone. Nine of them read the committed
+check in the CI `required` task, so no promise rests on review alone. Ten of them read the committed
 snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
 generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
 `pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm rust-api:generate`,
 `pnpm ruby-api:generate`, `pnpm java-api:generate`, `pnpm kotlin-api:generate`,
-`pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
+`pnpm dotnet-api:generate`, `pnpm cli-surface:generate`, or `pnpm telemetry-surface:generate`.
 
 A snapshot is only as good as where it reads from, so neither `api/cli.txt` nor `api/telemetry.txt`
 reads a table kept beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself

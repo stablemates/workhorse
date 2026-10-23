@@ -44,6 +44,23 @@ interface SupportManifest {
       readonly minimum: string;
       readonly tested: string[];
     };
+    readonly aspnetcore: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: number;
+      readonly tested: number[];
+    };
+    readonly dotnet: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: number;
+      /** The tested releases that have not shipped. CI tests each at its newest preview. */
+      readonly prerelease?: number[];
+      readonly tested: number[];
+    };
+    readonly efcore: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: string;
+      readonly tested: string[];
+    };
     readonly go: { readonly minimum: string };
     readonly java: {
       readonly endOfLife: EndOfLifeDates;
@@ -56,6 +73,7 @@ interface SupportManifest {
       readonly minimum: number;
       readonly tested: number[];
     };
+    readonly npgsql: { readonly minimum: string };
     readonly pgjdbc: { readonly minimum: string };
     readonly postgres: {
       readonly endOfLife: EndOfLifeDates;
@@ -97,10 +115,14 @@ async function readSupportManifest(): Promise<SupportManifest> {
 /** Display names for the manifest's runtime keys, as both documentation tables spell them. */
 const RUNTIME_NAMES = {
   activejob: "Active Job",
+  aspnetcore: "ASP.NET Core",
+  dotnet: ".NET",
+  efcore: "EF Core",
   go: "Go",
   java: "Java",
   kotlin: "Kotlin",
   node: "Node.js",
+  npgsql: "Npgsql",
   pgjdbc: "PgJDBC",
   postgres: "PostgreSQL",
   python: "Python",
@@ -110,11 +132,14 @@ const RUNTIME_NAMES = {
 
 // Go is deliberately absent: its policy is relative to whichever two releases are current, so the
 // Go project publishes no date to transcribe, and recording one would make this repository the
-// authority on a schedule it does not own. Kotlin and PgJDBC are absent for the same reason: the
-// Kotlin compiler ends a language version when it drops it, and PgJDBC moves under the dependency
-// range rule. See "Raising a floor" in docs/compatibility.md.
+// authority on a schedule it does not own. Kotlin, PgJDBC, and Npgsql are absent for the same
+// reason: the Kotlin compiler ends a language version when it drops it, and the two drivers move
+// under the dependency range rule. See "Raising a floor" in docs/compatibility.md.
 const DATED_RUNTIMES = [
   "activejob",
+  "aspnetcore",
+  "dotnet",
+  "efcore",
   "java",
   "node",
   "postgres",
@@ -302,7 +327,8 @@ describe("supported version constants", () => {
     expect(mise.tools).toEqual({
       // CI installs the advisory scanner itself, so `pnpm rust:vuln` runs the same release there.
       "cargo-deny": /tool: cargo-deny@(\S+)/.exec(workflow)?.[1],
-      // Every job that builds the .NET solution installs this SDK. SM-1627 adds .NET to support.json.
+      // Every job that builds the .NET solution installs this SDK. support.json records no second
+      // pin of it, as ADR 0107 rejects global.json for the same reason.
       dotnet: dotnetVersions[0],
       go: manifest.toolchains.go,
       gradle: manifest.toolchains.gradle,
@@ -330,6 +356,11 @@ describe("supported version constants", () => {
     // to the floor. It must still be a release that CI tests.
     expect(manifest.support.java.tested).toContain(
       Number(/^temurin-(\d+)\./.exec(manifest.toolchains.java)?.[1]),
+    );
+    // The .NET floor lane runs on the runtime that the pinned SDK carries (ADR 0107, "Floors"). An
+    // SDK of a later release would leave the floor without a lane.
+    expect(Number(/^(\d+)\./.exec(mise.tools.dotnet ?? "")?.[1])).toBe(
+      manifest.support.dotnet.minimum,
     );
     // The Go pin may run ahead of the floor when only a newer release carries a standard library
     // fix (SM-1206). The `go` CI lane still runs the floor, because setup-go sets GOTOOLCHAIN=local.
@@ -472,6 +503,62 @@ describe("supported version constants", () => {
     );
   });
 
+  it("matches the .NET build and the .NET lanes CI runs", async () => {
+    const [manifest, buildProps, packagesProps, aspNetCoreProject, workflow] = await Promise.all([
+      readSupportManifest(),
+      read("dotnet/Directory.Build.props"),
+      read("dotnet/Directory.Packages.props"),
+      read("dotnet/src/Workhorse.AspNetCore/Workhorse.AspNetCore.csproj"),
+      read(".github/workflows/ci.yml"),
+    ]);
+    const { aspnetcore, dotnet, efcore, npgsql } = manifest.support;
+    // A shipped package states each dependency as a floor without an upper bound, so the version
+    // that Directory.Packages.props gives a shipped dependency is the floor a caller resolves.
+    const shipped = packagesProps.slice(packagesProps.indexOf('Label="Shipped dependencies"'));
+    const shippedVersions = Object.fromEntries(
+      [
+        ...shipped
+          .slice(0, shipped.indexOf("</ItemGroup>"))
+          .matchAll(/<PackageVersion Include="([^"]+)" Version="([^"]+)" \/>/g),
+      ].map((match) => [match[1]!, match[2]!]),
+    );
+
+    // Every package targets the floor, and a later runtime runs it without a second target.
+    expect(dotnet.tested[0]).toBe(dotnet.minimum);
+    expect(buildProps).toContain(`<TargetFramework>net${dotnet.minimum}.0</TargetFramework>`);
+    // A release in `prerelease` is a later release that CI tests at its newest preview.
+    for (const release of dotnet.prerelease ?? []) {
+      expect(dotnet.tested.slice(1)).toContain(release);
+    }
+    expect(shippedVersions.Npgsql).toBe(npgsql.minimum);
+    // The `Microsoft.Extensions.*` floor is the first release of the .NET floor (ADR 0107).
+    const extensions = Object.entries(shippedVersions).filter(([name]) =>
+      name.startsWith("Microsoft.Extensions."),
+    );
+    expect(extensions.length).toBeGreaterThan(0);
+    for (const [, version] of extensions) expect(version).toBe(`${dotnet.minimum}.0.0`);
+    expect(efcore.tested[0]).toBe(efcore.minimum);
+    expect(shippedVersions["Microsoft.EntityFrameworkCore.Relational"]).toBe(`${efcore.minimum}.0`);
+    expect(Object.keys(shippedVersions).toSorted()).toEqual(
+      [
+        "Microsoft.EntityFrameworkCore.Relational",
+        "Npgsql",
+        ...extensions.map(([name]) => name),
+      ].toSorted(),
+    );
+    // ASP.NET Core is a shared framework. Each .NET lane installs the ASP.NET Core runtime of its
+    // release, so the two entries test the same releases and end on the same dates.
+    expect(aspNetCoreProject).toContain(
+      '<FrameworkReference Include="Microsoft.AspNetCore.App" />',
+    );
+    expect(aspnetcore).toEqual({
+      endOfLife: dotnet.endOfLife,
+      minimum: dotnet.minimum,
+      tested: dotnet.tested,
+    });
+    expect(workflow).toContain("for runtime in dotnet aspnetcore; do\n");
+  });
+
   it("keeps each list sorted, non-empty, and anchored at its minimum", () => {
     expect(SUPPORTED_NODE_MAJORS.length).toBeGreaterThan(0);
     expect(SUPPORTED_POSTGRES_MAJORS.length).toBeGreaterThan(0);
@@ -504,10 +591,15 @@ describe("upstream end of life", () => {
       // Recording the same version list twice is what lets a date go missing when a version is
       // added, so the keys are held to `tested` in order rather than as a set.
       expect(Object.keys(entry.endOfLife)).toEqual(entry.tested.map(String));
-      // An unexpected key would slip past the manifest-match test's toMatchObject above.
-      expect(Object.keys(entry).toSorted()).toEqual(["endOfLife", "minimum", "tested"]);
+      // An unexpected key would slip past the manifest-match test's toMatchObject above. Only
+      // .NET lists the releases that CI tests before they ship.
+      expect(Object.keys(entry).toSorted()).toEqual(
+        runtime === "dotnet"
+          ? ["endOfLife", "minimum", "prerelease", "tested"]
+          : ["endOfLife", "minimum", "tested"],
+      );
     }
-    for (const runtime of ["go", "kotlin", "pgjdbc"] as const) {
+    for (const runtime of ["go", "kotlin", "npgsql", "pgjdbc"] as const) {
       expect(Object.keys(manifest.support[runtime])).toEqual(["minimum"]);
     }
   });
@@ -524,6 +616,7 @@ describe("upstream end of life", () => {
     }
     for (const runtime of [
       "activejob",
+      "efcore",
       "java",
       "node",
       "postgres",
@@ -532,13 +625,22 @@ describe("upstream end of life", () => {
     ] as const) {
       expect(Object.values(manifest.support[runtime].endOfLife)).not.toContain(null);
     }
+    // Microsoft states the end of support of a .NET release only when the release ships, so only a
+    // release that CI tests at a preview has no date yet.
+    for (const runtime of ["dotnet", "aspnetcore"] as const) {
+      const unannounced = Object.entries(manifest.support[runtime].endOfLife)
+        .filter(([, date]) => date === null)
+        .map(([version]) => Number(version));
+      expect(unannounced).toEqual(manifest.support.dotnet.prerelease ?? []);
+    }
   });
 
   it("transcribes each date at the precision its upstream schedule publishes", async () => {
     const manifest = await readSupportManifest();
 
     // nodejs/Release, the PostgreSQL versioning policy, Ruby's maintenance branches page, the
-    // Rails maintenance policy, and the Spring Boot support page all name a day. The Python
+    // Rails maintenance policy, the Spring Boot support page, the .NET support policy, and the EF
+    // Core releases page all name a day. The Python
     // developer guide names only a month until a version actually retires, and the Adoptium support
     // roadmap names only a month for each Temurin release. Rounding either to a day would invent a
     // date the schedule does not state.
@@ -624,6 +726,10 @@ describe("continuous integration", () => {
       { java: 21, postgres: 18 },
       { java: 27, postgres: 18 },
     ]);
+    expect(pullRequest.dotnet.include).toEqual([
+      { dotnet: 10, runtime: "sdk", postgres: 18 },
+      { dotnet: 11, runtime: "preview", postgres: 18 },
+    ]);
     expect(pullRequest.packed.include).toEqual([{ node: 24 }]);
     expect(push).toEqual(pullRequest);
 
@@ -642,6 +748,9 @@ describe("continuous integration", () => {
     );
     expect(full.jvm.include).toHaveLength(
       manifest.support.java.tested.length * manifest.support.postgres.tested.length,
+    );
+    expect(full.dotnet.include).toHaveLength(
+      manifest.support.dotnet.tested.length * manifest.support.postgres.tested.length,
     );
     expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
@@ -1391,6 +1500,26 @@ describe("documentation", () => {
         Minimum: manifest.support.pgjdbc.minimum,
         "End of life": "No date; the dependency range rule applies",
       },
+      ".NET": {
+        Supported: manifest.support.dotnet.tested.join(", "),
+        Minimum: String(manifest.support.dotnet.minimum),
+        "End of life": endOfLifeCell(manifest.support.dotnet.endOfLife),
+      },
+      Npgsql: {
+        Supported: `${manifest.support.npgsql.minimum} and newer`,
+        Minimum: manifest.support.npgsql.minimum,
+        "End of life": "No date; the dependency range rule applies",
+      },
+      "EF Core": {
+        Supported: manifest.support.efcore.tested.join(", "),
+        Minimum: manifest.support.efcore.minimum,
+        "End of life": endOfLifeCell(manifest.support.efcore.endOfLife),
+      },
+      "ASP.NET Core": {
+        Supported: manifest.support.aspnetcore.tested.join(", "),
+        Minimum: String(manifest.support.aspnetcore.minimum),
+        "End of life": endOfLifeCell(manifest.support.aspnetcore.endOfLife),
+      },
     } satisfies Record<string, { Supported: string; Minimum: string; "End of life": string }>;
     for (const [runtime, cells] of Object.entries(expectedSupport)) {
       expect(supportTable[runtime]).toMatchObject(cells);
@@ -1400,6 +1529,7 @@ describe("documentation", () => {
       Notes: `pgx ${pgxVersion} is the minimum and the tested version.`,
     });
     expect(supportTable.Java?.Notes).toContain(`\`--release ${manifest.support.java.minimum}\``);
+    expect(supportTable[".NET"]?.Notes).toContain(`\`net${manifest.support.dotnet.minimum}.0\``);
     expect(supportTable.Kotlin?.Notes).toContain(
       `language and API version ${manifest.support.kotlin.minimum}`,
     );

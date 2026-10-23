@@ -31,10 +31,16 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 // show them name the Kotlin module and the starter by their artifact IDs. No README or site page
 // shows them before Maven Central serves the artifacts (SM-1384), so `docs/compatibility.md` is
 // their only surface until then.
+//
+// A NuGet package needs no version: `dotnet add package` adds the newest release, so
+// `install.dotnet` follows the no-version rule. It names the core, `Workhorse`. No README or site
+// page shows it before NuGet serves the packages (SM-1441), so `docs/compatibility.md` is its only
+// surface until then.
 
 const execFileAsync = promisify(execFile);
 
 type InstallCommand =
+  | "dotnet"
   | "go"
   | "gradle"
   | "maven"
@@ -93,7 +99,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
     commands: ["go", "node", "python", "ruby", "rust", "schema", "schemaPinned"],
   },
   { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
-  { file: "docs/compatibility.md", commands: ["gradle", "maven"] },
+  { file: "docs/compatibility.md", commands: ["dotnet", "gradle", "maven"] },
 ];
 
 /** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
@@ -139,11 +145,12 @@ const versionPatterns: readonly { readonly label: string; readonly pattern: RegE
   { label: "Rust version", pattern: /cargo add workhorse@\S+/ },
   { label: "Ruby version", pattern: /bundle add stablemates-workhorse\b.*--version\b/ },
   { label: "Gemfile version", pattern: /gem "stablemates-workhorse", ["'~<>=\d]/ },
+  { label: "NuGet version", pattern: /dotnet add package Workhorse\b.*(?:--version|-v)\b/ },
 ];
 
 /** Install commands, extracted so a version is reported against the command that carries it. */
 const installCommandPattern =
-  /(?:npm (?:install|i)|pnpm add|yarn add|bun add|pip install|pipx install|uv add|go get|cargo add|bundle add|gem "stablemates-workhorse"|npx --package)[^\n`]*/g;
+  /(?:npm (?:install|i)|pnpm add|yarn add|bun add|pip install|pipx install|uv add|go get|cargo add|bundle add|gem "stablemates-workhorse"|npx --package|dotnet add package)[^\n`]*/g;
 
 /**
  * The schema tool, which is the one command that must name a version.
@@ -269,13 +276,13 @@ describe("install commands", () => {
     );
   });
 
-  it("keeps the Gradle and Maven coordinates off the README and site pages until Central serves them", async () => {
+  it("keeps the Gradle, Maven, and NuGet commands off the README and site pages until the registries serve them", async () => {
     const manifest = await readInstallManifest();
     const shown: string[] = [];
 
     for (const [file, contents] of await documentedSurfaces()) {
       if (!file.endsWith("README.md") && !file.startsWith("site/")) continue;
-      for (const key of ["gradle", "maven"] as const) {
+      for (const key of ["dotnet", "gradle", "maven"] as const) {
         if (contents.includes(manifest.install[key])) shown.push(`${file}: install.${key}`);
       }
     }
