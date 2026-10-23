@@ -21,22 +21,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 func TestGORMTransactions(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration test")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		if os.Getenv("WORKHORSE_REQUIRE_DATABASE") == "1" {
-			t.Fatal("DATABASE_URL_TEST is required")
-		}
-		t.Skip("DATABASE_URL_TEST is not set")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	for _, prepared := range []bool{false, true} {
 		t.Run(fmt.Sprintf("PrepareStmt=%t", prepared), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

@@ -19,16 +19,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 func TestWorkerCompletesATaskOnItsFastTierQueue(t *testing.T) {
-	if testing.Short() {
-		t.Skip("PostgreSQL integration tests do not run in short mode")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		t.Skip("DATABASE_URL_TEST is required for integration tests")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pool, err := pgxpool.New(ctx, createDemoWorkerDatabase(t, sourceURL))

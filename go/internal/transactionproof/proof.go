@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 type Identity struct {
@@ -120,16 +121,7 @@ func (trace *Trace) AssertBorrowed(t *testing.T, expectedPID int32) {
 
 func Database(t *testing.T) string {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("real PostgreSQL transaction proof")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		if os.Getenv("WORKHORSE_REQUIRE_DATABASE") == "1" {
-			t.Fatal("DATABASE_URL_TEST is required")
-		}
-		t.Skip("DATABASE_URL_TEST is required")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	parsed, err := url.Parse(sourceURL)
 	if err != nil {
 		t.Fatal(err)

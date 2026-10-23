@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 func TestExternalModuleCanImportAndEnqueue(t *testing.T) {
@@ -230,10 +231,8 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 		t.Fatalf("PostgreSQL support list %v is not anchored at its declared minimum", postgresMajors)
 	}
 
-	databaseURL := os.Getenv("DATABASE_URL_TEST")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL_TEST is required to exercise the PostgreSQL support lane")
-	}
+	// The support checks above need no database. The check below needs the PostgreSQL lane.
+	databaseURL := testdatabase.SourceURL(t)
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		t.Fatal(err)

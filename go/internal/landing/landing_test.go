@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 // Each other file in this directory is one Go snippet of the landing page, byte for byte.
@@ -40,13 +41,7 @@ type landing struct {
 
 func newLanding(t *testing.T) *landing {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("integration test")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		t.Skip("DATABASE_URL_TEST is not set")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, createLandingDatabase(t, sourceURL))
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
@@ -46,16 +47,7 @@ func (recorder *queryRecorder) count() int {
 
 func bunFixture(t *testing.T) (*bun.DB, *sql.DB, *queryRecorder, string) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Bun PostgreSQL fixture does not run in short mode")
-	}
-	sourceURL := os.Getenv("DATABASE_URL_TEST")
-	if sourceURL == "" {
-		if os.Getenv("WORKHORSE_REQUIRE_DATABASE") == "1" {
-			t.Fatal("DATABASE_URL_TEST is required for the Bun PostgreSQL fixture")
-		}
-		t.Skip("DATABASE_URL_TEST is required for the Bun PostgreSQL fixture")
-	}
+	sourceURL := testdatabase.SourceURL(t)
 	parsed, err := url.Parse(sourceURL)
 	if err != nil {
 		t.Fatal(err)

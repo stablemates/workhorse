@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/testdatabase"
 )
 
 var (
@@ -221,13 +221,5 @@ func assertPolicyQuery(t *testing.T, executor workhorse.Executor) {
 
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("PostgreSQL integration tests do not run in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL_TEST")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL_TEST is required for integration tests")
-	}
-	return databaseURL
+	return testdatabase.SourceURL(t)
 }
