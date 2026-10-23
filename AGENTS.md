@@ -212,8 +212,11 @@ the result as a product failure.
 A database-scope test file never uses the checkout's `test` database directly. It creates a scratch
 database named after that database plus a per-process digest, and drops it in teardown. A teardown
 that times out leaves the scratch database behind, and each schema change retires a schema template.
+
 `pnpm db:sweep` lists those leftovers and `pnpm db:sweep --yes` drops them. The sweep skips every
-database a checkout owns and every database a session still holds open.
+database a checkout owns and every database a session still holds open. It also keeps the schema
+template of each worktree's current schema. It skips a template that a test harness copies at that
+time.
 
 ## Never substitute a pinned tool
 

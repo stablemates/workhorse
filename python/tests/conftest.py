@@ -110,9 +110,7 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
     admin_url = urlunsplit(parsed._replace(path="/postgres"))
     isolated_url = urlunsplit(parsed._replace(path=f"/{database_name}"))
     with psycopg.connect(admin_url, autocommit=True) as admin:
-        template_name = ensure_schema_template(admin, parsed)
-        drop_scratch_database(admin, database_name)
-        admin.execute(f'CREATE DATABASE "{database_name}" TEMPLATE "{template_name}"')
+        copy_schema_template(admin, parsed, database_name)
     try:
         with psycopg.connect(isolated_url, autocommit=True) as connection:
             connection.execute(REFRESH_INSTALL_CLOCK)
@@ -130,8 +128,10 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
 SCHEMA = REPOSITORY / "sql/schema/current.sql"
 
 # Shared with `typescript/core/test/support/schema-template.ts`. Both suites install the same
-# `current.sql`, so they share one template, and `pnpm db:sweep` keeps it and retires the others.
+# `current.sql`, so they share one template. `pnpm db:sweep` keeps the template of each worktree's
+# current schema and retires the others.
 SCHEMA_TEMPLATE_PREFIX = "workhorse_test_template_"
+SCHEMA_TEMPLATE_STAGING_SUFFIX = "_building"
 
 # The install seeds these values from the clock. A copy of the template has the values of the
 # moment the template was built, so set them again as `current.sql` sets them. The list holds
@@ -183,20 +183,40 @@ def schema_template_name() -> str:
     return f"{SCHEMA_TEMPLATE_PREFIX}{schema_digest()}_{utc_day}"
 
 
-def ensure_schema_template(admin: psycopg.Connection, source: SplitResult) -> str:
-    """Install ``current.sql`` once into a template database, as ``ensureSchemaTemplate`` does.
+def copy_schema_template(admin: psycopg.Connection, source: SplitResult, target: str) -> None:
+    """Copy the schema template into ``target``, as ``copySchemaTemplate`` does.
 
     A copy of the template costs much less than a new install of the 1 MB schema in each test.
-    The advisory lock and the staging name let a TypeScript run build the same template at the
-    same time: the first builder renames a complete staging database, and the other one reuses it.
+    The session holds a shared advisory lock on the template from the existence check until the
+    copy ends. ``pnpm db:sweep`` takes the exclusive lock with no wait before it drops a template,
+    so it skips a template that a copy uses. The TypeScript harness takes the same locks, so the
+    two suites can build and copy the same template at the same time.
     """
     name = schema_template_name()
-    staging_name = f"{name}_building"
+    admin.execute("SELECT pg_advisory_lock_shared(hashtextextended(%s, 0))", (name,))
+    try:
+        if not database_exists(admin, name):
+            build_schema_template(admin, source, name)
+        drop_scratch_database(admin, target)
+        admin.execute(f'CREATE DATABASE "{target}" TEMPLATE "{name}"')
+    finally:
+        admin.execute("SELECT pg_advisory_unlock_shared(hashtextextended(%s, 0))", (name,))
+
+
+def build_schema_template(admin: psycopg.Connection, source: SplitResult, name: str) -> None:
+    """Install ``current.sql`` into a staging database and rename it to ``name``.
+
+    The session gives up its shared lock before it waits for the exclusive lock, because two
+    sessions that both hold the shared lock and wait for the exclusive lock wait for each other.
+    It takes the shared lock again before it releases the exclusive lock, so no sweep can drop the
+    new template before the copy.
+    """
+    admin.execute("SELECT pg_advisory_unlock_shared(hashtextextended(%s, 0))", (name,))
     admin.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (name,))
     try:
-        existing = admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
-        if existing.fetchone() is not None:
-            return name
+        if database_exists(admin, name):
+            return
+        staging_name = f"{name}{SCHEMA_TEMPLATE_STAGING_SUFFIX}"
         drop_scratch_database(admin, staging_name)
         admin.execute(f'CREATE DATABASE "{staging_name}"')
         try:
@@ -208,9 +228,16 @@ def ensure_schema_template(admin: psycopg.Connection, source: SplitResult) -> st
             drop_scratch_database(admin, staging_name)
             raise
         admin.execute(f'ALTER DATABASE "{staging_name}" RENAME TO "{name}"')
-        return name
     finally:
+        admin.execute("SELECT pg_advisory_lock_shared(hashtextextended(%s, 0))", (name,))
         admin.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (name,))
+
+
+def database_exists(admin: psycopg.Connection, name: str) -> bool:
+    return (
+        admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+        is not None
+    )
 
 
 # Drop attempts before giving up. PostgreSQL waits a few seconds inside each attempt for other

@@ -6,13 +6,20 @@ import {
   assertSweepTarget,
   checkoutDatabaseNames,
   classifyTestDatabase,
+  liveSchemaTemplates,
   planTestDatabaseSweep,
   registryDatabaseNames,
   type SweepContext,
   testFamilyRoots,
+  listWorktreeRoots,
+  parseWorktreeList,
+  readDatabaseInventory,
 } from "./test-database-sweep.js";
+import { schemaTemplateName } from "../typescript/core/test/support/schema-template.js";
 
 const currentTemplate = "workhorse_test_template_0123456789abcdef_20260916";
+// A second worktree on a branch with a migration, so its schema digest is different.
+const migrationTemplate = "workhorse_test_template_fedcba9876543210_20260916";
 const registryNames = [
   "workhorse_dev_primary_pilchard_3fd2e3ee",
   "workhorse_dev_secondary_pilchard_3fd2e3ee",
@@ -24,7 +31,7 @@ const protectedNames = new Set([...registryNames, ...checkoutDatabaseNames({})])
 const context: SweepContext = {
   protectedNames,
   familyRoots: testFamilyRoots(protectedNames),
-  currentTemplate,
+  liveTemplates: new Set([currentTemplate, migrationTemplate]),
 };
 
 const temporaryDirectories: string[] = [];
@@ -47,16 +54,15 @@ describe("test database classification", () => {
     }
   });
 
-  it("keeps only the template the current schema hashes to", () => {
-    expect(classifyTestDatabase(currentTemplate, context)).toEqual({
-      kind: "template",
-      retired: false,
-    });
+  it("keeps only the templates the current schema of a worktree hashes to", () => {
+    for (const name of [currentTemplate, migrationTemplate]) {
+      expect(classifyTestDatabase(name, context)).toEqual({ kind: "template", retired: false });
+    }
     expect(
       classifyTestDatabase("workhorse_test_template_0123456789abcdef_20260901", context),
     ).toEqual({ kind: "template", retired: true });
     expect(
-      classifyTestDatabase("workhorse_test_template_fedcba9876543210_20260916", context),
+      classifyTestDatabase("workhorse_test_template_0011223344556677_20260916", context),
     ).toEqual({ kind: "template", retired: true });
     expect(classifyTestDatabase(`${currentTemplate}_building`, context)).toEqual({
       kind: "template",
@@ -126,6 +132,50 @@ describe("sweep target guards", () => {
   });
 });
 
+describe("database inventory", () => {
+  it("leaves out a database that another checkout drops during the read", async () => {
+    // 42704 is the code of PostgreSQL 18, and 3D000 the code of older versions.
+    const droppedCodes: Record<string, string> = { "200": "42704", "400": "3D000" };
+    const admin = {
+      async query(text: string, values?: unknown[]) {
+        if (text.includes("FROM pg_database")) {
+          return {
+            rows: [100, 200, 300, 400, 500].map((oid) => ({
+              oid: String(oid),
+              name: inventoryName(oid),
+              in_use: oid === 500,
+            })),
+          };
+        }
+        const oid = String(values?.[0]);
+        const code = droppedCodes[oid];
+        if (code !== undefined) {
+          throw Object.assign(new Error(`database with OID ${oid} does not exist`), { code });
+        }
+        return { rows: [{ size_bytes: oid === "300" ? null : `${Number(oid) * 10}` }] };
+      },
+    };
+
+    expect(await readDatabaseInventory(admin as never)).toEqual([
+      { name: inventoryName(100), sizeBytes: 1000, inUse: false },
+      { name: inventoryName(500), sizeBytes: 5000, inUse: true },
+    ]);
+  });
+
+  it("reports any other error of the size read", async () => {
+    const admin = {
+      async query(text: string) {
+        if (text.includes("FROM pg_database")) {
+          return { rows: [{ oid: "100", name: "workhorse_test", in_use: false }] };
+        }
+        throw Object.assign(new Error("permission denied"), { code: "42501" });
+      },
+    };
+
+    await expect(readDatabaseInventory(admin as never)).rejects.toThrow(/permission denied/);
+  });
+});
+
 describe("sweep plan", () => {
   const inventory = [
     { name: "workhorse_test_pilchard_3fd2e3ee", sizeBytes: 9_000_000, inUse: true },
@@ -150,6 +200,53 @@ describe("sweep plan", () => {
     expect(plan.held.map((entry) => entry.name)).toEqual([
       "workhorse_test_grayling_cf8ff2de_43b1eb3f3c",
     ]);
+  });
+});
+
+describe("live schema templates", () => {
+  const now = new Date("2026-09-16T12:00:00Z");
+
+  it("names the template of each worktree's current schema, also when the digests differ", async () => {
+    const main = await worktreeWithSchema("CREATE SCHEMA workhorse;\n");
+    const migration = await worktreeWithSchema("CREATE SCHEMA workhorse;\n-- a migration\n");
+    const live = await liveSchemaTemplates([main, migration], now);
+
+    const expected = [
+      schemaTemplateName(Buffer.from("CREATE SCHEMA workhorse;\n"), now),
+      schemaTemplateName(Buffer.from("CREATE SCHEMA workhorse;\n-- a migration\n"), now),
+    ];
+    expect(new Set(expected).size).toBe(2);
+    expect([...live].toSorted()).toEqual(expected.toSorted());
+    for (const name of expected) {
+      expect(classifyTestDatabase(name, { ...context, liveTemplates: live })).toEqual({
+        kind: "template",
+        retired: false,
+      });
+    }
+  });
+
+  it("skips a worktree without a current schema", async () => {
+    expect(await liveSchemaTemplates([await temporaryGitDirectory()], now)).toEqual(new Set());
+  });
+
+  it("keeps a worktree path that contains a newline whole", () => {
+    const listing = [
+      "worktree /work/main",
+      "HEAD 0123456789abcdef0123456789abcdef01234567",
+      "branch refs/heads/main",
+      "",
+      "worktree /work/odd\nname",
+      "HEAD fedcba9876543210fedcba9876543210fedcba98",
+      "detached",
+      "",
+      "",
+    ].join("\0");
+
+    expect(parseWorktreeList(listing)).toEqual(["/work/main", "/work/odd\nname"]);
+  });
+
+  it("finds this checkout among the worktrees git lists", () => {
+    expect(listWorktreeRoots(process.cwd())).toContain(process.cwd());
   });
 });
 
@@ -190,6 +287,17 @@ describe("owned database names", () => {
     expect(await registryDatabaseNames(await temporaryGitDirectory())).toEqual([]);
   });
 });
+
+function inventoryName(oid: number): string {
+  return `workhorse_test_pilchard_3fd2e3ee_${oid}d8b8ba4c`;
+}
+
+async function worktreeWithSchema(schema: string): Promise<string> {
+  const root = await temporaryGitDirectory();
+  await mkdir(join(root, "sql", "schema"), { recursive: true });
+  await writeFile(join(root, "sql", "schema", "current.sql"), schema);
+  return root;
+}
 
 async function temporaryGitDirectory(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "workhorse-test-database-sweep-"));

@@ -559,7 +559,7 @@ describe("the release consumers", () => {
       classifyTestDatabase(scratch, {
         protectedNames: new Set([source]),
         familyRoots: testFamilyRoots([source]),
-        currentTemplate: "",
+        liveTemplates: new Set(),
       }),
     ).toEqual({ kind: "scratch", retired: true });
   });
