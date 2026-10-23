@@ -3,6 +3,7 @@ import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { Menu, useDropdownActivity } from "../dropdown-activity.js";
 import {
+  Alert,
   Anchor,
   AppShell,
   Badge,
@@ -71,6 +72,63 @@ import {
 } from "../core.js";
 import { EventDetails } from "../components/event-details.js";
 import { formatCount } from "../count-format.js";
+import { formatClock, formatExact } from "../preferences.js";
+import { firstConnected, focusPageHeading, usePageHeadingFocus } from "../page-focus.js";
+
+/** The page area: the skip link and the page heading focus move here. */
+const mainContentId = "dashboard-main";
+
+/**
+ * The first focusable element on the page. It lets a keyboard user go past the header and the
+ * navigation to the page content. It shows only while it has focus.
+ */
+export function SkipToContentLink({ targetId }: { targetId: string }) {
+  return (
+    <a
+      className="dashboard-skip-link"
+      href={`#${targetId}`}
+      // Focus moves from a script, because a fragment in the address bar would reach the router.
+      onClick={(event) => {
+        event.preventDefault();
+        document.getElementById(targetId)?.focus();
+      }}
+    >
+      Skip to main content
+    </a>
+  );
+}
+
+/**
+ * Says that the page shows retained data after a refresh failed.
+ *
+ * The page stays so the operator keeps what they were reading, and this states how old it is, so
+ * old data does not read as current. The shell keeps the live region mounted and fills it, so a
+ * screen reader announces the warning when it appears, not on each failed poll.
+ */
+export function PageRefreshWarning({ error, refreshedAt }: { error: string; refreshedAt: string }) {
+  return (
+    <Alert
+      // The live region around it announces the change; an alert role would interrupt.
+      role="none"
+      color="orange"
+      variant="light"
+      icon={<WarningCircle size={18} />}
+      title="Refresh failed"
+      mb="md"
+    >
+      <Text size="sm">
+        This page shows data from the last successful refresh at{" "}
+        <time dateTime={refreshedAt} title={formatExact(refreshedAt)}>
+          {formatClock(refreshedAt)}
+        </time>
+        . It can be out of date.
+      </Text>
+      <Text size="sm" c="dimmed" mt={4} style={{ overflowWrap: "anywhere" }}>
+        {error}
+      </Text>
+    </Alert>
+  );
+}
 
 /**
  * The task drawer, fetched the first time an operator opens one.
@@ -182,6 +240,7 @@ export function DashboardContent({
   const narrowDetailDrawer = useMediaQuery("(max-width: 47.99em)");
   const refreshBlockingInputCapture = useRefreshBlockingInputCapture();
   const previousTaskDrawerId = useRef<string | null>(null);
+  const mainContent = useRef<HTMLElement | null>(null);
   const taskDrawerReturnTarget = useRef<HTMLElement | null>(null);
   const {
     navbarOpened,
@@ -190,6 +249,7 @@ export function DashboardContent({
     loadState,
     connected,
     loading,
+    shownRoute,
     loadPage,
     refreshInterval,
     autoRefreshPaused,
@@ -232,11 +292,20 @@ export function DashboardContent({
     // On the first open the panel is still being fetched. Leave the transition unconsumed so
     // this runs again with something to focus rather than skipping the move entirely.
     if (selectedTaskId !== null && !taskDrawerPresent) return;
-    const focusChange = taskDrawerFocusChange(previousTaskDrawerId.current, selectedTaskId);
+    const previousTaskId = previousTaskDrawerId.current;
+    const focusChange = taskDrawerFocusChange(previousTaskId, selectedTaskId);
     previousTaskDrawerId.current = selectedTaskId;
     if (focusChange === "none") return;
     if (focusChange === "trigger") {
-      taskDrawerReturnTarget.current?.focus();
+      // A refresh can replace or remove the row that opened the drawer, for example after Retry
+      // in a list that filters out the new state. Then focus goes to the row's new element, or to
+      // the page heading.
+      const opener = firstConnected([
+        taskDrawerReturnTarget.current,
+        previousTaskId === null ? null : document.getElementById(taskOpenButtonId(previousTaskId)),
+      ]);
+      if (opener) opener.focus();
+      else focusPageHeading(mainContent.current);
       return;
     }
     if (selectedTaskId === null) return;
@@ -255,6 +324,7 @@ export function DashboardContent({
     }
     document.getElementById("task-detail-drawer-close")?.focus();
   }, [selectedTaskId, taskDrawerPresent]);
+  usePageHeadingFocus(location.route, shownRoute, mainContent);
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],
@@ -271,6 +341,7 @@ export function DashboardContent({
       }}
       padding={{ base: "sm", sm: "md", xl: "xl" }}
     >
+      <SkipToContentLink targetId={mainContentId} />
       <AppShell.Header>
         {/* The right padding tracks the main-area padding so the last header item lines up with
             the content's right edge; the left stays at the sidebar's inset. */}
@@ -440,10 +511,18 @@ export function DashboardContent({
               </Badge>
             ) : null}
             <Badge
-              color={loadState.status === "error" ? "red" : connected ? "teal" : "gray"}
+              color={
+                loadState.status === "error"
+                  ? "red"
+                  : loadState.status === "stale"
+                    ? "orange"
+                    : connected
+                      ? "teal"
+                      : "gray"
+              }
               variant="light"
               leftSection={
-                loadState.status === "error" ? (
+                loadState.status === "error" || loadState.status === "stale" ? (
                   <WarningCircle size={12} />
                 ) : (
                   <CheckCircle size={12} />
@@ -454,16 +533,20 @@ export function DashboardContent({
               aria-label={
                 loadState.status === "error"
                   ? "Dashboard disconnected"
-                  : connected
-                    ? "Dashboard connected"
-                    : "Dashboard connecting"
+                  : loadState.status === "stale"
+                    ? "Dashboard refresh failed"
+                    : connected
+                      ? "Dashboard connected"
+                      : "Dashboard connecting"
               }
             >
               {loadState.status === "error"
                 ? "Disconnected"
-                : connected
-                  ? "Connected"
-                  : "Connecting"}
+                : loadState.status === "stale"
+                  ? "Refresh failed"
+                  : connected
+                    ? "Connected"
+                    : "Connecting"}
             </Badge>
             <ThemeSchemeSwitch />
           </Group>
@@ -587,8 +670,21 @@ export function DashboardContent({
         </AppShell.Section>
       </AppShell.Navbar>
 
-      <AppShell.Main className="dashboard-main">
-        <Box w="100%">{content}</Box>
+      <AppShell.Main
+        className="dashboard-main"
+        id={mainContentId}
+        ref={mainContent}
+        // The skip link moves focus here from a script; it does not join the tab order.
+        tabIndex={-1}
+      >
+        <Box w="100%">
+          <div role="status" aria-atomic="true">
+            {loadState.status === "stale" ? (
+              <PageRefreshWarning error={loadState.error} refreshedAt={loadState.refreshedAt} />
+            ) : null}
+          </div>
+          {content}
+        </Box>
       </AppShell.Main>
       {taskDrawerRequested ? (
         <Suspense fallback={null}>

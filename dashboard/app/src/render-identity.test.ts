@@ -5,7 +5,13 @@ import type {
   DashboardTaskCounts,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type { LoadState, PageData } from "./core.js";
-import { readyLoadState, readyTaskCounts, sameStructure } from "./render-identity.js";
+import {
+  failedLoadState,
+  readyLoadState,
+  readyTaskCounts,
+  sameStructure,
+  startedLoadState,
+} from "./render-identity.js";
 import type { TaskListRowProps } from "./components/task-row.js";
 
 // The row pulls in the preferences module, which reads stored settings as it loads.
@@ -170,5 +176,115 @@ describe("what a poll makes a task row redraw", () => {
 
   it("redraws every row when the operator changes the display time zone", () => {
     expect(sameTaskRow(rowProps(), rowProps({ timeZone: "Europe/Berlin" }))).toBe(false);
+  });
+});
+
+describe("what a failed page load writes to the shell", () => {
+  const refreshedAt = "2026-10-22T12:00:00.000Z";
+
+  it("keeps the page and marks it stale when the data on screen answers the failed request", () => {
+    const data = tasksPage([taskRow()]);
+    const current: LoadState = { status: "ready", data, error: null };
+    const next = failedLoadState(
+      current,
+      { route: "/tasks", error: "502 Bad Gateway" },
+      { refreshedAt },
+    );
+
+    expect(next).toEqual({ status: "stale", data, error: "502 Bad Gateway", refreshedAt });
+    expect(next.data).toBe(data);
+  });
+
+  it("keeps a manual refresh of the same page too", () => {
+    const data = tasksPage([taskRow()]);
+    const current: LoadState = { status: "loading", data, error: null };
+
+    expect(
+      failedLoadState(current, { route: "/tasks", error: "timeout" }, { refreshedAt }).status,
+    ).toBe("stale");
+  });
+
+  it("shows the error screen when no usable data exists for the request", () => {
+    const data = tasksPage([taskRow()]);
+    const elsewhere: LoadState = { status: "loading", data, error: null };
+    expect(failedLoadState(elsewhere, { route: "/tasks", error: "502 Bad Gateway" }, null)).toEqual(
+      {
+        status: "error",
+        data,
+        error: "502 Bad Gateway",
+        route: "/tasks",
+      },
+    );
+    const nothing: LoadState = { status: "loading", data: null, error: null };
+    expect(
+      failedLoadState(nothing, { route: "/tasks", error: "502 Bad Gateway" }, { refreshedAt })
+        .status,
+    ).toBe("error");
+  });
+
+  it("returns the same object for a repeated failure, so the warning does not announce again", () => {
+    const current: LoadState = {
+      status: "stale",
+      data: tasksPage([taskRow()]),
+      error: "502 Bad Gateway",
+      refreshedAt,
+    };
+
+    expect(
+      failedLoadState(current, { route: "/tasks", error: "502 Bad Gateway" }, { refreshedAt }),
+    ).toBe(current);
+    expect(
+      failedLoadState(
+        current,
+        { route: "/tasks", error: "503 Service Unavailable" },
+        { refreshedAt },
+      ),
+    ).not.toBe(current);
+  });
+
+  it("returns to the normal status when a later refresh succeeds", () => {
+    const data = tasksPage([taskRow()]);
+    const current: LoadState = { status: "stale", data, error: "502 Bad Gateway", refreshedAt };
+    const next = readyLoadState(current, tasksPage([taskRow()]));
+
+    expect(next).toEqual({ status: "ready", data, error: null });
+  });
+});
+
+describe("what a manual refresh of a stale page writes to the shell", () => {
+  const refreshedAt = "2026-10-22T12:00:00.000Z";
+  const stale: LoadState = {
+    status: "stale",
+    data: tasksPage([taskRow()]),
+    error: "502 Bad Gateway",
+    refreshedAt,
+  };
+
+  it("keeps the warning and its time while the same request is in progress", () => {
+    expect(startedLoadState(stale, true)).toBe(stale);
+  });
+
+  it("keeps the warning when the retry fails again with the same error", () => {
+    const retrying = startedLoadState(stale, true);
+    const failed = failedLoadState(
+      retrying,
+      { route: "/tasks", error: "502 Bad Gateway" },
+      { refreshedAt },
+    );
+    expect(failed).toBe(stale);
+  });
+
+  it("drops the warning for a load of another request, which it does not describe", () => {
+    expect(startedLoadState(stale, false)).toEqual({
+      status: "loading",
+      data: stale.data,
+      error: null,
+    });
+  });
+
+  it("shows the loading state for a page that is not stale", () => {
+    const data = tasksPage([taskRow()]);
+    const ready: LoadState = { status: "ready", data, error: null };
+    expect(startedLoadState(ready, true)).toEqual({ status: "loading", data, error: null });
   });
 });

@@ -196,10 +196,18 @@ export type PageData =
 export type TaskGroupsPageData =
   | { kind: "list"; list: DashboardTaskGroupsPage }
   | { kind: "detail"; detail: DashboardTaskGroupDetail };
+/**
+ * What the page area shows.
+ *
+ * `stale` keeps the page after a refresh failed for the data on screen. `refreshedAt` is the time
+ * of the last load that succeeded for that data, so the page can say how old the data is.
+ * `error.route` is the route whose load failed, which the error screen is about.
+ */
 export type LoadState =
   | { status: "loading"; data: PageData | null; error: null }
   | { status: "ready"; data: PageData; error: null }
-  | { status: "error"; data: PageData | null; error: string };
+  | { status: "stale"; data: PageData; error: string; refreshedAt: string }
+  | { status: "error"; data: PageData | null; error: string; route: PageRoute };
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
   "/events",

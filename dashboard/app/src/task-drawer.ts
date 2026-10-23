@@ -56,7 +56,9 @@ export function taskDrawerCloseOnEscape(dropdownOpened: boolean): boolean {
  * What the drawer body shows for one controller state.
  *
  * Picking another task clears the loaded detail but keeps the selected id, so the drawer stays
- * open on a loader instead of closing and re-opening.
+ * open on a loader instead of closing and re-opening. A failed reload of the task on screen keeps
+ * its detail: the error shows above the detail the operator was reading, which says which facts
+ * may be old instead of replacing them.
  */
 export type TaskDrawerBody = "closed" | "error" | "loading" | "detail";
 
@@ -66,9 +68,47 @@ export function taskDrawerBody(state: {
   taskDetailError: string | null;
 }): TaskDrawerBody {
   if (state.selectedTaskId === null) return "closed";
+  if (state.selectedTask !== null) return "detail";
   if (state.taskDetailError !== null) return "error";
-  if (state.selectedTask === null) return "loading";
-  return "detail";
+  return "loading";
+}
+
+/**
+ * Whether a detail load keeps the detail that the drawer shows now.
+ *
+ * An action such as Retry reloads the task on screen. Emptying the drawer first unmounted the
+ * whole detail: the panel became a spinner, scrolled back to the top, lost the text in its
+ * fields, and dropped keyboard focus to the document body. Only a load for another task empties
+ * it, because the old detail must never show under the new task's heading.
+ */
+export function taskDetailKeepsShownDetail(
+  shownTaskId: string | null,
+  requestedId: string,
+): boolean {
+  return shownTaskId === requestedId;
+}
+
+/**
+ * Whether the drawer must put focus back after a render removed the control that held it.
+ *
+ * A reload can remove the focused control, for example the signal form after the signal arrives.
+ * The browser then moves focus to the document body, and a keyboard or screen reader user loses
+ * their place. The drawer moves focus to the task heading instead. It does nothing when focus
+ * already went somewhere real, or when the drawer now shows another task, because the shell owns
+ * focus for a task switch.
+ */
+export function taskDetailFocusLost(state: {
+  focusedTaskId: string | null;
+  focusedControlConnected: boolean;
+  focusOnBody: boolean;
+  selectedTaskId: string | null;
+}): boolean {
+  return (
+    state.focusedTaskId !== null &&
+    state.focusedTaskId === state.selectedTaskId &&
+    !state.focusedControlConnected &&
+    state.focusOnBody
+  );
 }
 
 /** The drawer is open for as long as a task is selected, including while its detail loads. */

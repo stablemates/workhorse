@@ -999,6 +999,60 @@ An `oxlint` `no-restricted-globals` rule rejects `localStorage`, `window.localSt
 `dashboard/app/browser/index.html` runs before the SPA modules load. It catches a failed read and
 uses the system color scheme.
 
+### Page loads, task reloads, and focus
+
+The SPA reads each page again on manual refresh, on auto refresh, and after an operator action.
+These rules keep the data on screen readable and keep keyboard focus in a known place.
+
+A page load that fails has two outcomes. `failedLoadState` in `dashboard/app/src/render-identity.ts`
+selects one:
+
+| Data on screen                                   | Load state | Page area                                       |
+| ------------------------------------------------ | ---------- | ----------------------------------------------- |
+| Answers the same request: route, listing, window | `stale`    | The page, with a `Refresh failed` warning above |
+| None, or data for a different request            | `error`    | The full error screen with a `Try again` button |
+
+- The `stale` state keeps the ISO time of the last load that succeeded for that request. The
+  warning shows that time with `formatClock`, and states that the data can be out of date.
+- The warning is inside a `role="status"` region that stays mounted. A repeated failure with the
+  same error text keeps the same state object, so the warning does not announce again on each poll.
+- A manual refresh of the same request keeps the `stale` state until a load succeeds.
+  `startedLoadState` makes this decision. The refresh control shows its spinner meanwhile. A load
+  for another request, such as another page, starts from the `loading` state.
+- The header status badge shows `Refresh failed` for `stale` and `Disconnected` for `error`.
+- The next successful load returns the state to `ready` and removes the warning.
+
+The task drawer reloads its task after an action such as Retry, Run now, or a delivered signal.
+
+- `taskDetailKeepsShownDetail` in `dashboard/app/src/task-drawer.ts` keeps the shown detail while
+  the same task reloads. The drawer keeps its scroll position, its field text, and focus.
+- A load for a different task empties the drawer first, so the old detail never shows under the
+  new task. `createLatestRequestGuard` still lets only the newest detail request write.
+- If a reload of the shown task fails, the drawer keeps the detail and shows the error above it.
+- If a reload removes the control that had focus, and focus fell to the document body, focus moves
+  to the task heading `task-overview-heading`. `taskDetailFocusLost` makes this decision. The
+  heading has `tabIndex={-1}`, so it takes focus from a script only.
+- When the drawer closes, focus returns to the control that opened it. If a refresh replaced that
+  row, focus goes to the row's new open control. If the row is gone, focus goes to the page
+  heading.
+
+Navigation between routes changes the document and the focus.
+
+- The document title is `<page> · Workhorse`, for example `Queues · Workhorse`. `documentTitle` in
+  `dashboard/app/src/shell/controller.tsx` builds it. On unmount the shell restores the host's
+  title.
+- After a route change, including Back and Forward, `usePageHeadingFocus` in
+  `dashboard/app/src/page-focus.ts` moves focus to the first `h1` in the page area. It waits until
+  `pageContentRoute` names the new route, so the heading of the previous page does not take focus.
+  If the heading arrives after the data loads, it waits for it. If focus moved into the page or a
+  detail drawer first, it does nothing.
+- Polling, filters, the pager, and the task drawer do not change the route, so they do not move
+  focus.
+- The Tasks and Events pages have no visible page heading. The shell gives them a visually hidden
+  `h1`. The full error screen also has an `h1`.
+- The first focusable element is a `Skip to main content` link. It moves focus to the page area
+  `#dashboard-main`, and it shows only while it has focus.
+
 ### Human waits
 
 `dashboard_human_waits_v1(p_input jsonb)` accepts `canComplete` and `canSignal`.

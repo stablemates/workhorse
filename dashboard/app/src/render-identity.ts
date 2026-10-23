@@ -1,4 +1,4 @@
-import type { LoadState, PageData } from "./core.js";
+import type { LoadState, PageData, PageRoute } from "./core.js";
 import type { DashboardTaskCounts } from "@stablemates/workhorse-dashboard-server/wire";
 
 /**
@@ -53,4 +53,49 @@ export function readyTaskCounts(
   counts: DashboardTaskCounts,
 ): DashboardTaskCounts {
   return current !== null && sameStructure(current, counts) ? current : counts;
+}
+
+/**
+ * The load state after a page load failed.
+ *
+ * During an incident a proxy can fail one background refresh while the next one succeeds. The
+ * error screen hid the page the operator was reading, although its data was still in state. If the
+ * data on screen answers the same request that failed, the page stays and is marked stale with
+ * the time of its last good load. If it does not, for example after a click to another page, no
+ * usable data exists and the error screen shows.
+ *
+ * A repeated failure with the same message returns the same object, so a stale page does not
+ * render again, and its warning does not announce again, on each failed poll.
+ */
+export function failedLoadState(
+  current: LoadState,
+  failure: { route: PageRoute; error: string },
+  retained: { refreshedAt: string } | null,
+): LoadState {
+  const { route, error } = failure;
+  if (retained !== null && current.data !== null) {
+    if (
+      current.status === "stale" &&
+      current.error === error &&
+      current.refreshedAt === retained.refreshedAt
+    ) {
+      return current;
+    }
+    return { status: "stale", data: current.data, error, refreshedAt: retained.refreshedAt };
+  }
+  return { status: "error", data: current.data, error, route };
+}
+
+/**
+ * The load state when the operator starts a page load.
+ *
+ * A stale page stays stale while the operator retries the same request, until a load succeeds.
+ * Showing the loading state instead removed the warning and the time of the last good load while
+ * old data stayed on screen, and the header said the dashboard was connected. The shell shows the
+ * request in progress separately. A load for another request, such as another page, does not
+ * keep the warning, because the warning is about data that page does not show.
+ */
+export function startedLoadState(current: LoadState, sameRequest: boolean): LoadState {
+  if (current.status === "stale" && sameRequest) return current;
+  return { status: "loading", data: current.data, error: null };
 }
