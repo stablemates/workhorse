@@ -21,6 +21,7 @@ import {
 import { copyToClipboard, formatJson } from "./preferences.js";
 import type { RunNowFeedback } from "./run-now.js";
 import type { TaskLocationState } from "./task-location.js";
+import { randomUuid } from "./random-uuid.js";
 
 /**
  * Read the full quick action of one pending decision from the task detail.
@@ -173,7 +174,7 @@ export function useTaskActions({
         audit: {
           actor: auditActor,
           reason: cancelReason.trim() || null,
-          requestId: crypto.randomUUID(),
+          requestId: randomUuid(),
         },
       });
       notifyCancel(
@@ -208,11 +209,11 @@ export function useTaskActions({
         id: taskId,
         name: waitName,
         result: quickAction.result,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: randomUuid(),
         audit: {
           actor: auditActor,
           reason: `${quickAction.label} human wait ${waitName} from the dashboard`,
-          requestId: crypto.randomUUID(),
+          requestId: randomUuid(),
         },
       });
       notifyDashboard({
@@ -244,7 +245,7 @@ export function useTaskActions({
         audit: {
           actor: auditActor,
           reason: `Redrive dead letter ${task.id} from the dashboard`,
-          requestId: crypto.randomUUID(),
+          requestId: randomUuid(),
         },
       });
       notifyRedrive(result, { openTask: inspectTask });

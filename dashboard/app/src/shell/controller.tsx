@@ -88,6 +88,7 @@ import { createDashboardRefreshController } from "../dashboard-refresh-controlle
 import { useMutationInFlight } from "../mutation-in-flight.js";
 import { formatCount } from "../count-format.js";
 import { describeQueueTier, describeTierSwitch } from "../queue-tier.js";
+import { randomUuid } from "../random-uuid.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -615,7 +616,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `${paused ? "Pause" : "Resume"} ${namespace}/${name} from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -645,7 +646,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `${paused ? "Pause" : "Resume"} ${queue} from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -674,7 +675,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `Clear queued work from ${queue} from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         setConfirmingQueue(null);
@@ -706,7 +707,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `Move ${queue} to the ${tier} tier from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -734,7 +735,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `Change the history of ${queue} from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -767,7 +768,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `${paused ? "Pause" : "Resume"} ${workerId} from the dashboard`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -796,7 +797,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: "Update maintenance policy from the dashboard",
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         notifyDashboard({
@@ -825,7 +826,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `Revert ${setting} to the application default`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         await loadPage();
@@ -926,7 +927,7 @@ export function useDashboardController(
           audit: {
             actor: auditActor,
             reason: `Demonstrate the ${feature ?? scenario ?? kind} execution path`,
-            requestId: crypto.randomUUID(),
+            requestId: randomUuid(),
           },
         });
         // A keyed kind may replay to a task that predates this click, so the answer names what
@@ -1037,7 +1038,7 @@ export function useDashboardController(
       const feedback = await requestRunNow(client, {
         id,
         auditActor,
-        requestId: crypto.randomUUID(),
+        requestId: randomUuid(),
       });
       // Reloaded on every outcome: a refusal is still a statement about durable state this list
       // should be showing, and a released task has already changed row.

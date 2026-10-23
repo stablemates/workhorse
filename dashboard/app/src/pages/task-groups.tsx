@@ -38,6 +38,7 @@ import { formatExact, formatJson, formatRelative } from "../preferences.js";
 import { statusColor } from "../status-colors.js";
 import { formatCount } from "../count-format.js";
 import { taskGroupsLocationHref, type TaskGroupsLocationState } from "../task-groups-location.js";
+import { randomUuid } from "../random-uuid.js";
 
 /** The navigation a task groups view needs from the shell. */
 export interface TaskGroupsNavigation {
@@ -330,7 +331,7 @@ export function TaskGroupDetailView({
     try {
       const canceled = await client.cancelTaskGroup({
         id: group.id,
-        audit: { actor: auditActor, reason: reason.trim(), requestId: crypto.randomUUID() },
+        audit: { actor: auditActor, reason: reason.trim(), requestId: randomUuid() },
       });
       notifyDashboard({
         title: canceled.state === "finished" ? "Task group finished" : "Task group canceled",

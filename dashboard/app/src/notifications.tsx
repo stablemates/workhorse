@@ -16,6 +16,7 @@ import type {
   DashboardRedriveStatus,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RunNowFeedback } from "./run-now.js";
+import { randomUuid } from "./random-uuid.js";
 
 /**
  * Where every operator result in this dashboard is reported.
@@ -78,7 +79,7 @@ function toneIcon(tone: DashboardResultTone): ReactNode {
 export function notifyDashboard(notification: DashboardNotification): string {
   const tone = notification.tone ?? "neutral";
   const action = notification.action;
-  const id = notification.id ?? `workhorse-${crypto.randomUUID()}`;
+  const id = notification.id ?? `workhorse-${randomUuid()}`;
   // `show` ignores an id that is already on screen, so a repeated action would report nothing at
   // all the second time. Removing the previous answer first is what makes the new one replace it.
   if (notification.id !== undefined) notifications.hide(notification.id);
