@@ -441,6 +441,36 @@ of each language names itself. TypeScript, Go, and Rust record `Error`, and Pyth
 recovered the panic. Thus a Go panic records the same three fields as a TypeScript or Python
 exception.
 
+#### Text that jsonb cannot store
+
+A handler error can hold text that PostgreSQL `jsonb` cannot store. If `fail_v1` refuses the
+envelope, the failure is not recorded and the task stays active until lease recovery. Thus each
+worker cleans the envelope before it sends it. `fail_v1` does not clean it.
+
+The worker replaces each refused character with U+FFFD in `name`, `message`, and `stack`. A valid
+surrogate pair and all other text do not change. A redacted envelope holds only fixed text.
+
+| SDK        | Function                                                           | Text it replaces                               |
+| ---------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| Java       | `Worker.storable`                                                  | NUL, and a UTF-16 surrogate outside a pair     |
+| .NET       | `FailureEnvelope.Storable`                                         | NUL, and a UTF-16 surrogate outside a pair     |
+| TypeScript | `storableText` in `typescript/core/src/queue/claim-lease-fence.ts` | NUL, and a UTF-16 surrogate outside a pair     |
+| Python     | `_storable_text` in `python/src/workhorse/worker.py`               | NUL, and a surrogate code point outside a pair |
+| Go         | `storableText` in `go/worker.go`                                   | NUL, and each byte that is not UTF-8           |
+| Ruby       | `storable_text` in `ruby/lib/stablemates/workhorse/worker.rb`      | NUL, and each byte that is not UTF-8           |
+| Rust       | `storable_text` in `rust/src/worker/execute.rs`                    | NUL                                            |
+
+Java and .NET clean only `message` and `stack`, because a Java or C# type name cannot hold these
+characters. The other SDKs also clean `name`, because a handler can set it. A Python string holds a
+surrogate pair as two code points, so `_storable_text` joins the pair into the character that it
+encodes.
+
+A Go or Ruby string holds bytes, so a byte that is not UTF-8 is the nearest form of an unpaired
+surrogate. Ruby reads a binary string as UTF-8 bytes. A Rust `String` holds only UTF-8, so NUL is
+the one character it can hold that `jsonb` refuses. The `failures.json` fixtures `nul-in-message`,
+`unpaired-surrogate-in-message`, `surrogate-pair-in-message`, and `redacted-nul-in-message` pin
+this rule. Its `envelope.storableText` entry states how each language builds an unpaired surrogate.
+
 #### JSON number precision
 
 JSON numbers are the other area where the runtimes are different. PostgreSQL stores a `jsonb` number

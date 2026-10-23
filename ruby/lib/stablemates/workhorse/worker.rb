@@ -1866,8 +1866,24 @@ module Stablemates
         return {"name" => REDACTED_NAME, "message" => REDACTED_MESSAGE} if redact
 
         # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
-        {"name" => (durable_replay_conflict(error) || error).class.name, "message" => error.message.to_s,
-         "stack" => error.full_message(highlight: false, order: :top)}
+        name = (durable_replay_conflict(error) || error).class.name
+        {"name" => name.is_a?(String) ? storable_text(name) : name, "message" => storable_text(error.message.to_s),
+         "stack" => storable_text(error.full_message(highlight: false, order: :top))}
+      end
+
+      # +text+ as UTF-8 with each NUL and each byte that is not UTF-8 replaced by U+FFFD. PostgreSQL
+      # jsonb stores no NUL, the JSON generator refuses text that is not UTF-8, and either refusal
+      # would end the worker instead of recording the handler's failure. A Ruby string holds bytes,
+      # so a byte that is not UTF-8 is the nearest form of the unpaired surrogate that the JVM and
+      # .NET workers replace. A binary string is read as UTF-8 bytes.
+      def storable_text(text)
+        text = text.dup.force_encoding(Encoding::UTF_8) if text.encoding == Encoding::BINARY
+        unless text.encoding == Encoding::UTF_8
+          text = text.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "\uFFFD")
+        end
+        # One U+FFFD for each byte, as the Go worker and encoding/json write it.
+        text = text.scrub { |bytes| "\uFFFD" * bytes.bytesize } unless text.valid_encoding?
+        text.include?("\0") ? text.tr("\0", "\uFFFD") : text
       end
 
       def validate_result(task, result)

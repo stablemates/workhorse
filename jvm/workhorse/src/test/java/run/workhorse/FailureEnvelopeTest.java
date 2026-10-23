@@ -45,6 +45,24 @@ class FailureEnvelopeTest {
     return (T) value;
   }
 
+  /** A fixture message: text, or text parts and unpaired surrogates, which a Java string holds. */
+  private static String message(@Nullable Object message) {
+    if (message instanceof String text) {
+      return text;
+    }
+    StringBuilder built = new StringBuilder();
+    for (Object part : (List<?>) java.util.Objects.requireNonNull(message)) {
+      built.append(
+          part instanceof String text
+              ? text
+              : String.valueOf(
+                  (char)
+                      Integer.parseInt(
+                          String.valueOf(((Map<?, ?>) part).get("unpairedSurrogate")), 16)));
+    }
+    return built.toString();
+  }
+
   @Test
   void anAnonymousOrHiddenClassRecordsTheJavaGenericName() throws IOException {
     Map<String, @Nullable Object> envelope = at(failures(), "envelope");
@@ -101,7 +119,7 @@ class FailureEnvelopeTest {
     for (Map<String, @Nullable Object> fixture : fixtures) {
       Map<String, @Nullable Object> input = at(fixture, "error");
       Map<String, @Nullable Object> expected = at(fixture, "envelope");
-      String message = at(input, "message");
+      String message = message(input.get("message"));
       Exception error =
           Boolean.TRUE.equals(input.get("declaresName"))
               ? new PaymentDeclined(message)

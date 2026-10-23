@@ -15,7 +15,11 @@
       "java": "Exception",
       "csharp": "Exception"
     },
-    "forbiddenNameCharacters": ["*", ".", "<", " "]
+    "forbiddenNameCharacters": ["*", ".", "<", " "],
+    "storableText": {
+      "replacement": "\ufffd",
+      "description": "PostgreSQL jsonb cannot store a NUL character or an unpaired surrogate. Before the worker sends the envelope, it replaces each one in the name, the message, and the stack with the replacement. A valid surrogate pair and all other text do not change. An error message can be an array of parts. A string part is text. A part {\"unpairedSurrogate\": \"D800\"} is one UTF-16 code unit that no strict JSON parser reads from an escape. TypeScript, Java, C#, and Python put that code unit in the string. Go and Ruby strings hold bytes, so they use the byte 0xFF, which is not UTF-8. A Rust String holds only UTF-8, so Rust uses the text that String::from_utf8_lossy makes from the byte 0xFF."
+    }
   },
   "fixtures": [
     {
@@ -47,6 +51,58 @@
       "id": "redacted-details",
       "description": "Local redaction produces exactly what redact_error_details_v1 would have produced.",
       "error": { "declaresName": true, "declaresStack": true, "message": "card declined" },
+      "redactErrorDetails": true,
+      "envelope": {
+        "name": "RedactedTaskError",
+        "message": "Task handler failed; details redacted"
+      }
+    },
+    {
+      "id": "nul-in-message",
+      "description": "A NUL character in the message becomes the replacement, so fail_v1 accepts the envelope and the retry policy settles the task.",
+      "error": { "declaresName": true, "declaresStack": true, "message": "card\u0000declined" },
+      "redactErrorDetails": false,
+      "envelope": { "name": "PaymentDeclined", "message": "card\ufffddeclined", "stack": "string" }
+    },
+    {
+      "id": "unpaired-surrogate-in-message",
+      "description": "An unpaired high or low surrogate in the message becomes the replacement.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": [
+          "card ",
+          { "unpairedSurrogate": "D800" },
+          " declined ",
+          { "unpairedSurrogate": "DC00" }
+        ]
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": "card \ufffd declined \ufffd",
+        "stack": "string"
+      }
+    },
+    {
+      "id": "surrogate-pair-in-message",
+      "description": "A valid surrogate pair is text that jsonb stores, so the message does not change.",
+      "error": {
+        "declaresName": true,
+        "declaresStack": true,
+        "message": "card \ud83d\ude00 declined"
+      },
+      "redactErrorDetails": false,
+      "envelope": {
+        "name": "PaymentDeclined",
+        "message": "card \ud83d\ude00 declined",
+        "stack": "string"
+      }
+    },
+    {
+      "id": "redacted-nul-in-message",
+      "description": "Redaction replaces an unstorable message with the fixed redacted envelope.",
+      "error": { "declaresName": true, "declaresStack": true, "message": "card\u0000declined" },
       "redactErrorDetails": true,
       "envelope": {
         "name": "RedactedTaskError",

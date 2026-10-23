@@ -189,9 +189,36 @@ export function errorEnvelope(error: unknown, redactDetails = false): Json {
   if (error instanceof Error) {
     // A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
     const name = durableReplayConflict(error)?.name ?? error.name;
-    return { name, message: error.message, stack: error.stack ?? null };
+    return {
+      name: storableText(name),
+      message: storableText(error.message),
+      stack: storableText(error.stack ?? null),
+    };
   }
-  return { name: NON_ERROR_NAME, message: String(error), stack: null };
+  return { name: NON_ERROR_NAME, message: storableText(String(error)), stack: null };
+}
+
+/**
+ * `text` with each NUL and each surrogate outside a pair replaced by U+FFFD, as the JVM and .NET
+ * workers do. PostgreSQL jsonb stores neither, and a refused envelope would stop the worker instead
+ * of recording the handler's failure. A value that is not a string does not change.
+ */
+function storableText<T>(text: T): T | string {
+  if (typeof text !== "string") return text;
+  let output: string | undefined;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    const next = index + 1 < text.length ? text.charCodeAt(index + 1) : 0;
+    if (unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+      if (output !== undefined) output += text.slice(index, index + 2);
+      index++;
+      continue;
+    }
+    const refused = unit === 0 || (unit >= 0xd800 && unit <= 0xdfff);
+    if (refused && output === undefined) output = text.slice(0, index);
+    if (output !== undefined) output += refused ? "�" : text[index];
+  }
+  return output ?? text;
 }
 
 export function recordRecoveryTelemetry(

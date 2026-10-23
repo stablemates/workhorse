@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -159,6 +160,26 @@ final class RuntimeFixtures {
     }
   }
 
+  /**
+   * The message a failures fixture describes: text, or an array of text parts and unpaired
+   * surrogates. A Java string holds an unpaired surrogate as one {@code char}.
+   */
+  static String fixtureMessage(@Nullable Object message) {
+    if (message instanceof String text) {
+      return text;
+    }
+    StringBuilder built = new StringBuilder();
+    for (Object part : (List<?>) Objects.requireNonNull(message, "message")) {
+      if (part instanceof String text) {
+        built.append(text);
+      } else {
+        Object unit = Runner.object(part, "message part").get("unpairedSurrogate");
+        built.append((char) Integer.parseInt(String.valueOf(unit), 16));
+      }
+    }
+    return built.toString();
+  }
+
   void failure(Map<String, @Nullable Object> fixture) throws Exception {
     String name = "failures-" + fixture.get("id");
     UUID taskId = enqueue("protocol.failure", Map.of(), options(name).maxAttempts(1));
@@ -170,7 +191,7 @@ final class RuntimeFixtures {
               + "'");
     }
     Map<String, @Nullable Object> declared = Runner.object(fixture.get("error"), "error");
-    String message = (String) declared.get("message");
+    String message = fixtureMessage(declared.get("message"));
     Exception error =
         Boolean.TRUE.equals(declared.get("declaresName"))
             ? new PaymentDeclined(message)

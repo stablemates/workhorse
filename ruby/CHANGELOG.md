@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A handler error with text that jsonb cannot store settles by its retry policy
+
+PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a
+handler error with such text made `fail_v1` refuse the failure envelope. The worker stopped, and the
+task stayed active until lease recovery (SM-1650).
+
+Now `error_envelope` replaces each NUL character and each byte that is not UTF-8 with U+FFFD. It
+does this in the name, the message, and the stack. The JVM and .NET workers use the same rule. The
+retry policy then settles the task. All other text does not change.
+
+The `protocol/v1/failures.json` fixtures pin the rule for every SDK.
+
 ### A refused completion settles a due deadline or attempt timeout
 
 A handler can return just before its deadline or attempt timeout, and the completion write can then

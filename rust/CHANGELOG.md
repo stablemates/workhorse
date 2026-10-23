@@ -11,6 +11,18 @@ adds.
 
 ## Unreleased
 
+### A handler error with text that jsonb cannot store settles by its retry policy
+
+PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a
+handler error with such text made `fail_v1` refuse the failure envelope. The worker stopped, and the
+task stayed active until lease recovery (SM-1650).
+
+Now `fail_with_state` replaces each NUL character with U+FFFD. It does this in the name, the
+message, and the stack. The JVM and .NET workers use the same rule. The retry policy then settles
+the task. A Rust `String` cannot hold an unpaired surrogate.
+
+The `protocol/v1/failures.json` fixtures pin the rule for every SDK.
+
 ### Workers on one pool renew their leases in one transaction
 
 On the dedicated heartbeat connection, a round sent one transaction for each worker and each 100
