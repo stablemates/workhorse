@@ -528,9 +528,12 @@ def test_an_accepted_answer_after_the_lease_window_ended_does_not_renew_it(
 
 
 # PostgreSQL may end the reserved heartbeat connection while the worker idles between tasks. The
-# lease outlives the whole test, so only a lost reconnect could end an attempt.
+# lease outlives the whole test, so only a lost reconnect could end an attempt. The round bound of
+# this interval, 375 ms, keeps most rounds within it on a loaded host.
 TERMINATION_LEASE_MS = 10_000
-TERMINATION_HEARTBEAT_MS = 100
+TERMINATION_HEARTBEAT_MS = 500
+# The tasks the test runs at most before the idle worker holds a connection that it can identify.
+RESERVATION_ATTEMPTS = 5
 
 
 class BlockingTask:
@@ -540,6 +543,11 @@ class BlockingTask:
         self.started = Event()
         self.release = Event()
         self.cancelled = False
+
+    def reset(self) -> None:
+        """Block the next task too. Call it only while no task of this gate runs."""
+        self.started.clear()
+        self.release.clear()
 
     def handler(self, _payload: Any, context: HandlerContext) -> dict[str, bool]:
         self.started.set()
@@ -559,26 +567,33 @@ class BlockingTask:
         return {"ok": True}
 
 
-def heartbeat_backends(database_url: str) -> list[int]:
-    """List the backends whose latest statement was a heartbeat round, excluding the observer.
+def heartbeat_backends(database_url: str) -> list[tuple[int, str, str]]:
+    """List the backends whose latest statement was part of a heartbeat round, excluding the
+    observer, with their state and latest statement.
 
     A round ends with the COMMIT of its transaction, and no other worker statement sends one.
     """
     with psycopg.connect(database_url, autocommit=True) as observer:
         rows = observer.execute(
-            "SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
+            "SELECT pid, state, query FROM pg_stat_activity WHERE datname = current_database() "
             "AND pid <> pg_backend_pid() "
             "AND (query LIKE '%workhorse.heartbeat_many_v2%' OR query = 'COMMIT')"
         ).fetchall()
-    return [int(row[0]) for row in rows]
+    return [(int(row[0]), str(row[1]), str(row[2])) for row in rows]
 
 
 def wait_for_heartbeat_backend(database_url: str, other_than: int | None = None) -> int:
+    """Wait for a heartbeat round on a backend other than `other_than`, and return that backend.
+
+    Under load, a round can pass its bound. The worker then replaces the connection (ADR 0071),
+    so for a short time two backends can show a heartbeat round.
+    """
     deadline = monotonic() + 10
     while monotonic() < deadline:
-        pids = [pid for pid in heartbeat_backends(database_url) if pid != other_than]
+        pids = [
+            pid for pid, _state, _query in heartbeat_backends(database_url) if pid != other_than
+        ]
         if pids:
-            assert len(pids) == 1, pids
             return pids[0]
         sleep(0.02)
     raise AssertionError("no backend ran a heartbeat round")
@@ -594,18 +609,115 @@ def wait_for_outcome(database_url: str, task_id: str) -> Any:
     raise AssertionError("the task never settled")
 
 
-def terminate_the_idle_heartbeat_connection(
-    database_url: str, queue: str, task_type: str, before: BlockingTask, after: BlockingTask
-) -> None:
-    """Drive one task, end the reserved heartbeat backend while idle, then drive a second task."""
-    before_id = enqueue(database_url, f"{task_type}.before", queue)
-    assert before.started.wait(30)
-    reserved = wait_for_heartbeat_backend(database_url)
-    before.release.set()
-    assert wait_for_outcome(database_url, before_id) == ("succeeded",)
+class RoundsInFlight:
+    """Count the heartbeat rounds of one worker core that still run.
 
+    Each round runs on its own thread. A round that passed its deadline can still hold its
+    connection after the reservation stopped counting it, so only this count shows its end.
+    """
+
+    def __init__(self, core: Worker) -> None:
+        self._lock = Lock()
+        self._running = 0
+        run_round = core._run_heartbeat_round
+
+        def counted(heartbeat_round: Any, reservation: Any) -> None:
+            with self._lock:
+                self._running += 1
+            try:
+                run_round(heartbeat_round, reservation)
+            finally:
+                with self._lock:
+                    self._running -= 1
+
+        core._run_heartbeat_round = counted  # type: ignore[method-assign]
+
+    def running(self) -> int:
+        with self._lock:
+            return self._running
+
+
+def held_heartbeat_connection(core: Worker, rounds: RoundsInFlight) -> object:
+    """Wait until no heartbeat round of `core` runs, and return the connection its reservation holds.
+
+    The heartbeat thread ends only between rounds, once no lease is left, and `rounds` shows that
+    no round thread still runs. The reservation is then settled when it holds one idle connection,
+    lends none, and opens or closes none.
+    """
+    reservation = core._reservation
+    assert reservation is not None
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        with core._heartbeat_lock:
+            rounds_ended = core._heartbeat_thread is None and rounds.running() == 0
+        with reservation._condition:
+            held = reservation._idle
+            if (
+                rounds_ended
+                and held is not None
+                and reservation._lent is None
+                and reservation._acquirer is None
+                and not reservation._disposing
+            ):
+                return held
+        sleep(0.02)
+    raise AssertionError("the heartbeat reservation never settled")
+
+
+def reserve_an_identified_heartbeat_connection(
+    database_url: str,
+    core: Worker,
+    rounds: RoundsInFlight,
+    queue: str,
+    task_type: str,
+    before: BlockingTask,
+) -> tuple[int, object]:
+    """Run tasks until the idle worker holds a connection whose last round ended.
+
+    Return the backend of that connection and the connection the reservation holds. The worker
+    sends no round while it is idle, so the connection that ended the last round of a task is the
+    one it holds. Under load, a round can pass its bound, and the worker replaces its connection
+    (ADR 0071). A replacement that ran no round yet is not visible, so the test then runs one more
+    task.
+    """
+    backends: list[tuple[int, str, str]] = []
+    for _attempt in range(RESERVATION_ATTEMPTS):
+        before.reset()
+        before_id = enqueue(database_url, f"{task_type}.before", queue)
+        assert before.started.wait(30)
+        # A renewal shows that a round of this task ended on the connection.
+        wait_for_lease_renewal(database_url, before_id, lease_expiry(database_url, before_id))
+        before.release.set()
+        assert wait_for_outcome(database_url, before_id) == ("succeeded",)
+        held = held_heartbeat_connection(core, rounds)
+        backends = heartbeat_backends(database_url)
+        # The same connection is still held after the read, so no round replaced it meanwhile.
+        if (
+            len(backends) == 1
+            and backends[0][1:] == ("idle", "COMMIT")
+            and held_heartbeat_connection(core, rounds) is held
+        ):
+            return backends[0][0], held
+    raise AssertionError(f"the worker replaced its heartbeat connection in every task: {backends}")
+
+
+def terminate_the_idle_heartbeat_connection(
+    database_url: str,
+    core: Worker,
+    queue: str,
+    task_type: str,
+    before: BlockingTask,
+    after: BlockingTask,
+) -> None:
+    """Drive tasks, end the reserved heartbeat backend while idle, then drive a second task.
+
+    The worker runs no round before the first task, so the count covers every round of the test.
+    """
+    rounds = RoundsInFlight(core)
     # The idle worker still holds the reserved connection, so the termination hits it between rounds.
-    assert heartbeat_backends(database_url) == [reserved]
+    reserved, held = reserve_an_identified_heartbeat_connection(
+        database_url, core, rounds, queue, task_type, before
+    )
     with psycopg.connect(database_url, autocommit=True) as observer:
         terminated = observer.execute("SELECT pg_terminate_backend(%s)", (reserved,)).fetchone()
     assert terminated == (True,)
@@ -620,6 +732,8 @@ def terminate_the_idle_heartbeat_connection(
     wait_for_lease_renewal(database_url, after_id, claimed)
     after.release.set()
     assert wait_for_outcome(database_url, after_id) == ("succeeded",)
+    # The worker gave up the connection whose backend the test ended.
+    assert held_heartbeat_connection(core, rounds) is not held
     assert before.cancelled is False
     assert after.cancelled is False
 
@@ -659,7 +773,7 @@ def test_a_terminated_idle_heartbeat_connection_is_replaced_on_the_next_round(
     running.start()
     try:
         terminate_the_idle_heartbeat_connection(
-            database_url, queue, "heartbeat.terminated", before, after
+            database_url, worker, queue, "heartbeat.terminated", before, after
         )
         assert running.is_alive()
     finally:
@@ -701,6 +815,7 @@ async def test_a_terminated_idle_async_heartbeat_connection_is_replaced_on_the_n
         await asyncio.to_thread(
             terminate_the_idle_heartbeat_connection,
             database_url,
+            worker._inner,
             queue,
             "heartbeat.terminated",
             before,
