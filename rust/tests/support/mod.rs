@@ -179,10 +179,15 @@ fn set(key: &str) -> bool {
     env::var(key).is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false"))
 }
 
+/// `connect_timeout` bounds only the socket, so the whole startup exchange has the same bound too.
 async fn connect(config: &Config) -> Client {
     let mut config = config.clone();
     config.connect_timeout(CONNECT_TIMEOUT);
-    let (client, connection) = config.connect(NoTls).await.unwrap_or_else(|error| {
+    let connected =
+        tokio::time::timeout(CONNECT_TIMEOUT, config.connect(NoTls)).await.unwrap_or_else(|_| {
+            panic!("PostgreSQL did not accept a session within {CONNECT_TIMEOUT:?}")
+        });
+    let (client, connection) = connected.unwrap_or_else(|error| {
         panic!("PostgreSQL is unreachable at {:?}: {error:?}", config.get_hosts())
     });
     tokio::spawn(connection);
