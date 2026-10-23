@@ -111,6 +111,8 @@ export const FILTERED_LANES = {
       "site/lib/landing-snippets.ts",
       // `workhorse benchmark` names this page in its output.
       "docs/benchmarking.md",
+      // database-roles-integration.test.ts runs the SQL blocks of this page.
+      "docs/architecture/operations.md",
     ],
   },
   "runtime-smoke": { sources: [], inputs: typescriptBuild },

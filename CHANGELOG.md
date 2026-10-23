@@ -39,6 +39,21 @@ keepalive.
 
 The `subscription-recovery` case in `protocol/v1/runtime.json` checks these rules in every SDK.
 
+### The docs give tested database roles for the dashboard and workers
+
+ADR 0022 promised least-privilege database roles for the dashboard, but no guidance existed. Only
+the application enforced the read-only dashboard mode. The new "Database roles" section of
+`docs/architecture/operations.md` gives the grant SQL (SM-1667). It covers the installation role, a
+read-only dashboard role, a writable dashboard role, and a worker role. A scratch-database test runs that SQL
+and checks that the read-only role serves each dashboard read and that PostgreSQL rejects its
+writes with SQLSTATE `42501`.
+
+The read-only role needs `SELECT` on each table in the `workhorse` schema, because each function
+runs with the privileges of its caller. It can read stored payloads, results, checkpoints, and
+human-wait context, so its grants are not a redaction boundary. A worker role must act as the
+installation role, because maintenance creates and drops history partitions. The schema and
+its grants do not change. No upgrade step is necessary.
+
 ### A late schedule pass no longer loses a `skip` occurrence
 
 A worker waits one maintenance interval after its schedule pass ends, so the next pass always

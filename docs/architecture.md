@@ -87,4 +87,6 @@ columns, and limits of that area. For an explanation of a concept, read the
 - [Worker process lifecycle](architecture/operations.md#worker-process-lifecycle)
 - [Command-line entry points](architecture/operations.md#command-line-entry-points)
 - [Administrative CLI and TUI](architecture/operations.md#administrative-cli-and-tui)
+- [Database roles](architecture/operations.md#database-roles) for the installation, dashboard, and
+  worker connections
 - [Operational limits](architecture/operations.md#operational-limits)
