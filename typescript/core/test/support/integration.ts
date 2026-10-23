@@ -130,15 +130,6 @@ export function createIntegrationTestContext(
       },
       { force: true },
     );
-    await pool.query(`UPDATE workhorse.maintenance_state SET
-      last_started_at = NULL,
-      last_completed_at = NULL,
-      last_completed_local_date = NULL,
-      history_retained_before = CASE WHEN routine_name = 'history_retention'
-        THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-          - interval '14 days'
-        ELSE NULL END,
-      updated_at = clock_timestamp()`);
     // A test that fails before it stops its worker must not leave that worker running into the
     // next test. Its statements can claim the tasks of the next test or deadlock the next reset.
     // Vitest calls onTestFinished after the afterEach hooks, also when one of them fails.
