@@ -81,6 +81,41 @@ class SlowOperation:
         return "finished"
 
 
+OPERATION_START_LIMIT = 10
+CHECKPOINT_TIMEOUT = 0.1
+
+
+async def time_out_after_start(call: Awaitable[Json], operation: SlowOperation) -> Json:
+    """Await the checkpoint call, and time it out a fixed delay after its operation starts.
+
+    The worker reads the stored checkpoints before it starts the operation. On a loaded
+    host that read can take longer than the timeout, and then the worker correctly never
+    starts the operation. The deadline starts when the operation starts, so the timeout
+    always cancels a running operation.
+    """
+    pending = asyncio.ensure_future(call)
+    started = asyncio.ensure_future(operation.started.wait())
+    try:
+        await asyncio.wait(
+            {pending, started}, timeout=OPERATION_START_LIMIT, return_when=asyncio.FIRST_COMPLETED
+        )
+        if not operation.started.is_set():
+            raise AssertionError(
+                f"the checkpoint did not start its operation in {OPERATION_START_LIMIT} s"
+            )
+    except BaseException:
+        # A failed start or a cancelled caller must not leave the checkpoint call running.
+        pending.cancel()
+        with suppress(BaseException):
+            await pending
+        raise
+    finally:
+        started.cancel()
+        with suppress(asyncio.CancelledError):
+            await started
+    return await asyncio.wait_for(pending, CHECKPOINT_TIMEOUT)
+
+
 @pytest.mark.asyncio
 async def test_a_timed_out_checkpoint_cancels_its_operation_and_waits_for_cleanup() -> None:
     threads = _BridgeThreads()
@@ -89,7 +124,7 @@ async def test_a_timed_out_checkpoint_cancels_its_operation_and_waits_for_cleanu
     operation = SlowOperation()
     try:
         with pytest.raises(TimeoutError):
-            await asyncio.wait_for(adapter.checkpoint("slow", operation), 0.1)
+            await time_out_after_start(adapter.checkpoint("slow", operation), operation)
 
         assert operation.started.is_set()
         assert operation.cleaned, "the checkpoint returned before its operation cleaned up"
@@ -157,9 +192,9 @@ async def test_a_checkpoint_saves_nothing_when_its_operation_absorbs_the_cancell
     operation = SuppressingOperation()
     try:
         with pytest.raises(TimeoutError):
-            await asyncio.wait_for(adapter.checkpoint("absorbed", operation), 0.1)
+            await time_out_after_start(adapter.checkpoint("absorbed", operation), operation)
 
-        assert operation.cleaned
+        assert operation.cleaned, "the checkpoint returned before its operation cleaned up"
         assert context.ended.is_set()
         assert context.saved == [], "the core received a value from a cancelled operation"
         assert len(context.errors) == 1
@@ -410,10 +445,11 @@ async def test_a_handler_that_absorbs_a_checkpoint_timeout_leaves_nothing_runnin
 
     async def handler(_payload: Json, context: AsyncHandlerContext) -> Json:
         try:
-            return await asyncio.wait_for(context.checkpoint("slow", operation), 0.1)
+            return await time_out_after_start(context.checkpoint("slow", operation), operation)
         except TimeoutError:
-            worker.stop()
             return "gave up"
+        finally:
+            worker.stop()
 
     worker.handle("async.checkpoint.timeout", handler)
 
@@ -427,7 +463,8 @@ async def test_a_handler_that_absorbs_a_checkpoint_timeout_leaves_nothing_runnin
     finally:
         loop.set_exception_handler(previous_handler)
     assert reported == []
-    assert operation.cleaned
+    assert operation.started.is_set(), "the checkpoint did not start its operation"
+    assert operation.cleaned, "the handler returned before the checkpoint operation cleaned up"
     assert other_tasks() == set()
     with psycopg.connect(database_url) as connection:
         row = connection.execute(
