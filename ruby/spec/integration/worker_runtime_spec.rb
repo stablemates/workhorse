@@ -217,9 +217,10 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     running(long) do
       wait_until { state(long_id) == "active" }
       sleep 0.1
-      # The short lease expires well before the long worker's next round would fall due.
+      # The short lease expires well before the long worker's next round would fall due. 0.1 s is the
+      # smallest supported interval, and 2 * 0.1 s plus a 0.075 s round bound is less than the lease.
       reason = :none
-      short = worker(queues: [short_queue], lease: 0.3, heartbeat: 0.05).handle("short") do |_payload, context|
+      short = worker(queues: [short_queue], lease: 0.5, heartbeat: 0.1).handle("short") do |_payload, context|
         context.cancellation.wait(0.9)
         reason = context.cancellation.reason
         {}

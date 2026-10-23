@@ -26,10 +26,11 @@ func main() {
 	defer pool.Close()
 
 	// The crash test waits for a killed worker's lease to expire, so the other modes keep a short
-	// lease. The drain test asserts a completion, so its lease and grace period outlast any stall a
-	// loaded host can impose: a stall longer than one lease makes the worker give up the attempt as
-	// lease_lost and exit cleanly without an outcome.
-	leaseDuration, heartbeatInterval, shutdownGracePeriod := 200*time.Millisecond, 50*time.Millisecond, 2*time.Second
+	// lease. 100 ms is the smallest supported heartbeat interval, and 2 * 100 ms plus a 75 ms round
+	// bound is less than the lease. The drain test asserts a completion, so its lease and grace
+	// period outlast any stall a loaded host can impose: a stall longer than one lease makes the
+	// worker give up the attempt as lease_lost and exit cleanly without an outcome.
+	leaseDuration, heartbeatInterval, shutdownGracePeriod := 400*time.Millisecond, 100*time.Millisecond, 2*time.Second
 	if mode == "drain" {
 		leaseDuration, heartbeatInterval, shutdownGracePeriod = 30*time.Second, time.Second, 30*time.Second
 	}

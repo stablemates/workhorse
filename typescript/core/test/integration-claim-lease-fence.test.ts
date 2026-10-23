@@ -845,7 +845,7 @@ describe("claim lease fence", () => {
     const worker = new Worker(queue, {
       workerId: "attempt-timeout-worker",
       leaseMs: 5_000,
-      heartbeatMs: 50,
+      heartbeatMs: 100,
     }).handle("attempt-timeout", async (_payload, context) => {
       handled.push({ id: context.task.id, attempt: context.task.attempt });
       await new Promise<void>((_resolve, reject) => {
@@ -921,7 +921,7 @@ describe("claim lease fence", () => {
     const worker = new Worker(earlyTimerQueue, {
       workerId: "early-timer-worker",
       leaseMs: 5_000,
-      heartbeatMs: 50,
+      heartbeatMs: 100,
     }).handle("early-timer-timeout", async (_payload, context) => {
       handled.push({ id: context.task.id, attempt: context.task.attempt });
       await new Promise<void>((_resolve, reject) => {
@@ -1246,7 +1246,7 @@ describe("claim lease fence", () => {
     const timeoutWorker = new Worker(queue, {
       workerId: "wait-timeout-budget-worker",
       leaseMs: 5_000,
-      heartbeatMs: 50,
+      heartbeatMs: 100,
     }).handle("wait-timeout-budget", async (_payload, context) => {
       activations += 1;
       if (activations === 1) await context.sleep("pause", 1_200);
@@ -1275,7 +1275,7 @@ describe("claim lease fence", () => {
     const deadlineWorker = new Worker(queue, {
       workerId: "wait-deadline-worker",
       leaseMs: 5_000,
-      heartbeatMs: 50,
+      heartbeatMs: 100,
     }).handle("wait-deadline", async (_payload, context) => {
       await context.sleep("long-pause", 1_000);
       return null;

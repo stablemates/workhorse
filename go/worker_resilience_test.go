@@ -35,7 +35,7 @@ func TestWorkerRunKeepsRunningAfterALeaseLoss(t *testing.T) {
 		Queue:               queueName,
 		WorkerID:            "run-lease-loss-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 	})
@@ -127,7 +127,7 @@ func TestWorkerLogsAFailingMaintenancePhaseAndKeepsRunning(t *testing.T) {
 		Queue:               queueName,
 		WorkerID:            "maintenance-phase-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
@@ -188,7 +188,7 @@ func TestWorkerWithoutALoggerWritesToTheDefaultLogger(t *testing.T) {
 		Queue:               "go-worker-default-logger",
 		WorkerID:            "default-logger-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        10 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 	})

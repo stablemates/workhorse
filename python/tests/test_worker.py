@@ -786,6 +786,7 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
             ).fetchone()
             assert status == ("cancel_requested",)
             assert canceled.context.cancellation.wait(timeout=5)
+            assert isinstance(canceled.context.cancellation.reason, CancellationRequestedError)
             return [
                 {"status": "succeeded", "result": {"cancel": item.payload["cancel"]}}
                 for item in items
@@ -795,8 +796,12 @@ def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) 
             worker_pool,
             worker_id="python-batch-cancellation-worker",
             concurrency=2,
-            lease_ms=500,
-            heartbeat_ms=40,
+            # The worker sees the cancel request only in a heartbeat status, and the cancel needs a
+            # live lease. Below 100 ms, the smallest supported interval, every round under host
+            # load can time out. The lease is longer than the handler's 5 s wait, so it cannot
+            # lapse first.
+            lease_ms=10_000,
+            heartbeat_ms=100,
         ).handle_batch("batch.cancel", max_size=2, linger_ms=100, handler=handle_batch)
 
         assert worker.run_once() is True
@@ -841,8 +846,10 @@ def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> No
             worker_pool,
             worker_id="python-batch-timeout-worker",
             concurrency=2,
-            lease_ms=500,
-            heartbeat_ms=400,
+            # The peer must keep its lease until the batch ends. A 400 ms interval in a 500 ms lease
+            # leaves no margin for one slow round. The lease is longer than the handler's 5 s wait.
+            lease_ms=10_000,
+            heartbeat_ms=100,
         ).handle_batch("batch.timeout", max_size=2, linger_ms=100, handler=handle_batch)
 
         assert worker.run_once() is True
@@ -1257,18 +1264,18 @@ def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
         enqueue_connection.commit()
 
         # The handler outlives the original lease, so only renewal keeps the completion
-        # accepted. The lease is ten heartbeats long: a loaded CI runner can stall the
-        # heartbeat thread or the database for several hundred milliseconds without the
-        # lease lapsing, which is what made the tighter 150 ms / 40 ms pairing flaky.
+        # accepted. The lease is ten heartbeats long, so it lapses only if no round succeeds for
+        # about 1.8 s. A 200 ms interval gives each round a 150 ms bound. The 1 000 ms / 100 ms
+        # pairing can lose its lease under host load.
         def outlive_original_lease(_payload: object, _context: object) -> dict[str, bool]:
-            sleep(1.5)
+            sleep(2.5)
             return {"renewed": True}
 
         worker = Worker(
             worker_pool,
             worker_id="python-heartbeat-worker",
-            lease_ms=1_000,
-            heartbeat_ms=100,
+            lease_ms=2_000,
+            heartbeat_ms=200,
         ).handle("lease.renewed", outlive_original_lease)
 
         assert worker.run_once() is True
@@ -1300,8 +1307,10 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
         worker = Worker(
             worker_pool,
             worker_id="python-cancellation-worker",
-            lease_ms=500,
-            heartbeat_ms=40,
+            # The worker sees the cancel request only in a heartbeat status. 100 ms is the smallest
+            # supported interval. The lease is longer than the handler's 5 s wait.
+            lease_ms=10_000,
+            heartbeat_ms=100,
         ).handle("cancel.active", wait_for_cancellation)
 
         def run_worker() -> None:
@@ -1376,8 +1385,10 @@ def test_worker_classifies_an_absolute_deadline(
         worker = Worker(
             worker_pool,
             worker_id="python-deadline-worker",
-            lease_ms=500,
-            heartbeat_ms=400,
+            # The lease is longer than the handler's 5 s wait, so one slow round cannot end the
+            # attempt first.
+            lease_ms=10_000,
+            heartbeat_ms=100,
         ).handle("deadline.active", wait_for_deadline)
 
         assert worker.run_once() is True
@@ -1491,8 +1502,10 @@ def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
         worker = Worker(
             worker_pool,
             worker_id="python-timeout-worker",
-            lease_ms=500,
-            heartbeat_ms=400,
+            # The lease is longer than the handler's 5 s wait, so one slow round cannot end the
+            # attempt first.
+            lease_ms=10_000,
+            heartbeat_ms=100,
         ).handle("timeout.active", wait_for_timeout)
 
         assert worker.run_once() is True
@@ -1530,8 +1543,10 @@ def test_worker_keeps_running_after_a_lease_loss(database_url: str) -> None:
             Worker(
                 worker_pool,
                 worker_id="python-stale-worker",
-                lease_ms=150,
-                heartbeat_ms=40,
+                # The row lock below outlasts the lease, so the lease lapses while it holds.
+                # 2 * 100 ms + a 75 ms round bound is less than the lease.
+                lease_ms=400,
+                heartbeat_ms=100,
                 poll_ms=10,
             )
             .handle("lease.expires", wait_for_lease_loss)
@@ -1553,7 +1568,7 @@ def test_worker_keeps_running_after_a_lease_loss(database_url: str) -> None:
                 "SELECT task_id FROM workhorse.task_runtime WHERE task_id = %s FOR UPDATE",
                 (task_id,),
             ).fetchone()
-            sleep(0.2)
+            sleep(0.6)
             blocking_connection.commit()
             eventually(lambda: len(observed_reasons) == 1, "the handler never observed the loss")
             assert isinstance(observed_reasons[0], StaleLeaseError)

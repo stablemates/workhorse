@@ -608,7 +608,8 @@ describe("busy heartbeat retry", () => {
         workerId: `busy-retry-no-scalar-${String(sharedHeartbeats)}`,
         queue: queueName,
         leaseMs: 1_000,
-        heartbeatMs: 50,
+        // 100 ms is the smallest supported interval. The handler outlasts two rounds.
+        heartbeatMs: 100,
         registryIntervalMs: 0,
         sharedHeartbeats,
       }).handle("scalar", async () => {

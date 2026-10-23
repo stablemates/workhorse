@@ -393,7 +393,9 @@ RSpec.describe "Worker on the fast tier against PostgreSQL" do
     task_ids = Array.new(3) { |index| queue.enqueue("fenced", {"index" => index}, priority: 3 - index, max_attempts: 1).task_id }
     lost = task_ids[1]
     errors = Concurrent::Array.new
-    subject = worker(concurrency: 3, lease: 0.5, heartbeat: 0.05)
+    # The worker sees the stale fence only in a heartbeat status. 0.1 s is the smallest supported
+    # interval. The lease is longer than the 5 s wait, so the other members keep their leases.
+    subject = worker(concurrency: 3, lease: 10, heartbeat: 0.1)
     subject.handle_batch("fenced", max_size: 3, linger: 1) do |items|
       @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1", [lost])
       items.find { |item| item.context.task.id == lost }.context.cancellation.wait(5)

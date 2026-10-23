@@ -1817,7 +1817,7 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 		Queue:             queueName,
 		WorkerID:          "recovery-worker",
 		LeaseDuration:     time.Second,
-		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2046,7 +2046,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 		Queue:               queueName,
 		WorkerID:            "maintenance-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 		ShutdownGracePeriod: 20 * time.Millisecond,
@@ -2235,7 +2235,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 		WorkerID:            "single-connection-worker",
 		SharedHeartbeats:    true,
 		LeaseDuration:       10 * time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 	})
@@ -2308,7 +2308,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 		WorkerID:            "notification-worker",
 		SharedHeartbeats:    true,
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Second,
 		MaintenanceInterval: 20 * time.Millisecond,
 	})
@@ -2384,7 +2384,7 @@ func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
 		Queue:               queueName,
 		WorkerID:            "polling-only-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        50 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 		PollingOnly:         true,
@@ -2441,7 +2441,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 		Queue:               queueName,
 		WorkerID:            "notification-backoff-worker",
 		LeaseDuration:       time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   100 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),

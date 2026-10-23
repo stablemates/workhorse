@@ -20,6 +20,8 @@ with ConnectionPool(database_url, min_size=3, max_size=3, kwargs={"autocommit": 
     Worker(
         pool,
         worker_id="python-crash-worker",
-        lease_ms=200,
-        heartbeat_ms=50,
+        # The test waits for this lease to lapse. 100 ms is the smallest supported interval, and
+        # 2 * 100 ms + a 75 ms round bound is less than the lease.
+        lease_ms=400,
+        heartbeat_ms=100,
     ).handle("process.crash-recovery", block_forever).run()
