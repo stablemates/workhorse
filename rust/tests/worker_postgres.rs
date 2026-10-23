@@ -1651,7 +1651,9 @@ async fn cancelled_batch_members_keep_their_callbacks_inside_the_concurrency() {
     let grace = Duration::from_millis(100);
     let worker = harness.worker(WorkerOptions {
         concurrency: 1,
-        heartbeat_interval: Some(Duration::from_millis(50)),
+        // The worker sees the cancel request only in a heartbeat status. Below 100 ms, the smallest
+        // supported interval, every round under host load can time out.
+        heartbeat_interval: Some(Duration::from_millis(100)),
         shutdown_grace_period: grace,
         ..options()
     });
@@ -1697,7 +1699,9 @@ async fn cancelling_one_batch_member_keeps_the_others_outcome() {
     let kept = harness.enqueue("rust.gated", json!(2), EnqueueOptions::default()).await;
     let worker = harness.worker(WorkerOptions {
         concurrency: 2,
-        heartbeat_interval: Some(Duration::from_millis(50)),
+        // The worker sees the cancel request only in a heartbeat status. Below 100 ms, the smallest
+        // supported interval, every round under host load can time out.
+        heartbeat_interval: Some(Duration::from_millis(100)),
         ..options()
     });
     let (called, mut calls) = mpsc::unbounded_channel();
