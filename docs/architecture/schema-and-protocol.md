@@ -4042,6 +4042,9 @@ The SDK writes with a copy of the caller's options that adds internal converters
 - Options whose `NumberHandling` includes `AllowNamedFloatingPointLiterals` are refused.
 - A lone surrogate in a string, a `char`, a dictionary key, or a property name is refused.
 - A `JsonNode`, `JsonElement`, or `JsonDocument` value is checked at every depth.
+- The SDK refuses a `System.Numerics.BigInteger` at every depth, also as a `BigInteger?`, an
+  `object` member, or a dictionary key. Without this converter, `System.Text.Json` writes the
+  properties of the struct as an object, and the reader gets no number (SM-1746).
 
 A `[JsonNumberHandling]` attribute on a property keeps these checks: the SDK binds finite-number
 converters for the handling that the attribute selects. A property attribute that selects its own
@@ -4049,7 +4052,10 @@ converter, such as `[JsonConverter]`, bypasses these converters. Such a converte
 non-finite number.
 
 A JSON integer beyond 2^53 - 1 survives a .NET round trip as a `long` or a `decimal`. It still
-rounds in a TypeScript or Go worker. `BigInteger` is not a supported payload type.
+rounds in a TypeScript or Go worker. `BigInteger` is not a supported payload type. The SDK adds its
+`BigInteger` converter after the converters of the caller. If the caller adds a
+`JsonConverter<BigInteger>` to the options or to a property, the SDK writes with that converter.
+The caller then owns the JSON text of the value, and the read uses the same converter.
 
 A payload contract validates the JSON text, not the .NET object. Two option sets that write the same
 JSON text give the same result. A naming policy changes the JSON text. So it changes each checkpoint

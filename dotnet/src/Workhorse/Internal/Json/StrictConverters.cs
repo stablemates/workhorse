@@ -170,3 +170,27 @@ internal sealed class NullableFiniteConverter<T>(JsonConverter<T> inner) : JsonC
         }
     }
 }
+
+/// <summary>
+/// Refuses a <see cref="BigInteger"/>, which is not a supported payload type (ADR 0107, "Values and
+/// durations"). Without a converter, the framework writes the properties of the struct as an object,
+/// and the number is lost. The codec adds this converter after the converters of the caller, so a
+/// converter of the caller for <see cref="BigInteger"/>, in the options or on a property, still wins.
+/// </summary>
+internal sealed class UnsupportedBigIntegerConverter : JsonConverter<BigInteger>
+{
+    public override BigInteger Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new JsonException("BigInteger is not a supported JSON type");
+
+    public override void Write(Utf8JsonWriter writer, BigInteger value, JsonSerializerOptions options) =>
+        throw Refusal();
+
+    public override BigInteger ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new JsonException("BigInteger is not a supported JSON type");
+
+    public override void WriteAsPropertyName(Utf8JsonWriter writer, BigInteger value, JsonSerializerOptions options) =>
+        throw Refusal();
+
+    private static ArgumentException Refusal() =>
+        new("a BigInteger is not a supported JSON value; send it as a string, or add a JsonConverter<BigInteger> to the JSON options");
+}

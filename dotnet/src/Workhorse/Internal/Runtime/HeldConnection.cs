@@ -259,17 +259,13 @@ internal sealed class HeldConnection
         var begun = false;
         try
         {
-            // PostgreSQL measures statement_timeout for each statement and the idle timeout for each
-            // idle gap, and restarts both every time. While the round can hold a row lock, it has one
-            // idle gap before the heartbeat, the heartbeat, and one idle gap before COMMIT. So the
-            // heartbeat gets one half, each gap one eighth, and the last quarter is kept for COMMIT.
-            var milliseconds = remaining / 1_000_000;
+            var (statement, idle) = RoundTimeouts(remaining);
             using (var begin = new NpgsqlBatch(_connection))
             {
                 begin.BatchCommands.Add(new NpgsqlBatchCommand(SessionCommands.Begin));
                 var timeouts = new NpgsqlBatchCommand(SessionCommands.RoundTimeouts);
-                timeouts.Parameters.Add(Parameters.Text(Math.Max(1, milliseconds / 2).ToString(System.Globalization.CultureInfo.InvariantCulture)));
-                timeouts.Parameters.Add(Parameters.Text(Math.Max(1, milliseconds / 8).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                timeouts.Parameters.Add(Parameters.Text(statement));
+                timeouts.Parameters.Add(Parameters.Text(idle));
                 begin.BatchCommands.Add(timeouts);
                 begin.Timeout = TimeoutSeconds(deadline);
                 begun = true;
@@ -331,6 +327,23 @@ internal sealed class HeldConnection
         {
             _cancel = null;
         }
+    }
+
+    /// <summary>
+    /// The server budgets for the rest of a round that has <paramref name="remainingNanos"/> left, in
+    /// whole milliseconds: <c>statement_timeout</c> and <c>idle_in_transaction_session_timeout</c>.
+    /// </summary>
+    /// <remarks>
+    /// PostgreSQL measures <c>statement_timeout</c> for each statement and the idle timeout for each
+    /// idle gap, and restarts both every time. While the round can hold a row lock, it has one idle
+    /// gap before the heartbeat, the heartbeat, and one idle gap before <c>COMMIT</c>. So the heartbeat
+    /// gets one quarter and each gap one quarter. The worker keeps the last quarter for <c>COMMIT</c>
+    /// and the settings statement, as in every SDK (SM-1633). Each budget is at least 1 ms.
+    /// </remarks>
+    internal static (string Statement, string Idle) RoundTimeouts(long remainingNanos)
+    {
+        var quarter = Math.Max(1, remainingNanos / 1_000_000 / 4).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return (quarter, quarter);
     }
 
     /// <summary>Rolls back the round's transaction. Returns whether the connection is clean again.</summary>

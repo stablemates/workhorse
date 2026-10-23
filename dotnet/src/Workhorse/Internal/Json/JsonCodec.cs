@@ -29,6 +29,12 @@ namespace Workhorse.Internal.Json;
 /// of the caller for one of those types. A read needs no check, so <see cref="ReadOptions"/> is the
 /// options of the caller unchanged.
 /// </para>
+/// <para>
+/// The write copy also refuses a <see cref="System.Numerics.BigInteger"/> with
+/// <see cref="ArgumentException"/>, at any depth, because it is not a supported payload type. That
+/// converter comes after the converters of the caller. If the caller adds a converter for
+/// <see cref="System.Numerics.BigInteger"/>, in the options or on a property, the codec writes with it.
+/// </para>
 /// </remarks>
 internal sealed class JsonCodec
 {
@@ -77,6 +83,8 @@ internal sealed class JsonCodec
         copy.Converters.Insert(0, new FiniteSingleConverter());
         copy.Converters.Insert(0, new FiniteHalfConverter());
         copy.Converters.Insert(0, new StrictTreeConverterFactory());
+        // Last, so that a BigInteger converter of the caller wins.
+        copy.Converters.Add(new UnsupportedBigIntegerConverter());
         // HandledNumber.Resolver comes first, so the internal wrapper has metadata also when the
         // caller resolves only through a source-generated JsonSerializerContext.
         copy.TypeInfoResolver = JsonTypeInfoResolver

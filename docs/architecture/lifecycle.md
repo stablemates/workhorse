@@ -1960,8 +1960,8 @@ one round trip, because PostgreSQL waits for the next statement of the client. W
 round trip and a bound of 750 ms, one eighth was about 84 ms, so the client time could make
 PostgreSQL end the session. One quarter leaves room for the round trip.
 
-.NET still uses one half and one eighth (`HeldConnection.Send`). It sets them from the time that
-remains before step 3, and it makes the 8 ms check at that point.
+.NET uses the same shares (`HeldConnection.RoundTimeouts`, SM-1745). It sets them from the time
+that remains before step 3, and it makes the 8 ms check at that point.
 
 The heartbeat and both idle gaps together end within three quarters of the time that remains. The
 settings statement in step 4 also uses time, so it may use at most the last quarter. If it takes

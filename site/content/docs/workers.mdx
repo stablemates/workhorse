@@ -304,8 +304,9 @@ for a row lock and never report `busy`. TypeScript `Queue.tryHeartbeat()` calls 
 which renews one lease by the rule of `heartbeat_many_v2`, but it has no busy retry.
 
 **Round deadline.** A round on the reserved connection sends `heartbeat_many_v2` in its own
-transaction. Before the statement, the round sets `statement_timeout` to one half of the time left
-before its deadline, and `idle_in_transaction_session_timeout` to one eighth of it. The worker counts
+transaction. Before the statement, the round sets `statement_timeout` to one quarter of the time left
+before its deadline. It sets `idle_in_transaction_session_timeout` to one quarter too, for each idle
+gap. The last quarter stays for `COMMIT` and the settings statement. The worker counts
 the renewals only after `COMMIT` succeeds. No setting bounds `COMMIT`. If a round expires before it
 sends `heartbeat_many_v2`, it rolls back and keeps its connection. If a statement of the round can
 still run, the worker discards the connection.
