@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 import {
   createRefreshBlockerRegistry,
@@ -86,4 +88,35 @@ describe("dashboard refresh blocker registry", () => {
     registry.set("pinned-page", null);
     expect(registry.getSnapshot()).toEqual({ blocked: false, description: null });
   });
+});
+
+describe("dashboard refresh blocker catalogue", () => {
+  const sourceDirectory = new URL("./", import.meta.url);
+  const sources = readdirSync(sourceDirectory, { recursive: true, encoding: "utf8" })
+    .filter((path) => /\.tsx?$/.test(path) && !/\.test\.tsx?$/.test(path))
+    .map((path) => readFileSync(new URL(path, sourceDirectory), "utf8"))
+    .join("\n");
+  const architecture = readFileSync(
+    new URL("../../../docs/architecture/dashboard.md", import.meta.url),
+    "utf8",
+  );
+  const pauseConditions = architecture.slice(
+    architecture.indexOf("#### Pause conditions"),
+    architecture.indexOf("#### Resume countdown"),
+  );
+
+  // A blocker that no source references promises a pause that never happens.
+  it.each(Object.keys(dashboardRefreshBlockers))(
+    "references the %s blocker outside its definition",
+    (key) => {
+      expect(sources).toContain(`dashboardRefreshBlockers.${key}`);
+    },
+  );
+
+  it.each(Object.keys(dashboardRefreshBlockers))(
+    "lists the %s blocker in the documented pause conditions",
+    (key) => {
+      expect(pauseConditions).toMatch(new RegExp(`\\|[^\\n]*\`${key}\`[^\\n]*\\|`));
+    },
+  );
 });
