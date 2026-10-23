@@ -1517,24 +1517,25 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0083 and leaves the schema at
-   version 82.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0084 and leaves the schema at
+   version 83.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
 error:
 
-| Migration                                                     | Schema version | Changes                                                                                                            |
-| ------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `0075-allow-throttle-on-fast-tier-queues.sql`                 | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue                                   |
-| `0076-add-the-dashboard-retention-preview-function.sql`       | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document                                     |
-| `0077-fence-the-worker-deregistration-by-instance.sql`        | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller                           |
-| `0078-copy-the-diagnostic-details-into-hint.sql`              | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                                                     |
-| `0079-bound-the-history-partition-lock-waits.sql`             | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last                 |
-| `0080-compare-the-enqueue-fingerprint-instants-as-values.sql` | 79             | An enqueue fingerprint compares `runAt` and `deadline` as instants, so a replay matches from any session time zone |
-| `0081-bound-the-dense-cron-evaluation.sql`                    | 80             | `cron_occurrences_v1` resolves only the wall-clock times near its window, and its results do not change            |
-| `0082-keep-the-operator-pause-after-a-registry-prune.sql`     | 81             | A registry prune keeps the operator pause of a paused instance, and the same instance gets it back                 |
-| `0083-fire-skip-schedules-within-the-supported-delay.sql`     | 82             | A `skip` schedule fires each occurrence inside the supported delay and records the occurrences it skips            |
+| Migration                                                               | Schema version | Changes                                                                                                                          |
+| ----------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `0075-allow-throttle-on-fast-tier-queues.sql`                           | 74             | `enqueue_throttle_v1` and `enqueue_many_v1` accept throttle on a fast-tier queue                                                 |
+| `0076-add-the-dashboard-retention-preview-function.sql`                 | 75             | `dashboard_retention_preview_v1`, which returns the retention preview document                                                   |
+| `0077-fence-the-worker-deregistration-by-instance.sql`                  | 76             | `deregister_worker_v2`, which deletes a registry row only for the instance of the caller                                         |
+| `0078-copy-the-diagnostic-details-into-hint.sql`                        | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                                                                   |
+| `0079-bound-the-history-partition-lock-waits.sql`                       | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last                               |
+| `0080-compare-the-enqueue-fingerprint-instants-as-values.sql`           | 79             | An enqueue fingerprint compares `runAt` and `deadline` as instants, so a replay matches from any session time zone               |
+| `0081-bound-the-dense-cron-evaluation.sql`                              | 80             | `cron_occurrences_v1` resolves only the wall-clock times near its window, and its results do not change                          |
+| `0082-keep-the-operator-pause-after-a-registry-prune.sql`               | 81             | A registry prune keeps the operator pause of a paused instance, and the same instance gets it back                               |
+| `0083-fire-skip-schedules-within-the-supported-delay.sql`               | 82             | A `skip` schedule fires each occurrence inside the supported delay and records the occurrences it skips                          |
+| `0084-recheck-terminal-cleanup-references-and-continue-lease-scans.sql` | 83             | Terminal cleanup keeps a task that got a new reference during a batch, and a full expired-lease scan does not space the next one |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1580,7 +1581,16 @@ after a delay inside the supported delay, a `skip` schedule fires occurrences th
 schema skipped. The pass also tries each namespace lock before it reads occurrence history. Every
 process of every SDK version gets the new behavior when the migration commits.
 
-A 0.9 process keeps working on schema version 82. Its dashboard host still sends its own retention
+Schema version 83 does not raise the floor. Migration 0084 changes only the bodies of
+`prune_full_terminal_tasks_internal_v1`, `recover_expired_v1`, and `tick_v1`, and no signature or
+result shape. Terminal cleanup now rechecks the references of its locked rows in a second
+statement. Thus at read committed, a task that got a dependency during a batch stays, and the rest
+of the batch is deleted. The terminal_tasks phase no longer fails with SQLSTATE `23001` there.
+
+A recovery scan that fills its share of the limit no longer spaces the next expired-lease scan.
+Every process of every SDK version gets the new behavior when the migration commits.
+
+A 0.9 process keeps working on schema version 83. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

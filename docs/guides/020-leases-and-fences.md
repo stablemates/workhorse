@@ -45,11 +45,15 @@ covers the whole database, not one task or queue. So a later claim always has a 
 accepts a shorter value, but on a loaded host it can renew no lease.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
-default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
-shortest maintenance interval among live registered workers. Unregistered workers do not count.
+default 1,000 ms). A tick skips the expired-lease scan when another tick completed it within half
+the shortest maintenance interval among live registered workers. Unregistered workers do not count.
 While registered workers keep ticking, a tick reaches the scan at least once per shortest
 registered interval, unless other recovery work fills the limit first. With no live registered
-worker, every tick runs the scan. Each run recovers a bounded batch of expired rows.
+worker, every tick runs the scan.
+
+Each scan recovers a bounded batch of expired rows. A scan is complete when it returns fewer rows
+than its share of the recovery limit. A scan that fills its share leaves a backlog, so the next
+tick scans again.
 
 More detail: [Task lifecycle: Claim](../architecture/lifecycle.md#claim), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence).
 

@@ -20,6 +20,30 @@ upgrade steps.
 
 ## Unreleased
 
+### Terminal cleanup and lease recovery continue under concurrent work
+
+Terminal cleanup chose and locked its candidates in one statement, with one snapshot. If an enqueue
+committed a dependency on a terminal prerequisite after that snapshot and before the lock, the
+delete failed with SQLSTATE `23001`, and the `terminal_tasks` phase rolled back all its batches.
+Also, a recovery scan that filled its limit counted as a completed expired-lease scan. After many
+workers failed at once, expired leases then drained at one batch per half maintenance interval, not
+one batch per tick (SM-1665).
+
+Migration 0084 (`0084-recheck-terminal-cleanup-references-and-continue-lease-scans.sql`) moves the
+schema to version 83. `prune_full_terminal_tasks_internal_v1` now locks its candidate window in one
+statement and checks every reference again in a second statement. At read committed, the isolation
+level of workers since migration 0048, the second statement sees the new dependency. The
+prerequisite stays, the rest of the batch is deleted, and a later pass deletes the prerequisite
+after its dependent finishes. At repeatable read or serializable, the phase keeps its earlier
+error.
+
+`recover_expired_v1` and `tick_v1` now record a completed scan only when the scan returns
+fewer rows than its share of the limit. While a backlog remains, every tick scans.
+
+The migration does not raise the SDK compatibility floor, and no signature or result shape
+changes. Run `workhorse schema migrate`. Every process gets the new behavior when the migration
+commits.
+
 ### A worker without a live notification subscription polls at the short interval
 
 A worker that can listen uses a 5,000 ms wait after an empty claim, because a notification wakes it

@@ -200,11 +200,15 @@ covers the whole database, not one task or queue. Thus, a later claim always has
 accepts a shorter value, but on a loaded host it can renew no lease.
 
 **Recovery cadence.** Each worker calls `tick_v1` once per `maintenanceIntervalMs` (TypeScript
-default 1,000 ms). A tick skips the expired-lease scan when another tick ran it within half the
-shortest maintenance interval among live registered workers. Unregistered workers do not count.
+default 1,000 ms). A tick skips the expired-lease scan when another tick completed it within half
+the shortest maintenance interval among live registered workers. Unregistered workers do not count.
 While registered workers continue to tick, a tick reaches the scan at least once per shortest
 registered interval, unless other recovery work fills the limit first. With no live registered
-worker, every tick runs the scan. Each run recovers a bounded batch of expired rows.
+worker, every tick runs the scan.
+
+Each scan recovers a bounded batch of expired rows. A scan is complete only when it returns fewer
+rows than its share of the recovery limit. A scan that fills its share leaves a backlog, so the next
+tick scans again.
 
 More detail: [Task lifecycle: Claim](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#claim), [Task lifecycle: Worker options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#worker-options), and [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence).
 
@@ -1226,10 +1230,13 @@ names the instance of the run that stops, so a late call cannot delete the row o
 
 **Opt-out.** An opted-out worker writes no `worker_registry` row. `tick_v1` spaces the expired-lease
 scan by half the shortest maintenance interval among live registered workers. Thus, an opted-out
-worker never shortens that spacing. While registered workers continue to tick, recovery follows the
-expiry of a lease by at most one interval of the fastest registered worker. That bound holds only
-while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a later
-tick. With no live registered worker, every tick runs the scan.
+worker never shortens that spacing. While registered workers continue to tick, a tick reaches the
+scan at most one interval of the fastest registered worker after a lease expires. That bound holds
+only while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a
+later tick. With no live registered worker, every tick runs the scan.
+
+A scan is complete only when it returns fewer rows than its share of the recovery limit. A scan that
+fills its share leaves a backlog, so the next tick scans again.
 
 More detail: [Data model: `worker_registry`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#worker_registry), [Task lifecycle: Maintenance cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#maintenance-cadence), and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
 

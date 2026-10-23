@@ -14569,6 +14569,8 @@ DECLARE
   v_skip_expired_leases boolean := COALESCE(
     NULLIF(current_setting('workhorse.recovery_skip_expired_leases', true), ''), 'false'
   )::boolean;
+  v_scan_limit integer;
+  v_scanned integer := 0;
 BEGIN
   PERFORM set_config('workhorse.recovery_scanned_expired_leases', 'false', true);
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
@@ -14643,10 +14645,10 @@ BEGIN
     RETURN v_count;
   END IF;
 
-  -- Reaching this scan is what tick_v1 records, so an early return above never spaces the next one.
-  PERFORM set_config(
-    'workhorse.recovery_scanned_expired_leases', (NOT v_skip_expired_leases)::text, true
-  );
+  -- tick_v1 records only a scan that returned fewer rows than its share of the limit. An early
+  -- return above, or a scan that fills its share, leaves expired leases behind, so it never spaces
+  -- the next scan (SM-1665).
+  v_scan_limit := v_limit - v_count;
   FOR v_runtime IN
     SELECT r.* FROM workhorse.task_runtime r
      WHERE NOT v_skip_expired_leases
@@ -14660,8 +14662,9 @@ BEGIN
          OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now
        )
      ORDER BY r.expires_at, r.task_id FOR UPDATE SKIP LOCKED
-     LIMIT GREATEST(0, v_limit - v_count)
+     LIMIT v_scan_limit
   LOOP
+    v_scanned := v_scanned + 1;
     SELECT * INTO STRICT v_task FROM workhorse.task j WHERE j.id = v_runtime.task_id;
     IF v_runtime.cancel_requested_at IS NOT NULL THEN
       v_envelope := workhorse.cancellation_envelope_v1(
@@ -14759,6 +14762,10 @@ BEGIN
     v_expired_leases := v_expired_leases + 1;
     v_notify_queues := array_append(v_notify_queues, v_task.queue_name);
   END LOOP;
+  PERFORM set_config(
+    'workhorse.recovery_scanned_expired_leases',
+    (NOT v_skip_expired_leases AND v_scanned < v_scan_limit)::text, true
+  );
   PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
   PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
@@ -14886,8 +14893,9 @@ BEGIN
     v_had_error := true;
   END;
   PERFORM set_config('workhorse.recovery_skip_expired_leases', 'false', true);
-  -- Only a scan that ran spaces the next one. Recovery skips the scan when deadline, timeout, or
-  -- fast-tier work fills its limit, and a failed phase rolls the scan back with this setting.
+  -- Only a completed scan spaces the next one. Recovery skips the scan when deadline, timeout, or
+  -- fast-tier work fills its limit. A scan that fills the rest of the limit leaves a backlog, so
+  -- the next tick scans again. A failed phase rolls the scan back with this setting.
   IF error IS NULL
      AND current_setting('workhorse.recovery_scanned_expired_leases', true) = 'true' THEN
     UPDATE workhorse.maintenance_state
@@ -15037,12 +15045,22 @@ $$;
 
 -- One full-tier batch of terminal cleanup. It reports whether it deleted nothing while its locked
 -- candidate window held a prerequisite that a dependency edge protects.
+--
+-- The first statement locks the candidate window. The second statement rechecks every reference
+-- of the locked rows and deletes the rest. At read committed, the second statement reads a
+-- snapshot taken after the locks. A reference that committed after the first snapshot, such as a
+-- dependency edge or a redrive, is visible there, so its row stays, and a later pass checks it
+-- again (SM-1665). An insert of such a reference takes FOR KEY SHARE on the task row through its
+-- foreign key. That lock conflicts with FOR UPDATE, so no new reference commits after the lock.
+-- In one statement, the check used the snapshot from before the lock, and the ON DELETE RESTRICT
+-- check of task_dependency then failed the whole terminal_tasks phase.
 CREATE OR REPLACE FUNCTION workhorse.prune_full_terminal_tasks_internal_v1(
   p_identity_before timestamptz, p_outcome_before timestamptz,
   p_history_before timestamptz, p_limit integer
 ) RETURNS TABLE (pruned integer, dependency_starved boolean)
 LANGUAGE plpgsql
 AS $$
+DECLARE v_locked uuid[];
 BEGIN
   IF p_limit < 1 THEN
     pruned := 0;
@@ -15050,33 +15068,62 @@ BEGIN
     RETURN NEXT;
     RETURN;
   END IF;
+  SELECT COALESCE(array_agg(locked.id ORDER BY locked.finished_at, locked.id), '{}'::uuid[])
+    INTO v_locked
+    FROM (
+      SELECT task.id, outcome.finished_at
+        FROM workhorse.task task
+        JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+       WHERE task.created_at < p_identity_before
+         AND outcome.finished_at < p_outcome_before
+         AND outcome.history_through_at < p_history_before
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_runtime runtime WHERE runtime.task_id = task.id
+             )
+         AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
+             )
+         -- A redrive source waits for its younger target, so it stays out of the window.
+         -- Otherwise a window of sources would hide the targets that release them, and no pass
+         -- would progress.
+         AND NOT EXISTS (
+               SELECT 1 FROM workhorse.task_redrive redrive WHERE redrive.source_task_id = task.id
+             )
+         -- A group that is not finished needs its member outcomes when it finishes (ADR 0095).
+         AND NOT EXISTS (
+               SELECT 1
+                 FROM workhorse.task_group_member member
+                 JOIN workhorse.task_group task_group ON task_group.id = member.group_id
+                WHERE member.task_id = task.id AND task_group.state <> 'finished'
+             )
+       ORDER BY outcome.finished_at, task.id
+       FOR UPDATE OF task SKIP LOCKED
+       LIMIT LEAST(p_limit * 4, 100000)
+    ) locked;
   WITH candidate_window AS MATERIALIZED (
     SELECT task.id, outcome.finished_at
-      FROM workhorse.task task
+      FROM unnest(v_locked) AS locked(id)
+      JOIN workhorse.task task ON task.id = locked.id
       JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
      WHERE task.created_at < p_identity_before
        AND outcome.finished_at < p_outcome_before
        AND outcome.history_through_at < p_history_before
+       -- The window filters again, now with a snapshot taken after the locks.
        AND NOT EXISTS (SELECT 1 FROM workhorse.task_runtime runtime WHERE runtime.task_id = task.id)
        AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
            )
-       -- A redrive source waits for its younger target, so it stays out of the window. Otherwise a
-       -- window of sources would hide the targets that release them, and no pass would progress.
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.task_redrive redrive WHERE redrive.source_task_id = task.id
            )
-       -- A group that is not finished needs its member outcomes when it finishes (ADR 0095).
        AND NOT EXISTS (
              SELECT 1
                FROM workhorse.task_group_member member
                JOIN workhorse.task_group task_group ON task_group.id = member.group_id
               WHERE member.task_id = task.id AND task_group.state <> 'finished'
            )
-     ORDER BY outcome.finished_at, task.id
-     FOR UPDATE OF task SKIP LOCKED
-     LIMIT LEAST(p_limit * 4, 100000)
   ), candidates AS (
     SELECT candidate.id
       FROM candidate_window candidate
@@ -22692,10 +22739,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (79, 'compare the enqueue fingerprint instants as values'),
   (80, 'bound the dense cron evaluation'),
   (81, 'keep the operator pause after a registry prune'),
-  (82, 'fire skip schedules within the supported delay')
+  (82, 'fire skip schedules within the supported delay'),
+  (83, 'recheck terminal cleanup references and continue lease scans')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (82) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (83) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -287,15 +287,38 @@ scan when another tick ran it within half the shortest live maintenance interval
    while its `last_heartbeat_at` is within its own `lease_ms`. `worker_client_protocols_v1` uses
    the same rule.
 2. It skips the scan if `maintenance_state.lease_recovery_started_at` is within half that interval.
-   Otherwise it runs the scan. If the recovery phase reaches the scan and succeeds, it records the
-   start time of the tick there. If other recovery work fills its limit, recovery returns before
+   Otherwise it runs the scan. If other recovery work fills its limit, recovery returns before
    the scan.
-3. If no row is live, as for a direct `tick_v1` caller, every tick runs the scan.
+3. The scan gets the part of the limit that earlier recovery work left. If the scan returns fewer
+   rows than that share and the phase succeeds, the tick records its start time in
+   `lease_recovery_started_at`. A scan that fills its share leaves expired leases behind. Since
+   migration 0084 (schema version 83), such a scan records nothing, so the next tick scans again.
+4. If no row is live, as for a direct `tick_v1` caller, every tick runs the scan.
+
+A row that another transaction locks does not count, because the scan skips it with
+`SKIP LOCKED`. Thus a scan that returns fewer rows because of a locked row is complete, and the
+transaction that holds the lock decides that row. A later scan recovers it if it is still expired.
 
 A spaced tick still promotes, recovers deadlines and timeouts, and reports `skipped_lock = false`.
 While registered workers keep ticking, the registered worker that ticks most often reaches the scan
-within one of its intervals. Recovery then occurs at most that interval after a lease expires. A
-direct call to `recover_expired_v1` always runs the scan.
+within one of its intervals, unless other recovery work fills the limit first. A direct call to
+`recover_expired_v1` always runs the scan.
+
+Recovery clamps the `p_recover_limit` of `tick_v1` (default 1,000) to 1 through 10,000. One scan
+recovers at most its share S: that clamped limit, less the deadline, timeout, and fast-tier work of
+the same tick. The time bounds in this section state when a tick reaches the scan. They promise the
+recovery of every expired lease only when the expired leases fit in S.
+
+A backlog of N expired leases, for example after many workers fail at once, needs `ceil(N / S)`
+scans. This count assumes that S stays the same, each scan succeeds, and no other transaction locks
+a backlog row. Because a full scan does not space the next scan, each of those scans can run on the
+next tick of any worker. Thus the backlog drains at one batch per tick. For example, one worker
+with a limit of 1,000 needs three ticks for 2,500 expired leases.
+
+If deadline, timeout, or fast-tier work fills the whole limit, a tick does not reach the scan. Then
+the backlog waits for a tick with a share. After the scan that returns fewer rows than S, the
+spacing applies again. Before migration 0084, a full scan also spaced the next scan. Thus a backlog
+drained at one batch per half interval.
 
 Only registered workers set the spacing. A worker that opts out of the registry writes no
 `worker_registry` row. Thus its interval never counts. Each SDK has an opt-out:
@@ -319,13 +342,14 @@ tick every 1 s. The shortest live registered interval is 60 s. Thus the spacing 
 
 Before migration 0061, the tick at 2 s would have recovered the lease. In general, the scan runs at
 the first tick from any worker after the spacing has passed. Thus, while registered workers are
-live, recovery waits up to the spacing plus one interval of the fastest unregistered worker. It
-never waits longer than one interval of the fastest registered worker. The ticks of that worker
-still reach the scan.
+live, the first scan after an expiry waits up to the spacing plus one interval of the fastest
+unregistered worker. It never waits longer than one interval of the fastest registered worker. The
+ticks of that worker still reach the scan.
 
 A fleet with no live registration runs the scan on every tick. Thus a fleet of only unregistered
-workers keeps the one-interval bound. Each bound holds only while recovery reaches the scan. If
-other recovery work fills the limit, the scan waits for a later tick.
+workers keeps the one-interval bound for its first scan. Each bound holds only while recovery
+reaches the scan. If other recovery work fills the limit, the scan waits for a later tick. A
+backlog larger than S needs more scans, as the share rule above states.
 
 `tick_v1(p_promote_limit, p_recover_limit)` receives no interval from its caller. Thus Workhorse
 does not count unregistered workers. To restore the shorter bound, register the fast workers or
@@ -471,9 +495,31 @@ conditions:
 `prune_terminal_tasks_v1` then:
 
 1. Locks at most `LEAST(p_limit * 4, 100000)` such identities, oldest `finished_at` first, with
-   `SKIP LOCKED`.
-2. Drops candidates that a retained enqueue key, a dependency edge, or an unprunable child pins.
+   `FOR UPDATE OF task SKIP LOCKED`.
+2. In a second statement, checks the window conditions of the locked identities again. It drops
+   candidates that a retained enqueue key, a dependency edge, or an unprunable child pins.
 3. Deletes at most `p_limit`. The bounded delete cascades outcome, checkpoints, and waits.
+
+An enqueue can add a reference to a terminal identity while a batch runs, for example a dependency
+edge or a redrive. The insert of that reference takes `FOR KEY SHARE` on the task row through its
+foreign key. That lock conflicts with `FOR UPDATE`. Thus an enqueue that holds it makes step 1 skip the
+identity, and no new reference commits after step 1 locks it.
+
+Since migration 0084 (schema version 83), step 2 runs as its own statement. At read committed, its snapshot comes after the
+locks of step 1, so it sees a reference that committed between the first snapshot and the lock.
+The identity stays, the rest of the batch is deleted, and a later pass checks the identity again.
+After its dependent finishes and the released edge goes, a later pass deletes a prerequisite.
+
+Before migration 0084, one statement chose and locked the window with one snapshot. If an enqueue
+committed a dependency between that snapshot and the lock, the delete failed the `ON DELETE
+RESTRICT` check of `task_dependency` with SQLSTATE `23001`. The phase then rolled back all its
+batches.
+
+This guarantee holds at read committed, the isolation level of claims. Workers run maintenance at
+read committed, because since migration 0048 the claim functions refuse any other level (see
+[Isolation requirement](#isolation-requirement)). At repeatable read or serializable, step 2 uses
+the snapshot of the transaction. There, a reference that committed after that snapshot still fails
+the phase with SQLSTATE `23001`, as before migration 0084.
 
 The full and fast tiers share `p_limit`. The tier that goes first gets half of it, rounded up. The
 other tier gets the rest of `p_limit`. If the first tier used its whole share and the batch still
