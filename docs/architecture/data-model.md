@@ -314,8 +314,11 @@ Workhorse handles a stale cache in two ways:
    result stands. A payload the current version also rejects still raises, after one extra
    `get_contract_definition_v1` read.
 
-Child-task creation and `syncSchedules` share that path through `taskAcceptance`, which reads
-through the queue's database.
+Child-task creation shares that path through `taskAcceptance`, which reads through the queue's
+database. `syncSchedules` does not use the cache or the local definitions. It calls
+`currentTaskAcceptances`, which reads `get_contract_definition_v1` once for each distinct task type.
+If PostgreSQL has no definition for a type, the schedule stores no contract version
+([Operations: Contract stamping](operations.md#contract-stamping)).
 
 At completion:
 

@@ -46,7 +46,7 @@ export interface StoredSchedule {
 export class CronSchedulesModule extends QueueModule {
   constructor(
     context: QueueModuleContext,
-    private readonly enqueueContracts: Pick<EnqueueContractsModule, "taskAcceptance">,
+    private readonly enqueueContracts: Pick<EnqueueContractsModule, "currentTaskAcceptances">,
   ) {
     super(context);
   }
@@ -56,26 +56,24 @@ export class CronSchedulesModule extends QueueModule {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
-    const scheduleInputs = await Promise.all(
-      definitions.map(async (definition) => ({
-        ...(await this.enqueueContracts.taskAcceptance(
-          definition.task.type,
-          definition.task.payload,
-        )),
-        name: definition.name,
-        schedule: definition.schedule,
-        timezone: definition.timezone ?? "UTC",
-        catchupPolicy: definition.catchupPolicy ?? "skip",
-        enabled: definition.enabled ?? true,
-        queue: definition.task.queue ?? this.context.defaultQueue,
-        priority: validateTaskPriority(definition.task.priority),
-        concurrencyKey: definition.task.concurrencyKey ?? null,
-        type: definition.task.type,
-        payload: definition.task.payload,
-        maxAttempts: definition.task.maxAttempts ?? 25,
-        retryPolicy: definition.task.retryPolicy ?? null,
-      })),
+    const acceptances = await this.enqueueContracts.currentTaskAcceptances(
+      definitions.map((definition) => definition.task),
     );
+    const scheduleInputs = definitions.map((definition, index) => ({
+      ...acceptances[index]!,
+      name: definition.name,
+      schedule: definition.schedule,
+      timezone: definition.timezone ?? "UTC",
+      catchupPolicy: definition.catchupPolicy ?? "skip",
+      enabled: definition.enabled ?? true,
+      queue: definition.task.queue ?? this.context.defaultQueue,
+      priority: validateTaskPriority(definition.task.priority),
+      concurrencyKey: definition.task.concurrencyKey ?? null,
+      type: definition.task.type,
+      payload: definition.task.payload,
+      maxAttempts: definition.task.maxAttempts ?? 25,
+      retryPolicy: definition.task.retryPolicy ?? null,
+    }));
     await withSpan(
       "workhorse.schedule.synchronize",
       { "workhorse.schedule.definition_count": definitions.length },

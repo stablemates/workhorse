@@ -35,7 +35,7 @@ definitions:
 
 | SDK        | How it applies the contract                                                                                            |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `taskAcceptance`                                                                                                       |
+| TypeScript | `syncSchedules` reads `get_contract_definition_v1` once per distinct type through `currentTaskAcceptances`             |
 | Go         | `applyScheduleContracts`                                                                                               |
 | Python     | `Queue.sync_schedules` and `AsyncQueue.sync_schedules` read `get_contract_definition_v1` once per distinct type        |
 | Rust       | `Queue::sync_schedules` reads `get_contract_definition_v1` once per distinct type                                      |
@@ -43,9 +43,10 @@ definitions:
 | JVM        | `Queue.syncSchedules` reads `get_contract_definition_v1` once per distinct type through `Contracts.load`               |
 | .NET       | `Queue.SyncSchedulesAsync` reads `get_contract_definition_v1` once per distinct type through `ContractStore.LoadAsync` |
 
-The six SDKs other than TypeScript skip their contract cache. The reason is that
-`fire_schedule_v1` never checks `contract_policy`. Thus a stale version would stay on every
-occurrence.
+Every SDK skips its payload contract cache and its local payload contract definitions. The reason
+is that `fire_schedule_v1` never checks `contract_policy`. Thus a stale version would stay on every
+occurrence. If PostgreSQL has no payload contract for a type, the schedule stores no contract
+version.
 
 If a payload fails the schema, the SDK raises its contract validation error and writes nothing.
 The fixture `contracted-schedule-definition` in `protocol/v1/schedules.json` covers the stamped
