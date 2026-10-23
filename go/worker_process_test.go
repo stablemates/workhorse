@@ -146,17 +146,20 @@ func TestWorkerRecoversHandlerPanicAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runContext, stop := context.WithCancel(ctx)
 	worker.Handle("process.panic", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		if payload.(map[string]any)["kind"] == "panic" {
 			panic("provider exploded")
 		}
-		stop()
 		return map[string]any{"continued": true}, nil
 	})
-	if err := worker.Run(runContext); err != nil {
-		t.Fatal(err)
-	}
+	// The worker stops when both tasks have an outcome, so the stop does not depend on which
+	// handler call runs.
+	runContext, stop := context.WithCancel(ctx)
+	settled := stopWhenTasksSettle(runContext, stop, pool, map[string]string{
+		"panic": panicTaskID, "following": followingTaskID,
+	})
+	runWorkerWithDeadline(t, worker, runContext, stop, "both tasks did not get an outcome")
+	settled.Wait()
 
 	var panicState, panicMessage, followingState string
 	if err := pool.QueryRow(ctx, "SELECT state, error->>'message' FROM workhorse.task_outcome WHERE task_id = $1::uuid", panicTaskID).Scan(&panicState, &panicMessage); err != nil {
