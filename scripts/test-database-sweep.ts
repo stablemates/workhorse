@@ -8,7 +8,7 @@
  * names one per schema digest and UTC day and keeps it on purpose, so every schema change and
  * every new day retires the previous one without removing it. Each worktree can be on a different
  * schema, so the sweep keeps the template of each worktree's current schema. A harness holds the
- * template's advisory lock while it copies, and the sweep skips a template whose lock is busy.
+ * advisory lock of a database while it needs it, and the sweep skips a database whose lock is busy.
  *
  * Classification is positive. A database is retired only when its name matches the template shape
  * or the scratch shape of a known `_test` family; everything else is foreign and is never
@@ -75,7 +75,7 @@ export interface SweepPlan {
 
 export interface SweepOutcome {
   dropped: SweepEntry[];
-  /** Entries a session or a template copy claimed between planning and dropping. */
+  /** Entries a session or a harness lock claimed between planning and dropping. */
   skipped: SweepEntry[];
 }
 
@@ -255,10 +255,13 @@ export function planTestDatabaseSweep(
  * caller cannot hand this function a plan the guards never saw, and a database a session claimed
  * since planning is reported rather than forced away from its owner.
  *
- * Before it drops a template, the sweep takes the template's advisory lock with no wait. A test
- * harness holds that lock in shared mode from its existence check until its copy ends, so a busy
- * lock means a copy in progress, and the sweep skips the template. One session holds the lock and
- * runs the drop, because a session advisory lock belongs to one connection.
+ * Before it drops a database, the sweep takes the database's advisory lock with no wait. A test
+ * harness holds that lock in shared mode while it still needs the database. A busy lock thus means
+ * a live owner, and the sweep skips the database. The TypeScript and Python harnesses hold the lock
+ * of a shared template from the existence check until the copy ends. The JVM harness holds the
+ * lock of its per-process template until the process drops it, because no session stays connected
+ * to a template. One session holds the lock and runs the drop, because a session advisory lock
+ * belongs to one connection.
  */
 export async function dropRetiredDatabases(
   admin: Pool,
@@ -275,10 +278,8 @@ export async function dropRetiredDatabases(
           `Refusing to drop ${entry.name}: no longer classified as a retired database`,
         );
       }
-      const dropped =
-        kind === "template"
-          ? await dropUnlockedTemplate(session, entry.name)
-          : await dropUnheldDatabase(session, entry.name);
+      const lockName = kind === "template" ? schemaTemplateLockName(entry.name) : entry.name;
+      const dropped = await dropUnlockedDatabase(session, entry.name, lockName);
       (dropped ? outcome.dropped : outcome.skipped).push(entry);
     }
   } finally {
@@ -287,8 +288,11 @@ export async function dropRetiredDatabases(
   return outcome;
 }
 
-async function dropUnlockedTemplate(session: PoolClient, name: string): Promise<boolean> {
-  const lockName = schemaTemplateLockName(name);
+async function dropUnlockedDatabase(
+  session: PoolClient,
+  name: string,
+  lockName: string,
+): Promise<boolean> {
   const lock = await session.query<{ locked: boolean }>(
     "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
     [lockName],

@@ -59,7 +59,7 @@ try {
     console.log(
       `Dropped ${outcome.dropped.length} database(s), reclaiming ${formatBytes(totalBytes(outcome.dropped))}`,
     );
-    report("claimed by a session or a template copy since the plan was made", outcome.skipped);
+    report("claimed by a session or a harness lock since the plan was made", outcome.skipped);
   } else {
     for (const entry of plan.drop) {
       console.log(

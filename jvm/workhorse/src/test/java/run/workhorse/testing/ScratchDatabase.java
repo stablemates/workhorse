@@ -43,6 +43,8 @@ public final class ScratchDatabase implements BeforeAllCallback {
 
   private static final Object TEMPLATE_LOCK = new Object();
   private static @Nullable String template;
+  // The session on `postgres` that holds the template's advisory lock until `drop` ends.
+  private static @Nullable Connection templateLease;
 
   @Override
   public void beforeAll(ExtensionContext context) throws Exception {
@@ -109,6 +111,12 @@ public final class ScratchDatabase implements BeforeAllCallback {
    * The schema template of the extra databases. The first call creates it and installs the schema.
    * No session stays connected to it, because PostgreSQL copies only a template without sessions.
    * The caller holds {@link #TEMPLATE_LOCK}.
+   *
+   * <p>A session on {@code postgres} takes the shared advisory lock of the template name before the
+   * template exists. It keeps the lock until {@link #drop}, so {@code pnpm db:sweep} does not drop
+   * the template while the process runs. The sweep takes the exclusive lock with no wait before it
+   * drops a database, and skips a busy one. If the process stops or crashes, its session ends and
+   * PostgreSQL releases the lock, so the sweep can drop the template that it left.
    */
   private static String template(Database main) throws Exception {
     if (template != null) {
@@ -119,9 +127,15 @@ public final class ScratchDatabase implements BeforeAllCallback {
       throw new IllegalStateException("Extend the test class with ScratchDatabase");
     }
     String name = extraName(main, "jvm-template:" + ProcessHandle.current().pid());
-    try (Connection admin = DriverManager.getConnection(adminUrl, main.credentials)) {
-      dropDatabase(admin, name);
-      try (Statement statement = admin.createStatement()) {
+    Connection lease = DriverManager.getConnection(adminUrl, main.credentials);
+    try {
+      try (PreparedStatement lock =
+          lease.prepareStatement("SELECT pg_advisory_lock_shared(hashtextextended(?, 0))")) {
+        lock.setString(1, name);
+        lock.execute();
+      }
+      dropDatabase(lease, name);
+      try (Statement statement = lease.createStatement()) {
         statement.execute("CREATE DATABASE " + quoteIdentifier(name));
       }
       try (Connection connection =
@@ -129,13 +143,38 @@ public final class ScratchDatabase implements BeforeAllCallback {
           Statement statement = connection.createStatement()) {
         statement.execute(Files.readString(schema()));
       } catch (Exception error) {
-        dropDatabase(admin, name);
+        dropDatabase(lease, name);
         throw error;
       }
+    } catch (Exception error) {
+      try {
+        lease.close();
+      } catch (SQLException closing) {
+        error.addSuppressed(closing);
+      }
+      throw error;
     }
+    templateLease = lease;
     template = name;
     report("installed the schema into template database " + name);
     return name;
+  }
+
+  /** The name of the schema template, or {@code null} before the first {@link #extra} call. */
+  static @Nullable String templateName() {
+    synchronized (TEMPLATE_LOCK) {
+      return template;
+    }
+  }
+
+  /** A new connection to the {@code postgres} database of the server. The caller closes it. */
+  static Connection connectAdmin() throws SQLException {
+    synchronized (LOCK) {
+      if (database == null || database.adminUrl == null) {
+        throw new IllegalStateException("Extend the test class with ScratchDatabase");
+      }
+      return DriverManager.getConnection(database.adminUrl, database.credentials);
+    }
   }
 
   /** {@code <source>_jvm_<digest>} for an extra database or the template, from {@code seed}. */
@@ -250,9 +289,12 @@ public final class ScratchDatabase implements BeforeAllCallback {
       current = database;
     }
     String copied;
+    Connection lease;
     synchronized (TEMPLATE_LOCK) {
       copied = template;
+      lease = templateLease;
       template = null;
+      templateLease = null;
     }
     if (current == null || current.adminUrl == null) {
       return;
@@ -261,6 +303,18 @@ public final class ScratchDatabase implements BeforeAllCallback {
     SQLException failure = dropAndReport(current, current.name, null);
     if (copied != null) {
       failure = dropAndReport(current, copied, failure);
+    }
+    // The lease ends after the template drop. If that drop failed, the sweep can drop the template.
+    if (lease != null) {
+      try {
+        lease.close();
+      } catch (SQLException error) {
+        if (failure == null) {
+          failure = error;
+        } else {
+          failure.addSuppressed(error);
+        }
+      }
     }
     if (failure != null) {
       throw failure;

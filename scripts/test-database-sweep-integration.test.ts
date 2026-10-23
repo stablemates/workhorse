@@ -29,6 +29,9 @@ const liveName = `${sourceName.slice(0, 52)}_5b0eafed02`;
 const templateName = `${schemaTemplatePrefix}${randomBytes(8).toString("hex")}_00000000`;
 const copyName = `${sourceName.slice(0, 52)}_5b0eafed03`;
 
+// The JVM harness names its per-process template with the scratch shape `<source>_jvm_<digest>`.
+const jvmTemplateName = `${sourceName.slice(0, 43)}_jvm_5b0eafed04`;
+
 const protectedNames = new Set([...checkoutDatabaseNames(process.env), sourceName]);
 const context: SweepContext = {
   protectedNames,
@@ -57,7 +60,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (liveSession) await liveSession.end();
-  for (const name of [leakedName, liveName, templateName, `${templateName}_building`, copyName]) {
+  for (const name of [
+    leakedName,
+    liveName,
+    templateName,
+    `${templateName}_building`,
+    copyName,
+    jvmTemplateName,
+  ]) {
     await dropLocalDatabase(admin, name);
   }
   await admin.end();
@@ -95,6 +105,48 @@ describe("sweeping leaked scratch databases", () => {
     );
     expect(await databaseExists(admin, sourceName)).toBe(true);
   });
+});
+
+describe("sweeping the per-process template of a running JVM test process", () => {
+  it(
+    "skips the template under the process's shared lock and drops it after the process ends",
+    dropWait,
+    async () => {
+      await dropLocalDatabase(admin, jvmTemplateName);
+      await admin.query(`CREATE DATABASE ${identifier(jvmTemplateName)}`);
+      // `ScratchDatabase.template` holds this lock on a `postgres` session until the process drops
+      // the template. No session connects to the template itself, so the session check sees none.
+      const jvmProcess = new Client({ connectionString: adminUrl(sourceUrl) });
+      await jvmProcess.connect();
+      try {
+        await jvmProcess.query("SELECT pg_advisory_lock_shared(hashtextextended($1, 0))", [
+          jvmTemplateName,
+        ]);
+        const inventory = (await readDatabaseInventory(admin)).filter(
+          (entry) => entry.name === jvmTemplateName,
+        );
+        const plan = planTestDatabaseSweep(inventory, context);
+        expect(plan.drop.map((entry) => ({ name: entry.name, kind: entry.kind }))).toEqual([
+          { name: jvmTemplateName, kind: "scratch" },
+        ]);
+
+        const running = await dropRetiredDatabases(admin, plan, context);
+
+        expect(running.dropped).toEqual([]);
+        expect(running.skipped.map((entry) => entry.name)).toEqual([jvmTemplateName]);
+        expect(await databaseExists(admin, jvmTemplateName)).toBe(true);
+
+        // A process that stops or crashes ends its session, and PostgreSQL releases the lock.
+        await jvmProcess.end();
+        const stopped = await dropRetiredDatabases(admin, plan, context);
+
+        expect(stopped.dropped.map((entry) => entry.name)).toEqual([jvmTemplateName]);
+        expect(await databaseExists(admin, jvmTemplateName)).toBe(false);
+      } finally {
+        await jvmProcess.end().catch(() => {});
+      }
+    },
+  );
 });
 
 describe("sweeping a schema template that a harness copies", () => {
