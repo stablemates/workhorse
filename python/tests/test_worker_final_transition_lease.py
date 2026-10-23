@@ -284,6 +284,71 @@ def test_a_refused_renewal_after_the_handler_returns_only_stops_renewing(verdict
     assert executor.acknowledged_cancels == (1 if verdict == "cancel_requested" else 0)
 
 
+def record_attempt_outcomes(core: Worker) -> list[object]:
+    """Record the outcome of each attempt that `core` runs, once the attempt has ended."""
+    outcomes: list[object] = []
+    execute = core._execute_claimed_task_within_span
+
+    def recording(task: Any, claim_sent_at: float, arbiter: Any, *rest: Any) -> None:
+        try:
+            execute(task, claim_sent_at, arbiter, *rest)
+        finally:
+            outcomes.append(arbiter.outcome)
+
+    core._execute_claimed_task_within_span = recording  # type: ignore[method-assign]
+    return outcomes
+
+
+# The outcome an attempt reports once PostgreSQL accepts its held final write.
+WRITTEN_OUTCOMES = {"completion": "completed", "failure": "failed", "oversized": "failed"}
+
+
+@pytest.mark.parametrize("outcome", OUTCOMES)
+@pytest.mark.parametrize("fast", [False, True], ids=["full-tier", "fast-tier"])
+def test_a_lease_that_lapses_after_the_handler_returns_only_stops_renewing(
+    outcome: str, fast: bool
+) -> None:
+    executor = HeldSettlement(fast=fast)
+    contexts: list[Any] = []
+    handle = handler_for(outcome)
+
+    def handle_and_keep_context(payload: object, context: object) -> object:
+        contexts.append(context)
+        return handle(payload, context)
+
+    worker = sync_worker(executor).handle(TASK, handle_and_keep_context)
+    outcomes = record_attempt_outcomes(worker)
+    run = Thread(target=worker.run_once)
+    run.start()
+    try:
+        assert executor.held.wait(EVENT_SECONDS), "the attempt never reached its final write"
+        with worker._heartbeat_lock:
+            heartbeats = worker._heartbeat_thread
+        assert heartbeats is not None
+        # With no lease left, the next accepted answer or the watchdog finds the local lease window
+        # ended. Either one causes the lapse at once, so the test does not wait for a time.
+        worker.lease_ms = 0
+        deadline = monotonic() + EVENT_SECONDS
+        while task_is_renewing(worker) and monotonic() < deadline:
+            sleep(HEARTBEAT_MS / 4000)
+        assert not task_is_renewing(worker), "the lapsed lease did not stop renewing"
+        assert executor.settlements == []
+    finally:
+        executor.release.set()
+        run.join(10)
+
+    assert not run.is_alive()
+    # The attempt joins its watchdog. The heartbeat thread ends once no lease is left, so after it
+    # ends, each path that handled the lapse has returned.
+    heartbeats.join(EVENT_SECONDS)
+    assert not heartbeats.is_alive()
+    # The lapse neither cancels the finished attempt nor ends it with lease loss.
+    assert not contexts[0].cancellation.cancelled
+    # PostgreSQL accepts the fenced final write, so the attempt reports it.
+    assert settled(executor) == [expected_settlement(outcome)]
+    assert outcomes == [WRITTEN_OUTCOMES[outcome]]
+
+
 def release_after_renewal_is_refused(core: Worker, executor: HeldSettlement) -> None:
     assert executor.held.wait(EVENT_SECONDS), "the attempt never reached its final write"
     deadline = monotonic() + EVENT_SECONDS
