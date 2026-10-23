@@ -694,6 +694,22 @@ key raises `HumanWaitIdempotencyConflictError`.
 | Payload and result limits | 1,048,576 bytes         |
 | Idempotency retention     | 86,400,000 milliseconds |
 
+#### Timestamp text
+
+PostgreSQL reads timestamp text without an offset in the session `TimeZone`. Thus the Python SDK
+sends the timestamp inputs below as UTC text that ends in `Z`. `_timestamp` in
+`python/src/workhorse/_protocol.py` does this conversion.
+
+| Input                                                                                               | Text form                     |
+| --------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `EnqueueOptions.run_at` and `deadline`                                                              | `2026-10-22T10:00:00.123Z`    |
+| `TaskListQuery.created_after` and `created_before`                                                  | `2026-10-22T10:00:00.123456Z` |
+| `DeadLetterFilter.finished_after` and `finished_before`, for `list_dead_letters` and `redrive_many` | `2026-10-22T10:00:00.123456Z` |
+
+- A naive `datetime` raises `ValueError("timestamps must include a timezone")`. The SDK does
+  not call the SQL function.
+- The enqueue inputs keep milliseconds. The admin time filters keep microseconds.
+
 #### Compatibility checks
 
 Every non-empty Python mutation first runs

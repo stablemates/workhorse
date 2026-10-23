@@ -18,6 +18,7 @@ from ._drivers import (
     Row as _Row,
     SyncExecutor as _SyncExecutor,
 )
+from ._protocol import _timestamp
 from ._statements import SQL_STATEMENTS as _SQL_STATEMENTS, DriverStatement as _DriverStatement
 from ._task_groups import (
     CANCEL as _CANCEL_TASK_GROUP,
@@ -111,6 +112,12 @@ class AdminAudit:
 
 @dataclass(frozen=True)
 class DeadLetterFilter:
+    """The dead-letter filter of ``list_dead_letters`` and ``redrive_many``.
+
+    ``finished_after`` and ``finished_before`` must be timezone-aware. A naive ``datetime`` raises
+    ``ValueError`` before the SDK calls the SQL function.
+    """
+
     queue: str | None = None
     type: str | None = None
     tags: tuple[str, ...] = ()
@@ -172,6 +179,12 @@ class TaskPayloadProjection:
 
 @dataclass(frozen=True)
 class TaskListQuery:
+    """The task filter and page settings of ``list_tasks``.
+
+    ``created_after`` and ``created_before`` must be timezone-aware. A naive ``datetime`` raises
+    ``ValueError`` before the SDK calls the SQL function.
+    """
+
     queue: str | None = None
     type: str | None = None
     states: tuple[TaskState, ...] = ()
@@ -965,6 +978,8 @@ def _validate_limit(limit: int, maximum: int, label: str) -> int:
 
 def _validate_task_query(query: TaskListQuery) -> TaskListQuery:
     _validate_limit(query.limit, _MAX_PAGE_SIZE, "list_tasks limit")
+    _filter_timestamp(query.created_after)
+    _filter_timestamp(query.created_before)
     if query.created_after and query.created_before and query.created_after >= query.created_before:
         raise ValueError("created_after must be earlier than created_before")
     if len(set(query.states)) != len(query.states):
@@ -992,8 +1007,9 @@ def _json(value: object) -> Json:
     return cast(Json, value)
 
 
-def _iso(value: datetime | None) -> str | None:
-    return None if value is None else value.isoformat()
+def _filter_timestamp(value: datetime | None) -> str | None:
+    """Return a time filter bound as UTC text with microseconds. A naive bound raises ValueError."""
+    return _timestamp(value, "microseconds")
 
 
 def _dependency_policy(row: _Row) -> DependencyPolicy | None:
@@ -1011,8 +1027,12 @@ def _task_parameters(query: TaskListQuery) -> tuple[object, ...]:
         **({"queue": query.queue} if query.queue is not None else {}),
         **({"type": query.type} if query.type is not None else {}),
         **({"states": query.states} if query.states else {}),
-        **({"createdAfter": _iso(query.created_after)} if query.created_after else {}),
-        **({"createdBefore": _iso(query.created_before)} if query.created_before else {}),
+        **({"createdAfter": _filter_timestamp(query.created_after)} if query.created_after else {}),
+        **(
+            {"createdBefore": _filter_timestamp(query.created_before)}
+            if query.created_before
+            else {}
+        ),
     }
     projection = {
         "include": query.payload.include,
@@ -1210,8 +1230,16 @@ def _filter_document(filter: DeadLetterFilter) -> str:
             **({"type": filter.type} if filter.type is not None else {}),
             **({"tags": filter.tags} if filter.tags else {}),
             **({"errorName": filter.error_name} if filter.error_name else {}),
-            **({"finishedAfter": _iso(filter.finished_after)} if filter.finished_after else {}),
-            **({"finishedBefore": _iso(filter.finished_before)} if filter.finished_before else {}),
+            **(
+                {"finishedAfter": _filter_timestamp(filter.finished_after)}
+                if filter.finished_after
+                else {}
+            ),
+            **(
+                {"finishedBefore": _filter_timestamp(filter.finished_before)}
+                if filter.finished_before
+                else {}
+            ),
         }
     )
 

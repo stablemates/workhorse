@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import cast
+from typing import Literal, cast
 
 from ._statements import (
     DEFAULT_VALUE_MAX_BYTES,
@@ -228,12 +228,19 @@ def _validate_priority(priority: int) -> None:
         raise ValueError("priority must be between 0 and 100")
 
 
-def _timestamp(value: datetime | None) -> str | None:
+def _timestamp(
+    value: datetime | None, timespec: Literal["milliseconds", "microseconds"] = "milliseconds"
+) -> str | None:
+    """Return ``value`` as UTC protocol text that ends in ``Z``.
+
+    PostgreSQL reads timestamp text without an offset in the session ``TimeZone``, so a naive
+    ``datetime`` could name a different instant in each session. This function rejects it.
+    """
     if value is None:
         return None
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamps must include a timezone")
-    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec=timespec).replace("+00:00", "Z")
 
 
 def _idempotency(value: Idempotency) -> dict[str, Json]:
