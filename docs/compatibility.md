@@ -1517,8 +1517,8 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0085 and leaves the schema at
-   version 84.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0086 and leaves the schema at
+   version 85.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
@@ -1537,6 +1537,7 @@ error:
 | `0083-fire-skip-schedules-within-the-supported-delay.sql`               | 82             | A `skip` schedule fires each occurrence inside the supported delay and records the occurrences it skips                          |
 | `0084-recheck-terminal-cleanup-references-and-continue-lease-scans.sql` | 83             | Terminal cleanup keeps a task that got a new reference during a batch, and a full expired-lease scan does not space the next one |
 | `0085-make-the-day-and-schedule-lock-keys-unambiguous.sql`              | 84             | A history-day lock does not depend on the session DateStyle or time zone, and two schedules do not share an occurrence lock      |
+| `0086-report-the-fast-tier-retry-of-an-expired-timeout.sql`             | 85             | A fast-tier attempt timeout that starts another attempt returns its retry state                                                  |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1603,7 +1604,14 @@ Migration 0085 also renames a history partition that has the name of the wrong U
 calendar day that the session time zone skipped can produce such a name. Every process of every SDK
 version gets the new locks when the migration commits.
 
-A 0.9 process keeps working on schema version 84. Its dashboard host still sends its own retention
+Schema version 85 does not raise the floor. Migration 0086 changes the body of
+`expire_owned_telemetry_v1`, and no signature or result shape. A fast-tier attempt timeout that
+starts another attempt now returns `ready` or `scheduled` in `retry_state`, not null. Thus the
+TypeScript, Python, Ruby, JVM, and .NET workers record the retry span and the retry count for it.
+The Go and Rust workers do not read `retry_state`. Every process of every SDK version gets
+the new result when the migration commits.
+
+A 0.9 process keeps working on schema version 85. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

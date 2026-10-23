@@ -1,14 +1,14 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 85,
+    "installedSchemaVersion": 86,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [5],
     "compatible": true,
@@ -16,7 +16,7 @@
   },
   {
     "id": "served-protocol-undeclared",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [],
     "compatible": true,
@@ -161,7 +161,7 @@
   },
   {
     "id": "schema-serves-only-older-protocols",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [4],
     "compatible": false,
@@ -180,7 +180,7 @@
   },
   {
     "id": "schema-no-longer-serves-client",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 5,
     "servedProtocolVersions": [6],
     "compatible": false,
@@ -189,7 +189,7 @@
   },
   {
     "id": "client-protocol-too-old",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 4,
     "servedProtocolVersions": [5],
     "compatible": false,
@@ -199,7 +199,7 @@
   },
   {
     "id": "client-protocol-too-new",
-    "installedSchemaVersion": 84,
+    "installedSchemaVersion": 85,
     "clientProtocolVersion": 6,
     "servedProtocolVersions": [5],
     "compatible": false,

@@ -653,6 +653,10 @@ describe("schema installation", () => {
         version: 84,
         description: "make the day and schedule lock keys unambiguous",
       },
+      {
+        version: 85,
+        description: "report the fast-tier retry of an expired timeout",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
