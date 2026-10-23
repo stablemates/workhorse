@@ -212,12 +212,16 @@ module Conformance
       end
       task_id = queue.enqueue(fixture["taskType"], {}, **options).task_id
       reasons = Concurrent::Array.new
+      # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
+      expiries = Concurrent::Array.new
+      cancelled_at = Concurrent::Array.new
       with_pool do |pool|
         subject = worker(pool, fixture, lease: fixture["leaseMs"] / 1000.0, heartbeat: fixture["heartbeatMs"] / 1000.0,
           shared_heartbeats: true)
         subject.handle(fixture["taskType"]) do |_payload, context|
           raise "the expiration never reached the handler" unless context.cancellation.wait(5)
 
+          cancelled_at << value("SELECT clock_timestamp()::text")
           reasons << CANCEL_NAMES[context.cancellation.reason]
           subject.pause
           context.cancellation.check!
@@ -235,6 +239,7 @@ module Conformance
           else
             rows.first.fetch(field)
           end
+          expiries << anchor
           shifted = value("SELECT ($1::timestamptz - $2 * interval '1 millisecond')::text", anchor,
             fixture["localClockLeadMs"])
           [rows.first.merge(field => shifted)]
@@ -247,6 +252,13 @@ module Conformance
         end
       end
       check(reasons.to_a == fixture["expectedAbortReasons"], "abort reasons #{reasons.to_a}")
+      # Both times come from the database clock, so the worker clock cannot move either one.
+      check(expiries.size == cancelled_at.size, "#{expiries.size} claims, #{cancelled_at.size} cancellations")
+      after_expiry = cancelled_at.zip(expiries).map do |at, expiry|
+        value("SELECT ($1::timestamptz >= $2::timestamptz)::text", at, expiry) == "true"
+      end
+      check(after_expiry == [fixture["expectedCancelledAfterDatabaseExpiry"]] * cancelled_at.size,
+        "cancellation after the database expiry: #{after_expiry}")
       expect_outcomes(task_id, fixture["expectedAttemptOutcomes"])
     end
 

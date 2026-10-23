@@ -2213,6 +2213,12 @@ At the earlier of `deadline_at` and `attempt_timeout_at`, the local timer calls 
 with the current worker and fence. PostgreSQL then closes the timed-out attempt and schedules its
 retry or terminal failure. It does not wait for lease expiry.
 
+Every SDK cancels the handler for an expiry only after PostgreSQL confirms it. If the answer is
+`not_due`, the handler continues to run under its lease, and the worker asks again. Thus a worker
+clock that runs ahead cannot end an attempt before the database expiry. The shared expiration cases
+in `protocol/v1/runtime.json` check this. Each one compares the database clock at the cancellation
+with the expiry that PostgreSQL holds.
+
 The TypeScript `TaskAttempt` does not use the wall clock of the worker for that timer:
 
 1. The claim's database time is `leaseExpiresAt` minus the worker's `leaseMs`, because PostgreSQL

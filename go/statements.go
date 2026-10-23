@@ -378,6 +378,7 @@ const (
 	unknownOwnershipStatusFormat        = "PostgreSQL returned unknown ownership status %s"
 	invalidCancelAcknowledgeMessage     = "PostgreSQL returned an invalid cancellation acknowledgement"
 	expirationNotDueMessage             = "PostgreSQL did not accept ownership expiration before the retry budget elapsed"
+	expirationRequestFailedMessage      = "Ownership expiration request failed; the worker asks again"
 	shutdownSettlementFailedMessage     = "Shutdown settlement failed; lease recovery will settle the task"
 	emptyWorkerTaskTypeMessage          = "worker task type must not be empty"
 	nilWorkerHandlerMessage             = "worker handler must not be nil"

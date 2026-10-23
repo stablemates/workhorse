@@ -60,6 +60,7 @@ type workerRuntimeFixture struct {
 	ExpectedMaximumDelayMS               int                               `json:"expectedMaximumDelayMs"`
 	Mode                                 string                            `json:"mode"`
 	LocalClockLeadMS                     int                               `json:"localClockLeadMs"`
+	ExpectedCancelledAfterDatabaseExpiry bool                              `json:"expectedCancelledAfterDatabaseExpiry"`
 	ExpectedAbortReason                  string                            `json:"expectedAbortReason"`
 	ExpectedAbortReasons                 []string                          `json:"expectedAbortReasons"`
 	ExpectedAbortMessage                 string                            `json:"expectedAbortMessage"`
@@ -1510,30 +1511,46 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A maintenance tick could settle the expiry first and turn the next heartbeat into stale, so
+	// only the worker's own request settles it here.
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:             queueName,
-		WorkerID:          queueName,
-		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
-		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+		Queue:               queueName,
+		WorkerID:            queueName,
+		LeaseDuration:       time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval:   time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+		MaintenanceInterval: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	causes := make(chan error, len(fixture.ExpectedAbortReasons))
+	// Each attempt reports whether PostgreSQL's clock had reached the expiry it held when the
+	// handler observed cancellation. Both times come from the database clock.
+	afterExpiry := make(chan bool, len(fixture.ExpectedAbortReasons))
 	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		field := "attempt_timeout_at"
 		if fixture.Mode == "deadline" {
 			field = "deadline_at"
 		}
-		if _, err := pool.Exec(ctx, fmt.Sprintf(
-			"UPDATE workhorse.task_runtime SET %s = %s + ($2 * interval '1 millisecond') WHERE task_id = $1::uuid",
+		var expiry time.Time
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"UPDATE workhorse.task_runtime SET %s = %s + ($2 * interval '1 millisecond') WHERE task_id = $1::uuid RETURNING %s",
 			field,
 			field,
-		), taskID, fixture.LocalClockLeadMS); err != nil {
+			field,
+		), taskID, fixture.LocalClockLeadMS).Scan(&expiry); err != nil {
+			// The test reads one observation for each attempt, so a failed setup still sends one.
+			causes <- fmt.Errorf("move the database expiry: %w", err)
+			afterExpiry <- false
 			return nil, err
 		}
 		<-handlerContext.Done()
 		causes <- context.Cause(handlerContext)
+		var after bool
+		if err := pool.QueryRow(ctx, "SELECT clock_timestamp() >= $1", expiry).Scan(&after); err != nil {
+			t.Errorf("read the database clock at cancellation: %v", err)
+		}
+		afterExpiry <- after
 		return nil, nil
 	})
 	for _, expected := range fixture.ExpectedAfterRuns {
@@ -1562,7 +1579,35 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	if strings.Join(observedCauses, ",") != strings.Join(fixture.ExpectedAbortReasons, ",") {
 		t.Fatalf("unexpected expiration causes: %v", observedCauses)
 	}
+	for attempt := range fixture.ExpectedAbortReasons {
+		if after := <-afterExpiry; after != fixture.ExpectedCancelledAfterDatabaseExpiry {
+			t.Fatalf("attempt %d: cancelled after the database expiry = %t", attempt+1, after)
+		}
+	}
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)
+}
+
+// TestWorkerKeepsRenewingWhileAnEarlyExpiryIsNotDue gives PostgreSQL an execution timeout 2.5
+// seconds after the worker's copy, with a lease of two seconds. PostgreSQL answers not_due for longer
+// than one lease, so the attempt reaches its database timeout only if renewal continues while the
+// worker asks. A worker that stopped renewing would lose the lease first. The original timeout of
+// 1.5 seconds gives the handler time to move the database copy before it falls due.
+func TestWorkerKeepsRenewingWhileAnEarlyExpiryIsNotDue(t *testing.T) {
+	executeWorkerExpirationFixture(t, workerRuntimeFixture{
+		TaskType:                             "go.expiry-not-due",
+		Mode:                                 "execution-timeout",
+		DurationMS:                           1500,
+		LocalClockLeadMS:                     2500,
+		LeaseMS:                              2000,
+		HeartbeatMS:                          200,
+		MaxAttempts:                          1,
+		ExpectedAbortReasons:                 []string{"ExecutionTimeoutError"},
+		ExpectedCancelledAfterDatabaseExpiry: true,
+		ExpectedAfterRuns: []workerFixtureTaskState{
+			{State: "failed", Attempt: 1, ErrorName: "ExecutionTimeout"},
+		},
+		ExpectedAttemptOutcomes: []string{"timeout"},
+	})
 }
 
 func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {

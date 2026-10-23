@@ -316,6 +316,10 @@ final class RuntimeFixtures {
     }
     UUID taskId = enqueue(taskType(fixture), Map.of(), options);
     List<String> reasons = new CopyOnWriteArrayList<>();
+    // The expiry PostgreSQL holds for each attempt, and its clock when the handler saw
+    // cancellation.
+    List<Instant> expiries = new CopyOnWriteArrayList<>();
+    List<Instant> cancelledAt = new CopyOnWriteArrayList<>();
     AtomicInteger heartbeats = new AtomicInteger();
     String field = deadline ? "deadline_at" : "attempt_timeout_at";
     AtomicReference<@Nullable Worker> holder = new AtomicReference<>();
@@ -356,6 +360,7 @@ final class RuntimeFixtures {
                                   + "' RETURNING deadline_at::text"))
                       : java.util.Objects.requireNonNull(value).toInstant();
             }
+            expiries.add(anchor);
             return anchor.minusMillis(lead).atOffset(java.time.ZoneOffset.UTC);
           }
         };
@@ -372,6 +377,10 @@ final class RuntimeFixtures {
                     if (!ctx.cancellation().await(Duration.ofSeconds(5))) {
                       throw new IllegalStateException("the expiration never reached the handler");
                     }
+                    cancelledAt.add(
+                        Database.instant(
+                            java.util.Objects.requireNonNull(
+                                value("SELECT clock_timestamp()::text"))));
                     reasons.add(CANCEL_NAMES.get(ctx.cancellation().reason()));
                     java.util.Objects.requireNonNull(holder.get()).pause();
                     ctx.cancellation().throwIfCancelled();
@@ -391,6 +400,19 @@ final class RuntimeFixtures {
       }
     }
     check(reasons.equals(fixture.get("expectedAbortReasons")), "abort reasons " + reasons);
+    // Both times come from the database clock, so the worker clock cannot move either one.
+    check(
+        expiries.size() == cancelledAt.size(),
+        expiries.size() + " claims, " + cancelledAt.size() + " cancellations");
+    List<Boolean> afterExpiry = new java.util.ArrayList<>();
+    for (int index = 0; index < cancelledAt.size(); index++) {
+      afterExpiry.add(!cancelledAt.get(index).isBefore(expiries.get(index)));
+    }
+    check(
+        afterExpiry.equals(
+            java.util.Collections.nCopies(
+                cancelledAt.size(), fixture.get("expectedCancelledAfterDatabaseExpiry"))),
+        "cancellation after the database expiry: " + afterExpiry);
     expectOutcomes(taskId, (List<?>) fixture.get("expectedAttemptOutcomes"));
   }
 

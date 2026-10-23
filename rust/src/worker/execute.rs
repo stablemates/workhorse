@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -21,9 +22,12 @@ use crate::{
     Operation,
 };
 
-/// How often, and for how long, an expiration PostgreSQL reports as not yet due is retried.
+/// How often, and for how long, an expiration PostgreSQL reports as not yet due is retried after
+/// the handler returned.
 const EXPIRATION_RETRY: Duration = Duration::from_millis(5);
 const EXPIRATION_BUDGET: Duration = Duration::from_secs(1);
+/// The longest wait between two expiration requests while the handler runs.
+const EXPIRATION_RETRY_MAXIMUM: Duration = Duration::from_secs(1);
 /// How far past a deadline the local timer fires, so PostgreSQL's clock agrees it has passed.
 const EXPIRATION_SKEW: Duration = Duration::from_millis(1);
 
@@ -34,15 +38,15 @@ fn instant_at(at: DateTime<Utc>) -> Instant {
     Instant::now() + (at - Utc::now()).to_std().unwrap_or_default() + EXPIRATION_SKEW
 }
 
-/// The earlier of the task deadline and the attempt timeout, with the reason each one cancels.
-fn expiration(task: &ClaimedTask) -> Option<(Instant, CancelReason)> {
-    let deadline = task.deadline_at.map(|at| (at, CancelReason::DeadlineExceeded));
-    let timeout = task.attempt_timeout_at.map(|at| (at, CancelReason::ExecutionTimeout));
-    [deadline, timeout]
-        .into_iter()
-        .flatten()
-        .min_by_key(|(at, _)| *at)
-        .map(|(at, reason)| (instant_at(at), reason))
+/// The earlier of the task deadline and the attempt timeout, on the worker clock. It only starts a
+/// question to PostgreSQL, which decides whether the expiry is due.
+fn expiration(task: &ClaimedTask) -> Option<Instant> {
+    [task.deadline_at, task.attempt_timeout_at].into_iter().flatten().min().map(instant_at)
+}
+
+/// Whether an `expire_owned` answer decides the attempt. `not_due` and `accepted` leave it running.
+fn decides(status: OwnershipStatus) -> bool {
+    !matches!(status, OwnershipStatus::NotDue | OwnershipStatus::Accepted)
 }
 
 fn cancel_reason(status: OwnershipStatus) -> CancelReason {
@@ -96,11 +100,19 @@ impl Inner {
         tokio::pin!(watchdog);
         let mut watchdog_armed = true;
         let expires = expiration(&task);
-        let expiry = tokio::time::sleep_until(expires.map_or_else(Instant::now, |(at, _)| at));
+        let expiry = tokio::time::sleep_until(expires.unwrap_or_else(Instant::now));
         tokio::pin!(expiry);
         let mut expired: Option<Result<OwnershipStatus, Error>> = None;
         let mut rejected: Option<OwnershipStatus> = None;
         let mut beats_open = true;
+        // One expire_owned request at a time runs beside the handler, so renewals, the watchdog,
+        // and heartbeat verdicts keep their effect while PostgreSQL answers. The handler is
+        // cancelled only for an answer that decides the attempt.
+        let mut expiring: Option<BoxFuture<'_, Result<OwnershipStatus, Error>>> = None;
+        let mut expiration_retry = EXPIRATION_RETRY;
+        // A stale heartbeat answer during a request can come from that expiry itself, so the
+        // expiry answer decides first.
+        let mut stale_beat = false;
         let result = loop {
             tokio::select! {
                 result = &mut future => break result,
@@ -118,15 +130,48 @@ impl Inner {
                         "No heartbeat was accepted within the task lease"
                     );
                 }
-                () = &mut expiry, if expires.is_some() && expired.is_none() => {
-                    let (_, reason) = expires.expect("guarded above");
-                    token.cancel(reason);
-                    membership.leave();
-                    watchdog_armed = false;
-                    expired = Some(self.expire_ownership(&task).await);
+                () = &mut expiry, if expires.is_some() && expired.is_none() && expiring.is_none()
+                    && rejected.is_none() => {
+                    expiring = Some(Box::pin(self.expire_owned_once(&task)));
+                }
+                answer = async { expiring.as_mut().expect("the guard checks it").await },
+                    if expiring.is_some() => {
+                    expiring = None;
+                    match answer {
+                        Ok(status) if decides(status) => {
+                            token.cancel(cancel_reason(status));
+                            membership.leave();
+                            watchdog_armed = false;
+                            expired = Some(Ok(status));
+                        }
+                        _ if stale_beat => {
+                            rejected.get_or_insert(OwnershipStatus::Stale);
+                            watchdog_armed = false;
+                            token.cancel(CancelReason::LeaseLost);
+                        }
+                        answer => {
+                            // not_due is the database refusing an expiry its clock has not
+                            // reached, and a failed request proves nothing. The handler keeps
+                            // running and renewing, and the worker asks again after a backoff.
+                            if let Err(error) = answer {
+                                tracing::warn!(
+                                    parent: &span,
+                                    workhorse.worker.id = %self.worker_id,
+                                    error = %error,
+                                    "Ownership expiration request failed; the worker asks again"
+                                );
+                            }
+                            expiry.as_mut().reset(Instant::now() + expiration_retry);
+                            expiration_retry = (expiration_retry * 2).min(EXPIRATION_RETRY_MAXIMUM);
+                        }
+                    }
                 }
                 beat = membership.beats.recv(), if beats_open => match beat {
                     Some(Beat::Renewed(sent_at)) => watchdog.as_mut().reset(sent_at + lease),
+                    Some(Beat::Rejected(OwnershipStatus::Stale)) if expiring.is_some() => {
+                        stale_beat = true;
+                        membership.leave();
+                    }
                     Some(Beat::Rejected(status)) => {
                         rejected.get_or_insert(status);
                         watchdog_armed = false;
@@ -137,6 +182,42 @@ impl Inner {
                 () = shutdown.cancelled(), if !token.is_cancelled() => token.cancel(CancelReason::Shutdown),
             }
         };
+        // A handler that returned while a request was in flight waits for its answer, so a
+        // confirmed expiry is not settled again. An attempt whose ownership already ended drops
+        // the request. Renewals continue during the wait, and the lease watchdog bounds it, so a
+        // blocked request cannot hold the attempt.
+        if let Some(mut request) = expiring.take().filter(|_| rejected.is_none()) {
+            loop {
+                tokio::select! {
+                    answer = &mut request => {
+                        match answer {
+                            Ok(status) if decides(status) => expired = Some(Ok(status)),
+                            _ if stale_beat => {
+                                rejected.get_or_insert(OwnershipStatus::Stale);
+                            }
+                            _ => {}
+                        }
+                        break;
+                    }
+                    () = &mut watchdog, if watchdog_armed => {
+                        rejected.get_or_insert(OwnershipStatus::Stale);
+                        break;
+                    }
+                    beat = membership.beats.recv(), if beats_open => match beat {
+                        Some(Beat::Renewed(sent_at)) => watchdog.as_mut().reset(sent_at + lease),
+                        Some(Beat::Rejected(OwnershipStatus::Stale)) => {
+                            stale_beat = true;
+                            membership.leave();
+                        }
+                        Some(Beat::Rejected(status)) => {
+                            rejected.get_or_insert(status);
+                            break;
+                        }
+                        None => beats_open = false,
+                    },
+                }
+            }
+        }
         drop(membership);
         let result: HandlerResult = result
             .unwrap_or_else(|panic| Err(HandlerError::from_panic(&task.task_type, false, panic)));
@@ -226,22 +307,27 @@ impl Inner {
         }
     }
 
-    /// Asks PostgreSQL to expire the task's ownership, retrying briefly while it is not yet due.
+    /// Asks PostgreSQL once to expire the task's ownership under its fence.
+    async fn expire_owned_once(&self, task: &ClaimedTask) -> Result<OwnershipStatus, Error> {
+        let rows = fenced_rows(
+            &self.statements(),
+            sql::EXPIRE_OWNED_TELEMETRY_V1,
+            &[&task.id, &self.worker_id, &task.fence_token],
+        )
+        .await?;
+        let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
+        OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())
+    }
+
+    /// Asks PostgreSQL to expire the task's ownership after the handler returned, retrying briefly
+    /// while it is not yet due.
     pub(super) async fn expire_ownership(
         &self,
         task: &ClaimedTask,
     ) -> Result<OwnershipStatus, Error> {
         let budget = Instant::now() + EXPIRATION_BUDGET;
         loop {
-            let rows = fenced_rows(
-                &self.statements(),
-                sql::EXPIRE_OWNED_TELEMETRY_V1,
-                &[&task.id, &self.worker_id, &task.fence_token],
-            )
-            .await?;
-            let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
-            let status =
-                OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())?;
+            let status = self.expire_owned_once(task).await?;
             if status != OwnershipStatus::NotDue || Instant::now() + EXPIRATION_RETRY > budget {
                 return Ok(status);
             }

@@ -383,10 +383,16 @@ def execute_expiration_fixture(
     )
     task_id = Queue(connection).enqueue(fixture["taskType"], {}, options)
     abort_reasons: list[str] = []
+    # The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
+    database_expiries: list[datetime] = []
+    cancelled_at: list[datetime] = []
     worker: Worker
 
     def handler(_payload: object, context: HandlerContext) -> None:
         assert context.cancellation.wait(timeout=5)
+        now = connection.execute("SELECT clock_timestamp()").fetchone()
+        assert now is not None
+        cancelled_at.append(now[0])
         reason = context.cancellation.reason
         abort_reasons.append(type(reason).__name__)
         worker.pause()
@@ -420,6 +426,7 @@ def execute_expiration_fixture(
                 field = "attempt_timeout_at"
                 value = claimed[field]
             assert isinstance(value, datetime)
+            database_expiries.append(value)
             claimed[field] = value - timedelta(milliseconds=fixture["localClockLeadMs"])
             return [claimed]
         return rows
@@ -430,6 +437,11 @@ def execute_expiration_fixture(
         assert worker.run_once() is True
         assert_task_states(connection, {"task": task_id}, {"task": expected})
     assert abort_reasons == fixture["expectedAbortReasons"]
+    # Both times come from the database clock, so the worker clock cannot move either one.
+    assert len(database_expiries) == len(cancelled_at)
+    assert [at >= expiry for at, expiry in zip(cancelled_at, database_expiries, strict=True)] == [
+        fixture["expectedCancelledAfterDatabaseExpiry"]
+    ] * len(cancelled_at)
     assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
 
 

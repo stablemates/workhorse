@@ -342,6 +342,8 @@ async function executeExpirationRuntimeFixture(
   fixture: ExpirationRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
+  // The expiry PostgreSQL holds for each attempt, before the worker's copy moves earlier.
+  const databaseExpiries: Date[] = [];
   const earlyTimerQueue = new Proxy(queue, {
     get(target, property, receiver) {
       if (property === "claimMany") return undefined;
@@ -356,11 +358,13 @@ async function executeExpirationRuntimeFixture(
               RETURNING deadline_at AS "deadlineAt"`,
             [claimed.id, fixture.durationMs],
           );
+          databaseExpiries.push(deadline.rows[0]!.deadlineAt);
           claimed.deadlineAt = new Date(
             deadline.rows[0]!.deadlineAt.getTime() - fixture.localClockLeadMs,
           );
         }
         if (claimed && fixture.mode === "execution-timeout" && claimed.attemptTimeoutAt) {
+          databaseExpiries.push(claimed.attemptTimeoutAt);
           claimed.attemptTimeoutAt = new Date(
             claimed.attemptTimeoutAt.getTime() - fixture.localClockLeadMs,
           );
@@ -382,6 +386,8 @@ async function executeExpirationRuntimeFixture(
         },
   );
   const abortReasons: unknown[] = [];
+  // PostgreSQL's clock when each handler observed its cancellation.
+  const cancelledAt: Date[] = [];
   const handled: { id: string; attempt: number }[] = [];
   const worker = new Worker(earlyTimerQueue, {
     workerId: `runtime-${fixture.id}`,
@@ -391,6 +397,8 @@ async function executeExpirationRuntimeFixture(
   }).handle(fixture.taskType, async (_payload, context) => {
     handled.push({ id: context.task.id, attempt: context.task.attempt });
     const reason = await waitForAbort(context.signal);
+    const now = await database.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+    cancelledAt.push(now.rows[0]!.now);
     abortReasons.push(reason);
     throw reason;
   });
@@ -409,6 +417,11 @@ async function executeExpirationRuntimeFixture(
   expect(abortReasons).toEqual(
     fixture.expectedAbortReasons.map((name) => expect.objectContaining({ name })),
   );
+  // Both times come from the database clock, so the worker clock cannot move either one.
+  expect(databaseExpiries).toHaveLength(cancelledAt.length);
+  expect(
+    cancelledAt.map((at, attempt) => at.getTime() >= databaseExpiries[attempt]!.getTime()),
+  ).toEqual(cancelledAt.map(() => fixture.expectedCancelledAfterDatabaseExpiry));
   await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcomes);
 }
 

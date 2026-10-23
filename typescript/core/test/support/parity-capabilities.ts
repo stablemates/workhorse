@@ -1251,6 +1251,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     dotnet: {
       fixtures: [
         "runtime/deadline-settles-after-early-local-timer",
+        "runtime/deadline-waits-for-database-beyond-retry-budget",
         "runtime/execution-timeout-settles-after-early-local-timer",
         "runtime/empty-polls-back-off-with-jitter",
         "runtime/stop-drains-active-slots-without-new-claims",

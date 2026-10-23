@@ -1736,17 +1736,29 @@ other. It uses a dedicated connection that the workers on the pool share.
 
 #### Ownership and expiration
 
-The earlier of `deadline_at` and `attempt_timeout_at` cancels the handler context. Then, while
-PostgreSQL returns `not_due`, the supervisor retries `expire_owned_telemetry_v1`. It does this
-within its 1,000 millisecond clock-skew budget.
+The handler context has no deadline of its own. Only PostgreSQL's answer cancels it for an expiry,
+so a worker clock that runs ahead cannot end the attempt early.
 
-The supervisor leaves the heartbeat batch before it calls `expire_owned_telemetry_v1`. The heartbeat
-goroutine delivers each ownership result without blocking. Thus a slow expiration cannot stop
-heartbeats for other tasks. If the supervisor settles expiration, `execute` records the outcome. It
-does not repeat the fenced transition.
+1. At the earlier of `deadline_at` and `attempt_timeout_at` on the worker clock, the supervisor
+   sends one `expire_owned_telemetry_v1` request in its own goroutine.
+2. While the request runs, the attempt stays in the heartbeat batch, and the lease watchdog
+   continues to run.
+3. `deadline_exceeded` or `timeout_exceeded` cancels the context. The supervisor has then settled
+   the expiry, so `execute` records the outcome and does not repeat the fenced transition.
+4. `cancel_requested` cancels the context and settles through `acknowledge_cancel_v1`. `stale`
+   cancels it without another fenced write.
+5. `not_due`, or a failed request, leaves the handler running under its renewed lease. The
+   supervisor asks again after a backoff that starts at 5 milliseconds and doubles up to 1,000
+   milliseconds. A failed request also logs a warning.
 
-- `cancel_requested` cancels the context and settles through `acknowledge_cancel_v1`.
-- `stale` cancels it without another fenced write.
+A `stale` heartbeat answer can come from the expiry of the attempt itself. Thus, while a request is
+in flight, a `stale` heartbeat answer does not cancel the context. A heartbeat answer other than
+`accepted` or `busy` removes the attempt from the batch, and the expiry answer decides first. If
+that answer does not decide the attempt, the heartbeat answer does. A `cancel_requested`,
+`deadline_exceeded`, or `timeout_exceeded` heartbeat answer cancels the context at once.
+
+A handler that returns while a request is in flight waits for its answer. The request ends when
+the supervisor ends.
 
 `context.Cause` returns `CancellationRequestedError`, `DeadlineExceededError`,
 `ExecutionTimeoutError`, or `LeaseLostError`.
@@ -1775,8 +1787,8 @@ These end that attempt with the `lease_lost` handler outcome:
 - a `stale` heartbeat;
 - a rejected completion;
 - a `stale` failure;
-- an expiration that PostgreSQL still reports as `not_due` after the clock-skew budget, which also
-  logs a warning.
+- an expiration that PostgreSQL still reports as `not_due` after the handler returned. `execute`
+  retries it for 1,000 milliseconds and then logs a warning.
 
 `Run` and `RunOnce` continue to dispatch, because lease recovery already owns the task.
 
@@ -2431,6 +2443,28 @@ only while the registered member still has that fence token.
 
 A parent can suspend and resume under a new fence while the old round is in flight. The old result
 cannot renew or cancel that new claim.
+
+#### Expiration
+
+`Inner::execute` in `rust/src/worker/execute.rs` cancels the handler token for an expiry only after
+PostgreSQL confirms it. Thus a worker clock that runs ahead cannot end the attempt early.
+
+1. At the earlier of `deadline_at` and `attempt_timeout_at` on the worker clock, `execute` sends
+   one `expire_owned_telemetry_v1` request. The handler, the heartbeats, and the lease watchdog
+   continue while it runs.
+2. `deadline_exceeded` cancels the token with `CancelReason::DeadlineExceeded`, and
+   `timeout_exceeded` with `CancelReason::ExecutionTimeout`. `execute` then records the outcome and
+   does not repeat the fenced transition.
+3. `cancel_requested` cancels it with `CancelReason::Requested` and settles through
+   `acknowledge_cancel_v1`. `stale` cancels it with `CancelReason::LeaseLost`.
+4. `not_due`, or a failed request, leaves the handler running under its renewed lease. `execute`
+   asks again after a backoff that starts at 5 milliseconds and doubles up to 1,000 milliseconds.
+
+A `stale` heartbeat answer can come from the expiry of the attempt itself. Thus, while a request is
+in flight, a `stale` heartbeat answer only stops the heartbeats. The expiry answer selects the
+reason. If that answer does not decide the attempt, the token gets `CancelReason::LeaseLost`. A
+handler that returns while a request is in flight waits for its answer, unless the attempt has
+already lost its lease. Renewals continue during that wait, and the lease watchdog bounds it.
 
 #### Handlers and batches
 
