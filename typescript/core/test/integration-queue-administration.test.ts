@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -181,15 +180,19 @@ describe("queue administration", () => {
     const inserter = await pool.connect();
     try {
       await inserter.query("BEGIN");
-      await inserter.query(
-        `INSERT INTO workhorse.task_event(task_id, event_type) VALUES ($1, 'concurrent-purge')`,
+      const inserted = await inserter.query<{ pid: number }>(
+        `INSERT INTO workhorse.task_event(task_id, event_type) VALUES ($1, 'concurrent-purge')
+         RETURNING pg_backend_pid() AS pid`,
         [id],
       );
+      const pid = inserted.rows[0]!.pid;
       let settled = false;
       const purge = admin.purgeQueue(queueName, adminAudit("serialize purge")).finally(() => {
         settled = true;
       });
-      await sleep(25);
+      // A pending purge alone does not show that it waits for the insert. PostgreSQL must report
+      // the wait before the insert commits.
+      await waitForDatabaseCondition(() => blockedBy(pid));
       expect(settled).toBe(false);
       await inserter.query("COMMIT");
 

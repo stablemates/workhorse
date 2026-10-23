@@ -251,11 +251,22 @@ describe("busy heartbeat retry", () => {
     const queueName = "busy-retry-failed";
     const id = await queue.enqueue("failed", {}, { queue: queueName });
     let rounds: Round[] = [];
+    // The worker's next regular slot when each round starts. A regular round sets it to its send
+    // time plus one interval before it sends. A retry leaves it as it is, so the test finds the
+    // retry by its slot, not by measured gaps (SM-1670).
+    const slots: (number | undefined)[] = [];
+    let failedRetry: number | undefined;
     onReservedChannel((channel) => {
       rounds = interceptRounds(channel, async (round, tasks) => {
-        if (round === 0) return new Map(tasks.map((task) => [task.id, "busy" as const]));
-        if (round === 1) throw new Error("injected retry failure");
-        return undefined;
+        slots[round] = (worker as unknown as { nextHeartbeatAt?: number }).nextHeartbeatAt;
+        if (failedRetry !== undefined) return undefined;
+        if (round > 0 && slots[round] === slots[round - 1]) {
+          failedRetry = round;
+          throw new Error("injected retry failure");
+        }
+        // A regular round reports the lease busy. If a slow host reaches the regular slot before
+        // the retry falls due, the worker drops the retry, and the next regular round tries again.
+        return new Map(tasks.map((task) => [task.id, "busy" as const]));
       });
     });
     let release!: () => void;
@@ -274,18 +285,29 @@ describe("busy heartbeat retry", () => {
     });
     const run = worker.runOnce();
     try {
-      await vi.waitFor(() => expect(rounds[2]?.endedAt).toBeDefined(), {
-        timeout: 5_000,
-        interval: 10,
-      });
+      await vi.waitFor(
+        () => {
+          expect(failedRetry).toBeDefined();
+          expect(rounds[failedRetry! + 1]?.endedAt).toBeDefined();
+        },
+        { timeout: 15_000, interval: 10 },
+      );
     } finally {
       release();
     }
     expect(await run).toBe(true);
-    expect(rounds[1]!.failed).toBe(true);
-    expect(rounds[1]!.startedAt - rounds[0]!.endedAt!).toBeLessThan(heartbeatMs / 2);
-    // The failed retry scheduled no retry. The next round is the regular one.
-    expect(rounds[2]!.startedAt - rounds[0]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
+    const retry = failedRetry!;
+    const busy = retry - 1;
+    const next = retry + 1;
+    // The worker sent a retry of the busy lease before the regular slot, and the retry failed.
+    expect(rounds[retry]!.failed).toBe(true);
+    expect(slots[busy]).toBeDefined();
+    // The failed retry scheduled no retry. The next round is the regular one: it sets a new slot,
+    // and it falls due one interval after the busy round started.
+    expect(slots[next]).toBeGreaterThan(slots[retry]!);
+    expect(rounds[next]!.startedAt - rounds[busy]!.startedAt).toBeGreaterThanOrEqual(
+      0.9 * heartbeatMs,
+    );
     expect(await outcomeState(id)).toBe("succeeded");
   });
 

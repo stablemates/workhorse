@@ -14,6 +14,7 @@ import { workerHeartbeatReservation } from "../src/worker-internal.js";
 // `InjectedCrashError` is worker test support, not published API, so it comes from the source module.
 import { InjectedCrashError } from "../src/worker.js";
 import { Pool } from "pg";
+import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { databaseUrl, deferred, pool, queue, admin, adminAudit } = createIntegrationTestContext(
@@ -1019,7 +1020,7 @@ describe("worker registry", () => {
     let maxInFlight = 0;
     let latestIds: string[] = [];
     for (const sequence of [1, 2]) await shared.enqueue("slow-heartbeat", { sequence });
-    const heartbeat = vi.spyOn(shared, "heartbeatMany").mockImplementation((tasks) => {
+    vi.spyOn(shared, "heartbeatMany").mockImplementation((tasks) => {
       heartbeatCalls += 1;
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -1035,12 +1036,18 @@ describe("worker registry", () => {
       workerId: "slow-heartbeat-worker",
       concurrency: 2,
       heartbeatMs: 10,
-      leaseMs: 500,
+      // No round renews while the test holds the first one. A lease of 500 ms could end before a
+      // loaded host starts the handlers, so the lease is long enough not to end in the test.
+      leaseMs: 30_000,
       pollMs: 0,
     }).handle("slow-heartbeat", async () => {
       await releaseHandlers.promise;
       return null;
     });
+    const schedule = worker as unknown as HeartbeatSchedule;
+    let holdTimers = false;
+    const timers = recordHeartbeatTimers(worker, () => holdTimers);
+    const pendingTimers = () => timers.filter((timer) => !timer.fired && !timer.cleared);
 
     try {
       const run = worker.runOnce();
@@ -1048,24 +1055,40 @@ describe("worker registry", () => {
       await vi.waitFor(() => expect(heartbeatGates).toHaveLength(1), stallWait);
       expect(latestIds).toHaveLength(2);
 
-      await sleep(40);
+      // Wait until the next slot has passed while the first round is in flight. The worker holds
+      // the round as in flight and has no pending timer, so no second round can start.
+      const slotAtFirstRound = schedule.nextHeartbeatAt!;
+      await vi.waitFor(
+        () => expect(performance.now()).toBeGreaterThan(slotAtFirstRound),
+        stallWait,
+      );
+      expect(schedule.heartbeatInFlight).toBe(true);
+      expect(pendingTimers()).toEqual([]);
       expect(heartbeatCalls).toBe(1);
       heartbeatGates[0]!.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
       await vi.waitFor(() => expect(heartbeatCalls).toBe(2), stallWait);
       expect(maxInFlight).toBe(1);
 
-      releaseHandlers.resolve();
+      // The second round ends, and the worker arms the timer of the third round. The test holds
+      // that timer, so the third round cannot start.
+      holdTimers = true;
       heartbeatGates[1]!.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
+      await vi.waitFor(() => expect(pendingTimers()).toHaveLength(1), stallWait);
+      const third = pendingTimers()[0]!;
+      releaseHandlers.resolve();
       await expect(run).resolves.toBe(true);
-      const callsAtSettlement = heartbeatCalls;
-      await sleep(30);
-      expect(heartbeatCalls).toBe(callsAtSettlement);
+      // No lease remains, and the end of the last lease cleared the timer of the third round.
+      expect(schedule.heartbeatLeases.size).toBe(0);
+      expect(third).toMatchObject({ fired: false, cleared: true });
+      expect(pendingTimers()).toEqual([]);
+      expect(heartbeatCalls).toBe(2);
     } finally {
       releaseHandlers.resolve();
       for (const gate of heartbeatGates) {
         gate.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
       }
-      heartbeat.mockRestore();
+      // Also removes the timer recording, which replaces the global clearTimeout.
+      vi.restoreAllMocks();
     }
   });
 
@@ -1085,21 +1108,28 @@ describe("worker registry", () => {
 
     const running = worker.run();
     await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2), stallWait);
+    // runOnce() waits for the run to end. The gate is the worker's execution queue: runOnce()
+    // joins it behind the run, so it cannot claim while the run holds both slots.
+    const execution = worker as unknown as { executionTail: Promise<void> };
+    const tailOfRun = execution.executionTail;
     const blockedRunOnce = worker.runOnce();
     let runOnceResolved = false;
     void blockedRunOnce.then(() => {
       runOnceResolved = true;
     });
-    await sleep(20);
+    expect(execution.executionTail).not.toBe(tailOfRun);
+    const states = async () => Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
+    expect((await states()).filter((state) => state === "ready")).toHaveLength(1);
     expect(runOnceResolved).toBe(false);
 
     worker.stop();
+    // The run settles only after its active slots drain, and both handlers wait for the release.
     expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, draining: true });
     let resolved = false;
     void running.then(() => {
       resolved = true;
     });
-    await sleep(20);
+    await Promise.resolve();
     expect(resolved).toBe(false);
 
     release.resolve();
@@ -1113,9 +1143,9 @@ describe("worker registry", () => {
       remotelyPaused: false,
       draining: false,
     });
-    const states = await Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
-    expect(states.filter((state) => state === "ready")).toHaveLength(1);
-    expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
+    const finalStates = await states();
+    expect(finalStates.filter((state) => state === "ready")).toHaveLength(1);
+    expect(finalStates.filter((state) => state === "succeeded")).toHaveLength(2);
   });
 
   it("drains both active handlers after signal abort without claiming queued work", async () => {
@@ -1305,7 +1335,9 @@ describe("worker registry", () => {
       void run.catch(() => {
         settled = true;
       });
-      await Promise.resolve();
+      // The pass settles only after every execution ends. Both siblings wait for the release, so
+      // their slots stay active.
+      expect(worker.runtimeState().activeSlots).toBeGreaterThanOrEqual(2);
       expect(settled).toBe(false);
 
       releaseSiblings.resolve();
