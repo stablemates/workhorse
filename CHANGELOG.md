@@ -54,6 +54,21 @@ human-wait context, so its grants are not a redaction boundary. A worker role mu
 installation role, because maintenance creates and drops history partitions. The schema and
 its grants do not change. No upgrade step is necessary.
 
+### The schema lifecycle documents the write-blocking index of migration 0061
+
+Before this change, `docs/schema-lifecycle.md` stated that no supported migration step builds an
+index without `CONCURRENTLY`. Migration 0061 does: it builds `fast_task_outcome_failed_finished_idx`
+on `workhorse.fast_task_outcome` and blocks fast-tier outcome writes until it commits (SM-1642).
+
+- If a database at schema version 25 through 59 holds many fast-tier outcomes, build the index
+  concurrently before you upgrade. The section "Shipped migrations that block writes" in
+  `docs/schema-lifecycle.md` gives the procedure and the validity check. Migration 0061 then skips
+  its build. Migration 0061 does not change.
+- A test now rejects a new migration step that builds an index on an existing table without
+  `CONCURRENTLY`.
+- `docs/schema-lifecycle.md` and ADR 0109 now state when a migration can replace the body of a
+  `_vN` function and keep the suffix, and when the change needs a `_vN+1` successor (SM-1665).
+
 ### A late schedule pass no longer loses a `skip` occurrence
 
 A worker waits one maintenance interval after its schedule pass ends, so the next pass always

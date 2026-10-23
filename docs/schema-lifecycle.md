@@ -21,7 +21,9 @@ an index. It may not rename, drop, or change the meaning of anything a supported
 writes. A function is superseded by adding the next `_vN` beside it and retaining the old one; the
 old one is removed at the next major release, never before. Every function already carries a
 suffix, so every one of them can be superseded this way. Migration 0025 is the one exception; see
-[The fast-tier cutover](#the-fast-tier-cutover).
+[The fast-tier cutover](#the-fast-tier-cutover). A migration can also replace the body of an
+existing `_vN` function and keep its suffix when the change stays compatible; see
+[When a function body change keeps its suffix](#when-a-function-body-change-keeps-its-suffix).
 
 That rule is what makes a rolling deployment safe. A pipeline migrates the database before any
 process from the new release starts, and every still-running process keeps working, because the
@@ -95,6 +97,48 @@ throws a plain error instead, because an unreachable database says nothing about
 below the baseline, versions newer than the runtime, mixed version rows, and gaps in the ordered
 plan. `workhorse schema migrate` exposes the same step from the CLI. An already-current schema is
 left unchanged. The current baseline needs no incremental migration.
+
+### When a function body change keeps its suffix
+
+Most migrations replace the body of an existing `_vN` function with `CREATE OR REPLACE FUNCTION`.
+A client calls the function by its name and suffix, so the body change reaches every client at the
+commit. This rule tells you when the change can keep the suffix, and when it needs a successor
+([ADR 0109](decisions/0109-keep-a-function-suffix-when-a-body-change-stays-compatible.md)).
+
+A migration can replace the body of a `_vN` function and keep the suffix when all of these stay
+compatible:
+
+1. The function name, and the types, defaults, and order of its arguments.
+2. The result columns, their types, and their order.
+3. Each behavior that the documentation, a protocol fixture, or `docs/compatibility.md` states as a
+   guarantee. A client that follows the documentation of an earlier release keeps working. For
+   a result row order, a fixture assertion alone does not make a client guarantee.
+
+These changes are compatible:
+
+- A correction of a defect.
+- A performance change.
+- A new input that the function accepts, when the earlier body rejected it. Migration 0075 is an
+  example: `enqueue_throttle_v1` now accepts throttle on a fast-tier queue.
+- A new row in a result.
+
+A result row order is a client guarantee only if the documentation tells clients that they can
+rely on it. A change to a guaranteed order breaks condition 3, so it must use a successor. A
+protocol fixture can pin an order that no document offers to clients as a guarantee. If no SDK
+reads the rows by position, that order can change with the body. The same migration must then
+update the fixture and the documentation that describes the order. Migration 0079 is an example:
+it changes the order of the maintenance phases and updates the fixture and the documentation.
+
+A change that breaks one of the three conditions needs a successor. These changes need one:
+
+- A different result for an input, when the documentation states the earlier result.
+- A rejection of an input that the documentation states the function accepts.
+- A new meaning for a stored value that a supported release reads or writes.
+
+Add the successor as `<name>_v<N+1>` beside the function. Keep the earlier function until a
+contract step retires its protocol version
+([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
+The header comment of a migration must state why its body changes stay compatible.
 
 ## Migration execution contract
 
@@ -220,12 +264,68 @@ no migration running.
 
 ### Shipped migrations that block writes
 
-No supported step builds an index non-concurrently. The two that did, `0003-named-budgets.sql` and
-`0006-bounded-dashboard-reads.sql`, both start below the 0.2.0 baseline, so pruning the chain
-removed them along with the operator pre-steps this section described
-([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)). A step added from
-now on that cannot take a lock cheaply declares `"execution":"nontransactional"` instead; see
-[Non-transactional steps](#non-transactional-steps).
+An ordinary `CREATE INDEX` holds `SHARE` on its table until the step commits. While the index
+builds, every insert, update, and delete on that table waits. Reads continue. The build time
+increases with the number of rows in the table, and the 5-second `lock_timeout` does not bound it.
+
+**Migration 0061 blocks writes to `workhorse.fast_task_outcome`.** The step
+`0061-bound-the-scan-cost-of-fast-dead-letters-statistics-and-repeated-ticks.sql` takes the schema
+from version 59 to version 60. It builds `fast_task_outcome_failed_finished_idx` without
+`CONCURRENTLY`. A database runs this step when it migrates from schema version 25 through 59 to
+0.7.0 or later, for example from 0.5.x or 0.6.x. While the step runs, a fast-tier task cannot
+finish: a completion, a final failure, or a cancellation waits, because each writes an outcome
+row. If no queue used the fast tier, the table is empty and the build is short. A database below
+schema version 25 needs no preparation, because migration 0025 creates the table empty.
+
+To keep fast-tier writes running, build the index concurrently before the upgrade:
+
+1. Read the schema version with `SELECT version FROM workhorse.schema_version;`. Continue only if it
+   is from 25 through 59.
+2. Build the index outside a transaction, with the definition that migration 0061 uses:
+
+   ```sql
+   CREATE INDEX CONCURRENTLY IF NOT EXISTS fast_task_outcome_failed_finished_idx
+     ON workhorse.fast_task_outcome (finished_at DESC, task_id DESC) WHERE state = 'failed';
+   ```
+
+   Use the definition exactly as shown. `IF NOT EXISTS` compares only the name, so migration 0061
+   keeps an index with a different definition, and the schema then differs from a clean
+   installation.
+
+3. Make sure that the index is valid. The query must return `true`:
+
+   ```sql
+   SELECT indisvalid FROM pg_index
+   WHERE indexrelid = 'workhorse.fast_task_outcome_failed_finished_idx'::regclass;
+   ```
+
+   If it returns `false`, the build failed. Remove the index with
+   `DROP INDEX CONCURRENTLY IF EXISTS workhorse.fast_task_outcome_failed_finished_idx;`, then do
+   step 2 again. Migration 0061 does not repair an invalid index, because `IF NOT EXISTS` skips it.
+
+4. Run `workhorse schema migrate`. Migration 0061 finds the index and skips the build.
+
+The processes of the earlier release keep working while the index exists. The index adds a small
+cost to each failed fast-tier outcome that they write.
+
+**A new step must not block writes with an index build.** A step that builds an index on a table
+that an earlier step created uses `CREATE INDEX CONCURRENTLY IF NOT EXISTS` in a non-transactional
+step; see [Non-transactional steps](#non-transactional-steps). A step can build an index without
+`CONCURRENTLY` only on a table that the same step creates. PostgreSQL cannot build an index
+concurrently on a partitioned table, so such a change needs its own rollout plan.
+
+`typescript/core/test/schema-migration-statements.test.ts` rejects a step that does one of these on
+a table that an earlier step or the baseline created. The test also reads the `DO` blocks of the
+step, because a `DO` block cannot build an index concurrently.
+
+- It builds an index without `CONCURRENTLY`.
+- It adds a `PRIMARY KEY`, `UNIQUE`, or `EXCLUDE` constraint without `USING INDEX`.
+- It runs `REINDEX` without `CONCURRENTLY`.
+
+The test names migration 0061 as its one exemption, with the reason. Two earlier steps,
+`0003-named-budgets.sql` and `0006-bounded-dashboard-reads.sql`, also built indexes without
+`CONCURRENTLY`. Both start below the 0.2.0 baseline, so pruning the chain removed them
+([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol

@@ -9,7 +9,9 @@
   [ADR 0073](0073-prune-the-migration-chain-to-the-0-2-0-baseline.md) (0.1.x had no production
   installs, so the chain now begins at the 0.2.0 baseline rather than at 0.1.0),
   [ADR 0077](0077-add-a-fast-task-tier-that-records-one-outcome-row-per-task.md) (migration 0025 is a contract step
-  in the 0.5.0 minor, crossed offline)
+  in the 0.5.0 minor, crossed offline),
+  [ADR 0109](0109-keep-a-function-suffix-when-a-body-change-stays-compatible.md) (a compatible
+  body change keeps the `_vN` suffix)
 - **Related:** WH-604, WH-607, WH-605, WH-582
 
 ## Context
