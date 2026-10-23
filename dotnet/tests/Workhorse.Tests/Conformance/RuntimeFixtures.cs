@@ -252,8 +252,12 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             ? options with { Deadline = DateTimeOffset.UtcNow.AddHours(1) }
             : options with { ExecutionTimeout = TimeSpan.FromMilliseconds(duration) };
         var taskId = await EnqueueAsync(TaskType(fixture), Json.Members(), options);
-        await ShiftClaimsAsync(taskId, deadline ? "deadline_at" : "attempt_timeout_at", lead, deadline ? duration : null);
+        var column = deadline ? "deadline_at" : "attempt_timeout_at";
+        await ShiftClaimsAsync(taskId, column, lead, deadline ? duration : null);
         var reasons = new ConcurrentQueue<string?>();
+        // The expiry PostgreSQL holds for each attempt, and its clock when the handler saw cancellation.
+        var expiries = new ConcurrentQueue<string?>();
+        var cancelledAt = new ConcurrentQueue<string?>();
         var heartbeats = 0;
         Worker? holder = null;
         var hook = new Intercept.Callbacks(
@@ -286,7 +290,9 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         });
         subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
         {
+            expiries.Enqueue(await ValueAsync($"SELECT {column}::text FROM workhorse.task_runtime WHERE task_id = '{taskId}'"));
             await WaitForCancellationAsync("the expiration never reached the handler", context.CancellationToken);
+            cancelledAt.Enqueue(await ValueAsync("SELECT clock_timestamp()::text"));
             reasons.Enqueue(CancelNames.GetValueOrDefault(context.CancelReason ?? CancelReason.Suspended));
             holder!.Pause();
             context.CancellationToken.ThrowIfCancellationRequested();
@@ -304,6 +310,17 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         }
 
         Failure.Check(Matcher.Same(reasons.Cast<object?>().ToList(), fixture.GetValueOrDefault("expectedAbortReasons")), $"abort reasons [{string.Join(", ", reasons)}]");
+
+        // Both times come from the database clock, so the worker clock cannot move either one.
+        Failure.Check(expiries.Count == cancelledAt.Count, $"{expiries.Count} attempts, {cancelledAt.Count} cancellations");
+        var afterExpiry = new List<bool>();
+        foreach (var (at, expiry) in cancelledAt.Zip(expiries))
+        {
+            afterExpiry.Add(await ValueAsync($"SELECT ('{at}'::timestamptz >= '{expiry}'::timestamptz)::text") == "true");
+        }
+
+        var expected = (bool)fixture["expectedCancelledAfterDatabaseExpiry"]!;
+        Failure.Check(afterExpiry.All(after => after == expected), $"cancellation after the database expiry: [{string.Join(", ", afterExpiry)}]");
         await ExpectOutcomesAsync(taskId, (List<object?>)fixture["expectedAttemptOutcomes"]!);
     }
 

@@ -577,19 +577,31 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
     let lead = number(fixture, "localClockLeadMs") as f64;
     let reasons = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&reasons);
+    // Whether PostgreSQL's clock had reached the expiry it held when each handler observed its
+    // cancellation. Both times come from the database clock.
+    let after_expiry = Arc::new(Mutex::new(Vec::new()));
+    let compared = Arc::clone(&after_expiry);
     let url = database.url().to_owned();
-    let worker = worker(database, 4, lease_options(fixture))?;
+    // A maintenance tick could settle the expiry first and turn the next heartbeat into `stale`, so
+    // only the worker's own request settles it here.
+    let options =
+        WorkerOptions { maintenance_interval: Duration::from_secs(3600), ..lease_options(fixture) };
+    let worker = worker(database, 4, options)?;
     worker.handle(task_type, move |_: Value, context: HandlerContext| {
-        let (url, observed) = (url.clone(), Arc::clone(&observed));
+        let (url, observed, compared) = (url.clone(), Arc::clone(&observed), Arc::clone(&compared));
         async move {
             let (client, connection) = tokio_postgres::connect(&url, NoTls).await?;
             tokio::spawn(connection);
             let statement = format!(
                 "UPDATE workhorse.task_runtime SET {column} = {column} + ($2 * interval '1 millisecond')
-                  WHERE task_id = $1"
+                  WHERE task_id = $1 RETURNING {column}"
             );
-            client.execute(&statement, &[&context.task().id, &lead]).await?;
+            let expiry: chrono::DateTime<chrono::Utc> =
+                client.query_one(&statement, &[&context.task().id, &lead]).await?.get(0);
             context.cancellation().cancelled().await;
+            let after: bool =
+                client.query_one("SELECT clock_timestamp() >= $1", &[&expiry]).await?.get(0);
+            compared.lock().unwrap().push(after);
             observed.lock().unwrap().push(context.cancellation().reason());
             Ok(Value::Null)
         }
@@ -607,6 +619,11 @@ async fn expiration(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .map(|name| abort_reason(name).map(Some))
         .collect::<Checked<Vec<_>>>()?;
     check(reasons == expected, || format!("handler abort reasons {reasons:?}, want {expected:?}"))?;
+    let after_expiry = after_expiry.lock().unwrap().clone();
+    let cancelled_after = fixture["expectedCancelledAfterDatabaseExpiry"] == json!(true);
+    check(after_expiry == vec![cancelled_after; reasons.len()], || {
+        format!("cancellation after the database expiry {after_expiry:?}")
+    })?;
     assert_outcomes(&client, task, &strings(&fixture["expectedAttemptOutcomes"])).await
 }
 

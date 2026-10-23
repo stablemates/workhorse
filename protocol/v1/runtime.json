@@ -85,6 +85,7 @@
     "heartbeatMs": 20,
     "maxAttempts": 2,
     "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
     "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" }],
     "expectedAttemptOutcomes": ["deadline_exceeded"]
   },
@@ -100,6 +101,23 @@
     "heartbeatMs": 100,
     "maxAttempts": 2,
     "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
+    "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" }],
+    "expectedAttemptOutcomes": ["deadline_exceeded"]
+  },
+  {
+    "id": "deadline-waits-for-database-beyond-retry-budget",
+    "kind": "expiration",
+    "covers": ["deadline-settlement", "database-authoritative-expiration"],
+    "taskType": "protocol.deadline-clock-lead",
+    "mode": "deadline",
+    "durationMs": 1500,
+    "localClockLeadMs": 2500,
+    "leaseMs": 5000,
+    "heartbeatMs": 300,
+    "maxAttempts": 2,
+    "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
     "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" }],
     "expectedAttemptOutcomes": ["deadline_exceeded"]
   },
@@ -115,6 +133,7 @@
     "heartbeatMs": 20,
     "maxAttempts": 2,
     "expectedAbortReasons": ["ExecutionTimeoutError", "ExecutionTimeoutError"],
+    "expectedCancelledAfterDatabaseExpiry": true,
     "expectedAfterRuns": [
       { "state": "ready", "attempt": 2 },
       { "state": "failed", "attempt": 2, "errorName": "ExecutionTimeout" }

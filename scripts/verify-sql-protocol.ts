@@ -136,6 +136,7 @@ export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
   heartbeatMs: number;
   maxAttempts: number;
   expectedAbortReasons: RuntimeAbortReason[];
+  expectedCancelledAfterDatabaseExpiry: boolean;
   expectedAfterRuns: ExpectedRuntimeState[];
   expectedAttemptOutcomes: TaskAttemptOutcome[];
 }

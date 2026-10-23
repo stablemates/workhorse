@@ -48,6 +48,7 @@ const (
 	workerRecoveryLimit        = 100
 	expirationRetryInterval    = 5 * time.Millisecond
 	expirationRetryBudget      = time.Second
+	expirationRetryMaximum     = time.Second
 	maximumEmptyPollInterval   = 5 * time.Second
 	notificationClaimDelay     = 50 * time.Millisecond
 	// How long a cancelled handler has to unwind before Run stops waiting for it. A handler that
@@ -367,7 +368,10 @@ type Worker struct {
 	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
 	// member, in the order of members. It is queryHeartbeatRound outside tests.
 	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
-	completions    completionBatcher
+	// expireOwned asks PostgreSQL once to expire an attempt while its handler runs
+	// (expireOwnedOnce). Internal tests replace it to order its answer against heartbeat answers.
+	expireOwned func(ctx context.Context, task ClaimedTask) (ownershipStatus, error)
+	completions completionBatcher
 	// claimConnection is holdClaimConnection outside tests. A claim and a fused completion take
 	// their connection through it before they read the claim gate.
 	claimConnection func(ctx context.Context, executor Executor) (Executor, func(), error)
@@ -390,6 +394,10 @@ type heartbeatMember struct {
 	// moves on each accepted renewal. A busy retry never runs past it. Write it only through
 	// publishLeaseEnd.
 	leaseEnd atomic.Pointer[time.Time]
+	// expiring is set while an expire_owned request of the supervising goroutine is in flight. A
+	// stale heartbeat answer can then come from that expiry itself, so it does not cancel the
+	// handler: the expiry answer selects the cause.
+	expiring atomic.Bool
 }
 
 // publishLeaseEnd stores a new copy of end for the heartbeat loop to read. A published value never
@@ -602,6 +610,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		sharedHeartbeats:           options.SharedHeartbeats,
 	}
 	worker.heartbeatRound = worker.queryHeartbeatRound
+	worker.expireOwned = worker.expireOwnedOnce
 	worker.claimConnection = holdClaimConnection
 	return worker, nil
 }
@@ -2272,10 +2281,8 @@ func (worker *Worker) execute(
 			resultError = nil
 		}
 	}()
-	cancelDeadline := func() {}
-	if expiration, cause := ownershipExpiration(task); expiration != nil {
-		handlerParent, cancelDeadline = context.WithDeadlineCause(handlerParent, *expiration, cause)
-	}
+	// The handler context has no deadline of its own. Only the ownership supervisor cancels it for
+	// an expiry, after PostgreSQL confirms it, so a worker clock that runs ahead cannot end it early.
 	handlerContext, cancelHandler := context.WithCancelCause(handlerParent)
 	handlerReturned, releaseOwnership := worker.superviseOwnership(ctx, task, cancelHandler)
 	// Renewal outlives the handler: result validation and the fenced final write can wait on the
@@ -2297,7 +2304,6 @@ func (worker *Worker) execute(
 	ownership := handlerReturned()
 	cause := context.Cause(handlerContext)
 	cancelHandler(nil)
-	cancelDeadline()
 
 	// The stop is the end of Run, or of the context a caller passed to RunOnce. The supervisor
 	// usually reports it first, as its ownership error. A handler that fails after the stop
@@ -2450,10 +2456,19 @@ func (worker *Worker) superviseOwnership(
 	go func() {
 		defer close(exited)
 		defer worker.unregisterHeartbeat(member)
-		expirationTimer, expirationCause := ownershipExpirationTimer(task)
+		// An expire_owned request in flight ends with this goroutine, so a request that a lock or a
+		// stalled connection holds cannot keep its pool connection after the attempt ended.
+		expiryContext, cancelExpiry := context.WithCancel(ctx)
+		defer cancelExpiry()
+		expirationTimer := ownershipExpirationTimer(task)
 		if expirationTimer != nil {
 			defer expirationTimer.Stop()
 		}
+		// One expire_owned request at a time runs in its own goroutine, so renewals, the watchdog,
+		// and heartbeat verdicts keep their effect while PostgreSQL answers.
+		var expiryAnswers chan expiryAnswer
+		var pendingResult *ownershipResult
+		expirationRetry := expirationRetryInterval
 		// The lease watchdog ends this attempt once its last accepted renewal is a full lease old.
 		// A heartbeat that never answers cannot report the loss, and by then a peer may own the
 		// task, so the worker stops the handler on its own clock rather than on an answer.
@@ -2472,8 +2487,10 @@ func (worker *Worker) superviseOwnership(
 			if expirationTimer != nil {
 				expiration = expirationTimer.C
 			}
+			// A handler that returns while a request is in flight waits for its answer, so a
+			// confirmed expiry is not reported as an accepted lease.
 			awaitReturn := returned
-			if !handlerRunning {
+			if !handlerRunning || expiryAnswers != nil {
 				awaitReturn = nil
 			}
 			select {
@@ -2488,7 +2505,18 @@ func (worker *Worker) superviseOwnership(
 				}
 				return
 			case result := <-member.result:
+				if expiryAnswers != nil {
+					// The expiry request can have caused this verdict, or settled the attempt
+					// already, so its answer decides first. No later heartbeat result arrives.
+					pendingResult = &result
+					worker.unregisterHeartbeat(member)
+					continue
+				}
 				if handlerRunning {
+					// A stale verdict can arrive here after the request that suppressed its
+					// cancellation has ended, so the supervisor always cancels. The first cause
+					// stays.
+					cancelHandler(ownershipCause(task, result.status))
 					done <- result
 				}
 				return
@@ -2508,13 +2536,50 @@ func (worker *Worker) superviseOwnership(
 				if !handlerRunning {
 					return
 				}
-				cancelHandler(expirationCause)
-				// Leave the heartbeat batch first: expireOwnership can retry for a while, and this
-				// goroutine does not read member.result until it returns.
-				worker.unregisterHeartbeat(member)
-				status, err := worker.expireOwnership(ctx, task)
-				done <- ownershipResult{status: status, expirationSettled: err == nil, err: err}
-				return
+				member.expiring.Store(true)
+				expiryAnswers = make(chan expiryAnswer, 1)
+				go func(answers chan<- expiryAnswer) {
+					status, err := worker.expireOwned(expiryContext, task)
+					answers <- expiryAnswer{status: status, err: err}
+				}(expiryAnswers)
+			case answer := <-expiryAnswers:
+				expiryAnswers = nil
+				if answer.err == nil && answer.status != workerOwnershipNotDue &&
+					answer.status != workerOwnershipAccepted {
+					// PostgreSQL decided the attempt. A deadline or timeout answer is the settled
+					// expiry, so execute does not write it again. The handler is cancelled while
+					// expiring is still set, so a stale heartbeat that this expiry caused cannot
+					// set its cause first.
+					cancelHandler(ownershipCause(task, answer.status))
+					done <- ownershipResult{
+						status: answer.status,
+						expirationSettled: answer.status == workerOwnershipDeadline ||
+							answer.status == workerOwnershipTimeout,
+					}
+					return
+				}
+				member.expiring.Store(false)
+				if pendingResult != nil {
+					// A heartbeat verdict arrived during the request, and the expiry did not
+					// replace it. A stale verdict did not cancel the handler, so cancel it now.
+					cancelHandler(ownershipCause(task, pendingResult.status))
+					done <- *pendingResult
+					return
+				}
+				if answer.err != nil && ctx.Err() != nil {
+					continue
+				}
+				// not_due is the database refusing an expiry its clock has not reached, and a failed
+				// request proves nothing. The handler keeps running and renewing, and the worker asks
+				// again after a backoff. The lease watchdog still ends an attempt nobody renews.
+				if answer.err != nil {
+					worker.logger.WarnContext(
+						ctx, expirationRequestFailedMessage,
+						append(taskLogAttributes(task, worker.workerID), errorLogField, answer.err)...,
+					)
+				}
+				resetTimer(expirationTimer, expirationRetry)
+				expirationRetry = min(2*expirationRetry, expirationRetryMaximum)
 			}
 		}
 	}()
@@ -2875,7 +2940,9 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 			worker.recordHeartbeatStatus(member.ctx, status)
 			busy = append(busy, member)
 		default:
-			member.cancelHandler(ownershipCause(member.task, status))
+			if status != workerOwnershipStale || !member.expiring.Load() {
+				member.cancelHandler(ownershipCause(member.task, status))
+			}
 			worker.recordRejectedHeartbeat(member.ctx, member.task, status)
 			member.deliver(ownershipResult{status: status})
 		}
@@ -3038,29 +3105,22 @@ func (worker *Worker) recordRejectedHeartbeat(
 	)
 }
 
-func ownershipExpirationTimer(task ClaimedTask) (*time.Timer, error) {
-	expiration, cause := ownershipExpiration(task)
-	if expiration == nil {
-		return nil, nil
-	}
-	return time.NewTimer(max(time.Millisecond, time.Until(expiration.Add(time.Millisecond)))), cause
+type expiryAnswer struct {
+	status ownershipStatus
+	err    error
 }
 
-func ownershipExpiration(task ClaimedTask) (*time.Time, error) {
-	var expiration *time.Time
-	var cause error
-	if task.Deadline != nil {
-		expiration = task.Deadline
-		cause = &DeadlineExceededError{TaskID: task.ID}
-	}
+// ownershipExpirationTimer fires at the earlier of the task deadline and the attempt timeout, on
+// the worker clock. It only starts a question to PostgreSQL, which decides whether the expiry is due.
+func ownershipExpirationTimer(task ClaimedTask) *time.Timer {
+	expiration := task.Deadline
 	if task.AttemptTimeout != nil && (expiration == nil || task.AttemptTimeout.Before(*expiration)) {
 		expiration = task.AttemptTimeout
-		cause = &ExecutionTimeoutError{TaskID: task.ID, Attempt: task.Attempt}
 	}
 	if expiration == nil {
-		return nil, nil
+		return nil
 	}
-	return expiration, cause
+	return time.NewTimer(max(time.Millisecond, time.Until(expiration.Add(time.Millisecond))))
 }
 
 func ownershipCause(task ClaimedTask, status ownershipStatus) error {
@@ -3076,19 +3136,26 @@ func ownershipCause(task ClaimedTask, status ownershipStatus) error {
 	}
 }
 
+// expireOwnedOnce asks PostgreSQL once to expire the attempt's ownership under its fence.
+func (worker *Worker) expireOwnedOnce(ctx context.Context, task ClaimedTask) (ownershipStatus, error) {
+	rows, err := queryFencedWrite(
+		ctx,
+		NewPGXExecutor(worker.pool),
+		protocolStatementRegistry[expireOwnedStatementName],
+		worker.fencedLease(task).parameters()...,
+	)
+	if err != nil {
+		return emptyString, err
+	}
+	return parseOwnershipStatus(rows)
+}
+
+// expireOwnership settles an expiry after the handler returned. It asks again while PostgreSQL
+// answers not_due, within expirationRetryBudget.
 func (worker *Worker) expireOwnership(ctx context.Context, task ClaimedTask) (ownershipStatus, error) {
 	deadline := time.Now().Add(expirationRetryBudget)
 	for {
-		rows, err := queryFencedWrite(
-			ctx,
-			NewPGXExecutor(worker.pool),
-			protocolStatementRegistry[expireOwnedStatementName],
-			worker.fencedLease(task).parameters()...,
-		)
-		if err != nil {
-			return emptyString, err
-		}
-		status, err := parseOwnershipStatus(rows)
+		status, err := worker.expireOwnedOnce(ctx, task)
 		if err != nil || status != workerOwnershipNotDue || !time.Now().Before(deadline) {
 			return status, err
 		}

@@ -326,17 +326,19 @@ func TestSlowExpirationDoesNotStallHeartbeatsForOtherTasks(t *testing.T) {
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
 
-	// The handler's cancellation precedes the SQL call, so also wait for the call to reach the gate.
+	// The handler keeps running until PostgreSQL answers the expiry, so wait for the call to reach
+	// the gate. The handler must not observe a cancellation before that answer.
+	waitForBlockedExpiry(t, ctx, pool, gatePID)
 	select {
 	case <-expiring:
+		t.Fatal("the expiring handler was cancelled before PostgreSQL answered the expiry")
 	case err := <-workerResult:
 		t.Fatalf("worker stopped before the expiry window opened: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the expiring handler never observed its timeout")
+	default:
 	}
-	waitForBlockedExpiry(t, ctx, pool, gatePID)
-	// If the expiring member stays registered, every subsequent round reports it as non-accepted,
-	// which is the shape that used to fill its result channel and block the shared loop.
+	// The expiring member stays registered while its expiry is in flight. After the cancellation
+	// request, every round reports it as non-accepted, which is the shape that used to fill its
+	// result channel and block the shared loop.
 	requestedBy := "go-test"
 	if _, err := queue.Cancel(ctx, expiringID, workhorse.CancellationRequest{RequestedBy: &requestedBy}); err != nil {
 		t.Fatal(err)
