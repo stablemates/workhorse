@@ -401,7 +401,11 @@ impl<E: Executor> Host<E> {
         let extension = self.extensions.get(name);
         if extension.is_none() && !backend::BUILT_INS.contains(&name) {
             return rpc_error(if OPTIONAL_MUTATIONS.contains(&name) {
-                RpcError::new(403, "FORBIDDEN", "This procedure is not available")
+                RpcError::new(
+                    403,
+                    "FORBIDDEN",
+                    format!("This dashboard host does not provide the {name} action"),
+                )
             } else {
                 RpcError::new(404, "NOT_FOUND", "Procedure not found")
             });

@@ -270,7 +270,7 @@ func (host *handler) serveRPC(response http.ResponseWriter, request *http.Reques
 	procedure := host.options.Procedures[name]
 	if procedure == nil {
 		if optionalMutations[name] {
-			writeRPCError(response, http.StatusForbidden, "FORBIDDEN", "This procedure is not available")
+			writeRPCError(response, http.StatusForbidden, "FORBIDDEN", "This dashboard host does not provide the "+name+" action")
 			return
 		}
 		writeRPCError(response, http.StatusNotFound, "NOT_FOUND", "Procedure not found")

@@ -352,7 +352,12 @@ class DashboardServletTest {
       assertEquals(404, server.post(rpc + "nothing", "{}").status());
       TestServer.Response optional = server.post(rpc + "enqueueTest", "{}");
       assertEquals(403, optional.status());
-      assertTrue(optional.text().contains("This procedure is not available"));
+      assertTrue(
+          optional
+              .text()
+              .contains(
+                  "\"message\":\"This dashboard host does not provide the enqueueTest action\""),
+          optional.text());
       assertEquals(400, server.post(rpc + "meta", "[1]").status());
       assertEquals(400, server.post(rpc + "meta", "{").status());
       assertEquals(400, server.post(rpc + "meta", "{\"json\":{}}").status());
@@ -392,6 +397,16 @@ class DashboardServletTest {
           "BAD_REQUEST",
           Json.object(Json.object(Json.parse(large.text())).get("json")).get("code"));
       assertTrue(elapsed < 2000, "the dashboard answered after " + elapsed + " ms");
+    }
+  }
+
+  @Test
+  void answersAnUnprovidedActionAsReadOnlyOnAReadOnlyDashboard() throws Exception {
+    try (TestServer server = new TestServer("", builder().readOnly(true).build())) {
+      TestServer.Response response = server.post("/workhorse/rpc/dashboard/enqueueTest", "{}");
+      assertEquals(403, response.status());
+      assertTrue(
+          response.text().contains("\"message\":\"This dashboard is read-only\""), response.text());
     }
   }
 

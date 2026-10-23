@@ -219,9 +219,19 @@ RSpec.describe W::Dashboard do
     end
 
     it "refuses an optional mutation the host did not register and an unknown procedure" do
-      expect(rpc(dashboard, "enqueueTest", {"kind" => "success"})[1].dig("json", "code")).to eq("FORBIDDEN")
+      status, body = rpc(dashboard, "enqueueTest", {"kind" => "success"})
+      expect(status).to eq(403)
+      expect(body).to eq("json" => {"defined" => false, "code" => "FORBIDDEN", "status" => 403,
+                                    "message" => "This dashboard host does not provide the enqueueTest action"})
       expect(rpc(dashboard, "noSuchProcedure", nil)).to eq([404, {"json" => {"defined" => false,
                                                                              "code" => "NOT_FOUND", "status" => 404, "message" => "Procedure not found"}}])
+    end
+
+    it "refuses an optional mutation the host did not register as read-only on a read-only dashboard" do
+      status, body = rpc(dashboard(read_only: true), "enqueueTest", {"kind" => "success"})
+
+      expect(status).to eq(403)
+      expect(body.dig("json", "message")).to eq("This dashboard is read-only")
     end
 
     it "answers 405 for a method other than POST" do

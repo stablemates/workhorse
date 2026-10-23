@@ -47,6 +47,13 @@ adds.
   retention deleted a 13-day-old schedule occurrence under a 14-day policy. Now `Worker.run` and
   `Worker.runOnce` bind the text `now`, and PostgreSQL resolves it to its own time at the start of
   the call (SM-1645). The schema does not change.
+- **The dashboard names an action that the host does not provide.** The `Dashboard` filter answers
+  the `enqueueTest` and `setSchedulePaused` procedures only when the application gives a handler
+  for them. Before this change, a writable dashboard without that handler answered `FORBIDDEN` with
+  the message "This procedure is not available". Now the message is "This dashboard host does not
+  provide the <action> action", as in the TypeScript dashboard server. A read-only dashboard keeps
+  the message "This dashboard is read-only". The code `FORBIDDEN` and the HTTP status 403 do not
+  change (SM-1705).
 - **A lost notification subscription restarts the poll backoff.** Before this change, the empty
   claims of a live period counted toward the 250 ms backoff without a live subscription. After a
   loss, a worker that was idle for some time waited the 5,000 ms ceiling at once. Now the backoff

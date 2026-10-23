@@ -62,12 +62,14 @@ def _host(
         DashboardPrincipal("operator@example.test")
     ),
     audit_actor: str | None = None,
+    read_only: bool = False,
 ) -> DashboardHost:
     return DashboardHost(
         cast(object, _Connection()),
         authorize=authorize,
         environment="test",
         audit_actor=audit_actor,
+        read_only=read_only,
         _procedures={"meta": lambda _input, actor: {"environment": "test", "actor": actor}},
         _skip_compatibility_check=True,
     )
@@ -213,9 +215,18 @@ def test_dashboard_host_uses_the_audit_actor_only_without_a_principal() -> None:
     assert actor(_host(lambda _: True)) == "dashboard"
 
 
-def test_dashboard_host_forbids_an_unavailable_optional_mutation() -> None:
+@pytest.mark.parametrize(
+    ("read_only", "message"),
+    [
+        (False, "This dashboard host does not provide the setSchedulePaused action"),
+        (True, "This dashboard is read-only"),
+    ],
+)
+def test_dashboard_host_forbids_an_unavailable_optional_mutation(
+    read_only: bool, message: str
+) -> None:
     status, _, body = _request(
-        _host(),
+        _host(read_only=read_only),
         "/workhorse/rpc/dashboard/setSchedulePaused",
         method="POST",
         origin="https://example.test",
@@ -226,7 +237,7 @@ def test_dashboard_host_forbids_an_unavailable_optional_mutation() -> None:
         "json": {
             "code": "FORBIDDEN",
             "defined": False,
-            "message": "This procedure is not available",
+            "message": message,
             "status": 403,
         }
     }

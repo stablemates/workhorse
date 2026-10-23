@@ -114,19 +114,35 @@ func TestHandlerRejectsCrossOriginMutation(t *testing.T) {
 }
 
 func TestHandlerForbidsUnavailableOptionalMutation(t *testing.T) {
-	handler := testHandler(t, func(*http.Request) Authorization {
-		return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
-	})
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
-		http.MethodPost,
-		"https://example.test/workhorse/rpc/dashboard/setSchedulePaused",
-		strings.NewReader(`{"json":null}`),
-	)
-	request.Header.Set("Origin", "https://example.test")
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"FORBIDDEN"`) {
-		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	for _, test := range []struct {
+		readOnly bool
+		message  string
+	}{
+		{false, "This dashboard host does not provide the setSchedulePaused action"},
+		{true, "This dashboard is read-only"},
+	} {
+		handler, err := newHandler(HandlerOptions{
+			Executor: rejectingExecutor{},
+			ReadOnly: test.readOnly,
+			Authorize: func(*http.Request) Authorization {
+				return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
+			},
+		}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"https://example.test/workhorse/rpc/dashboard/setSchedulePaused",
+			strings.NewReader(`{"json":null}`),
+		)
+		request.Header.Set("Origin", "https://example.test")
+		handler.ServeHTTP(response, request)
+		want := `{"json":{"code":"FORBIDDEN","defined":false,"message":"` + test.message + `","status":403}}`
+		if response.Code != http.StatusForbidden || strings.TrimSpace(response.Body.String()) != want {
+			t.Fatalf("read-only %v: response = %d %s", test.readOnly, response.Code, response.Body.String())
+		}
 	}
 }
 

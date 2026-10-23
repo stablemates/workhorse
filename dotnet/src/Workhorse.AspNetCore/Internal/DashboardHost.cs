@@ -319,7 +319,7 @@ internal sealed partial class DashboardHost
         if (builtIn is null && extension is null)
         {
             return OptionalMutations.Contains(procedure)
-                ? RpcError(403, "FORBIDDEN", "This procedure is not available")
+                ? RpcError(403, "FORBIDDEN", $"This dashboard host does not provide the {procedure} action")
                 : RpcError(404, "NOT_FOUND", "Procedure not found");
         }
 
