@@ -5,6 +5,7 @@ import type { QueryResult } from "pg";
 import {
   canReserveHeartbeatConnection,
   holdHeartbeatConnection,
+  MINIMUM_REMAINING_MS,
   ReservedConnection,
 } from "../src/heartbeat-connection.js";
 import { attachConnectionPool } from "../src/index.js";
@@ -216,12 +217,27 @@ describe("reserved heartbeat connection", () => {
 
   it("never sets a positive budget to zero on a short round", async () => {
     const { pool, clients } = fakePool();
+    const connect = pool.connect.getMockImplementation()!;
+    // The connect takes real time, because vitest does not fake node:timers/promises. Only the fake
+    // clock and round timer count, so a stall on a loaded host does not shorten the round.
+    pool.connect.mockImplementation(async () => {
+      await sleep(20);
+      return connect();
+    });
     const connection = new ReservedConnection(asDatabase(pool));
-
-    await renew(connection, 12);
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    try {
+      // The shortest round that sends its heartbeat.
+      await renew(connection, MINIMUM_REMAINING_MS);
+    } finally {
+      vi.useRealTimers();
+    }
     await connection.close();
 
+    expect(sent(clients[0]!)).toEqual(bounded);
     const budgets = (clients[0]!.query.mock.calls[1]![1] as string[]).map(Number);
+    const quarter = Math.floor(MINIMUM_REMAINING_MS / 4);
+    expect(budgets).toEqual([quarter, quarter]);
     expect(Math.min(...budgets)).toBeGreaterThanOrEqual(1);
   });
 
