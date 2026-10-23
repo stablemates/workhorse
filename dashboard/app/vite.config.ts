@@ -27,6 +27,38 @@ const auditActor = process.env.WORKHORSE_DASHBOARD_ACTOR ?? "dashboard-dev";
 const demoTools = process.env.WORKHORSE_DASHBOARD_DEMO_TOOLS !== "false";
 const reactGrabEntry = resolve(import.meta.dirname, "browser/react-grab.ts");
 
+/**
+ * Matches a module inside one of the named npm package directories, and nothing else.
+ *
+ * A prefix test such as `/node_modules/react` also matches `react-redux`, `react-is`, and every
+ * other `react-*` package. Ending the match at the directory separator keeps each group to the
+ * packages it names. pnpm keeps the package directory name under `.pnpm/<id>/node_modules/`, so
+ * the same pattern works for both layouts.
+ */
+function packageDirectories(...names: readonly string[]): RegExp {
+  const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+  return new RegExp(`[\\\\/]node_modules[\\\\/](?:${escaped.join("|")})[\\\\/]`);
+}
+
+/**
+ * The named vendor chunks of the browser bundle, highest priority first.
+ *
+ * Rolldown also puts each captured module's dependencies into its group. A higher priority makes
+ * a group capture its own packages before a lower group takes them as dependencies. React has the
+ * highest priority, so React, React DOM, and the scheduler stay in the eager `react` chunk and no
+ * Mantine or icon chunk holds them. The chart group takes Recharts and its Redux store as its
+ * dependencies, so that code loads only with the lazy activity chart. Every module that no group
+ * matches, such as the page modules, stays in Rolldown's default chunking.
+ * `src/bundle-architecture.test.ts` builds the bundle and pins the contents of each chunk.
+ */
+const dashboardVendorChunks = [
+  { name: "react", test: packageDirectories("react", "react-dom", "scheduler"), priority: 50 },
+  { name: "mantine", test: packageDirectories("@mantine/core", "@mantine/hooks"), priority: 40 },
+  { name: "icons", test: packageDirectories("@phosphor-icons/react"), priority: 30 },
+  { name: "notifications", test: packageDirectories("@mantine/notifications"), priority: 20 },
+  { name: "mantine-charts", test: packageDirectories("@mantine/charts"), priority: 10 },
+] as const;
+
 export default defineConfig({
   root: "browser",
   base: "./",
@@ -62,18 +94,9 @@ export default defineConfig({
   build: {
     outDir: "../dist/app",
     emptyOutDir: false,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (id.includes("/node_modules/@mantine/charts/")) return "mantine-charts";
-          if (id.includes("/node_modules/@mantine/notifications/")) return "notifications";
-          if (id.includes("/node_modules/@mantine/")) return "mantine";
-          if (id.includes("/node_modules/@phosphor-icons/")) return "icons";
-          if (id.includes("/node_modules/react") || id.includes("/node_modules/scheduler")) {
-            return "react";
-          }
-          return undefined;
-        },
+        codeSplitting: { groups: [...dashboardVendorChunks] },
       },
     },
   },
