@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Workhorse.Internal;
+using Workhorse.Tests.Conformance;
 using Workhorse.Tests.Testing;
 using static Workhorse.Tests.Testing.WorkerHarness;
 
@@ -492,16 +493,22 @@ public sealed class WorkerTests(ScratchDatabase database)
     [Fact]
     public async Task AMaintenancePassRunsTheRetentionRoutines()
     {
+        // SM-1738: one session at a time runs a routine. A pass that does not get the routine's
+        // try-lock skips it and writes no completion time. Each worker of a parallel test runs the
+        // routines of the shared scratch database, and a stopped worker can leave its pass running.
+        // So this test uses a database of its own, where only its own worker runs maintenance.
+        await using var own = await new ConformanceDatabases(database).CreateAsync("retention_maintenance");
+
         // The routine runs again only after its interval, so the test marks it as never run.
         await ScalarAsync(
-            database.DataSource, "UPDATE workhorse.maintenance_state SET last_completed_at = NULL WHERE routine_name = 'terminal_storage'");
-        await using var worker = new Worker(database.DataSource, Options(UniqueQueue("retention")));
+            own.DataSource, "UPDATE workhorse.maintenance_state SET last_completed_at = NULL WHERE routine_name = 'terminal_storage'");
+        await using var worker = new Worker(own.DataSource, Options(UniqueQueue("retention")));
 
         Assert.False(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
         Assert.Equal(
             1L,
             await ScalarAsync(
-                database.DataSource,
+                own.DataSource,
                 "SELECT count(*) FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage' AND last_completed_at IS NOT NULL"));
     }
 
