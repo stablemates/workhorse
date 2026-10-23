@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
@@ -1403,11 +1404,24 @@ final class RuntimeFixtures {
     }
   }
 
+  /** The shortest wait at the notification base: 5 s less its jitter of 10 %. */
+  private static final long NOTIFICATION_WAIT_MINIMUM_NANOS = TimeUnit.MILLISECONDS.toNanos(4_500);
+
+  /**
+   * The longest wait at the polling-only base after the backoff restarts is 275 ms. A worker that
+   * makes no claim for this time after an empty claim waits at the notification base.
+   */
+  private static final long QUIET_BEFORE_LOSS_NANOS = TimeUnit.SECONDS.toNanos(1);
+
   /**
    * Runs a worker that can listen, but holds its {@code LISTEN} until the first task ran. Without a
    * live subscription, the worker polls at the polling-only base. With one, it waits for the
    * notification poll interval after each empty claim. When the runner ends the listener session,
    * the loss wakes the worker, and it polls at the polling-only base again.
+   *
+   * <p>The bounds after the loss start at events that the runner controls, not at the moment the
+   * runner sees them. A loaded runner sees an event late, and the worker's backoff grows in that
+   * time. A late observation would thus charge the runner's delay to the worker.
    */
   private void subscriptionRecovery(Map<String, @Nullable Object> fixture) throws Exception {
     String name = queueName(fixture);
@@ -1423,6 +1437,11 @@ final class RuntimeFixtures {
     int recoveryEnd = 0;
     long lostAt = 0;
     long enqueuedAfterLoss = 0;
+    // The runner can hold the first empty claim that starts at or after holdFrom. The hook records
+    // that claim, counts down reached, and returns it to the worker only after released.
+    AtomicLong holdFrom = new AtomicLong(Long.MAX_VALUE);
+    CountDownLatch reached = new CountDownLatch(1);
+    CountDownLatch released = new CountDownLatch(1);
     Intercept.Hook hook =
         new Intercept.Hook() {
           @Override
@@ -1433,13 +1452,23 @@ final class RuntimeFixtures {
           }
 
           @Override
-          public void after(Intercept.Call call) {
+          public void after(Intercept.Call call) throws InterruptedException {
             if (!call.is(SqlCatalogue.CLAIM_MANY_V1)) {
               return;
             }
             Long start = starts.remove(call);
+            long started = start == null ? 0 : start;
             if (recording.get()) {
-              claims.add(new long[] {start == null ? 0 : start, System.nanoTime(), call.rows()});
+              claims.add(new long[] {started, System.nanoTime(), call.rows()});
+            }
+            long from = holdFrom.get();
+            if (call.rows() == 0
+                && started >= from
+                && holdFrom.compareAndSet(from, Long.MAX_VALUE)) {
+              reached.countDown();
+              if (!released.await(15, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("the held claim was never released");
+              }
             }
           }
         };
@@ -1488,7 +1517,10 @@ final class RuntimeFixtures {
         recoveryEnd = claims.size();
 
         // The next empty claim starts a new wait at the notification base. Then the runner ends the
-        // live listener session and holds the next LISTEN, so the subscription is lost.
+        // live listener session and holds the next LISTEN, so the subscription is lost. The wait
+        // is internal to the worker. Thus the runner first waits until the worker has made no claim
+        // for QUIET_BEFORE_LOSS_NANOS after an empty claim. A loss before the worker chose its wait
+        // gives the polling base without a wake.
         int afterRecovery = recoveryEnd;
         eventually(
             "the worker made no empty claim after the second task",
@@ -1499,30 +1531,35 @@ final class RuntimeFixtures {
                     .anyMatch(claim -> claim[2] == 0);
               }
             });
-        listenGate.set(new CountDownLatch(1));
-        int pid = listenerPid.get();
-        check(pid != 0, "the runner did not see the pid of the listener session");
-        value("SELECT pg_terminate_backend(" + pid + ")::text");
         eventually(
-            "the listener session did not end",
-            7,
-            () -> value("SELECT 1 FROM pg_stat_activity WHERE pid = " + pid) == null);
-        lostAt = System.nanoTime();
-        // The loss wakes the worker. The third task waits for the claims after that wake.
-        long lost = lostAt;
-        eventually(
-            "the worker made no claim after the subscription was lost",
+            "the worker did not wait at the notification base after the second task",
             7,
             () -> {
               synchronized (claims) {
-                return claims.stream().anyMatch(claim -> claim[0] >= lost);
+                long[] last = claims.get(claims.size() - 1);
+                return last[2] == 0 && System.nanoTime() - last[1] >= QUIET_BEFORE_LOSS_NANOS;
               }
             });
+        listenGate.set(new CountDownLatch(1));
+        int pid = listenerPid.get();
+        check(pid != 0, "the runner did not see the pid of the listener session");
+        // The loss starts when the runner ends the session. The hook holds the first empty claim
+        // after that moment, which is the claim that the loss wakes. The worker thus cannot advance
+        // its backoff before the runner enqueues the third task.
+        lostAt = System.nanoTime();
+        holdFrom.set(lostAt);
+        value("SELECT pg_terminate_backend(" + pid + ")::text");
+        eventually(
+            "the worker made no claim after the subscription was lost",
+            7,
+            () -> reached.getCount() == 0);
         enqueuedAfterLoss = System.nanoTime();
         enqueue(taskType(fixture), Map.of("task", "third"), options(name));
+        released.countDown();
         eventually("the worker did not run the third task", 7, () -> handled.size() == 3);
       } finally {
         recording.set(false);
+        released.countDown();
         listenGate.get().countDown();
         subject.stop();
         run.get(10, TimeUnit.SECONDS);
@@ -1574,14 +1611,14 @@ final class RuntimeFixtures {
             + allowed);
     // After the loss, the worker claims at once and then polls at the polling-only base again.
     long lossMaximum = (Long) fixture.get("expectedMaximumClaimDelayAfterLossMs");
-    long lost = lostAt;
-    long afterLoss =
-        TimeUnit.NANOSECONDS.toMillis(
-            ordered.stream()
-                    .filter(claim -> claim[0] >= lost)
-                    .findFirst()
-                    .orElseThrow(() -> new Failure("no claim started after the loss"))[0]
-                - lostAt);
+    int woken = -1;
+    for (int index = 0; index < ordered.size() && woken < 0; index++) {
+      if (ordered.get(index)[0] >= lostAt) {
+        woken = index;
+      }
+    }
+    check(woken > 0, "no claim after the subscription was lost had a claim before it");
+    long afterLoss = TimeUnit.NANOSECONDS.toMillis(ordered.get(woken)[0] - lostAt);
     check(
         afterLoss <= lossMaximum,
         "after the subscription was lost, the first claim waited "
@@ -1589,6 +1626,23 @@ final class RuntimeFixtures {
             + " ms, want at most "
             + lossMaximum
             + " ms");
+    // The claim before the woken one found no task. The worker made no claim for
+    // QUIET_BEFORE_LOSS_NANOS after it, so it waited at the notification base. The woken claim
+    // started before the shortest wait at that base ended, so the loss started it.
+    long[] before = ordered.get(woken - 1);
+    check(
+        before[2] == 0 && lostAt - before[1] >= QUIET_BEFORE_LOSS_NANOS,
+        "the claim before the loss returned "
+            + TimeUnit.NANOSECONDS.toMillis(lostAt - before[1])
+            + " ms before it, want an empty claim at least "
+            + TimeUnit.NANOSECONDS.toMillis(QUIET_BEFORE_LOSS_NANOS)
+            + " ms before");
+    check(
+        ordered.get(woken)[0] - before[1] < NOTIFICATION_WAIT_MINIMUM_NANOS,
+        "the first claim after the subscription was lost started "
+            + TimeUnit.NANOSECONDS.toMillis(ordered.get(woken)[0] - before[1])
+            + " ms after the claim before it, so the wait at the notification base, not the loss,"
+            + " started it");
     long third = TimeUnit.NANOSECONDS.toMillis(ordered.get(found.get(2))[0] - enqueuedAfterLoss);
     check(
         third <= lossMaximum,

@@ -1207,12 +1207,26 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         }
     }
 
+    /// <summary>The shortest wait at the notification base: 5 s less its jitter of 10 %.</summary>
+    private const long NotificationWaitMinimumMs = 4_500;
+
+    /// <summary>
+    /// The longest wait at the polling-only base after the backoff restarts is 275 ms. A worker that
+    /// makes no claim for this time after an empty claim waits at the notification base.
+    /// </summary>
+    private const long QuietBeforeLossMs = 1_000;
+
     /// <summary>
     /// Runs a worker that can listen, but holds its <c>LISTEN</c> until the first task ran. Without a
     /// live subscription, the worker polls at the polling-only base. With one, it waits for the
     /// notification poll interval after each empty claim. When the runner ends the listener session,
     /// the loss wakes the worker, and it polls at the polling-only base again.
     /// </summary>
+    /// <remarks>
+    /// The bounds after the loss start at events that the runner controls, not at the moment the
+    /// runner sees them. A loaded runner sees an event late, and the worker's backoff grows in that
+    /// time. A late observation would thus charge the runner's delay to the worker.
+    /// </remarks>
     private async Task SubscriptionRecoveryAsync(OrderedDictionary<string, object?> fixture)
     {
         var name = QueueName(fixture);
@@ -1225,6 +1239,11 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var recoveryEnd = 0;
         long lostAt = 0;
         long enqueuedAfterLoss = 0;
+        // The runner can hold the first empty claim that starts at or after holdFrom. The hook
+        // records that claim, sets reached, and returns it to the worker only after released.
+        var holdFrom = long.MaxValue;
+        using var reached = new ManualResetEventSlim(false);
+        using var released = new ManualResetEventSlim(false);
 
         // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
         var claims = new ConcurrentQueue<(long Start, long End, long Rows)>();
@@ -1256,6 +1275,13 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 {
                     claims.Enqueue((start, Stopwatch.GetTimestamp(), call.Rows));
                 }
+
+                var from = Volatile.Read(ref holdFrom);
+                if (call.Rows == 0 && start >= from && Interlocked.CompareExchange(ref holdFrom, long.MaxValue, from) == from)
+                {
+                    reached.Set();
+                    Failure.Check(released.Wait(TimeSpan.FromSeconds(15)), "the held claim was never released");
+                }
             });
         await using (var pool = Intercept.Create(_database, hook))
         {
@@ -1283,25 +1309,37 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
                 // The next empty claim starts a new wait at the notification base. Then the runner ends
                 // the live listener session and holds the next LISTEN, so the subscription is lost.
+                // The wait is internal to the worker. Thus the runner first waits until the worker
+                // listens and has made no claim for QuietBeforeLossMs after an empty claim. A loss
+                // before the worker chose its wait gives the polling base without a wake.
                 await EventuallyAsync("the worker made no empty claim after the second task", 7, () => claims.Skip(recoveryEnd).Any(claim => claim.Rows == 0));
+                await EventuallyAsync("the worker did not wait at the notification base after the second task", 7, () =>
+                {
+                    var last = claims.Last();
+                    return subject.ListeningForTests && last.Rows == 0 && Stopwatch.GetElapsedTime(last.End).TotalMilliseconds >= QuietBeforeLossMs;
+                });
                 var held = new ManualResetEventSlim(false);
                 gates.Enqueue(held);
                 Volatile.Write(ref listenGate, held);
                 var pid = Volatile.Read(ref listenerPid);
                 Failure.Check(pid != 0, "the runner did not see the pid of the listener session");
-                await ValueAsync($"SELECT pg_terminate_backend({pid})::text");
-                await EventuallyAsync("the listener session did not end", 7, async () => await ValueAsync($"SELECT 1 FROM pg_stat_activity WHERE pid = {pid}") is null);
-                lostAt = Stopwatch.GetTimestamp();
 
-                // The loss wakes the worker. The third task waits for the claims after that wake.
-                await EventuallyAsync("the worker made no claim after the subscription was lost", 7, () => claims.Any(claim => claim.Start >= lostAt));
+                // The loss starts when the runner ends the session. The hook holds the first empty
+                // claim after that moment, which is the claim that the loss wakes. The worker thus
+                // cannot advance its backoff before the runner enqueues the third task.
+                lostAt = Stopwatch.GetTimestamp();
+                Volatile.Write(ref holdFrom, lostAt);
+                await ValueAsync($"SELECT pg_terminate_backend({pid})::text");
+                await EventuallyAsync("the worker made no claim after the subscription was lost", 7, () => reached.IsSet);
                 enqueuedAfterLoss = Stopwatch.GetTimestamp();
                 await EnqueueAsync(TaskType(fixture), Json.Members(("task", "third")), Options(name));
+                released.Set();
                 await EventuallyAsync("the worker did not run the third task", 7, () => handled.Count == 3);
             }
             finally
             {
                 Volatile.Write(ref recording, 0);
+                released.Set();
                 foreach (var gate in gates)
                 {
                     gate.Set();
@@ -1332,8 +1370,19 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
 
         // After the loss, the worker claims at once and then polls at the polling-only base again.
         var lossMaximum = (long)fixture["expectedMaximumClaimDelayAfterLossMs"]!;
-        var afterLoss = (long)Stopwatch.GetElapsedTime(lostAt, ordered.First(claim => claim.Start >= lostAt).Start).TotalMilliseconds;
+        var woken = ordered.FindIndex(claim => claim.Start >= lostAt);
+        Failure.Check(woken > 0, "no claim after the subscription was lost had a claim before it");
+        var afterLoss = (long)Stopwatch.GetElapsedTime(lostAt, ordered[woken].Start).TotalMilliseconds;
         Failure.Check(afterLoss <= lossMaximum, $"after the subscription was lost, the first claim waited {afterLoss} ms, want at most {lossMaximum} ms");
+
+        // The claim before the woken one found no task. The worker made no claim for
+        // QuietBeforeLossMs after it, so it waited at the notification base. The woken claim
+        // started before the shortest wait at that base ended, so the loss started it.
+        var before = ordered[woken - 1];
+        var quiet = (long)Stopwatch.GetElapsedTime(before.End, lostAt).TotalMilliseconds;
+        Failure.Check(before.Rows == 0 && quiet >= QuietBeforeLossMs, $"the claim before the loss returned {quiet} ms before it, want an empty claim at least {QuietBeforeLossMs} ms before");
+        var sinceBefore = (long)Stopwatch.GetElapsedTime(before.End, ordered[woken].Start).TotalMilliseconds;
+        Failure.Check(sinceBefore < NotificationWaitMinimumMs, $"the first claim after the subscription was lost started {sinceBefore} ms after the claim before it, so the wait at the notification base, not the loss, started it");
         var third = (long)Stopwatch.GetElapsedTime(enqueuedAfterLoss, ordered[found[2]].Start).TotalMilliseconds;
         Failure.Check(third <= lossMaximum, $"after the subscription was lost, the claim of the third task waited {third} ms, want at most {lossMaximum} ms");
     }

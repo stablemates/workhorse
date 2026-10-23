@@ -261,6 +261,23 @@ lost. The first claim after the loss must start within `expectedMaximumClaimDela
 After that claim, the runner enqueues a third task. The claim that finds it must also start within
 `expectedMaximumClaimDelayAfterLossMs` after the enqueue.
 
+Both bounds start at events that the runner controls, not at the moment the runner sees them. A
+loaded runner sees an event late, and the worker's backoff grows in that time. Thus each runner
+obeys these rules:
+
+1. The runner ends the listener session only when the worker is in its wait at the notification
+   base. A loss before the worker chose that wait gives the polling-only base without a wake. The
+   Python, TypeScript, and Ruby runners read the wait and its deadline from the worker.
+2. The Go, JVM, .NET, and Rust runners cannot read the wait. They wait until the worker has made
+   no claim for 1 s after an empty claim. A wait at the polling-only base after the backoff
+   restarts is at most 275 ms. If the worker cannot run for 1 s between that claim and its choice
+   of wait, this check cannot see the wait.
+3. The loss starts just before the runner ends the session.
+4. The runner holds the first empty claim after the loss until it has enqueued the third task.
+5. The first claim after the loss must start before its wait at the notification base ends, so
+   the loss, not that wait, started the claim. A runner that reads the wait compares with its
+   deadline. The other runners compare with the shortest wait at that base, 4,500 ms.
+
 ### Durable replay conflicts
 
 All seven SDK workers settle durable replay conflicts through `fail_v1` with `p_retry_delay_ms = -1`.

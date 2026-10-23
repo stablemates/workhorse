@@ -306,13 +306,19 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 // subscriptionRecoveryQueryTracer holds each LISTEN of the listener until the test closes the
 // current listen gate, so the worker has no live subscription until then. The test can arm a new
 // gate to hold the next LISTEN. The tracer records the backend pid of the connection that runs
-// LISTEN. It records every claim_many_v1 call but does not hold it.
+// LISTEN. It records every claim_many_v1 call. It holds the first empty claim that starts at or
+// after holdFrom: it closes reached and returns that claim to the worker only after released. If
+// the release does not come within 15 s, it sets holdExpired.
 type subscriptionRecoveryQueryTracer struct {
 	mu          sync.Mutex
 	listenGate  chan struct{}
 	listenerPID uint32
 	recording   bool
 	claims      []pollCadenceClaim
+	holdFrom    time.Time
+	holdExpired bool
+	reached     chan struct{}
+	released    chan struct{}
 }
 
 func (tracer *subscriptionRecoveryQueryTracer) TraceQueryStart(
@@ -350,9 +356,23 @@ func (tracer *subscriptionRecoveryQueryTracer) TraceQueryEnd(
 	}
 	claim := pollCadenceClaim{started: started, returned: time.Now(), found: data.CommandTag.RowsAffected() > 0}
 	tracer.mu.Lock()
-	defer tracer.mu.Unlock()
 	if tracer.recording {
 		tracer.claims = append(tracer.claims, claim)
+	}
+	hold := !tracer.holdFrom.IsZero() && !started.Before(tracer.holdFrom) && !claim.found
+	if hold {
+		tracer.holdFrom = time.Time{}
+	}
+	tracer.mu.Unlock()
+	if hold {
+		close(tracer.reached)
+		select {
+		case <-tracer.released:
+		case <-time.After(15 * time.Second):
+			tracer.mu.Lock()
+			tracer.holdExpired = true
+			tracer.mu.Unlock()
+		}
 	}
 }
 
@@ -362,10 +382,23 @@ func (tracer *subscriptionRecoveryQueryTracer) snapshot() []pollCadenceClaim {
 	return slices.Clone(tracer.claims)
 }
 
+const (
+	// The shortest wait at the notification base: 5 s less its jitter of 10 %.
+	notificationWaitMinimum = 4500 * time.Millisecond
+	// The longest wait at the polling-only base after the backoff restarts is 275 ms. A worker
+	// that makes no claim for this time after an empty claim waits at the notification base.
+	quietBeforeLoss = time.Second
+)
+
 func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-subscription-recovery")
 	ctx := context.Background()
-	tracer := &subscriptionRecoveryQueryTracer{listenGate: make(chan struct{}), recording: true}
+	tracer := &subscriptionRecoveryQueryTracer{
+		listenGate: make(chan struct{}), recording: true,
+		reached: make(chan struct{}), released: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseClaim := func() { releaseOnce.Do(func() { close(tracer.released) }) }
 	// releaseListen opens the current listen gate. holdListen arms a new gate for the next LISTEN.
 	listenOpen := false
 	releaseListen := func() {
@@ -419,6 +452,7 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 			return
 		}
 		stopped = true
+		releaseClaim()
 		releaseListen()
 		stop()
 		if err := <-runResult; err != nil {
@@ -461,7 +495,10 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	recoveryEnd := len(tracer.snapshot())
 
 	// The next empty claim starts a new wait at the notification base. Then the runner ends the
-	// live listener session and holds the next LISTEN, so the subscription is lost.
+	// live listener session and holds the next LISTEN, so the subscription is lost. The wait is
+	// internal to the worker. Thus the runner first waits until the worker has made no claim for
+	// quietBeforeLoss after an empty claim. A loss before the worker chose its wait gives the
+	// polling base without a wake.
 	waitUntil := func(message string, condition func() bool) {
 		t.Helper()
 		deadline := time.Now().Add(7 * time.Second)
@@ -475,32 +512,44 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 	waitUntil("the worker made no empty claim after the second task", func() bool {
 		return slices.ContainsFunc(tracer.snapshot()[recoveryEnd:], func(claim pollCadenceClaim) bool { return !claim.found })
 	})
+	waitUntil("the worker did not wait at the notification base after the second task", func() bool {
+		claims := tracer.snapshot()
+		last := claims[len(claims)-1]
+		return !last.found && time.Since(last.returned) >= quietBeforeLoss
+	})
 	holdListen()
 	tracer.mu.Lock()
 	listenerPID := tracer.listenerPID
+	// The loss starts when the runner ends the session. The tracer holds the first empty claim
+	// after that moment, which is the claim that the loss wakes. The worker thus cannot advance
+	// its backoff before the runner enqueues the third task.
+	lostAt := time.Now()
+	tracer.holdFrom = lostAt
 	tracer.mu.Unlock()
 	if _, err := pool.Exec(ctx, "SELECT pg_terminate_backend($1)", listenerPID); err != nil {
 		t.Fatal(err)
 	}
-	waitUntil("the listener session did not end", func() bool {
-		var sessions int
-		err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid = $1", listenerPID).Scan(&sessions)
-		return err == nil && sessions == 0
-	})
-	lostAt := time.Now()
-	// The loss wakes the worker. The third task waits for the claims after that wake.
-	waitUntil("the worker made no claim after the subscription was lost", func() bool {
-		return slices.ContainsFunc(tracer.snapshot(), func(claim pollCadenceClaim) bool { return !claim.started.Before(lostAt) })
-	})
+	select {
+	case <-tracer.reached:
+	case <-time.After(7 * time.Second):
+		t.Fatal("the worker made no claim after the subscription was lost")
+	}
 	enqueuedAfterLoss := time.Now()
 	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"task": "third"}); err != nil {
 		t.Fatal(err)
 	}
+	releaseClaim()
 	waitForHandled("third", 7*time.Second)
 	tracer.mu.Lock()
 	tracer.recording = false
 	tracer.mu.Unlock()
 	stopWorker()
+	tracer.mu.Lock()
+	holdExpired := tracer.holdExpired
+	tracer.mu.Unlock()
+	if holdExpired {
+		t.Fatal("the held claim was never released")
+	}
 
 	claims := tracer.snapshot()
 	recovered := slices.Clone(claims[:recoveryEnd])
@@ -539,11 +588,28 @@ func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntim
 		t.Fatalf("%d empty claims after the second task with a live subscription, want at most %d",
 			empty, fixture.MaximumEmptyAfterRecovery)
 	}
-	// After the loss, the worker claims at once and then polls at the polling-only base again.
+	// After the loss, the worker claims at once and then polls at the polling-only base again. The
+	// bounds start at events that the runner controls, not at the moment the runner sees them. A
+	// loaded runner sees an event late, and the worker's backoff grows in that time.
 	maximumAfterLoss := time.Duration(fixture.MaximumClaimDelayAfterLossMS) * time.Millisecond
 	afterLoss := slices.IndexFunc(claims, func(claim pollCadenceClaim) bool { return !claim.started.Before(lostAt) })
+	if afterLoss < 1 {
+		t.Fatal("no claim after the subscription was lost had a claim before it")
+	}
 	if delay := claims[afterLoss].started.Sub(lostAt); delay > maximumAfterLoss {
 		t.Fatalf("the first claim after the subscription was lost waited %s, want at most %s", delay, maximumAfterLoss)
+	}
+	// The claim before the woken one found no task. The worker made no claim for quietBeforeLoss
+	// after it, so it waited at the notification base. The woken claim started before the shortest
+	// wait at that base ended, so the loss started it.
+	before := claims[afterLoss-1]
+	if before.found || lostAt.Sub(before.returned) < quietBeforeLoss {
+		t.Fatalf("the claim before the loss returned %s before it, want an empty claim at least %s before",
+			lostAt.Sub(before.returned), quietBeforeLoss)
+	}
+	if delay := claims[afterLoss].started.Sub(before.returned); delay >= notificationWaitMinimum {
+		t.Fatalf("the first claim after the subscription was lost started %s after the claim before it, "+
+			"so the wait at the notification base, not the loss, started it", delay)
 	}
 	if delay := claims[third].started.Sub(enqueuedAfterLoss); delay > maximumAfterLoss {
 		t.Fatalf("the claim that found the third task waited %s after the subscription was lost, want at most %s",
