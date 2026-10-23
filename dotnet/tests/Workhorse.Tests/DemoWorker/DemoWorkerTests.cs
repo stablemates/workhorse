@@ -45,10 +45,50 @@ public sealed class DemoWorkerTests(ScratchDatabase database)
         using var program = new Process { StartInfo = start };
         program.OutputDataReceived += (_, line) => { lock (output) { output.AppendLine(line.Data); } };
         program.ErrorDataReceived += (_, line) => { lock (output) { output.AppendLine(line.Data); } };
+        var clock = Stopwatch.StartNew();
         Assert.True(program.Start());
         program.BeginOutputReadLine();
         program.BeginErrorReadLine();
         string Describe() { lock (output) { return output.ToString(); } }
+        async Task<string> ReportAsync(string failure)
+        {
+            var elapsed = clock.Elapsed;
+            if (program.HasExited)
+            {
+                // HasExited does not wait for the output callbacks. WaitForExitAsync also waits for
+                // the end of both output streams.
+                try
+                {
+                    await program.WaitForExitAsync(Token).WaitAsync(TimeSpan.FromSeconds(5), Token);
+                }
+                catch (TimeoutException)
+                {
+                    // Report the output that arrived.
+                }
+            }
+
+            return $"{failure}\nAt {elapsed.TotalSeconds:F1} s after the start, the program "
+                + (program.HasExited ? $"exited with code {program.ExitCode}" : "still runs")
+                + $". Its output:\n{Describe()}";
+        }
+
+        // Each wait ends at once if the program exits. A failed wait reports the process state and
+        // the program output, so a timeout tells a stalled program from a program that exited (SM-1731).
+        async Task UntilAsync(Func<Task<bool>> condition, string what)
+        {
+            try
+            {
+                await EventuallyAsync(
+                    async () => program.HasExited ? throw new InvalidOperationException($"The program exited before {what}") : await condition(),
+                    what);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                Assert.Fail(await ReportAsync(error.Message));
+            }
+        }
+
+        async Task<string?> StateAsync(Guid task) => (await TaskAsync(database.DataSource, task)).Text("state");
         try
         {
             // The demo seed moves the fast-tier queue to the fast tier before it enqueues there.
@@ -63,20 +103,22 @@ public sealed class DemoWorkerTests(ScratchDatabase database)
             var misrouted = await EnqueueAsync(
                 database.DataSource, DotnetQueue, LanguageTaskType, new { language = "ruby" }, new { maxAttempts = 1 });
 
-            var result = (await TaskInStateAsync(database.DataSource, language, "succeeded")).Json("result")!.Value;
+            await UntilAsync(async () => await StateAsync(language) == "succeeded", $"task {language} reaches succeeded");
+            var result = (await TaskAsync(database.DataSource, language)).Json("result")!.Value;
             Assert.Equal("dotnet", result.GetProperty("language").GetString());
             Assert.Equal("dotnet", result.GetProperty("runtime").GetString());
             Assert.Equal(1, result.GetProperty("attempt").GetInt32());
-            await EventuallyAsync(
+            await UntilAsync(
                 async () => await ScalarAsync(database.DataSource, "SELECT state FROM workhorse.fast_task_outcome WHERE task_id = $1", fast) is "succeeded",
                 "the fast-tier task succeeds");
             var fastResult = (string)(await ScalarAsync(
                 database.DataSource, "SELECT result::text FROM workhorse.fast_task_outcome WHERE task_id = $1", fast))!;
             Assert.Contains("\"runtime\": \"dotnet\"", fastResult, StringComparison.Ordinal);
-            var sharedResult = (await TaskInStateAsync(database.DataSource, shared, "succeeded")).Json("result")!.Value;
+            await UntilAsync(async () => await StateAsync(shared) == "succeeded", $"task {shared} reaches succeeded");
+            var sharedResult = (await TaskAsync(database.DataSource, shared)).Json("result")!.Value;
             Assert.Equal("schedule", sharedResult.GetProperty("source").GetString());
-            await TaskInStateAsync(database.DataSource, misrouted, "failed");
-            await EventuallyAsync(async () => await RegisteredAsync(program.Id) == 1, "the program registers its worker");
+            await UntilAsync(async () => await StateAsync(misrouted) == "failed", $"task {misrouted} reaches failed");
+            await UntilAsync(async () => await RegisteredAsync(program.Id) == 1, "the program registers its worker");
 
             using (var signal = Process.Start("kill", ["-TERM", program.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]))
             {
@@ -84,8 +126,20 @@ public sealed class DemoWorkerTests(ScratchDatabase database)
             }
 
             // The drain must end inside the 30 s force-kill window of the other demo workers.
-            await program.WaitForExitAsync(Token).WaitAsync(TimeSpan.FromSeconds(30), Token);
-            Assert.True(program.ExitCode == 0, Describe());
+            try
+            {
+                await program.WaitForExitAsync(Token).WaitAsync(TimeSpan.FromSeconds(30), Token);
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail(await ReportAsync("The program did not exit within 30 s of SIGTERM"));
+            }
+
+            if (program.ExitCode != 0)
+            {
+                Assert.Fail(await ReportAsync("The program exited with a failure code after SIGTERM"));
+            }
+
             Assert.Equal(0, await RegisteredAsync(program.Id));
         }
         finally

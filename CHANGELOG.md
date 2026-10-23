@@ -66,6 +66,19 @@ The migration does not raise the SDK compatibility floor, and no signature or re
 changes. Run `workhorse schema migrate`. Every process gets the new locks when the migration
 commits.
 
+### A disposed .NET host records the worker outcome before the disposal returns
+
+Before this change, a Generic Host that an application disposed without `StopAsync` could return
+from the disposal before the hosted worker recorded its outcome. The worker drained, but
+`ExecuteAsync` wrote the phase and `Environment.ExitCode` later, on another thread. If the drain
+abandoned a handler, a program that exited right after the disposal could exit with code 0
+(SM-1731).
+
+When an application disposes the host, the hosted worker of `Workhorse.Hosting` now waits for
+`ExecuteAsync`. The phase that the health check reads, the log events, and the exit code are final
+when the disposal returns. The disposal does not throw the run's error, because the hosted worker
+already logged it. `StopAsync` does not change.
+
 ### Terminal cleanup and lease recovery continue under concurrent work
 
 Terminal cleanup chose and locked its candidates in one statement, with one snapshot. If an enqueue

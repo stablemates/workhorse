@@ -128,6 +128,69 @@ public sealed class HostedWorkerTests(ScratchDatabase database)
         Assert.Equal(0, testing.Log.Count("workhorse.hosting.worker_ended"));
     }
 
+    /// <summary>
+    /// The service seam holds <c>ExecuteAsync</c> after the run ends and before it records the
+    /// outcome. The disposal must not return while it is held (SM-1731). A pass does not depend on
+    /// host load, because the held service cannot record anything. Without the fix, the disposal
+    /// returns at once after the run, well inside the hold.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposalReturnsOnlyAfterTheServiceRecordsTheOutcome(bool abandon)
+    {
+        using var exitCode = new ExitCodeGuard();
+        Environment.ExitCode = 0;
+        // A zero grace cancels the handler at once. The handler ignores its token, so the drain
+        // abandons it and the run throws ShutdownIncompleteException.
+        var testing = new HostingTesting(
+            database.DataSource,
+            UniqueQueue("dispose-held"),
+            abandon ? new Dictionary<string, string?> { ["Workhorse:Worker:ShutdownGrace"] = "00:00:00" } : null);
+        var gate = new Gate();
+        testing.Services.AddSingleton(gate);
+        testing.Services.AddWorkhorseHandler<GatedHandler, Order>();
+        testing.Services.AddWorkhorseWorker(_ => { });
+        var host = testing.Build();
+        var service = host.Services.GetServices<IHostedService>().OfType<WorkerService>().Single();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.AfterRun = () =>
+        {
+            reached.TrySetResult();
+            return hold.Task;
+        };
+        try
+        {
+            await host.StartAsync(Token);
+            var state = host.Services.GetRequiredService<WorkerState>();
+            await host.Services.GetRequiredService<Queue>().EnqueueAsync("hosted.gated", new Order(4), Token);
+            await gate.Started.Task.WaitAsync(Patience, Token);
+
+            var disposing = ((IAsyncDisposable)host).DisposeAsync().AsTask();
+            if (!abandon)
+            {
+                gate.Release.TrySetResult();
+            }
+
+            await reached.Task.WaitAsync(Patience, Token);
+            await Task.WhenAny(disposing, Task.Delay(TimeSpan.FromSeconds(1), Token));
+            Assert.False(disposing.IsCompleted, "the host disposal returned before the hosted worker recorded its outcome");
+            Assert.Equal(WorkerPhase.Running, state.Phase);
+
+            hold.SetResult();
+            await disposing.WaitAsync(Patience, Token);
+            Assert.Equal(abandon ? WorkerPhase.Abandoned : WorkerPhase.Stopped, state.Phase);
+            Assert.Equal(abandon ? 1 : 0, Environment.ExitCode);
+            Assert.Equal(abandon ? 1 : 0, testing.Log.Count("workhorse.hosting.worker_failed"));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            gate.Release.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task EachAttemptDisposesItsOwnScopeOnceIncludingAFailedAttempt()
     {
