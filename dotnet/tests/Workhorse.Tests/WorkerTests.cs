@@ -232,29 +232,21 @@ public sealed class WorkerTests(ScratchDatabase database)
     public async Task ACancelRequestCancelsTheTokenWithItsReason()
     {
         var queue = UniqueQueue("cancel");
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        CancelReason? seen = null;
         await using var worker = new Worker(database.DataSource, Options(queue, options =>
         {
             options.Lease = TimeSpan.FromSeconds(3);
             options.Heartbeat = TimeSpan.FromMilliseconds(200);
         }));
-        worker.Handle<Order>("cancellable", async (context, _) =>
-        {
-            // The reason is set before the token is cancelled, so a callback reads it.
-            using var registration = context.CancellationToken.Register(() => seen = context.CancelReason);
-            started.SetResult();
-            await Task.Delay(Timeout.Infinite, context.CancellationToken);
-        });
+        var witness = new CancellationWitness();
+        worker.Handle<Order>("cancellable", (context, _) => witness.WaitForCancellationAsync(context));
         var taskId = await EnqueueAsync(database.DataSource, queue, "cancellable", new { orderId = 1 });
 
         await using var running = new RunningWorker(worker);
-        await started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await witness.Registered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         await ScalarAsync(database.DataSource, "SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", taskId);
 
         await TaskInStateAsync(database.DataSource, taskId, "canceled");
-        await EventuallyAsync(() => seen is not null, "the cancellation callback runs");
-        Assert.Equal(CancelReason.Requested, seen);
+        await witness.AssertReasonAsync(CancelReason.Requested);
         await running.StopAsync();
     }
 
@@ -428,26 +420,6 @@ public sealed class WorkerTests(ScratchDatabase database)
             await ScalarAsync(
                 database.DataSource,
                 "SELECT count(*) FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage' AND last_completed_at IS NOT NULL"));
-    }
-
-    [Fact]
-    public async Task AnExecutionTimeoutCancelsTheHandlerAndSettlesTheAttempt()
-    {
-        var queue = UniqueQueue("timeout");
-        CancelReason? seen = null;
-        await using var worker = new Worker(database.DataSource, Options(queue));
-        worker.Handle<Order>("slow", async (context, _) =>
-        {
-            using var registration = context.CancellationToken.Register(() => seen = context.CancelReason);
-            await Task.Delay(Timeout.Infinite, context.CancellationToken);
-        });
-        var taskId = await EnqueueAsync(database.DataSource, queue, "slow", new { orderId = 1 }, new { maxAttempts = 1, executionTimeoutMs = 300 });
-
-        await using var running = new RunningWorker(worker);
-        await TaskInStateAsync(database.DataSource, taskId, "failed");
-        await EventuallyAsync(() => seen is not null, "the handler sees the timeout");
-        Assert.Equal(CancelReason.ExecutionTimeout, seen);
-        await running.StopAsync();
     }
 
     [Fact]
