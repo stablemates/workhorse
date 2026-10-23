@@ -813,8 +813,20 @@ func TestNewWorkerRefusesAPoolThatCannotLendAHeartbeatConnection(t *testing.T) {
 	}
 }
 
+// retryLeaseDuration is the lease of the retry test. It is many heartbeat intervals long, so a few
+// rounds that the load ends do not let the lease expire.
+const retryLeaseDuration = 10 * time.Second
+
+// retryRenewalWait is how long the retry test waits for each event: one renewal, or the failed
+// round. Each wait is shorter than retryLeaseDuration, so a single missed renewal fails the test
+// before the lease that it measures expires.
+const retryRenewalWait = 8 * time.Second
+
 // TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning pins the retry: a round that fails is
 // unknown, not a lease loss, so the handler keeps running and the next round renews the lease.
+//
+// The test uses reservedHeartbeatInterval. With an interval of 20 ms, each round has a statement
+// timeout of 5 ms, and on a loaded host that timeout ends most rounds before they renew the lease.
 func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat-retry")
 	ctx := context.Background()
@@ -835,8 +847,8 @@ func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "heartbeat-retry-worker",
-		LeaseDuration:       10 * time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		LeaseDuration:       retryLeaseDuration,
+		HeartbeatInterval:   reservedHeartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
@@ -870,19 +882,21 @@ func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 		t.Fatal("worker did not start the handler")
 	}
 	claimed := leaseExpiry(t, ctx, observer, taskID)
-	waitForLeaseRenewal(t, ctx, observer, taskID, claimed, 2*time.Second)
+	waitForLeaseRenewal(t, ctx, observer, taskID, claimed, retryRenewalWait)
 
 	// Kill the session the reserved connection heartbeats on. The next round fails on it, and the
-	// round after that renews on a connection the pool lends fresh.
+	// round after that renews on a connection the pool lends fresh. A round that the load ended
+	// before this point does not count, so the test waits for a failure logged after the kill.
+	failedRounds := strings.Count(logs.String(), heartbeatRoundFailedMessage)
 	terminateHeartbeatSession(t, ctx, observer)
-	waitForWorkerLog(t, &logs, "heartbeat round failed; retrying")
+	waitForWorkerLogCount(t, &logs, heartbeatRoundFailedMessage, failedRounds+1, retryRenewalWait)
 	select {
 	case <-cancelled:
 		t.Fatal("a failed heartbeat round cancelled the handler")
 	default:
 	}
 	failed := leaseExpiry(t, ctx, observer, taskID)
-	waitForLeaseRenewal(t, ctx, observer, taskID, failed, 2*time.Second)
+	waitForLeaseRenewal(t, ctx, observer, taskID, failed, retryRenewalWait)
 
 	close(release)
 	select {
@@ -903,6 +917,18 @@ func TestWorkerRetriesAFailedHeartbeatRoundAndKeepsTasksRunning(t *testing.T) {
 	}
 	if state != "succeeded" {
 		t.Fatalf("expected the retried attempt to succeed, received %s", state)
+	}
+}
+
+// waitForWorkerLogCount waits until logs holds message at least count times, for a maximum of within.
+func waitForWorkerLogCount(t *testing.T, logs *lockedBuffer, message string, count int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for strings.Count(logs.String(), message) < count {
+		if time.Now().After(deadline) {
+			t.Fatalf("worker did not log %q %d times within %s", message, count, within)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
