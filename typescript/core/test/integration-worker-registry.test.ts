@@ -1428,8 +1428,10 @@ describe("worker registry", () => {
     const tick = vi.spyOn(queue, "tick");
     const worker = new Worker(queue, {
       workerId: "maintenance-during-handler-worker",
-      heartbeatMs: 50,
-      leaseMs: 500,
+      // 100 ms is the smallest supported interval. The lease is longer than the 10 s waits, so a
+      // slow round cannot end the attempt.
+      heartbeatMs: 100,
+      leaseMs: 30_000,
       maintenanceIntervalMs: 100,
       // The other intervals are much longer than stallWait. Thus a second tick inside that wait
       // comes only from the 100 ms maintenance cadence.
@@ -1830,7 +1832,8 @@ describe("worker registry", () => {
     const releases = new Map<string, ReturnType<typeof deferred<void>>>();
     const worker = new Worker(queue, {
       workerId: kind,
-      heartbeatMs: 20,
+      // 100 ms is the smallest supported interval.
+      heartbeatMs: 100,
       leaseMs: 5_000,
       pollMs: 50,
       registryIntervalMs: 0,
@@ -2244,8 +2247,10 @@ describe("worker registry", () => {
     });
     const worker = new Worker(queue, {
       workerId: "pause-in-flight",
-      heartbeatMs: 50,
-      leaseMs: 500,
+      // 100 ms is the smallest supported interval. The lease is longer than the 20 s test timeout,
+      // so a slow round cannot end the attempt.
+      heartbeatMs: 100,
+      leaseMs: 30_000,
     }).handle("pause-in-flight", async () => {
       markStarted();
       await released;

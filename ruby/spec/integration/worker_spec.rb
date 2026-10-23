@@ -171,7 +171,9 @@ RSpec.describe "Worker against PostgreSQL" do
     context = nil
     continued = false
     output = StringIO.new
-    subject = worker(lease: 0.5, heartbeat: 0.05, logger: Logger.new(output)).handle("nap") do |_payload, handler_context|
+    # Only a heartbeat status reports the lost lease. The lease is longer than the 5 s wait, so the
+    # lease watchdog cannot end the attempt first.
+    subject = worker(lease: 10, heartbeat: 0.1, logger: Logger.new(output)).handle("nap") do |_payload, handler_context|
       context = handler_context
       context.sleep("nap", 3600)
       continued = true
@@ -339,7 +341,9 @@ RSpec.describe "Worker against PostgreSQL" do
   it "cancels the handler and keeps the task when the lease is taken over" do
     task_id = queue.enqueue("slow", {}).task_id
     reason = nil
-    subject = worker(lease: 0.5, heartbeat: 0.05).handle("slow") do |_payload, context|
+    # Only a heartbeat status reports the new fence. The lease is longer than the 5 s wait, so the
+    # lease watchdog cannot end the attempt first.
+    subject = worker(lease: 10, heartbeat: 0.1).handle("slow") do |_payload, context|
       @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1",
         [task_id])
       context.cancellation.wait(5)
