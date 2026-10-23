@@ -6,10 +6,25 @@ import { createIntegrationTestContext } from "./support/integration.js";
 
 const { deferred, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
-function aborted(signal: AbortSignal): Promise<void> {
+// A member's signal aborts only after a heartbeat round reports its status. The bound is shorter
+// than the 20 s test timeout, so a missing heartbeat status fails with this message instead.
+function aborted(signal: AbortSignal, status: string, timeoutMs = 10_000): Promise<void> {
   if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      reject(
+        new Error(
+          `The member signal did not abort within ${timeoutMs} ms. No heartbeat round reported ` +
+            `${status} for the member.`,
+        ),
+      );
+    }, timeoutMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -397,7 +412,8 @@ describe("batch handlers", () => {
       workerId,
       queue: queueName,
       concurrency: 2,
-      heartbeatMs: 50,
+      // 100 ms is the smallest supported heartbeat interval.
+      heartbeatMs: 100,
       // A reserved heartbeat connection renews through another Queue object, so the spy does not
       // see its heartbeats. That heartbeat also locks the stale row, and recovery skips locked rows.
       sharedHeartbeats: true,
@@ -457,25 +473,34 @@ describe("batch handlers", () => {
       { outcome: "succeed" },
       { queue: queueName },
     );
+    // The worker settles a failed callback as a member outcome. The test keeps the failure to report
+    // it before the task states.
+    let signalFailure: unknown;
     const worker = new Worker(queue, {
       workerId: "batch-cancel-worker",
       queue: queueName,
       concurrency: 2,
       // The worker stops renewing a canceled member's lease, and acknowledge_cancel_v1 needs a live
       // lease. The default 30 s lease is longer than the 20 s test timeout, so it cannot lapse first.
-      heartbeatMs: 20,
+      // The worker sees the cancel request only in a heartbeat status. Below the smallest supported
+      // interval, 100 ms, a heartbeat round under host load can time out each time.
+      heartbeatMs: 100,
     }).handleBatch<{ outcome: string }, null>(
       "batch-cancel",
       { maxSize: 2, lingerMs: 100 },
       async (items) => {
         const canceled = items.find(({ payload }) => payload.outcome === "cancel")!;
         await queue.cancel(canceled.context.task.id, { requestedBy: "batch-test" });
-        await aborted(canceled.context.signal);
+        await aborted(canceled.context.signal, "cancel_requested").catch((error: unknown) => {
+          signalFailure = error;
+          throw error;
+        });
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
+    if (signalFailure !== undefined) throw signalFailure;
     await expect(admin.getTask(canceledId)).resolves.toMatchObject({ state: "canceled" });
     await expect(admin.getTask(succeededId)).resolves.toMatchObject({
       state: "succeeded",
@@ -529,11 +554,16 @@ describe("batch handlers", () => {
       { queue: queueName },
     );
     const batches: boolean[][] = [];
+    // The worker settles a failed callback as a member outcome. The test keeps the failure to report
+    // it before the task states.
+    let signalFailure: unknown;
     const worker = new Worker(queue, {
       workerId: "batch-deadline-worker",
       queue: queueName,
       concurrency: 2,
-      heartbeatMs: 20,
+      // The worker sees the passed deadline only in a heartbeat status. Below the smallest supported
+      // interval, 100 ms, a heartbeat round under host load can time out each time.
+      heartbeatMs: 100,
     }).handleBatch<{ deadline: boolean }, null>(
       "batch-deadline",
       // A full batch dispatches at once. A short linger can split the batch when one member starts
@@ -549,13 +579,17 @@ describe("batch handlers", () => {
             [deadlineId],
           ),
         ).resolves.toMatchObject({ rowCount: 1 });
-        await aborted(expiring.context.signal);
+        await aborted(expiring.context.signal, "deadline_exceeded").catch((error: unknown) => {
+          signalFailure = error;
+          throw error;
+        });
         expect(peer.context.signal.aborted).toBe(false);
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
+    if (signalFailure !== undefined) throw signalFailure;
     // One batch holds both members. Their order depends on the claim sequence, so the test sorts
     // them. If this fails, the batch contents show whether the claim missed a member.
     expect(batches).toEqual([[false, true]]);
