@@ -20,6 +20,23 @@ upgrade steps.
 
 ## Unreleased
 
+### A dense cron schedule resolves only the times near its window
+
+A schedule pass calls `cron_occurrences_v1` for each schedule. Before this change, the function
+resolved every wall-clock time that the cron fields allow on each matching day of the window. For an
+every-second expression, each pass resolved 86,400 wall-clock times. Each accepted occurrence was
+also compared with all earlier ones, so a catch-up at the limit of 10,000 did a quadratic number of
+comparisons (SM-1643).
+
+Migration 0081 (`0081-bound-the-dense-cron-evaluation.sql`) moves the schema to version 80. After
+it, the function reads the UTC offsets of the zone near the durable position and near `now`. It
+resolves only the wall-clock times whose instants can fall in the window. It removes duplicate
+instants with one set operation. The occurrences, their order, the daylight-saving rules, and the
+catch-up limits do not change.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
+changes no stored data.
+
 ### TypeScript schedule sync reads the current payload contract from PostgreSQL
 
 A schedule stores the payload contract version, size limits, and redaction keys of its task type.

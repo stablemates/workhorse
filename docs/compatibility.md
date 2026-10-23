@@ -1514,8 +1514,8 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0080 and leaves the schema at
-   version 79.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0081 and leaves the schema at
+   version 80.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
@@ -1529,6 +1529,7 @@ error:
 | `0078-copy-the-diagnostic-details-into-hint.sql`              | 77             | Each P1001 to P1010 error also carries its DETAIL JSON in HINT                                                     |
 | `0079-bound-the-history-partition-lock-waits.sql`             | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last                 |
 | `0080-compare-the-enqueue-fingerprint-instants-as-values.sql` | 79             | An enqueue fingerprint compares `runAt` and `deadline` as instants, so a replay matches from any session time zone |
+| `0081-bound-the-dense-cron-evaluation.sql`                    | 80             | `cron_occurrences_v1` resolves only the wall-clock times near its window, and its results do not change            |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1554,7 +1555,11 @@ and `enqueue_debounce_v1`, and no signature. A replay that the earlier schema re
 of the session time zone now returns the bound task. A fingerprint stored before the migration
 still matches an exact replay. Every process gets the new comparison when the migration commits.
 
-A 0.9 process keeps working on schema version 79. Its dashboard host still sends its own retention
+Schema version 80 does not raise the floor. Migration 0081 changes only the body of
+`cron_occurrences_v1`, and no signature. The occurrences and their order do not change. Every
+process gets the bounded evaluation when the migration commits.
+
+A 0.9 process keeps working on schema version 80. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

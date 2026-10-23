@@ -3736,6 +3736,23 @@ Time behavior and bounds:
 - If several wall-clock fields normalize to one instant, it returns that instant once.
 - It searches at most 128 years and accepts limits from 1 through 10,000.
 
+Evaluation cost:
+
+- It reads the UTC offsets of the zone at 8-hour steps. The lower probes cover the 32 hours on
+  each side of `last_occurrence_at` and stop at `now`. The upper probes cover the 64 hours before
+  `now`.
+- The smallest and largest of these offsets bound the wall-clock times whose instants can fall in
+  the window. It resolves only the matching wall-clock times inside these bounds.
+- A window of a few seconds thus resolves a few wall-clock times, not the 86,400 seconds of a day.
+  A window across a daylight-saving gap also resolves the wall-clock times of the gap.
+- With a durable position, it stops when the candidates outside a gap reach the limit. It then
+  keeps the first wall-clock position of each instant with one `GROUP BY`. Thus duplicate removal
+  is not quadratic, and the result keeps the wall-clock order.
+- It reports the number of resolved wall-clock times with `RAISE DEBUG`, as
+  `cron_occurrences_v1 resolved <count> wall-clock times`.
+- The bounds assume three limits of the time zone data. Each UTC offset stays in effect for at
+  least 8 hours. Each offset is less than 16 hours from UTC. Each gap is shorter than 32 hours.
+
 `protocol/v1/cron-occurrences.json` fixes the inputs and expected UTC instants.
 
 #### Firing due schedules

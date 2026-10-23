@@ -4650,6 +4650,7 @@ DECLARE
   v_day_offset integer;
   v_start_date date;
   v_end_date date;
+  v_horizon_date date;
   v_day_of_month integer;
   v_day_of_week integer;
   v_dom_match boolean;
@@ -4660,8 +4661,18 @@ DECLARE
   v_second integer;
   v_wall timestamp;
   v_occurrence timestamptz;
-  v_seen_occurrences timestamptz[] := '{}';
-  v_returned integer := 0;
+  v_now_second timestamptz := date_trunc('second', p_now);
+  v_lower_wall timestamp;
+  v_upper_wall timestamp;
+  v_day_lower numeric;
+  v_day_upper numeric;
+  v_hour_second integer;
+  v_minute_second integer;
+  v_day_second integer;
+  v_candidates timestamptz[] := '{}';
+  v_candidate_count integer := 0;
+  v_normalized_count integer := 0;
+  v_resolved_count integer := 0;
   v_hour_index integer;
   v_minute_index integer;
   v_second_index integer;
@@ -4764,8 +4775,46 @@ BEGIN
   END IF;
 
   v_end_date := (p_now AT TIME ZONE p_timezone)::date;
+  v_horizon_date := (v_end_date - interval '128 years')::date;
+
+  -- Bound the wall-clock times that can resolve inside the window. A resolved instant equals its
+  -- wall-clock time minus a UTC offset of the zone. That offset is in effect at the instant, or
+  -- just before a daylight-saving gap that the wall-clock time falls into. Offsets stay within
+  -- 16 hours of UTC, and a gap is shorter than 32 hours. Thus only the offsets near the two ends of
+  -- the window can move a wall-clock time across an end. The probes are 8 hours apart and include
+  -- both ends of each range, so they see every offset that stays in effect for 8 hours or more.
+  -- The lower probes stop at now, because a later instant fails the window test. The bound only
+  -- skips wall-clock times whose instants fail the window test below, so the result does not
+  -- change. A position before the horizon needs no lower bound, because the walk starts at the
+  -- horizon. A position after the end date needs none either, because the walk visits no day.
+  IF isfinite(p_now) THEN
+    SELECT (v_now_second AT TIME ZONE 'UTC') + max(
+             (probe.instant AT TIME ZONE p_timezone) - (probe.instant AT TIME ZONE 'UTC')
+           )
+      INTO v_upper_wall
+      FROM generate_series(-64, 0, 8) probe_hours
+      CROSS JOIN LATERAL (
+        SELECT v_now_second + make_interval(hours => probe_hours) AS instant
+      ) probe;
+  END IF;
+  IF isfinite(p_last_occurrence_at)
+     AND (p_last_occurrence_at AT TIME ZONE p_timezone)::date
+       BETWEEN v_horizon_date AND v_end_date THEN
+    SELECT (p_last_occurrence_at AT TIME ZONE 'UTC') + min(
+             (probe.instant AT TIME ZONE p_timezone) - (probe.instant AT TIME ZONE 'UTC')
+           )
+      INTO v_lower_wall
+      FROM generate_series(-32, 32, 8) probe_hours
+      CROSS JOIN LATERAL (
+        SELECT p_last_occurrence_at + LEAST(
+                 make_interval(hours => probe_hours),
+                 v_now_second - p_last_occurrence_at
+               ) AS instant
+      ) probe;
+  END IF;
+
   IF p_last_occurrence_at IS NULL THEN
-    v_start_date := (v_end_date - interval '128 years')::date;
+    v_start_date := v_horizon_date;
     FOR v_day_offset IN 0..(v_end_date - v_start_date) LOOP
       v_date := v_end_date - v_day_offset;
       IF NOT extract(month FROM v_date)::integer = ANY(v_months) THEN CONTINUE; END IF;
@@ -4785,15 +4834,24 @@ BEGIN
       v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
         WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
       IF NOT v_day_match THEN CONTINUE; END IF;
+      v_day_upper := COALESCE(extract(epoch FROM v_upper_wall - v_date::timestamp), 86400);
       FOR v_hour_index IN REVERSE array_upper(v_hours, 1)..array_lower(v_hours, 1) LOOP
         v_hour := v_hours[v_hour_index];
+        v_hour_second := v_hour * 3600;
+        CONTINUE WHEN v_hour_second > v_day_upper;
         FOR v_minute_index IN REVERSE array_upper(v_minutes, 1)..array_lower(v_minutes, 1) LOOP
           v_minute := v_minutes[v_minute_index];
+          v_minute_second := v_hour_second + v_minute * 60;
+          CONTINUE WHEN v_minute_second > v_day_upper;
           FOR v_second_index IN REVERSE array_upper(v_seconds, 1)..array_lower(v_seconds, 1) LOOP
             v_second := v_seconds[v_second_index];
-            v_wall := v_date + make_interval(hours => v_hour, mins => v_minute, secs => v_second);
+            v_day_second := v_minute_second + v_second;
+            CONTINUE WHEN v_day_second > v_day_upper;
+            v_wall := v_date + make_interval(secs => v_day_second);
             v_occurrence := workhorse.resolve_cron_wall_clock_v1(v_wall, p_timezone);
-            IF v_occurrence <= date_trunc('second', p_now) THEN
+            v_resolved_count := v_resolved_count + 1;
+            IF v_occurrence <= v_now_second THEN
+              RAISE DEBUG 'cron_occurrences_v1 resolved % wall-clock times', v_resolved_count;
               occurrence_at := v_occurrence;
               RETURN NEXT;
               RETURN;
@@ -4805,12 +4863,11 @@ BEGIN
     RAISE EXCEPTION 'cron occurrence search exceeded the 128-year horizon';
   END IF;
 
-  v_start_date := GREATEST(
-    (p_last_occurrence_at AT TIME ZONE p_timezone)::date,
-    (v_end_date - interval '128 years')::date
-  );
+  v_start_date := GREATEST((p_last_occurrence_at AT TIME ZONE p_timezone)::date, v_horizon_date);
+  <<walk>>
   FOR v_day_offset IN 0..(v_end_date - v_start_date) LOOP
     v_date := v_start_date + v_day_offset;
+    EXIT walk WHEN v_date::timestamp > v_upper_wall;
     IF NOT extract(month FROM v_date)::integer = ANY(v_months) THEN CONTINUE; END IF;
     v_day_of_month := extract(day FROM v_date)::integer;
     v_day_of_week := extract(dow FROM v_date)::integer;
@@ -4828,24 +4885,48 @@ BEGIN
     v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
       WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
     IF NOT v_day_match THEN CONTINUE; END IF;
+    v_day_lower := COALESCE(extract(epoch FROM v_lower_wall - v_date::timestamp), -1);
+    v_day_upper := COALESCE(extract(epoch FROM v_upper_wall - v_date::timestamp), 86400);
     FOREACH v_hour IN ARRAY v_hours LOOP
+      v_hour_second := v_hour * 3600;
+      CONTINUE WHEN v_hour_second + 3599 < v_day_lower;
+      EXIT walk WHEN v_hour_second > v_day_upper;
       FOREACH v_minute IN ARRAY v_minutes LOOP
+        v_minute_second := v_hour_second + v_minute * 60;
+        CONTINUE WHEN v_minute_second + 59 < v_day_lower;
+        EXIT walk WHEN v_minute_second > v_day_upper;
         FOREACH v_second IN ARRAY v_seconds LOOP
-          v_wall := v_date + make_interval(hours => v_hour, mins => v_minute, secs => v_second);
+          v_day_second := v_minute_second + v_second;
+          CONTINUE WHEN v_day_second < v_day_lower;
+          EXIT walk WHEN v_day_second > v_day_upper;
+          v_wall := v_date + make_interval(secs => v_day_second);
           v_occurrence := workhorse.resolve_cron_wall_clock_v1(v_wall, p_timezone);
-          IF v_occurrence > p_last_occurrence_at
-             AND v_occurrence <= date_trunc('second', p_now)
-             AND NOT v_occurrence = ANY(v_seen_occurrences) THEN
-            occurrence_at := v_occurrence;
-            v_seen_occurrences := array_append(v_seen_occurrences, v_occurrence);
-            RETURN NEXT;
-            v_returned := v_returned + 1;
-            IF v_returned >= p_limit THEN RETURN; END IF;
+          v_resolved_count := v_resolved_count + 1;
+          IF v_occurrence > p_last_occurrence_at AND v_occurrence <= v_now_second THEN
+            v_candidates := array_append(v_candidates, v_occurrence);
+            v_candidate_count := v_candidate_count + 1;
+            -- Only a wall-clock time in a gap can share its instant with another wall-clock
+            -- time, so each duplicate needs one normalized candidate. When the candidates
+            -- without one reach the limit, the distinct instants reach it too.
+            IF v_occurrence AT TIME ZONE p_timezone <> v_wall THEN
+              v_normalized_count := v_normalized_count + 1;
+            END IF;
+            EXIT walk WHEN v_candidate_count - v_normalized_count >= p_limit;
           END IF;
         END LOOP;
       END LOOP;
     END LOOP;
   END LOOP;
+
+  RAISE DEBUG 'cron_occurrences_v1 resolved % wall-clock times', v_resolved_count;
+  -- Keep the first position of each instant, as a set operation, and return the instants in
+  -- wall-clock order.
+  RETURN QUERY
+    SELECT candidate.instant
+      FROM unnest(v_candidates) WITH ORDINALITY candidate(instant, ordinal)
+     GROUP BY candidate.instant
+     ORDER BY min(candidate.ordinal)
+     LIMIT p_limit;
 END;
 $$;
 
@@ -22411,10 +22492,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (76, 'fence the worker deregistration by instance'),
   (77, 'copy the diagnostic details into hint'),
   (78, 'bound the history partition lock waits'),
-  (79, 'compare the enqueue fingerprint instants as values')
+  (79, 'compare the enqueue fingerprint instants as values'),
+  (80, 'bound the dense cron evaluation')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (79) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (80) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

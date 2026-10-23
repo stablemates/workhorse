@@ -566,6 +566,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "compare the enqueue fingerprint instants as values",
     kind: "additive",
   },
+  {
+    fromVersion: 79,
+    toVersion: 80,
+    file: "0081-bound-the-dense-cron-evaluation.sql",
+    description: "bound the dense cron evaluation",
+    kind: "additive",
+  },
 ];
 
 /**

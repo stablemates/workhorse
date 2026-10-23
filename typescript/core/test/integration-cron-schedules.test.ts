@@ -78,6 +78,71 @@ describe("cron schedules", () => {
     );
   });
 
+  it("resolves only the wall-clock times near a dense evaluation window", async () => {
+    const notices: string[] = [];
+    const client = await pool.connect();
+    client.on("notice", (notice) => notices.push(notice.message ?? ""));
+    const evaluate = async (
+      lastOccurrenceAt: string | null,
+      now: string,
+      limit: number,
+      timezone: string,
+    ): Promise<{ occurrences: number; resolved: number }> => {
+      notices.length = 0;
+      const result = await client.query(
+        `SELECT occurrence_at
+           FROM workhorse.cron_occurrences_v1(
+             '* * * * * *', $1::timestamptz, $2::timestamptz, $3::integer, $4::text
+           )`,
+        [lastOccurrenceAt, now, limit, timezone],
+      );
+      const counts = notices.flatMap((message) => {
+        const match = /^cron_occurrences_v1 resolved (\d+) wall-clock times$/.exec(message);
+        return match ? [Number(match[1])] : [];
+      });
+      expect(counts).toHaveLength(1);
+      return { occurrences: result.rowCount ?? 0, resolved: counts[0]! };
+    };
+    try {
+      await client.query("SET client_min_messages = debug1");
+      // A day has 86,400 wall-clock seconds. Each window resolves only the seconds that can fall
+      // inside it.
+      await expect(
+        evaluate("2026-01-01T12:00:00Z", "2026-01-01T12:00:05.500Z", 10, "UTC"),
+      ).resolves.toEqual({ occurrences: 5, resolved: 6 });
+      await expect(evaluate(null, "2026-01-01T12:00:05.500Z", 1, "UTC")).resolves.toEqual({
+        occurrences: 1,
+        resolved: 1,
+      });
+      // The window crosses the spring gap, so it also resolves the 3,600 seconds of the skipped
+      // hour. They normalize into the hour after the gap.
+      await expect(
+        evaluate("2026-03-08T06:59:58Z", "2026-03-08T07:00:02Z", 10, "America/New_York"),
+      ).resolves.toEqual({ occurrences: 4, resolved: 3605 });
+      // A catch-up at the limit stops after the limit and the position it starts from.
+      await expect(
+        evaluate("2025-01-01T00:00:00Z", "2026-01-01T12:00:00Z", 10_000, "UTC"),
+      ).resolves.toEqual({ occurrences: 10_000, resolved: 10_001 });
+    } finally {
+      await client.query("RESET client_min_messages");
+      client.release();
+    }
+  });
+
+  it("returns no occurrence for a position at the end of the timestamp range", async () => {
+    // The offset probes near the position must stay inside the timestamp and interval ranges.
+    for (const now of ["1800-01-01T00:00:00Z", "2026-01-01T00:00:00Z"]) {
+      const result = await pool.query(
+        `SELECT occurrence_at
+           FROM workhorse.cron_occurrences_v1(
+             '0 0 * * *', '294276-12-31 20:00:00+00'::timestamptz, $1::timestamptz, 10, 'UTC'
+           )`,
+        [now],
+      );
+      expect(result.rows).toEqual([]);
+    }
+  });
+
   it("cancels one recurring occurrence without disabling later occurrences", async () => {
     await queue.syncSchedules("cancel-recurring", [
       {
