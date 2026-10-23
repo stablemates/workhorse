@@ -713,9 +713,9 @@ describe("declared engines", () => {
 describe("continuous integration", () => {
   it("uses latest versions continuously and the full support matrix weekly", async () => {
     const manifest = await readSupportManifest();
-    const pullRequest = buildCiMatrices(manifest.support, "pull_request");
-    const push = buildCiMatrices(manifest.support, "push");
-    const full = buildCiMatrices(manifest.support, "schedule", WEEKLY_COMPATIBILITY_SCHEDULE);
+    const pullRequest = buildCiMatrices(manifest, "pull_request");
+    const push = buildCiMatrices(manifest, "push");
+    const full = buildCiMatrices(manifest, "schedule", WEEKLY_COMPATIBILITY_SCHEDULE);
 
     expect(pullRequest.typescript.include).toEqual([{ node: 24, postgres: 18 }]);
     expect(pullRequest.python.include).toEqual([{ python: "3.14", postgres: 18 }]);
@@ -739,7 +739,9 @@ describe("continuous integration", () => {
     expect(full.python.include).toHaveLength(
       manifest.support.python.tested.length * manifest.support.postgres.tested.length,
     );
-    expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length);
+    // The floor against every PostgreSQL, and the development compiler against the newest.
+    expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length + 1);
+    expect(full.go.include).toContainEqual({ go: manifest.toolchains.go, postgres: 18 });
     expect(full.rust.include).toEqual(
       manifest.support.postgres.tested.map((postgres) => ({ postgres })),
     );

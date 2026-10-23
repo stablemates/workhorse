@@ -12,6 +12,11 @@ interface Support {
   readonly ruby: { readonly tested: readonly string[] };
 }
 
+/** The development toolchains of support.json, which mise.toml pins too. */
+interface Toolchains {
+  readonly go: string;
+}
+
 interface Matrix<T> {
   readonly include: readonly T[];
 }
@@ -68,8 +73,24 @@ function crossProduct<AKey extends string, A, BKey extends string, B>(
   );
 }
 
-export function buildCiMatrices(support: Support, eventName: string, schedule = ""): CiMatrices {
-  const goVersion = support.go.minimum.replace(/\.0$/, "");
+/**
+ * The Go releases of a weekly run, floor first: the floor of support.json, and the development
+ * compiler that mise.toml pins. setup-go sets GOTOOLCHAIN=local, so each lane compiles with the
+ * release it installs, and only this lane runs the suite on the development compiler.
+ */
+function goReleases(support: Support, toolchains: Toolchains): string[] {
+  const floor = support.go.minimum.replace(/\.0$/, "");
+  return toolchains.go === support.go.minimum || toolchains.go === floor
+    ? [floor]
+    : [floor, toolchains.go];
+}
+
+export function buildCiMatrices(
+  { support, toolchains }: { readonly support: Support; readonly toolchains: Toolchains },
+  eventName: string,
+  schedule = "",
+): CiMatrices {
+  const [goFloor, ...laterGo] = goReleases(support, toolchains);
   const oldestJava = support.java.tested[0];
   const newestJava = support.java.tested.at(-1);
   const newestNode = support.node.tested.at(-1);
@@ -84,7 +105,8 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
     newestNode === undefined ||
     newestPostgres === undefined ||
     newestPython === undefined ||
-    newestRuby === undefined
+    newestRuby === undefined ||
+    goFloor === undefined
   )
     throw new Error("CI support lists cannot be empty");
 
@@ -97,7 +119,7 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
         include: [{ python: newestPython, postgres: newestPostgres }],
       },
       go: {
-        include: [{ go: goVersion, postgres: newestPostgres }],
+        include: [{ go: goFloor, postgres: newestPostgres }],
       },
       rust: { include: [{ postgres: newestPostgres }] },
       ruby: { include: [{ ruby: newestRuby, postgres: newestPostgres }] },
@@ -120,11 +142,12 @@ export function buildCiMatrices(support: Support, eventName: string, schedule = 
     python: {
       include: crossProduct("python", support.python.tested, "postgres", support.postgres.tested),
     },
+    // The floor against every PostgreSQL, and the development compiler against the newest.
     go: {
-      include: support.postgres.tested.map((postgres) => ({
-        go: goVersion,
-        postgres,
-      })),
+      include: [
+        ...support.postgres.tested.map((postgres) => ({ go: goFloor, postgres })),
+        ...laterGo.map((go) => ({ go, postgres: newestPostgres })),
+      ],
     },
     rust: { include: support.postgres.tested.map((postgres) => ({ postgres })) },
     ruby: {
@@ -150,8 +173,9 @@ async function main(): Promise<void> {
     await readFile(new URL("../support.json", import.meta.url), "utf8"),
   ) as {
     readonly support: Support;
+    readonly toolchains: Toolchains;
   };
-  const matrices = buildCiMatrices(manifest.support, eventName, process.argv[3]);
+  const matrices = buildCiMatrices(manifest, eventName, process.argv[3]);
   for (const [name, matrix] of Object.entries(matrices)) {
     process.stdout.write(`${name}=${JSON.stringify(matrix)}\n`);
   }

@@ -14,8 +14,10 @@ pre-commit:
       group:
         parallel: true
         jobs:
+          # The inputs of `scripts/generate-sql-catalogues.ts`, the schema that it reads, and each
+          # catalogue that it writes. The check needs no database.
           - name: check generated SQL catalogues
-            glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,scripts/sql-catalogue-csharp.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py,dotnet/src/**/*SqlCatalogue.*,ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}"
+            glob: "{protocol/v1/manifest.json,protocol/v1/governed-surface.json,sql/schema/current.sql,scripts/generate-sql-catalogues.ts,scripts/sql-catalogue-*.ts,scripts/sql-governed-surface.ts,scripts/sql-surface.ts,go/sql_catalogue_generated.go,rust/src/sql_catalogue_generated.rs,jvm/workhorse/src/main/java/run/workhorse/internal/SqlCatalogue.java,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py,dotnet/src/**/*SqlCatalogue.*,ruby/lib/stablemates/workhorse/sql_catalogue_generated.rb}"
             run: mise exec -- pnpm sql-catalogues:check
           - name: check parity tables
             glob: "{rust/**,rust/PARITY.md,ruby/spec/**,typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
@@ -108,6 +110,18 @@ pre-commit:
           - name: lint .NET
             glob: "dotnet/**"
             run: mise exec -- pnpm dotnet:lint
+          # Spotless, then the Gradle build with the JVM linters, with no database. The two Gradle
+          # builds share `jvm/build`, so they run one at a time. CI's `jvm` job runs the tests.
+          - name: check JVM formatting and lint
+            group:
+              piped: true
+              jobs:
+                - name: check JVM formatting
+                  glob: "jvm/**"
+                  run: mise exec -- pnpm jvm:format:check
+                - name: lint JVM
+                  glob: "jvm/**"
+                  run: mise exec -- pnpm jvm:lint
           - name: lint Ruby
             glob: "ruby/**"
             run: mise exec -- pnpm ruby:lint

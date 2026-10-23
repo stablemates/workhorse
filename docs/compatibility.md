@@ -67,10 +67,13 @@ expected to work and is not tested. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
-surface without repository-only imports. Pull requests and pushes run Go against the newest
-PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major. It also serves the
-module zip from a staged proxy and consumes it from a clean module, as the release rehearsal does.
-The race detector runs only on that weekly schedule.
+surface without repository-only imports. Pull requests and pushes run Go 1.25 against the newest
+PostgreSQL. The weekly schedule runs Go 1.25 against every supported PostgreSQL major. It also runs
+the suite once on the development compiler that `mise.toml` pins, against the newest PostgreSQL.
+Before each Go suite run, CI records the compiler. If the compiler is not the release that CI
+installed for that run, the run fails. The weekly schedule also serves the module zip from a staged
+proxy and consumes it from a clean module, as the release rehearsal does. The race detector runs
+only on that weekly schedule.
 
 The Rust crate declares Rust 1.89 as its minimum and runs on Tokio through tokio-postgres and
 deadpool-postgres. Pull requests and pushes run its suite once, with every optional feature, against

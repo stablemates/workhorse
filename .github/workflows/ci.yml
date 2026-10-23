@@ -392,6 +392,24 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: go/go.sum
+      # setup-go sets GOTOOLCHAIN=local, so the matrix release compiles the suite, not the
+      # `toolchain` line of go/go.mod. The log records the real compiler, and the lane fails if it
+      # is another release. The weekly run adds the development compiler of mise.toml (SM-1670).
+      - name: Record the Go compiler
+        working-directory: go
+        env:
+          MATRIX_GO: ${{ matrix.go }}
+        run: |
+          set -euo pipefail
+          go version
+          compiler="$(go env GOVERSION)"
+          case "$compiler" in
+            "go$MATRIX_GO" | "go$MATRIX_GO".*) ;;
+            *)
+              echo "The Go lane for $MATRIX_GO compiles with $compiler" >&2
+              exit 1
+              ;;
+          esac
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
