@@ -5,11 +5,13 @@ description: Make the three decisions that a web framework changes, with one que
 
 When you add Workhorse to a web application, you make three decisions. They are where the worker
 runs, where your code gets the `Queue`, and how you mount the dashboard. None of these needs a
-framework package, so Workhorse publishes none. Make the three decisions in the order of this page.
-The first decision sets the shape of your deployment. The other two change only one file each.
+framework package. Make the three decisions in the order of this page. The first decision sets the
+shape of your deployment. The other two change only one file each.
 
-A Rails application can also keep its job classes through the
-[Active Job adapter](/docs/active-job) of the Ruby gem.
+The one framework package that Workhorse publishes is the Spring Boot starter of the JVM SDK, and
+its worker is off by default. A Rails application can also keep its job classes through the
+[Active Job adapter](/docs/active-job) of the Ruby gem. A Django application can keep its decorated
+tasks through the [Django Tasks backend](/docs/django-tasks) of the Python distribution.
 
 <Diagram
   name="frameworks-shape"
