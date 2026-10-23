@@ -1517,8 +1517,8 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0084 and leaves the schema at
-   version 83.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0085 and leaves the schema at
+   version 84.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
@@ -1536,6 +1536,7 @@ error:
 | `0082-keep-the-operator-pause-after-a-registry-prune.sql`               | 81             | A registry prune keeps the operator pause of a paused instance, and the same instance gets it back                               |
 | `0083-fire-skip-schedules-within-the-supported-delay.sql`               | 82             | A `skip` schedule fires each occurrence inside the supported delay and records the occurrences it skips                          |
 | `0084-recheck-terminal-cleanup-references-and-continue-lease-scans.sql` | 83             | Terminal cleanup keeps a task that got a new reference during a batch, and a full expired-lease scan does not space the next one |
+| `0085-make-the-day-and-schedule-lock-keys-unambiguous.sql`              | 84             | A history-day lock does not depend on the session DateStyle or time zone, and two schedules do not share an occurrence lock      |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1590,7 +1591,19 @@ of the batch is deleted. The terminal_tasks phase no longer fails with SQLSTATE 
 A recovery scan that fills its share of the limit no longer spaces the next expired-lease scan.
 Every process of every SDK version gets the new behavior when the migration commits.
 
-A 0.9 process keeps working on schema version 83. Its dashboard host still sends its own retention
+Schema version 84 does not raise the floor. Migration 0085 changes the bodies of `fire_schedule_v1`,
+`fire_due_schedules_v2`, `create_history_day_v1`, `retire_history_day_v1`,
+`retire_history_partitions_v1`, and `prepare_history_partitions_v1`, and no signature or result
+shape. A history-day lock now gives one day the same lock under every session DateStyle and time
+zone. A history partition gets the name of its UTC day under every session time zone. Two schedules
+whose namespace or name contains a colon no longer share an occurrence lock, so one no longer defers
+the other.
+
+Migration 0085 also renames a history partition that has the name of the wrong UTC day. Only a
+calendar day that the session time zone skipped can produce such a name. Every process of every SDK
+version gets the new locks when the migration commits.
+
+A 0.9 process keeps working on schema version 84. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

@@ -20,6 +20,33 @@ upgrade steps.
 
 ## Unreleased
 
+### History-day and schedule occurrence locks are unambiguous
+
+A history-day lock converted its date to text with the session `DateStyle`. Two sessions with
+different settings then took different locks for one day and did not exclude each other. A history
+partition name converted its date with the session `TimeZone`. In a time zone that skipped a whole
+day, such as `Pacific/Apia` on 2011-12-30, the name of that day named the next day. A schedule occurrence lock joined the namespace, the
+schedule name, and the second with colons. Thus the schedule `a:b`/`c` and the schedule `a`/`b:c`
+shared one lock, and one pass could falsely defer the other (SM-1665).
+
+Migration 0085 (`0085-make-the-day-and-schedule-lock-keys-unambiguous.sql`) moves the schema to
+version 84. `create_history_day_v1`, `retire_history_day_v1`, and `retire_history_partitions_v1`
+now give one day the same lock under every `DateStyle` and `TimeZone`. These functions and
+`prepare_history_partitions_v1` also give one day the same partition name under every `TimeZone`.
+`fire_schedule_v1` and
+`fire_due_schedules_v2` now keep the three parts of an occurrence separate in its lock.
+Duplicate-occurrence protection, busy-occurrence deferral, and the history parent lock order do not
+change.
+
+Only a calendar day that the session time zone skipped can produce a wrong partition name. Before
+this change, `retire_history_day_v1` for the next day dropped that partition, which holds the rows
+of the wrong day. The migration renames each such partition to the name of its UTC day. If the
+correct name is taken, it raises a NOTICE that names both tables and changes nothing.
+
+The migration does not raise the SDK compatibility floor, and no signature or result shape
+changes. Run `workhorse schema migrate`. Every process gets the new locks when the migration
+commits.
+
 ### Terminal cleanup and lease recovery continue under concurrent work
 
 Terminal cleanup chose and locked its candidates in one statement, with one snapshot. If an enqueue

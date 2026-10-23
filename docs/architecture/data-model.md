@@ -2856,6 +2856,16 @@ Lifecycle transitions insert attempt history before task events. This shared par
 therefore prevents paired partition DDL from deadlocking a transition between its two history
 inserts.
 
+Before the parent locks, each of the three functions takes a transaction advisory lock for its UTC
+day. Since migration 0085, the key of that lock does not depend on the session `DateStyle` or
+`TimeZone`. Thus sessions with different settings exclude each other for one day. A transaction that
+was already inside an earlier body when migration 0085 committed can hold a different key for the
+same day. During that one transaction, the parent locks above still serialize the DDL of the day.
+
+A partition name such as `task_event_20140303` names the UTC day of the partition. Since migration
+0085, `create_history_day_v1`, `retire_history_day_v1`, and `prepare_history_partitions_v1` give one
+day the same name under every session `TimeZone`.
+
 Creation then runs these steps:
 
 1. It locks `attempt_history_default` before `task_event_default`.
@@ -3900,6 +3910,16 @@ A busy lock ends the pass for that definition:
 A pass that defers before its first occurrence writes no row at all. It therefore never waits on the
 definition row lock the holding transaction owns. The holder either commits the occurrence or rolls
 back and leaves it for the next pass.
+
+Since migration 0085, the occurrence lock keeps the namespace, the schedule name, and the occurrence
+second as separate values. A colon in a namespace or a name therefore cannot make the occurrences of
+two schedules share one lock.
+
+A transaction that was already inside an earlier body when migration 0085 committed can hold a
+different lock for the same occurrence. During that one transaction, the definition row lock and the
+`schedule_occurrence` primary key make the other caller wait. If the holder commits, the other
+caller returns a null task id. If the holder rolls back, the other caller fires the occurrence. Thus
+the occurrence fires once.
 
 #### SDK options
 

@@ -5307,9 +5307,14 @@ DECLARE
   v_definition workhorse.schedule_definition%ROWTYPE;
   v_task_id uuid;
 BEGIN
+  -- The key keeps the namespace, the name, and the second as separate JSON array elements. A colon
+  -- in a namespace or a name therefore cannot make two occurrences share one key (SM-1665).
   IF NOT pg_try_advisory_xact_lock(hashtextextended(
-    'workhorse:schedule:' || p_namespace || ':' || p_schedule_name || ':' ||
-    extract(epoch FROM date_trunc('second', p_occurrence_at))::bigint,
+    'workhorse:schedule-occurrence:' || jsonb_build_array(
+      p_namespace,
+      p_schedule_name,
+      extract(epoch FROM date_trunc('second', p_occurrence_at))::bigint
+    )::text,
     0
   )) THEN
     RETURN NULL;
@@ -5499,9 +5504,11 @@ BEGIN
       -- stays behind it. `fire_schedule_v1` takes the same lock again, which a transaction that
       -- already holds it always wins.
       IF NOT pg_try_advisory_xact_lock(hashtextextended(
-        'workhorse:schedule:' || v_definition.namespace || ':' ||
-        v_definition.schedule_name || ':' ||
-        extract(epoch FROM date_trunc('second', v_occurrence))::bigint,
+        'workhorse:schedule-occurrence:' || jsonb_build_array(
+          v_definition.namespace,
+          v_definition.schedule_name,
+          extract(epoch FROM date_trunc('second', v_occurrence))::bigint
+        )::text,
         0
       )) THEN
         v_deferred := true;
@@ -14980,8 +14987,11 @@ BEGIN
      ORDER BY upper_bound, child.relname
      LIMIT p_limit
   LOOP
+    -- The cast to timestamp keeps the session TimeZone out of to_char, and to_char keeps the
+    -- session DateStyle out of the day text (SM-1665).
     IF NOT pg_try_advisory_xact_lock(hashtextextended(
-      'workhorse:history-day:' || ((v_partition.upper_bound AT TIME ZONE 'UTC')::date - 1),
+      'workhorse:history-day:' ||
+        to_char(((v_partition.upper_bound AT TIME ZONE 'UTC')::date - 1)::timestamp, 'YYYY-MM-DD'),
       0
     )) THEN
       CONTINUE;
@@ -15478,7 +15488,8 @@ BEGIN
       v_policy.partition_preparation_interval_ms
     );
     FOR v_day_offset IN 0..v_horizon_days LOOP
-      v_suffix := to_char(v_today + v_day_offset, 'YYYYMMDD');
+      -- The cast to timestamp keeps the session TimeZone out of the partition name (SM-1665).
+      v_suffix := to_char((v_today + v_day_offset)::timestamp, 'YYYYMMDD');
       IF to_regclass(format('workhorse.%I', 'task_event_' || v_suffix)) IS NULL
          OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
         -- Creation locks both history parents in ACCESS EXCLUSIVE mode. A request that waits
@@ -16697,7 +16708,7 @@ AS $$
 DECLARE
   v_start timestamptz := p_day::timestamp AT TIME ZONE 'UTC';
   v_end timestamptz := (p_day + 1)::timestamp AT TIME ZONE 'UTC';
-  v_suffix text := to_char(p_day, 'YYYYMMDD');
+  v_suffix text := to_char(p_day::timestamp, 'YYYYMMDD');
   v_event_partition text := 'task_event_' || v_suffix;
   v_attempt_partition text := 'attempt_history_' || v_suffix;
   v_event_staging text := 'workhorse_task_event_' || v_suffix;
@@ -16705,7 +16716,11 @@ DECLARE
   v_event_exists boolean;
   v_attempt_exists boolean;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || p_day, 0));
+  -- The cast to timestamp keeps the session TimeZone out of to_char, and to_char keeps the
+  -- session DateStyle out of the day text (SM-1665).
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('workhorse:history-day:' || to_char(p_day::timestamp, 'YYYY-MM-DD'), 0)
+  );
   v_event_exists := to_regclass(format('workhorse.%I', v_event_partition)) IS NOT NULL;
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
@@ -16753,12 +16768,16 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_start date := p_day;
-  v_suffix text := to_char(v_start, 'YYYYMMDD');
+  v_suffix text := to_char(v_start::timestamp, 'YYYYMMDD');
 BEGIN
   IF v_start >= (clock_timestamp() AT TIME ZONE 'UTC')::date THEN
     RAISE EXCEPTION 'only completed history days can be retired';
   END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || v_start, 0));
+  -- The cast to timestamp keeps the session TimeZone out of to_char, and to_char keeps the
+  -- session DateStyle out of the day text (SM-1665).
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('workhorse:history-day:' || to_char(v_start::timestamp, 'YYYY-MM-DD'), 0)
+  );
   LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE ONLY workhorse.task_event IN ACCESS EXCLUSIVE MODE;
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'task_event_' || v_suffix);
@@ -22740,10 +22759,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (80, 'bound the dense cron evaluation'),
   (81, 'keep the operator pause after a registry prune'),
   (82, 'fire skip schedules within the supported delay'),
-  (83, 'recheck terminal cleanup references and continue lease scans')
+  (83, 'recheck terminal cleanup references and continue lease scans'),
+  (84, 'make the day and schedule lock keys unambiguous')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (83) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (84) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
