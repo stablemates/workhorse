@@ -800,13 +800,20 @@ class HeldListenConnection:
 
 
 class ClaimTimingExecutor:
-    """Records each dispatch claim's start, its return to the worker, and whether it found a task."""
+    """Records each dispatch claim's start, its return to the worker, and whether it found a task.
+
+    The runner can hold the first empty claim that starts at or after ``hold_from``. The recorder
+    records that claim, sets ``reached``, and returns it to the worker only after ``released``.
+    """
 
     def __init__(self, executor: PooledSyncExecutor) -> None:
         self._executor = executor
         self._lock = Lock()
         self.recording = True
         self.claims: list[tuple[float, float, bool]] = []
+        self.hold_from: float | None = None
+        self.reached = Event()
+        self.released = Event()
 
     def rows(self, statement: DriverStatement, parameters: Any = ()) -> Any:
         if statement is not STATEMENTS.claim_many:
@@ -816,11 +823,51 @@ class ClaimTimingExecutor:
         with self._lock:
             if self.recording:
                 self.claims.append((started, monotonic(), bool(rows)))
+            hold = self.hold_from is not None and started >= self.hold_from and not rows
+            if hold:
+                self.hold_from = None
+        if hold:
+            self.reached.set()
+            assert self.released.wait(timeout=15), "the held claim was never released"
         return rows
 
     def recorded(self) -> list[tuple[float, float, bool]]:
         with self._lock:
             return list(self.claims)
+
+
+class EmptyClaimWait:
+    """Reads the wait that the worker installs after a claim that found no task.
+
+    The worker installs this wait only when it settles an empty claim. The wait keeps the wake
+    version of that claim, so a wake after the claim ends the wait. The worker starts no claim
+    while the wait is in place, unless a wake ends it.
+    """
+
+    def __init__(self, worker: Worker) -> None:
+        self._choose = worker._dispatch_wait_seconds
+        self._slots: Any = None
+        worker._dispatch_wait_seconds = self._capture  # type: ignore[method-assign]
+
+    def _capture(self, slots: Any) -> float:
+        self._slots = slots
+        return self._choose(slots)
+
+    def deadline(self) -> float | None:
+        """The end of the installed wait that a wake can end, or ``None`` without one."""
+        slots = self._slots
+        wait = None if slots is None else slots.empty_wait
+        return None if wait is None or wait[1] is None else float(wait[0])
+
+    def installed_after(self, moment: float, minimum_ms: float) -> bool:
+        """Whether the installed wait ends at least ``minimum_ms`` after ``moment``."""
+        deadline = self.deadline()
+        return deadline is not None and deadline >= moment + minimum_ms / 1_000
+
+
+def notification_wait_ms(worker: Worker) -> float:
+    """The shortest wait at the notification base: the interval less its jitter of 10 %."""
+    return worker._notification_poll_ms * 0.9
 
 
 def execute_subscription_recovery_fixture(
@@ -832,12 +879,17 @@ def execute_subscription_recovery_fixture(
     the worker must poll at the polling-only base. After the release, it must wait the
     notification poll interval. Then the runner ends the listener session. The loss must wake the
     worker, and the worker must poll at the polling-only base again.
+
+    The bounds after the loss start at events that the runner controls, not at the moment the
+    runner sees them. A loaded runner sees an event late, and the worker's backoff grows in that
+    time, so a late observation would charge the runner's delay to the worker.
     """
     queue_name = runtime_queue(fixture)
     handled: list[str] = []
     errors: list[BaseException] = []
     recovery_end = 0
     lost_at = 0.0
+    wait_end: float | None = None
     enqueued_after_loss = 0.0
 
     def wait_long(condition: Callable[[], bool], message: str) -> None:
@@ -861,6 +913,7 @@ def execute_subscription_recovery_fixture(
             fixture["taskType"],
             lambda payload, _context: handled.append(payload["task"]),
         )
+        empty_wait = EmptyClaimWait(worker)
         thread = run_in_thread(worker.run, errors)
         try:
             wait_for(
@@ -883,41 +936,51 @@ def execute_subscription_recovery_fixture(
             # The next empty claim starts a new wait at the notification base. Then the runner
             # ends the live listener session and holds the next LISTEN, so the subscription is
             # lost. The database is shared with other test processes, so the runner ends only
-            # the listener's own session.
+            # the listener's own session. The runner first waits until the worker has installed
+            # that wait. A loss before that moment gives the polling base without a wake.
             wait_long(
                 lambda: any(not claim[2] for claim in executor.recorded()[recovery_end:]),
                 "the worker made no empty claim after the second task",
             )
+            empty_end = next(
+                claim[1] for claim in executor.recorded()[recovery_end:] if not claim[2]
+            )
+            wait_long(
+                lambda: empty_wait.installed_after(empty_end, notification_wait_ms(worker)),
+                "the worker did not wait at the notification base after the second task",
+            )
             pool.hold_listen()
             listener_pid = pool.listener_pid
             assert listener_pid is not None, "the runner did not see the listener's LISTEN"
+            # The loss starts when the runner ends the session. The recorder holds the first
+            # empty claim after that moment, which is the claim that the loss wakes. The worker
+            # thus cannot advance its backoff before the runner enqueues the third task.
+            wait_end = empty_wait.deadline()
+            lost_at = executor.hold_from = monotonic()
             connection.execute("SELECT pg_terminate_backend(%s)", (listener_pid,))
             wait_long(
-                lambda: (
-                    connection.execute(
-                        "SELECT 1 FROM pg_stat_activity WHERE pid = %s", (listener_pid,)
-                    ).fetchone()
-                    is None
-                ),
-                "the listener session did not end",
-            )
-            lost_at = monotonic()
-            # The loss wakes the worker. The third task waits for the claims after that wake.
-            wait_long(
-                lambda: any(claim[0] >= lost_at for claim in executor.recorded()),
+                executor.reached.is_set,
                 "the worker made no claim after the subscription was lost",
             )
             enqueued_after_loss = monotonic()
             queue.enqueue(fixture["taskType"], {"task": "third"}, EnqueueOptions(queue=queue_name))
+            executor.released.set()
             wait_long(lambda: len(handled) == 3, "the worker did not run the third task")
         finally:
             executor.recording = False
+            executor.released.set()
             pool.listen_released.set()
             worker.stop()
             join(thread)
     assert errors == []
     assert_subscription_recovery(
-        executor.recorded(), recovery_end, lost_at, enqueued_after_loss, fixture
+        executor.recorded(),
+        recovery_end,
+        lost_at,
+        wait_end,
+        enqueued_after_loss,
+        fixture,
+        notification_wait_ms(worker),
     )
 
 
@@ -925,13 +988,18 @@ def assert_subscription_recovery(
     recorded: list[tuple[float, float, bool]],
     recovery_end: int,
     lost_at: float,
+    wait_end: float | None,
     enqueued_after_loss: float,
     fixture: Mapping[str, Any],
+    notification_wait_ms: float,
 ) -> None:
     """Asserts the claim timing of the three phases of a subscription-recovery run.
 
     ``recorded`` holds each claim's start, its return, and whether it found a task, in the order
     the claims returned. ``recovery_end`` counts the claims recorded before the loss phase.
+    ``lost_at`` is the moment just before the runner ended the listener session. ``wait_end`` is
+    the end of the empty-claim wait that the worker had installed at that moment.
+    ``notification_wait_ms`` is the shortest wait at the notification base.
     """
     claims = sorted(recorded)
     found = [index for index, claim in enumerate(claims) if claim[2]]
@@ -953,10 +1021,22 @@ def assert_subscription_recovery(
     )
     # After the loss, the worker claims at once and then polls at the polling-only base again.
     maximum_ms = fixture["expectedMaximumClaimDelayAfterLossMs"]
-    woken_ms = (next(claim[0] for claim in claims if claim[0] >= lost_at) - lost_at) * 1_000
+    woken = next(index for index, claim in enumerate(claims) if claim[0] >= lost_at)
+    woken_ms = (claims[woken][0] - lost_at) * 1_000
     assert woken_ms <= maximum_ms, (
         f"the first claim after the subscription was lost waited {woken_ms:.0f} ms, "
         f"want at most {maximum_ms} ms"
+    )
+    # When the runner ended the session, the claim before the woken one had installed a wait at
+    # the notification base. The woken claim started before that wait ended, so the loss started it.
+    before = claims[woken - 1][1]
+    assert wait_end is not None, "the worker had no empty-claim wait when the session ended"
+    assert wait_end >= before + notification_wait_ms / 1_000, (
+        "the claim before the loss did not install a wait at the notification base"
+    )
+    assert claims[woken][0] < wait_end, (
+        "the first claim after the subscription was lost started when the wait ended, "
+        "so the wait, not the loss, started it"
     )
     third_ms = (claims[third][0] - enqueued_after_loss) * 1_000
     assert third_ms <= maximum_ms, (
@@ -1384,6 +1464,24 @@ def listening_sessions(connection: psycopg.Connection[Any]) -> int:
     return int(row[0])
 
 
+def release_window(
+    connection: psycopg.Connection[Any], task_id: str, fixture: Mapping[str, Any]
+) -> list[float]:
+    """Waits for the first release, then for ``runMs``, and returns the releases in that window.
+
+    The window starts at the first release, not at the start of the worker. A slow start thus
+    cannot make the window shorter. The release times come from the database, so a slow runner
+    cannot make the window longer.
+    """
+    deadline = monotonic() + 10
+    while not release_times_ms(connection, task_id):
+        assert monotonic() < deadline, "the worker released no task"
+        sleep(0.02)
+    sleep(fixture["runMs"] / 1000)
+    times = release_times_ms(connection, task_id)
+    return [time for time in times if time - times[0] <= fixture["runMs"]]
+
+
 def assert_release_wait(times: list[float], fixture: Mapping[str, Any]) -> None:
     assert fixture["expectedMinimumReleases"] <= len(times) <= fixture["expectedMaximumReleases"], (
         f"{len(times)} releases while the worker ran"
@@ -1408,14 +1506,14 @@ def execute_release_wait_fixture(
     errors: list[BaseException] = []
     thread = run_in_thread(worker.run, errors)
     try:
-        sleep(fixture["runMs"] / 1000)
+        times = release_window(connection, task_id, fixture)
         listeners = listening_sessions(connection)
     finally:
         worker.stop()
         join(thread)
     assert errors == []
     assert listeners > 0, "no session listened while the worker ran"
-    assert_release_wait(release_times_ms(connection, task_id), fixture)
+    assert_release_wait(times, fixture)
 
 
 def execute_json_round_trip_fixture(
@@ -1925,6 +2023,10 @@ class AsyncClaimTimingExecutor:
         self._executor = executor
         self.recording = True
         self.claims: list[tuple[float, float, bool]] = []
+        # The hold of the sync recorder, on the event loop.
+        self.hold_from: float | None = None
+        self.reached = asyncio.Event()
+        self.released = asyncio.Event()
 
     def __getattr__(self, name: str) -> Any:
         if name not in self._FORWARDED:
@@ -1938,6 +2040,10 @@ class AsyncClaimTimingExecutor:
         rows = await self._executor.rows(statement, parameters)
         if self.recording:
             self.claims.append((started, monotonic(), bool(rows)))
+        if self.hold_from is not None and started >= self.hold_from and not rows:
+            self.hold_from = None
+            self.reached.set()
+            await asyncio.wait_for(self.released.wait(), timeout=15)
         return rows
 
 
@@ -1992,7 +2098,7 @@ async def execute_async_subscription_recovery_driver(
     driver: str,
 ) -> None:
     """Measures the empty-claim wait of an AsyncWorker without a live subscription, with one, and
-    after its loss. The phases and assertions are those of the sync runner.
+    after its loss. The phases, the hold, and the assertions are those of the sync runner.
     """
     queue_name = runtime_queue(fixture)
     queue = Queue(connection)
@@ -2000,6 +2106,7 @@ async def execute_async_subscription_recovery_driver(
     handled: list[str] = []
     recovery_end = 0
     lost_at = 0.0
+    wait_end: float | None = None
     enqueued_after_loss = 0.0
 
     async def handler(payload: Any, _context: AsyncHandlerContext) -> None:
@@ -2022,6 +2129,7 @@ async def execute_async_subscription_recovery_driver(
         worker.handle(fixture["taskType"], handler)
         executor = AsyncClaimTimingExecutor(worker._bridge._executor)
         worker._bridge._executor = executor
+        empty_wait = EmptyClaimWait(worker._inner)
         running = asyncio.create_task(worker.run())
         try:
             await wait_long(
@@ -2043,37 +2151,46 @@ async def execute_async_subscription_recovery_driver(
 
             # The next empty claim starts a new wait at the notification base. Then the runner
             # ends the live listener session and holds the next LISTEN, so the subscription is
-            # lost. The runner ends only the listener's own session.
+            # lost. The runner ends only the listener's own session, after the worker has installed
+            # that wait.
             await wait_long(
                 lambda: any(not claim[2] for claim in executor.claims[recovery_end:]),
                 "the worker made no empty claim after the second task",
             )
+            empty_end = next(claim[1] for claim in executor.claims[recovery_end:] if not claim[2])
+            await wait_long(
+                lambda: empty_wait.installed_after(empty_end, notification_wait_ms(worker._inner)),
+                "the worker did not wait at the notification base after the second task",
+            )
             hold.arm()
             listener_pid = hold.listener_pid
             assert listener_pid is not None, f"{driver}: the runner did not see the LISTEN"
+            # The recorder holds the claim that the loss wakes until the third task is in.
+            wait_end = empty_wait.deadline()
+            lost_at = executor.hold_from = monotonic()
             await read(connection, "SELECT pg_terminate_backend(%s)", (listener_pid,))
-            deadline = monotonic() + 7
-            while await read(
-                connection, "SELECT 1 FROM pg_stat_activity WHERE pid = %s", (listener_pid,)
-            ):
-                assert monotonic() < deadline, f"{driver}: the listener session did not end"
-                await asyncio.sleep(0.005)
-            lost_at = monotonic()
-            # The loss wakes the worker. The third task waits for the claims after that wake.
             await wait_long(
-                lambda: any(claim[0] >= lost_at for claim in executor.claims),
+                executor.reached.is_set,
                 "the worker made no claim after the subscription was lost",
             )
             enqueued_after_loss = monotonic()
             await enqueue("third")
+            executor.released.set()
             await wait_long(lambda: len(handled) == 3, "the worker did not run the third task")
         finally:
             executor.recording = False
+            executor.released.set()
             hold.released.set()
             worker.stop()
             await running
     assert_subscription_recovery(
-        executor.claims, recovery_end, lost_at, enqueued_after_loss, fixture
+        executor.claims,
+        recovery_end,
+        lost_at,
+        wait_end,
+        enqueued_after_loss,
+        fixture,
+        notification_wait_ms(worker._inner),
     )
 
 
@@ -2093,13 +2210,12 @@ async def execute_async_release_wait_fixture(
         worker.handle(fixture["registeredTaskType"], registered)
         running = asyncio.create_task(worker.run())
         try:
-            await asyncio.sleep(fixture["runMs"] / 1000)
+            times = await asyncio.to_thread(release_window, connection, task_id, fixture)
             listeners = await asyncio.to_thread(listening_sessions, connection)
         finally:
             worker.stop()
             await running
     assert listeners > 0, "no session listened while the worker ran"
-    times = await asyncio.to_thread(release_times_ms, connection, task_id)
     assert_release_wait(times, fixture)
 
 
