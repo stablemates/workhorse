@@ -332,8 +332,10 @@ error.
 
 The .NET SDK does not support `BigInteger`, because `System.Text.Json` has no number converter for
 it. [ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
-records that rule. [SM-1746](https://linear.app/stablemates/issue/SM-1746) records that the SDK does
-not yet refuse a `BigInteger` when it writes one.
+records that rule. If a value holds a `BigInteger` at any depth, the write throws
+`ArgumentException` ([SM-1746](https://linear.app/stablemates/issue/SM-1746)). A
+`JsonConverter<BigInteger>` that the caller adds to the JSON options or to a property still writes
+the value.
 
 So a payload, result, checkpoint, or progress value that carries an integer larger than
 9,007,199,254,740,991 in magnitude is not portable. Enqueued from Python and handled by a Python,

@@ -20,6 +20,24 @@ upgrade steps.
 
 ## Unreleased
 
+### The .NET heartbeat round gives each server budget one quarter
+
+PostgreSQL measures `statement_timeout` for each statement and
+`idle_in_transaction_session_timeout` for each idle gap of a heartbeat round. The other SDKs set
+each budget to one quarter of the time that remains in the round (SM-1633). The .NET worker still
+set one half for the statement and one eighth for each idle gap. An idle gap is about one round
+trip. Thus, on a slow network, PostgreSQL could end the session of a .NET round. The other SDKs
+complete the same round. The .NET worker now sets both budgets to one quarter, at least 1 ms
+(SM-1745).
+
+### The .NET SDK refuses a `BigInteger` value
+
+ADR 0107 states that `BigInteger` is not a supported payload type. Before this change, the .NET SDK
+wrote a `BigInteger` in a payload, result, checkpoint, wait value, or progress value as an object of
+its properties, such as `{"isPowerOfTwo":false,...}`, and reported no error. Now the write fails with
+`ArgumentException` at any depth. A `JsonConverter<BigInteger>` that the caller adds to the JSON
+options or to a property still writes the value (SM-1746).
+
 ### The metrics observer reports maintenance freshness and retention lag
 
 The `workhorse.maintenance.*` counters and histograms record only when a routine runs. If every
