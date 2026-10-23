@@ -121,6 +121,18 @@ mod tests {
         for vector in vectors {
             let id = vector["id"].as_str().unwrap();
             let decoded = serde_json::from_str::<Value>(vector["input"].as_str().unwrap());
+            if let Some(rounded) = vector["roundedDigest"].as_str() {
+                // The fingerprint reads each number as an `f64`, also with the `serde_json`
+                // feature `arbitrary_precision`, so this SDK gives `roundedDigest`. An SDK that
+                // keeps the exact number text refuses the vector (ADR 0098).
+                assert_eq!(vector["refusal"], "unsafeNumber", "vector {id}");
+                assert_eq!(
+                    checkpoint_input_fingerprint(&decoded.unwrap()).unwrap(),
+                    rounded,
+                    "vector {id}"
+                );
+                continue;
+            }
             match (vector["refusal"].as_str(), decoded) {
                 (None, Ok(input)) => assert_eq!(
                     checkpoint_input_fingerprint(&input).unwrap(),

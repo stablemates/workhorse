@@ -3,15 +3,18 @@ package workhorse
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -25,6 +28,21 @@ var ErrInvalidCheckpointInput = errors.New(invalidCheckpointInputMessage)
 // maxSafeCheckpointInteger is the largest number magnitude that a checkpoint input can hold. I-JSON
 // (RFC 7493) keeps integers to the range that an IEEE 754 double holds exactly.
 const maxSafeCheckpointInteger = 1<<53 - 1
+
+// maxSafeCheckpointIntegerText is the decimal text of maxSafeCheckpointInteger.
+var maxSafeCheckpointIntegerText = strconv.FormatInt(maxSafeCheckpointInteger, 10)
+
+var (
+	jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
+	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+)
+
+// encodedField is a struct field that encoding/json can encode under a JSON name.
+type encodedField struct {
+	index  []int
+	tagged bool
+	quoted bool
+}
 
 // A JSON escape \uXXXX has six bytes. A low surrogate code unit is the second unit of a pair.
 const (
@@ -58,9 +76,16 @@ func (err invalidCheckpointInputError) Unwrap() []error {
 // An input that has no fingerprint returns an error that wraps ErrInvalidCheckpointInput: a
 // non-finite number, a number above 2^53 - 1 in magnitude, or a string or key with invalid UTF-8.
 // A larger number can be an integer that a double does not hold exactly, so every SDK refuses it.
-// encoding/json writes an invalid byte as the escape \ufffd, so a json.RawMessage or a MarshalJSON
-// method that writes U+FFFD as an escape, in either case, is refused too. Such a method must write
-// U+FFFD itself.
+// The limit applies to the exact value of a json.Number or of a number in a json.RawMessage, so
+// 9007199254740991.25 is refused, although it rounds to 2^53 - 1.
+//
+// A json.RawMessage or the output of a MarshalJSON method is JSON text, so its escapes give their
+// characters: the escape of U+FFFD gives U+FFFD. A lone surrogate escape in that text is refused.
+// A MarshalJSON method that encodes invalid UTF-8 with encoding/json gets the escape of U+FFFD, so
+// such a method must refuse invalid text itself. The MarshalText method of a map key must give the
+// same text on each call, because the check calls it again. If two map keys give the same text,
+// the check cannot pair each value with its encoded member. Then, if one of these members holds
+// the lowercase escape of U+FFFD, CheckpointInputFingerprint refuses the input.
 func CheckpointInputFingerprint(input any) (string, error) {
 	canonical, err := canonicalCheckpointInput(input)
 	if err != nil {
@@ -79,7 +104,13 @@ func canonicalCheckpointInput(input any) ([]byte, error) {
 		}
 		return nil, err
 	}
-	if hasInvalidUTF8(encoded) {
+	// encoding/json writes each invalid byte of a string, a key, or MarshalText output as the escape
+	// of U+FFFD, in lowercase. It copies the text of a MarshalJSON method as it is. Thus an escape of
+	// U+FFFD outside such text marks an invalid byte. A field with the string option escapes the
+	// backslash of that escape again, so the check starts for any text that holds its digits.
+	invalid, _ := scanEscapes(encoded)
+	if invalid || bytes.Contains(encoded, []byte(jsonReplacementEscapeDigits)) &&
+		hasReplacedText(reflect.ValueOf(input), encoded) {
 		return nil, errors.New(invalidUTF8CheckpointInputMessage)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -95,14 +126,12 @@ func canonicalCheckpointInput(input any) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// hasInvalidUTF8 reports whether the input held text that is not valid Unicode. encoding/json
-// writes each invalid byte of a string or a key as the escape \ufffd, and it writes U+FFFD itself
-// without an escape. Thus any escape of U+FFFD marks invalid text. A json.RawMessage or a
-// MarshalJSON method can keep an invalid byte, or write a lone surrogate escape that encoding/json
-// decodes as U+FFFD.
-func hasInvalidUTF8(encoded []byte) bool {
+// scanEscapes reads JSON text. It reports whether the text holds text that is not valid Unicode,
+// and it counts the escapes of U+FFFD in the text. A json.RawMessage or a MarshalJSON method can
+// keep an invalid byte, or write a lone surrogate escape that encoding/json decodes as U+FFFD.
+func scanEscapes(encoded []byte) (invalid bool, replacements int) {
 	if !utf8.Valid(encoded) {
-		return true
+		return true, 0
 	}
 	for index := 0; index < len(encoded); index++ {
 		if encoded[index] != '\\' {
@@ -113,19 +142,22 @@ func hasInvalidUTF8(encoded []byte) bool {
 		case !isUnicodeEscape:
 			// The escaped character cannot start another escape, as in \\ufffd.
 			index++
-		case unit == utf8.RuneError || unit >= lowSurrogateStart && unit <= lowSurrogateEnd:
-			return true
+		case unit >= lowSurrogateStart && unit <= lowSurrogateEnd:
+			return true, replacements
 		case utf16.IsSurrogate(unit):
 			low, isPaired := escapedCodeUnit(encoded, index+unicodeEscapeLength)
 			if !isPaired || low < lowSurrogateStart || low > lowSurrogateEnd {
-				return true
+				return true, replacements
 			}
 			index += 2*unicodeEscapeLength - 1
 		default:
+			if unit == utf8.RuneError {
+				replacements++
+			}
 			index += unicodeEscapeLength - 1
 		}
 	}
-	return false
+	return false, replacements
 }
 
 // escapedCodeUnit returns the UTF-16 code unit of the escape \uXXXX that starts at start, if
@@ -136,6 +168,328 @@ func escapedCodeUnit(encoded []byte, start int) (rune, bool) {
 	}
 	unit, err := strconv.ParseUint(string(encoded[start+2:start+unicodeEscapeLength]), 16, 16)
 	return rune(unit), err == nil
+}
+
+// hasReplacedText reports whether encoding/json replaced an invalid byte in the encoded text of
+// value. The function reads value and its encoded text together. Text that a MarshalJSON method
+// gives is copied, so its escapes of U+FFFD are valid. Any other escape of U+FFFD replaced an
+// invalid byte of a string, a key, or MarshalText output. The function follows the encoded text,
+// so a field that encoding/json leaves out and a cycle that it does not encode have no effect. It
+// calls no MarshalJSON method, and it calls a MarshalText method only for a map key.
+func hasReplacedText(value reflect.Value, encoded []byte) bool {
+	if !value.IsValid() || bytes.Equal(encoded, []byte(jsonNullText)) || implementsMethod(value, jsonMarshalerType) {
+		return false
+	}
+	if implementsMethod(value, textMarshalerType) {
+		return hasReplacementEscape(encoded)
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return hasReplacementEscape(encoded)
+	case reflect.Interface, reflect.Pointer:
+		return hasReplacedText(value.Elem(), encoded)
+	case reflect.Slice, reflect.Array:
+		// encoding/json writes a byte slice as a base64 string, which holds no escape.
+		if encoded[0] != '[' {
+			return false
+		}
+		items, err := jsonElements(encoded)
+		if err != nil || len(items) != value.Len() {
+			return true
+		}
+		for index, item := range items {
+			if hasReplacedText(value.Index(index), item) {
+				return true
+			}
+		}
+	case reflect.Map:
+		return hasReplacedMapText(value, encoded)
+	case reflect.Struct:
+		return hasReplacedFieldText(value, encoded)
+	}
+	return false
+}
+
+// hasReplacedMapText checks the members of an encoded map. A key is never copied text, so any escape
+// of U+FFFD in a key replaced an invalid byte. Each value pairs with the member that has its key.
+// Two MarshalText keys can give the same name, and then no pairing is reliable. If a member of such
+// a name holds the lowercase escape of U+FFFD, the function reports a replacement. encoding/json
+// writes each replacement in that form, and the string option keeps it in the text.
+func hasReplacedMapText(value reflect.Value, encoded []byte) bool {
+	keys, members, err := jsonMembers(encoded)
+	if err != nil {
+		return true
+	}
+	byKey := make(map[string][][]byte, len(keys))
+	for index, key := range keys {
+		var name string
+		if hasReplacementEscape(key) || json.Unmarshal(key, &name) != nil {
+			return true
+		}
+		byKey[name] = append(byKey[name], members[index])
+	}
+	for _, named := range byKey {
+		if len(named) > 1 && slices.ContainsFunc(named, func(member []byte) bool {
+			return bytes.Contains(member, []byte(jsonReplacementEscape))
+		}) {
+			return true
+		}
+	}
+	entries := value.MapRange()
+	for entries.Next() {
+		name, isResolved := encodedMapKey(entries.Key())
+		named := byKey[name]
+		if !isResolved || len(named) == 0 {
+			return true
+		}
+		if len(named) == 1 && hasReplacedText(entries.Value(), named[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// encodedMapKey returns the JSON key that encoding/json writes for a map key whose text is valid.
+func encodedMapKey(key reflect.Value) (string, bool) {
+	if key.Kind() == reflect.String {
+		return key.String(), true
+	}
+	if key.CanInterface() {
+		if marshaler, isMarshaler := key.Interface().(encoding.TextMarshaler); isMarshaler {
+			if key.Kind() == reflect.Pointer && key.IsNil() {
+				return emptyString, true
+			}
+			text, err := marshaler.MarshalText()
+			return string(text), err == nil
+		}
+	}
+	switch key.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(key.Int(), 10), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return strconv.FormatUint(key.Uint(), 10), true
+	}
+	return emptyString, false
+}
+
+// hasReplacedFieldText checks the members of an encoded struct. Each member pairs with the field that
+// encoding/json encodes under its key.
+func hasReplacedFieldText(value reflect.Value, encoded []byte) bool {
+	keys, members, err := jsonMembers(encoded)
+	if err != nil {
+		return true
+	}
+	fields := encodedFields(value.Type())
+	for index, key := range keys {
+		var name string
+		if hasReplacementEscape(key) || json.Unmarshal(key, &name) != nil {
+			return true
+		}
+		field, found := fields[name]
+		if !found {
+			return true
+		}
+		fieldValue, err := value.FieldByIndexErr(field.index)
+		if err != nil {
+			return true
+		}
+		member := members[index]
+		// A field with the string option holds the JSON text of its value as a JSON string. A
+		// MarshalJSON or MarshalText method ignores the option.
+		if field.quoted && member[0] == '"' && !implementsMethod(fieldValue, jsonMarshalerType) &&
+			!implementsMethod(fieldValue, textMarshalerType) {
+			var inner string
+			if json.Unmarshal(member, &inner) != nil || hasReplacementEscape([]byte(inner)) {
+				return true
+			}
+			continue
+		}
+		if hasReplacedText(fieldValue, member) {
+			return true
+		}
+	}
+	return false
+}
+
+// encodedFields returns the fields of structType that encoding/json can encode, by JSON name. It
+// follows the rules of encoding/json. An embedded struct without a JSON name gives its fields. For
+// one name, the field at the smallest depth wins, and a tagged field wins over an untagged one.
+// encoding/json leaves out a name that two such fields share, so that name is not in the encoded
+// text.
+func encodedFields(structType reflect.Type) map[string]encodedField {
+	type embedded struct {
+		structType reflect.Type
+		index      []int
+	}
+	fields := map[string]encodedField{}
+	visited := map[reflect.Type]bool{}
+	next := []embedded{{structType: structType}}
+	for len(next) > 0 {
+		current := next
+		next = nil
+		found := map[string]encodedField{}
+		for _, parent := range current {
+			if visited[parent.structType] {
+				continue
+			}
+			visited[parent.structType] = true
+			for fieldIndex := range parent.structType.NumField() {
+				structField := parent.structType.Field(fieldIndex)
+				fieldType := structField.Type
+				if fieldType.Name() == emptyString && fieldType.Kind() == reflect.Pointer {
+					fieldType = fieldType.Elem()
+				}
+				if structField.Anonymous && !structField.IsExported() && fieldType.Kind() != reflect.Struct ||
+					!structField.Anonymous && !structField.IsExported() {
+					continue
+				}
+				tag := structField.Tag.Get(jsonStructTagKey)
+				if tag == jsonSkippedFieldTag {
+					continue
+				}
+				name, options, _ := strings.Cut(tag, jsonTagSeparator)
+				if !isValidJSONTagName(name) {
+					name = emptyString
+				}
+				index := append(slices.Clone(parent.index), fieldIndex)
+				if name == emptyString && structField.Anonymous && fieldType.Kind() == reflect.Struct {
+					next = append(next, embedded{structType: fieldType, index: index})
+					continue
+				}
+				tagged := name != emptyString
+				if !tagged {
+					name = structField.Name
+				}
+				quoted := slices.Contains(strings.Split(options, jsonTagSeparator), jsonQuotedOption) &&
+					isQuotableKind(fieldType.Kind())
+				if previous, exists := found[name]; !exists || tagged && !previous.tagged {
+					found[name] = encodedField{index: index, tagged: tagged, quoted: quoted}
+				}
+			}
+		}
+		for name, field := range found {
+			if _, exists := fields[name]; !exists {
+				fields[name] = field
+			}
+		}
+	}
+	return fields
+}
+
+// isValidJSONTagName reports whether encoding/json uses name from a struct tag as a JSON name.
+func isValidJSONTagName(name string) bool {
+	if name == emptyString {
+		return false
+	}
+	for _, char := range name {
+		if !strings.ContainsRune(jsonTagNamePunctuation, char) && !unicode.IsLetter(char) && !unicode.IsDigit(char) {
+			return false
+		}
+	}
+	return true
+}
+
+// isQuotableKind reports whether encoding/json applies the string option to a field of kind.
+func isQuotableKind(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Bool, reflect.String, reflect.Float32, reflect.Float64,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return true
+	}
+	return false
+}
+
+// implementsMethod reports whether encoding/json encodes value with the method of methodType. It
+// uses a method of the pointer only for an addressable value, as encoding/json does.
+func implementsMethod(value reflect.Value, methodType reflect.Type) bool {
+	valueType := value.Type()
+	return valueType.Implements(methodType) ||
+		valueType.Kind() != reflect.Pointer && value.CanAddr() && reflect.PointerTo(valueType).Implements(methodType)
+}
+
+// hasReplacementEscape reports whether JSON text holds an escape of U+FFFD.
+func hasReplacementEscape(encoded []byte) bool {
+	_, replacements := scanEscapes(encoded)
+	return replacements > 0
+}
+
+// jsonElements returns the text of each element of a JSON array.
+func jsonElements(encoded []byte) ([][]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	var items [][]byte
+	for decoder.More() {
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// jsonMembers returns the key text and the value text of each member of a JSON object.
+func jsonMembers(encoded []byte) (keys, members [][]byte, err error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if _, err := decoder.Token(); err != nil {
+		return nil, nil, err
+	}
+	for decoder.More() {
+		start := decoder.InputOffset()
+		if _, err := decoder.Token(); err != nil {
+			return nil, nil, err
+		}
+		key := bytes.TrimLeft(encoded[start:decoder.InputOffset()], jsonMemberSeparators)
+		var member json.RawMessage
+		if err := decoder.Decode(&member); err != nil {
+			return nil, nil, err
+		}
+		keys = append(keys, key)
+		members = append(members, member)
+	}
+	return keys, members, nil
+}
+
+// exceedsSafeInteger reports whether the exact value of the JSON number text is more than 2^53 - 1
+// in magnitude. ParseFloat rounds a text such as 9007199254740991.25 to 2^53 - 1, so this function
+// reads the digits.
+func exceedsSafeInteger(text string) bool {
+	mantissa, exponentText, hasExponent := strings.Cut(strings.ToLower(strings.TrimPrefix(text, jsonMinusSign)), jsonExponentMarker)
+	whole, fraction, _ := strings.Cut(mantissa, jsonDecimalPoint)
+	digits := strings.TrimLeft(whole+fraction, jsonZeroDigit)
+	if digits == emptyString {
+		return false
+	}
+	exponent := 0
+	if hasExponent {
+		parsed, err := strconv.Atoi(exponentText)
+		if err != nil {
+			// The exponent is outside the int range. ParseFloat has refused a large value already.
+			return !strings.HasPrefix(exponentText, jsonMinusSign)
+		}
+		exponent = parsed
+	}
+	if exponent < -len(text) {
+		return false
+	}
+	// The value is 0.digits * 10^point.
+	point := len(whole) - (len(whole) + len(fraction) - len(digits)) + exponent
+	if point > len(maxSafeCheckpointIntegerText) {
+		return true
+	}
+	if point < len(maxSafeCheckpointIntegerText) {
+		return false
+	}
+	digits = strings.TrimRight(digits, jsonZeroDigit)
+	integer := digits[:min(point, len(digits))] + strings.Repeat(jsonZeroDigit, max(point-len(digits), 0))
+	if integer != maxSafeCheckpointIntegerText {
+		return integer > maxSafeCheckpointIntegerText
+	}
+	// The integer part is 2^53 - 1, so a fraction digit other than zero makes the value larger.
+	return len(digits) > point
 }
 
 // isNonFiniteText reports whether encoding/json refused a float as NaN or an infinity.
@@ -156,8 +510,9 @@ func writeCanonicalJSON(out *bytes.Buffer, value any) error {
 			return fmt.Errorf(wrappedErrorFormat, nonFiniteCheckpointInputMessage, err)
 		}
 		// Each double of 2^53 or more in magnitude is an integer, so this refuses no fraction. A
-		// larger integer text rounds to such a double.
-		if math.Abs(number) > maxSafeCheckpointInteger {
+		// larger integer text rounds to such a double. A text such as 9007199254740991.25 rounds down
+		// to 2^53 - 1, so the exact text is checked too.
+		if math.Abs(number) > maxSafeCheckpointInteger || exceedsSafeInteger(string(value)) {
 			return errors.New(unsafeCheckpointInputNumberMessage)
 		}
 		out.WriteString(ecmaScriptNumber(number))
