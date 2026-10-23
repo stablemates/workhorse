@@ -62,6 +62,10 @@ copy the old deadline, because it is in the past. A copy makes the new task fail
 
 The deadline is optional. Workhorse stores it as `deadline_at`.
 
+In C#, a `DateTime` converts to a `DateTimeOffset` implicitly. If its `Kind` is `Local` or
+`Unspecified`, the conversion uses the offset of the host. Pass a `DateTimeOffset`, or a `DateTime`
+with `Kind` `Utc`.
+
 | Where the task is                  | What settles a passed deadline                                                                  |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Enqueued with a past deadline      | `enqueue_batch_v1` settles it in the same call.                                                 |

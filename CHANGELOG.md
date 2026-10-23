@@ -20,6 +20,16 @@ upgrade steps.
 
 ## Unreleased
 
+### The .NET docs state how a `DateTime` converts to an enqueue time
+
+C# converts a `DateTime` to a `DateTimeOffset` implicitly. If the `Kind` is `Local` or
+`Unspecified`, the conversion uses the offset of the host. Thus a `DateTime` with `Kind`
+`Unspecified` can give `RunAt` or `Deadline` an instant that the caller does not intend. The XML
+docs of `EnqueueOptions.RunAt`, `EnqueueOptions.Deadline`, `HandlerContext.SleepUntilAsync`, and
+the six admin time filters now state the rule. The architecture reference also shows how a caller
+can make the build report each implicit conversion with `Microsoft.CodeAnalysis.BannedApiAnalyzers`.
+The C# governed surface does not change (SM-1722).
+
 ### A fast-tier attempt timeout reports its retry
 
 `expire_owned_telemetry_v1` settles a due deadline or attempt timeout for a live worker and returns

@@ -18,9 +18,23 @@ public sealed record TaskQuery
     public IReadOnlyCollection<TaskState> States { get; init; } = [];
 
     /// <summary>The earliest creation time, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? CreatedAfter { get; init; }
 
     /// <summary>The latest creation time, or <c>null</c>. It must be later than <see cref="CreatedAfter"/>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? CreatedBefore { get; init; }
 
     /// <summary>The page size, 1 to 1,000. The default is 100.</summary>
