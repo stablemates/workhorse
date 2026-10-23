@@ -19,10 +19,19 @@ from workhorse._drivers import SyncExecutor
 from workhorse._statements import STATEMENTS, DriverStatement
 
 TASK = "final.transition"
-LEASE_MS = 200
-HEARTBEAT_MS = 40
-# Longer than two leases, so a lease that stopped renewing at handler return would lapse.
-HOLD_SECONDS = 0.45
+# The scripted executor accepts every round, so only a starved host could let the lease lapse. The
+# worker's watchdog then ends the attempt before its final write. This lease is longer than any wait
+# of the tests, so the tests do not depend on how fast the host schedules the heartbeat rounds.
+LEASE_MS = 10_000
+HEARTBEAT_MS = 100
+# The rounds that must renew the lease while the final write is held. A worker that stopped
+# renewing at handler return sends none.
+RENEWALS_WHILE_HELD = 3
+# The refusal test lets the watchdog lapse after the refusal, so its lease ends during the test. It
+# is long enough that the attempt reaches its final write within it under load.
+REFUSAL_LEASE_MS = 1_000
+# The longest wait for an event of the attempt.
+EVENT_SECONDS = 10
 
 
 class HeldSettlement:
@@ -98,7 +107,7 @@ class HeldSettlement:
 
     def _hold(self, transition: str, value: object) -> None:
         self.held.set()
-        assert self.release.wait(10), "the test never released the final write"
+        assert self.release.wait(EVENT_SECONDS), "the test never released the final write"
         with self._lock:
             self.settlements.append((transition, value))
 
@@ -130,14 +139,14 @@ def scripted(worker: Worker) -> Worker:
     return worker
 
 
-def sync_worker(executor: HeldSettlement) -> Worker:
+def sync_worker(executor: HeldSettlement, lease_ms: int = LEASE_MS) -> Worker:
     return scripted(
         Worker(
             object(),  # type: ignore[arg-type]
             queue="dispatch",
             worker_id="python-final-transition",
             concurrency=1,
-            lease_ms=LEASE_MS,
+            lease_ms=lease_ms,
             heartbeat_ms=HEARTBEAT_MS,
             registry_interval_ms=0,
             shared_heartbeats=True,
@@ -147,16 +156,16 @@ def sync_worker(executor: HeldSettlement) -> Worker:
 
 
 def assert_renews_while_held(core: Worker, executor: HeldSettlement) -> None:
-    assert executor.held.wait(5), "the attempt never reached its final write"
+    assert executor.held.wait(EVENT_SECONDS), "the attempt never reached its final write"
     task_id = str(task_row(1, TASK)["task_id"])
     rounds_before = executor.rounds()
-    deadline = monotonic() + HOLD_SECONDS
-    while monotonic() < deadline:
+    deadline = monotonic() + EVENT_SECONDS
+    # Renewal outlives the handler: rounds keep renewing the lease while the final write waits.
+    while executor.rounds() - rounds_before < RENEWALS_WHILE_HELD:
         with core._heartbeat_lock:
             assert task_id in core._heartbeat_members, "supervision ended before the final write"
+        assert monotonic() < deadline, "no heartbeat round renewed the lease of the held write"
         sleep(HEARTBEAT_MS / 4000)
-    # Without renewal the lease would have lapsed twice over by now.
-    assert executor.rounds() - rounds_before >= 3
     executor.release.set()
 
 
@@ -250,17 +259,18 @@ def test_a_refused_renewal_after_the_handler_returns_only_stops_renewing(verdict
         handled.set()
         return {"ok": True}
 
-    worker = sync_worker(executor).handle(TASK, handle)
+    worker = sync_worker(executor, REFUSAL_LEASE_MS).handle(TASK, handle)
     run = Thread(target=worker.run_once)
     run.start()
     try:
-        assert executor.held.wait(5), "the attempt never reached its final write"
-        deadline = monotonic() + 5
+        assert executor.held.wait(EVENT_SECONDS), "the attempt never reached its final write"
+        deadline = monotonic() + EVENT_SECONDS
         while task_is_renewing(worker) and monotonic() < deadline:
             sleep(HEARTBEAT_MS / 4000)
         assert not task_is_renewing(worker), "a refused renewal did not stop renewing"
-        # The refusal neither cancels the finished attempt nor writes a second transition.
-        sleep(LEASE_MS * 2 / 1000)
+        # The refusal neither cancels the finished attempt nor writes a second transition, also
+        # after the watchdog finds the lease lapsed.
+        sleep(REFUSAL_LEASE_MS * 2 / 1000)
         assert executor.settlements == []
     finally:
         executor.release.set()
@@ -275,8 +285,8 @@ def test_a_refused_renewal_after_the_handler_returns_only_stops_renewing(verdict
 
 
 def release_after_renewal_is_refused(core: Worker, executor: HeldSettlement) -> None:
-    assert executor.held.wait(5), "the attempt never reached its final write"
-    deadline = monotonic() + 5
+    assert executor.held.wait(EVENT_SECONDS), "the attempt never reached its final write"
+    deadline = monotonic() + EVENT_SECONDS
     while task_is_renewing(core) and monotonic() < deadline:
         sleep(HEARTBEAT_MS / 4000)
     # A refused renewal after the handler returns only stops renewing; it settles nothing.
@@ -392,12 +402,16 @@ def test_a_base_exception_from_the_handler_still_ends_supervision() -> None:
         assert worker._heartbeat_members == {}
 
 
-INTEGRATION_LEASE_MS = 1_000
+# Under load, a round can pass its bound and renew nothing. A lease of four intervals still renews
+# when some rounds fail, and a lease that stopped renewing at handler return still lapses during the
+# delay.
+INTEGRATION_LEASE_MS = 2_000
+INTEGRATION_HEARTBEAT_MS = 500
 FINAL_WRITES = (STATEMENTS.complete, STATEMENTS.fail, STATEMENTS.acknowledge_cancel)
 
 
 class DelayedFinalWrite:
-    """Send every statement to PostgreSQL, but hold the final write for three leases.
+    """Send every statement to PostgreSQL, but hold the final write for two leases.
 
     While it waits, the test runs lease recovery. A lease that stopped renewing at handler return
     would lapse and hand the task to recovery before the completion arrives.
@@ -439,7 +453,7 @@ def test_a_delayed_completion_keeps_the_claimed_lease(
             claimed_fence.append(int(row[0]))
             if cancel:
                 assert Queue(operator).cancel(task_id).status == "cancel_requested"
-            deadline = monotonic() + 3 * INTEGRATION_LEASE_MS / 1000
+            deadline = monotonic() + 2 * INTEGRATION_LEASE_MS / 1000
             while monotonic() < deadline:
                 operator.execute("SELECT * FROM workhorse.recover_expired_telemetry_v1(100, 0)")
                 sleep(INTEGRATION_LEASE_MS / 4000)
@@ -454,7 +468,7 @@ def test_a_delayed_completion_keeps_the_claimed_lease(
             queue=queue_name,
             worker_id="python-final-transition-lease",
             lease_ms=INTEGRATION_LEASE_MS,
-            heartbeat_ms=200,
+            heartbeat_ms=INTEGRATION_HEARTBEAT_MS,
             registry_interval_ms=0,
             _executor=executor,  # type: ignore[arg-type]
         ).handle(TASK, handle)
