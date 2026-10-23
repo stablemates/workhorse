@@ -20,7 +20,12 @@ RSpec.describe "Workhorse.checkpoint_input_fingerprint" do
   vectors.each do |vector|
     it "gives the outcome of the vector #{vector.fetch("id")}" do
       fingerprint = -> { W.checkpoint_input_fingerprint(JSON.parse(vector.fetch("input"))) }
-      if vector.key?("refusal")
+      if vector.key?("roundedDigest")
+        # JSON.parse decodes each number with a fraction or an exponent to a Float, so this SDK gives
+        # roundedDigest. An SDK that keeps the exact number text refuses the vector (ADR 0098).
+        expect(vector.fetch("refusal")).to eq("unsafeNumber")
+        expect(fingerprint.call).to eq(vector.fetch("roundedDigest"))
+      elsif vector.key?("refusal")
         expect(&fingerprint).to raise_error(*refusals.fetch(vector.fetch("refusal")))
       else
         expect(fingerprint.call).to eq(vector.fetch("digest"))

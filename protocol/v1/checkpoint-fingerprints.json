@@ -3,6 +3,8 @@
     "The checkpoint input fingerprint vectors of ADR 0098. Each SDK test reads this file, decodes each input with its own JSON decoder, and computes the fingerprint.",
     "input is JSON text. A vector with digest gives that SHA-256 digest of canonical, the RFC 8785 text of the input.",
     "A vector with refusal is refused. An SDK can refuse it when it decodes the text or when it computes the fingerprint.",
+    "A vector with refusal unsafeNumber can also have roundedDigest. The exact value of its number is more than 2^53 - 1 in magnitude, but the nearest double is not.",
+    "An SDK test that keeps the exact number text expects the refusal. An SDK test that decodes each number to a double expects roundedDigest, the digest of that double (ADR 0098). Each SDK test states its mode.",
     "loneSurrogate: a string or a key has a lone surrogate. nonFinite: a number is outside the double range. unsafeNumber: a number is more than 2^53 - 1 in magnitude.",
     "The file escapes each character outside printable ASCII, so each code point is visible."
   ],
@@ -244,6 +246,24 @@
       "refusal": "unsafeNumber"
     },
     {
+      "id": "fraction-above-the-largest-safe-integer",
+      "input": "9007199254740991.25",
+      "refusal": "unsafeNumber",
+      "roundedDigest": "f40b423c2dd95ff2b2f027e22208f438cf7242862e5e746860e697308c9add26"
+    },
+    {
+      "id": "negative-fraction-above-the-largest-safe-integer",
+      "input": "-9007199254740991.0000001",
+      "refusal": "unsafeNumber",
+      "roundedDigest": "4c933a456bb8f2e9894b2d0b26480439cd72d52fb8a27cbf8fd7f323f22c7815"
+    },
+    {
+      "id": "exponent-above-the-largest-safe-integer-in-an-object",
+      "input": "{\"id\":0.90071992547409910000000001e16}",
+      "refusal": "unsafeNumber",
+      "roundedDigest": "4fa44a93030f3903ae3f5dcbff22d5be56a98533d62079b5aaeb9d603ec92ad0"
+    },
+    {
       "id": "unsafe-integer-in-an-object",
       "input": "{\"id\":9007199254740993}",
       "refusal": "unsafeNumber"
@@ -391,6 +411,18 @@
       "input": "\"\ufffd\"",
       "canonical": "\"\ufffd\"",
       "digest": "568601070314e0f4489c9944b3c151d5251d379330008293bb7e1a826a22a845"
+    },
+    {
+      "id": "escaped-replacement-character",
+      "input": "\"\\ufffd\"",
+      "canonical": "\"\ufffd\"",
+      "digest": "568601070314e0f4489c9944b3c151d5251d379330008293bb7e1a826a22a845"
+    },
+    {
+      "id": "escaped-replacement-character-in-a-key",
+      "input": "{\"\\uFFFD\":1}",
+      "canonical": "{\"\ufffd\":1}",
+      "digest": "526085d95c318d0bff4ee6370e3ff0157b443771be9718dd99e14026c3bc5148"
     },
     {
       "id": "noncharacter",

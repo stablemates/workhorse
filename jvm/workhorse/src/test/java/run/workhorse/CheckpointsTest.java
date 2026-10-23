@@ -65,6 +65,16 @@ class CheckpointsTest {
   void givesTheOutcomeOfEachSharedVector(String id, Map<String, @Nullable Object> vector) {
     String input = (String) Objects.requireNonNull(vector.get("input"));
     Object refusal = vector.get("refusal");
+    Object roundedDigest = vector.get("roundedDigest");
+    if (roundedDigest != null) {
+      // Json.parse decodes a fraction to a Double before Checkpoints.inputFingerprint, so this
+      // runner tests the decoded-value path and gives roundedDigest. An SDK that keeps the exact
+      // number text refuses the vector (ADR 0098). rejectsANumberLargerThan2To53Minus1InMagnitude
+      // covers the exact path with a BigDecimal.
+      assertEquals("unsafeNumber", refusal, id);
+      assertEquals(roundedDigest, Checkpoints.inputFingerprint(Json.parse(input)), id);
+      return;
+    }
     if (refusal == null) {
       assertEquals(vector.get("digest"), Checkpoints.inputFingerprint(Json.parse(input)), id);
       return;

@@ -12,6 +12,7 @@ interface Vector {
   canonical?: string;
   digest?: string;
   refusal?: "loneSurrogate" | "nonFinite" | "unsafeNumber";
+  roundedDigest?: string;
 }
 
 const { vectors } = JSON.parse(
@@ -34,7 +35,12 @@ function decode({ input }: Vector): Json {
 }
 
 const digests = vectors.filter(({ refusal }) => refusal === undefined);
-const refused = vectors.filter(({ refusal }) => refusal !== undefined);
+// JSON.parse decodes each number to a double, so this SDK gives roundedDigest for a vector that has
+// it. An SDK that keeps the exact number text refuses such a vector (ADR 0098).
+const rounded = vectors.filter(({ roundedDigest }) => roundedDigest !== undefined);
+const refused = vectors.filter(
+  ({ refusal, roundedDigest }) => refusal !== undefined && roundedDigest === undefined,
+);
 
 function byId(id: string): Vector {
   const found = vectors.find((candidate) => candidate.id === id);
@@ -57,12 +63,20 @@ describe("checkpointInputFingerprint", () => {
           canonical !== undefined || digest !== undefined || !((refusal ?? "") in refusals),
       ),
     ).toEqual([]);
+    expect(rounded.filter(({ refusal }) => refusal !== "unsafeNumber")).toEqual([]);
   });
 
   it.each(digests.map((found) => [found.id, found] as const))(
     "gives the digest of the vector %s",
     (_id, found) => {
       expect(checkpointInputFingerprint(decode(found))).toBe(found.digest);
+    },
+  );
+
+  it.each(rounded.map((found) => [found.id, found] as const))(
+    "decodes each number to a double, so gives the rounded digest of the vector %s",
+    (_id, found) => {
+      expect(checkpointInputFingerprint(decode(found))).toBe(found.roundedDigest);
     },
   );
 

@@ -26,7 +26,12 @@ def test_the_fixture_has_vectors() -> None:
 @pytest.mark.parametrize("vector", VECTORS, ids=[vector["id"] for vector in VECTORS])
 def test_the_fingerprint_gives_the_shared_vectors(vector: dict[str, Any]) -> None:
     input = json.loads(vector["input"])
-    if "refusal" in vector:
+    if "roundedDigest" in vector:
+        # json.loads decodes each number to a float, so this SDK gives roundedDigest. An SDK that
+        # keeps the exact number text refuses the vector (ADR 0098).
+        assert vector["refusal"] == "unsafeNumber"
+        assert checkpoint_input_fingerprint(input) == vector["roundedDigest"]
+    elif "refusal" in vector:
         with pytest.raises(ValueError, match=REFUSALS[vector["refusal"]]):
             checkpoint_input_fingerprint(input)
     else:

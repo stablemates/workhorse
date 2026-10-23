@@ -35,6 +35,14 @@ const (
 	jsonEscapedCarriageReturn             = `\r`
 	jsonEscapedTab                        = `\t`
 	jsonControlEscapePrefix               = `\u00`
+	jsonStructTagKey                      = "json"
+	jsonSkippedFieldTag                   = "-"
+	jsonTagSeparator                      = ","
+	jsonQuotedOption                      = "string"
+	jsonTagNamePunctuation                = "!#$%&()*+-./:;<=>?@[]^_{|}~ "
+	jsonMemberSeparators                  = ", \t\r\n"
+	jsonReplacementEscapeDigits           = "ufffd"
+	jsonReplacementEscape                 = `\ufffd`
 	jsonNaNText                           = "NaN"
 	jsonPositiveInfinityText              = "+Inf"
 	jsonNegativeInfinityText              = "-Inf"
