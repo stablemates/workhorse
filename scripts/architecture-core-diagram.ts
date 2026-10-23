@@ -275,15 +275,15 @@ const cadenceDescription =
   "advisory lock, tick_v1 promotes scheduled tasks to ready, then recovers expired leases. At the " +
   "same cadence, and only with scheduleNamespaces set, the worker evaluates schedules. Every " +
   "maintenanceRoutinePollMs, 60 s by default, it calls run_maintenance_v1, which runs " +
-  "rollup_stats_v1, prepare_history_partitions_v1, retain_history_v1, prune_terminal_storage_v1, " +
-  "and prune_worker_registry_v1 in this order.";
+  "rollup_stats_v1, prune_terminal_storage_v1, prune_worker_registry_v1, retain_history_v1, " +
+  "and prepare_history_partitions_v1 in this order.";
 
 const routines = [
   "rollup_stats_v1",
-  "prepare_history_partitions_v1",
-  "retain_history_v1",
   "prune_terminal_storage_v1",
   "prune_worker_registry_v1",
+  "retain_history_v1",
+  "prepare_history_partitions_v1",
 ] as const;
 
 /** The cadence diagram: the worker, the tick, the schedule evaluation, and the routines. */

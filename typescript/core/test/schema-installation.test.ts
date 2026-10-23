@@ -625,6 +625,10 @@ describe("schema installation", () => {
         version: 77,
         description: "copy the diagnostic details into hint",
       },
+      {
+        version: 78,
+        description: "bound the history partition lock waits",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

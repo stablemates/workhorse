@@ -20,6 +20,32 @@ upgrade steps.
 
 ## Unreleased
 
+### Partition preparation no longer blocks lifecycle transitions behind a reader
+
+Partition preparation creates the next daily partitions of `task_event` and `attempt_history`. It
+locks both parent tables in `ACCESS EXCLUSIVE` mode. Before this change, that lock request had no
+wait limit. If a long reader, such as `pg_dump`, held a parent table, every claim, completion, and
+enqueue that writes history waited behind the request. When PostgreSQL granted the locks,
+`run_maintenance_v1` kept them through retention and terminal cleanup. Retention also kept the
+parent locks of a dropped partition through terminal cleanup (SM-1640).
+
+Migration 0079 (`0079-bound-the-history-partition-lock-waits.sql`) moves the schema to version 78.
+After it, each lock request of partition preparation waits at most 250 ms, as partition retirement
+does. If a lock stays busy, the routine defers the day and does not fail. The returned
+`history_partitions` row sets `skippedLock`, the recorded run has the outcome `incomplete` and names
+the `deferredDay`, and the next pass creates the day. `run_maintenance_v1` now runs history
+retention and partition preparation after terminal cleanup and registry cleanup. Thus the call
+commits directly after the partition DDL. Partition retirement takes both parent locks in the
+documented order, `attempt_history` before `task_event`. Terminal cleanup now uses the retention
+watermark of the previous pass, which delays it by one pass on the day that retention runs.
+
+The row order of `run_maintenance_v1` changes: `history_partitions` and the retention phases now
+come after `worker_registry`. The set of phases does not change. The DDL phases run last, so their
+parent locks end when the call commits. No SDK reads the rows by position.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
+changes no stored data.
+
 ### Each diagnosed error also carries its details in HINT
 
 Before this change, SQLSTATE `P1001` to `P1010`, apart from `P1004`, carried their structured

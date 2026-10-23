@@ -2341,6 +2341,232 @@ describe("retention maintenance", () => {
     expect(horizon.rows[0]?.missing).toBe(0);
   });
 
+  it("defers a history day while a reader holds a parent lock and creates it on a later pass", async () => {
+    const reader = await pool.connect();
+    const observer = await pool.connect();
+    const caller = await pool.connect();
+    const { rows } = await pool.query<{ day: string; suffix: string }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, to_char(day, 'YYYYMMDD') AS suffix
+         FROM (SELECT (clock_timestamp() AT TIME ZONE 'UTC')::date + 3 AS day) horizon`,
+    );
+    const { day, suffix } = rows[0]!;
+    const dayExists = async () =>
+      (
+        await pool.query<{ exists: boolean }>(
+          `SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL AS exists`,
+          [`workhorse.task_event_${suffix}`, `workhorse.attempt_history_${suffix}`],
+        )
+      ).rows[0]!.exists;
+    const exclusiveRequestWaits = async () =>
+      (
+        await observer.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_locks
+              WHERE relation = 'workhorse.task_event'::regclass
+                AND mode = 'AccessExclusiveLock' AND NOT granted
+           ) AS waiting`,
+        )
+      ).rows[0]!.waiting;
+    // Polls without a pause, because the bounded request waits only a short time.
+    const pollUntil = async (expected: boolean, limitMs: number) => {
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < limitMs) {
+        if ((await exclusiveRequestWaits()) === expected) return performance.now();
+      }
+      throw new Error(`the exclusive request did not ${expected ? "start" : "end"} waiting`);
+    };
+    await pool.query(`DROP TABLE workhorse.task_event_${suffix}`);
+    await pool.query(`DROP TABLE workhorse.attempt_history_${suffix}`);
+    await pool.query(
+      `UPDATE workhorse.maintenance_state SET last_completed_at = NULL
+        WHERE routine_name = 'history_partitions'`,
+    );
+
+    let readerOpen = false;
+    try {
+      // pg_dump takes ACCESS SHARE on each table it reads and keeps it until it ends.
+      await reader.query("BEGIN");
+      readerOpen = true;
+      await reader.query("LOCK TABLE ONLY workhorse.task_event IN ACCESS SHARE MODE");
+
+      const maintenance = queue.runMaintenance();
+      const waitStartedAt = await pollUntil(true, 10_000);
+      // A lifecycle transition that starts behind an unbounded ACCESS EXCLUSIVE request waits
+      // until the reader ends. The bounded request lets it continue while the reader still runs.
+      const lifecycle = (async () => {
+        const id = await queue.enqueue("partition-lock-reader", {});
+        const task = await queue.claim("partition-lock-worker");
+        expect(task?.id).toBe(id);
+        return queue.complete(task!, "partition-lock-worker", { done: true });
+      })();
+      const waitEndedAt = await pollUntil(false, 10_000);
+      // The limit is 250 ms. The margin allows for a loaded host.
+      expect(waitEndedAt - waitStartedAt).toBeLessThan(2_000);
+      const deadline = sleep(10_000, "timed out", { ref: false });
+      await expect(Promise.race([lifecycle, deadline])).resolves.toBe(true);
+      expect(
+        (await maintenance).find((result) => result.phase === "history_partitions"),
+      ).toMatchObject({ rowsAffected: 0, skippedLock: true, error: null });
+      await expect(
+        pool.query(
+          `SELECT run.outcome, run.phases->0->>'deferredDay' AS deferred_day,
+                  state.last_completed_at
+             FROM workhorse.maintenance_run run
+             JOIN workhorse.maintenance_state state USING (routine_name)
+            WHERE run.routine_name = 'history_partitions'
+            ORDER BY run.started_at DESC, run.run_id DESC LIMIT 1`,
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ outcome: "incomplete", deferred_day: day, last_completed_at: null }],
+      });
+      expect(await dayExists()).toBe(false);
+
+      // A deferral restores the caller's lock_timeout for the rest of its transaction.
+      await caller.query("BEGIN");
+      await caller.query("SET LOCAL lock_timeout = '7s'");
+      await expect(
+        caller.query("SELECT * FROM workhorse.prepare_history_partitions_v1(true)"),
+      ).resolves.toMatchObject({ rows: [{ skipped_lock: true, error: null }] });
+      await expect(caller.query("SHOW lock_timeout")).resolves.toMatchObject({
+        rows: [{ lock_timeout: "7s" }],
+      });
+      await caller.query("ROLLBACK");
+
+      await reader.query("COMMIT");
+      readerOpen = false;
+      expect(
+        (await queue.runMaintenance()).find((result) => result.phase === "history_partitions"),
+      ).toMatchObject({ rowsAffected: 1, skippedLock: false, error: null });
+      expect(await dayExists()).toBe(true);
+    } finally {
+      await caller.query("ROLLBACK").catch(() => undefined);
+      if (readerOpen) await reader.query("ROLLBACK").catch(() => undefined);
+      reader.release();
+      observer.release();
+      caller.release();
+    }
+  });
+
+  it("runs partition retirement and creation after terminal cleanup so it holds no parent lock", async () => {
+    const gate = await pool.connect();
+    const observer = await pool.connect();
+    const lockKey = "workhorse:test:maintenance-after-partitions";
+    const { rows } = await pool.query<{ suffix: string }>(
+      `SELECT to_char((clock_timestamp() AT TIME ZONE 'UTC')::date + 3, 'YYYYMMDD') AS suffix`,
+    );
+    const { suffix } = rows[0]!;
+    const expiredDay = "2018-01-01";
+    const partitions = async () =>
+      (
+        await observer.query<{ expired: boolean; created: boolean }>(
+          `SELECT to_regclass('workhorse.task_event_20180101') IS NOT NULL
+                    AND to_regclass('workhorse.attempt_history_20180101') IS NOT NULL AS expired,
+                  to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL AS created`,
+          [`workhorse.task_event_${suffix}`, `workhorse.attempt_history_${suffix}`],
+        )
+      ).rows[0];
+    await pool.query(`DROP TABLE workhorse.task_event_${suffix}`);
+    await pool.query(`DROP TABLE workhorse.attempt_history_${suffix}`);
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [expiredDay]);
+    // Daily retention, terminal cleanup, and partition preparation are all due in this pass.
+    await pool.query(
+      `UPDATE workhorse.maintenance_policy SET history_retention_local_time = '00:00:00'`,
+    );
+    await pool.query(
+      `UPDATE workhorse.maintenance_state
+          SET last_completed_at = NULL, last_completed_local_date = NULL
+        WHERE routine_name IN ('history_partitions', 'terminal_storage', 'history_retention')`,
+    );
+
+    try {
+      // Terminal cleanup starts by marking its maintenance_state row. The trigger pauses it there.
+      await pool.query(`
+        CREATE OR REPLACE FUNCTION workhorse.test_pause_terminal_storage()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.routine_name = 'terminal_storage' THEN
+            PERFORM pg_advisory_xact_lock(
+              hashtextextended('workhorse:test:maintenance-after-partitions', 0)
+            );
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER test_pause_terminal_storage
+        BEFORE UPDATE ON workhorse.maintenance_state
+        FOR EACH ROW EXECUTE FUNCTION workhorse.test_pause_terminal_storage();
+      `);
+      await gate.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
+
+      const maintenance = queue.runMaintenance();
+      await waitForDatabaseCondition(async () => {
+        const result = await observer.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_locks
+              WHERE locktype = 'advisory' AND NOT granted
+                AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+           ) AS waiting`,
+        );
+        return result.rows[0]!.waiting;
+      });
+      // Terminal cleanup is paused inside the maintenance call. Retention has not retired the
+      // expired day yet, and no history parent may be locked exclusively, so lifecycle
+      // transitions keep running.
+      expect(await partitions()).toEqual({ expired: true, created: false });
+      await expect(
+        observer.query<{ locked: string[] }>(
+          `SELECT COALESCE(array_agg(relation::regclass::text ORDER BY relation::regclass::text),
+                           '{}') AS locked
+             FROM pg_locks
+            WHERE relation IN ('workhorse.task_event'::regclass,
+                               'workhorse.attempt_history'::regclass)
+              AND mode = 'AccessExclusiveLock'`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ locked: [] }] });
+      const id = await queue.enqueue("partition-lock-order", {});
+      const task = await queue.claim("partition-lock-order-worker");
+      expect(task?.id).toBe(id);
+
+      await gate.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey]);
+      const phases = await maintenance;
+      expect(phases.map((result) => result.phase)).toEqual([
+        expect.stringMatching(/^stat_/),
+        ...phases.slice(1, -9).map(() => expect.stringMatching(/^stat_/)),
+        "enqueue_idempotency",
+        "released_dependencies",
+        "terminal_tasks",
+        "task_groups",
+        "worker_registry",
+        "event_retention",
+        "attempt_retention",
+        "schedule_occurrences",
+        "history_partitions",
+      ]);
+      expect(phases.find((result) => result.phase === "event_retention")).toMatchObject({
+        rowsAffected: 1,
+        error: null,
+      });
+      expect(phases.find((result) => result.phase === "attempt_retention")).toMatchObject({
+        rowsAffected: 1,
+        error: null,
+      });
+      expect(phases.find((result) => result.phase === "history_partitions")).toMatchObject({
+        rowsAffected: 1,
+        skippedLock: false,
+        error: null,
+      });
+      expect(await partitions()).toEqual({ expired: false, created: true });
+    } finally {
+      await gate.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
+      gate.release();
+      observer.release();
+      await pool.query(
+        "DROP TRIGGER IF EXISTS test_pause_terminal_storage ON workhorse.maintenance_state",
+      );
+      await pool.query("DROP FUNCTION IF EXISTS workhorse.test_pause_terminal_storage()");
+    }
+  });
+
   it("repairs a partially missing daily history partition", async () => {
     const day = "2021-02-01";
     await pool.query("SELECT workhorse.retire_history_day_v1($1)", [day]);

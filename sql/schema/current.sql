@@ -14654,6 +14654,11 @@ BEGIN
     v_previous_lock_timeout := current_setting('lock_timeout');
     PERFORM set_config('lock_timeout', '250ms', true);
     BEGIN
+      -- DROP locks the parent of the partition. Take both parents first, in the order that
+      -- lifecycle transitions and partition creation use: attempt_history before task_event.
+      -- run_maintenance_v1 can retire both kinds and then create partitions in one transaction.
+      LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
+      LOCK TABLE ONLY workhorse.task_event IN ACCESS EXCLUSIVE MODE;
       EXECUTE format(
         'DROP TABLE IF EXISTS %I.%I', v_partition.schema_name, v_partition.relname
       );
@@ -15066,6 +15071,8 @@ DECLARE v_state workhorse.maintenance_state%ROWTYPE;
 DECLARE v_run_started_at timestamptz;
 DECLARE v_run_completed_at timestamptz;
 DECLARE v_phases jsonb;
+DECLARE v_previous_lock_timeout text;
+DECLARE v_deferred_day date;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -15100,30 +15107,49 @@ BEGIN
       v_suffix := to_char(v_today + v_day_offset, 'YYYYMMDD');
       IF to_regclass(format('workhorse.%I', 'task_event_' || v_suffix)) IS NULL
          OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
-        PERFORM workhorse.create_history_day_v1(v_today + v_day_offset);
-        rows_affected := rows_affected + 1;
+        -- Creation locks both history parents in ACCESS EXCLUSIVE mode. A request that waits
+        -- for a reader, such as pg_dump, makes every claim, completion, and enqueue wait behind it.
+        -- Each lock request therefore waits at most 250 ms, as partition retirement does. A day
+        -- whose locks stay busy is deferred: its subtransaction rolls back, the remaining days
+        -- wait too because they need the same locks, and the routine stays due for the next pass.
+        v_previous_lock_timeout := current_setting('lock_timeout');
+        PERFORM set_config('lock_timeout', '250ms', true);
+        BEGIN
+          PERFORM workhorse.create_history_day_v1(v_today + v_day_offset);
+          rows_affected := rows_affected + 1;
+        EXCEPTION WHEN lock_not_available THEN
+          v_deferred_day := v_today + v_day_offset;
+        END;
+        PERFORM set_config('lock_timeout', v_previous_lock_timeout, true);
+        EXIT WHEN v_deferred_day IS NOT NULL;
       END IF;
     END LOOP;
   EXCEPTION WHEN OTHERS THEN
+    -- The subtransaction also rolled back the lock_timeout change.
     rows_affected := 0;
+    v_deferred_day := NULL;
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
   END;
+  skipped_lock := v_deferred_day IS NOT NULL;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
   v_phases := jsonb_build_array(jsonb_build_object(
     'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
     'error', error
-  ));
+  ) || CASE WHEN v_deferred_day IS NULL THEN '{}'::jsonb
+            ELSE jsonb_build_object('skippedLock', true, 'deferredDay', v_deferred_day) END);
   v_run_completed_at := clock_timestamp();
-  IF error IS NULL THEN
+  IF error IS NULL AND v_deferred_day IS NULL THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
      WHERE routine_name = 'history_partitions';
   END IF;
   PERFORM workhorse.record_maintenance_run_internal_v1(
     'history_partitions', v_run_started_at, v_run_completed_at,
-    CASE WHEN error IS NULL THEN 'succeeded' ELSE 'failed' END,
+    CASE WHEN error IS NOT NULL THEN 'failed'
+         WHEN v_deferred_day IS NOT NULL THEN 'incomplete'
+         ELSE 'succeeded' END,
     rows_affected, v_phases
   );
   RETURN NEXT;
@@ -16248,6 +16274,14 @@ $$;
 -- in the same housekeeping contract. The individual functions retain their own cadence gates and
 -- advisory locks, and report their expected per-phase failures as telemetry rows. Registry pruning
 -- remains best-effort so its failure cannot reject an otherwise successful maintenance pass.
+--
+-- Every SDK sends this call as one statement, so PostgreSQL holds each lock that a routine takes
+-- until the call returns. History retention and partition preparation change the partitions of the
+-- history parents and lock them in ACCESS EXCLUSIVE mode, so they run last: no other routine can
+-- extend how long those locks block lifecycle transitions. Each lock request waits at most 250 ms,
+-- and both routines take the parents in the order attempt_history, task_event. Terminal cleanup
+-- reads the watermark that retention records, so it uses the watermark of the previous retention
+-- pass. Retention runs once per local date, so that delays terminal cleanup by one pass each day.
 CREATE OR REPLACE FUNCTION workhorse.run_maintenance_v1(
   p_now timestamptz DEFAULT clock_timestamp()
 ) RETURNS TABLE (
@@ -16260,8 +16294,6 @@ BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
 
   RETURN QUERY SELECT * FROM workhorse.rollup_stats_v1(false, p_now, 240);
-  RETURN QUERY SELECT * FROM workhorse.prepare_history_partitions_v1(false, p_now);
-  RETURN QUERY SELECT * FROM workhorse.retain_history_v1(false, p_now);
   RETURN QUERY SELECT * FROM workhorse.prune_terminal_storage_v1(false, p_now);
 
   phase := 'worker_registry';
@@ -16278,6 +16310,9 @@ BEGIN
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
   RETURN NEXT;
+
+  RETURN QUERY SELECT * FROM workhorse.retain_history_v1(false, p_now);
+  RETURN QUERY SELECT * FROM workhorse.prepare_history_partitions_v1(false, p_now);
 END;
 $$;
 
@@ -22325,10 +22360,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (74, 'allow throttle on fast-tier queues'),
   (75, 'add the dashboard retention preview function'),
   (76, 'fence the worker deregistration by instance'),
-  (77, 'copy the diagnostic details into hint')
+  (77, 'copy the diagnostic details into hint'),
+  (78, 'bound the history partition lock waits')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (77) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (78) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

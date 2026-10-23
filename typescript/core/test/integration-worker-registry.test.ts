@@ -1244,15 +1244,16 @@ describe("worker registry", () => {
       // Statistics roll up before retention so the same pass can reclaim the history it summarized.
       "statistics_rollup:stat_rollup",
       "statistics_rollup:stat_retention",
-      "background_routines:history_partitions",
-      "background_routines:event_retention",
-      "background_routines:attempt_retention",
-      "background_routines:schedule_occurrences",
       "background_routines:enqueue_idempotency",
       "background_routines:released_dependencies",
       "background_routines:terminal_tasks",
       "background_routines:task_groups",
       "background_routines:worker_registry",
+      // The partition DDL phases run last, so their parent locks end when the call commits.
+      "background_routines:event_retention",
+      "background_routines:attempt_retention",
+      "background_routines:schedule_occurrences",
+      "background_routines:history_partitions",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 

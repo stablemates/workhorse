@@ -2782,12 +2782,65 @@ Event and attempt retention are independent phases inside `retain_history_v1`. E
 
 Explicit day creation and paired retirement functions remain available for controlled operator work.
 
+#### Partition DDL locks
+
+Partition creation and partition retirement change the partition set of a history parent. Thus each
+takes `ACCESS EXCLUSIVE` on that parent. Every lifecycle transition writes history. While one of
+these lock requests waits, every claim, completion, and enqueue that writes history waits behind it.
+The maintenance routines therefore bound each wait and release the locks early.
+
+| Routine                                          | Lock wait limit                                                  | Outcome when a lock stays busy                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `prepare_history_partitions_v1`                  | `lock_timeout` of 250 ms for each lock request                   | Defers the day and stops the pass. The routine stays due.                                  |
+| `retire_history_partitions_v1`                   | `lock_timeout` of 250 ms for each lock request of a `DROP TABLE` | Skips the partition. Retention reports itself incomplete when the partition stays expired. |
+| `create_history_day_v1`, `retire_history_day_v1` | None from Workhorse. The caller's `lock_timeout`.                | The caller controls the wait.                                                              |
+
+Partition preparation calls `create_history_day_v1` once for each missing day, from the current UTC
+day to the end of the horizon. Before each call, it sets `lock_timeout` to 250 ms with
+`set_config(..., true)` and restores the previous value after the call. The limit applies to each
+lock request: the day advisory lock, the two parents, and the two default partitions. If a request
+fails with `lock_not_available` (SQLSTATE `55P03`), these steps occur:
+
+1. The subtransaction of that day rolls back. PostgreSQL releases every lock the day took.
+2. Preparation stops and does not try the later days, because they need the same parent locks.
+3. The returned `history_partitions` row has `skipped_lock = true`, `error = NULL`, and the number of
+   days created before the deferred day in `rows_affected`.
+4. The recorded `maintenance_run` row has the outcome `incomplete`. Its phase object adds
+   `skippedLock: true` and `deferredDay`, the UTC date that was deferred.
+5. `maintenance_state.last_completed_at` does not change, so the next pass creates the day.
+
+If a day stays deferred, the default partitions receive its rows, and `missing-history-partitions`
+reports the day once it is within four days. Creation moves those rows into the partition when it
+succeeds.
+
+Transaction boundaries:
+
+- `run_maintenance_v1` runs `retain_history_v1` and then `prepare_history_partitions_v1` after every
+  other routine. Every SDK sends the call as one statement in its own transaction. Thus the
+  transaction commits directly after the partition creation DDL. Statistics, terminal cleanup, and
+  registry cleanup run before any history parent lock.
+- A partition that retention retires keeps both parent locks until the commit. In that time, the
+  rest of retention runs: the bounded deletion of default-partition rows, the `attempt_retention`
+  phase after `event_retention`, and the `schedule_occurrences` phase. Partition preparation then
+  runs with the locks that it already holds. Retention runs once per local date.
+- Terminal cleanup runs before retention in the same call. Thus it reads the `history_retained_before`
+  watermark of the previous retention pass. Retention runs once per local date, so terminal cleanup
+  uses the new watermark one pass later on that day.
+- A direct call, such as `Queue.prepareHistoryPartitions`, `Queue.retainHistory`, or
+  `Queue.runMaintenance`, holds the locks until the caller's transaction commits. Do not call these
+  functions inside a longer transaction.
+
 #### Partition DDL lock order
 
-`create_history_day_v1` and `retire_history_day_v1` acquire `ACCESS EXCLUSIVE` on the
-`attempt_history` parent before the `task_event` parent. Lifecycle transitions insert attempt
-history before task events. This shared parent-lock order therefore prevents paired partition DDL
-from deadlocking a transition between its two history inserts.
+`create_history_day_v1`, `retire_history_day_v1`, and `retire_history_partitions_v1` acquire
+`ACCESS EXCLUSIVE` on the `attempt_history` parent before the `task_event` parent.
+`retire_history_partitions_v1` takes both parent locks before each `DROP TABLE`, also when it drops a
+partition of one parent only. Thus a `run_maintenance_v1` call that retires partitions and then
+creates partitions takes the parents in this order once and holds them to the commit.
+
+Lifecycle transitions insert attempt history before task events. This shared parent-lock order
+therefore prevents paired partition DDL from deadlocking a transition between its two history
+inserts.
 
 Creation then runs these steps:
 
