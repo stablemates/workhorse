@@ -117,6 +117,14 @@ public final class Worker implements AutoCloseable {
   private static final String REDACTED_MESSAGE = "Task handler failed; details redacted";
   private static final String GENERIC_NAME = "Exception";
   private static final String LANGUAGE = "java";
+
+  /**
+   * The maintenance time. Maintenance writes shared due times and retention cutoffs, so the
+   * database clock chooses its time: PostgreSQL resolves this {@code timestamptz} input at the
+   * start of the autocommit statement.
+   */
+  static final String DATABASE_NOW = "now";
+
   private static final List<String> FORBIDDEN_NAME_CHARACTERS = List.of("*", ".", "<", " ");
   private static final Pattern EXPONENT_NUMBER = Pattern.compile("\\d[eE]");
 
@@ -2392,10 +2400,7 @@ public final class Worker implements AutoCloseable {
                   }
                   if (routineDue) {
                     lastRoutineAt.set(now);
-                    Sql.rows(
-                            connection,
-                            SqlCatalogue.RUN_MAINTENANCE_V1,
-                            Values.timestamp(Instant.now()))
+                    Sql.rows(connection, SqlCatalogue.RUN_MAINTENANCE_V1, DATABASE_NOW)
                         .forEach(telemetry::maintenancePhase);
                   }
                   return null;

@@ -482,6 +482,48 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     expect(@connection.exec(completed).getvalue(0, 0)).to eq("t")
   end
 
+  it "binds the text now to maintenance so PostgreSQL chooses its time" do
+    subject = worker
+    bound = []
+    allow(subject.instance_variable_get(:@executor)).to receive(:rows).and_wrap_original do |original, sql, *arguments|
+      bound << arguments.first if sql == W::SqlCatalogue::RUN_MAINTENANCE_V1
+      original.call(sql, *arguments)
+    end
+
+    subject.run_once
+    expect(bound).to eq([["now"]])
+  end
+
+  it "keeps due state and retention on the database clock when the worker clock is fast" do
+    @connection.exec("INSERT INTO workhorse.schedule_definition(
+      namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
+    ) VALUES ('clock-skew', 'daily', '0 0 * * *', 'default', 'clock-skew', '{}'::jsonb, 1)")
+    @connection.exec("INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
+                       VALUES ('clock-skew', 'daily', clock_timestamp() - interval '13 days')")
+    @connection.exec("UPDATE workhorse.retention_policy SET schedule_occurrence_retention_days = 14")
+    @connection.exec("UPDATE workhorse.maintenance_policy
+                         SET timezone = 'UTC', history_retention_local_time = '00:00'")
+    @connection.exec("UPDATE workhorse.maintenance_state
+                         SET last_started_at = NULL, last_completed_at = NULL, last_completed_local_date = NULL
+                       WHERE routine_name IN ('history_partitions', 'history_retention')")
+    subject = worker
+    fast = Time.now + (2 * 86_400)
+    allow(Time).to receive(:now).and_return(fast)
+
+    subject.run_once
+    expect(@connection.exec("SELECT count(*) FROM workhorse.schedule_occurrence
+                              WHERE namespace = 'clock-skew'").getvalue(0, 0)).to eq("1")
+    routines = @connection.exec("SELECT routine_name, last_started_at > clock_timestamp() AS ahead,
+                                        last_started_at IS NOT NULL AS started
+                                   FROM workhorse.maintenance_state
+                                  WHERE routine_name IN ('history_partitions', 'history_retention')
+                                  ORDER BY routine_name").to_a
+    expect(routines).to eq([
+      {"routine_name" => "history_partitions", "ahead" => "f", "started" => "t"},
+      {"routine_name" => "history_retention", "ahead" => "f", "started" => "t"}
+    ])
+  end
+
   it "continues the enqueuing trace in the handler span and records the shared metrics" do
     parent = OpenTelemetry::Trace::SpanContext.new
     enqueue_context = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(parent))

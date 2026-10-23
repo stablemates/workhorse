@@ -399,7 +399,9 @@ The Python worker runs the first pass and every later pass on a dedicated mainte
 #### Background routines
 
 Every TypeScript, Python, Go, Rust, Ruby, JVM, and .NET worker calls `run_maintenance_v1(p_now)`
-from its slow maintenance cycle. The function calls, in order:
+from its slow maintenance cycle. The worker binds the text `now` to `p_now`, so the database clock
+sets the time, as [Maintenance time](data-model.md#maintenance-time) explains. The function calls,
+in order:
 
 1. `rollup_stats_v1`
 2. `prune_terminal_storage_v1`

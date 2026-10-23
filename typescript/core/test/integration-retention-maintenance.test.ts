@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -331,6 +331,54 @@ describe("retention maintenance", () => {
     expect(await queue.pruneTerminalStorage({ now })).toHaveLength(4);
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 1_000) })).toEqual([]);
     expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(4);
+  });
+
+  it("keeps due state and retention on the database clock when the worker clock is fast", async () => {
+    await pool.query(
+      `INSERT INTO workhorse.schedule_definition(
+         namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
+       ) VALUES ('clock-skew', 'daily', '0 0 * * *', 'default', 'clock-skew', '{}'::jsonb, 1)`,
+    );
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
+       VALUES ('clock-skew', 'daily', clock_timestamp() - interval '13 days')`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      scheduleOccurrenceRetentionDays: 14,
+    });
+    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalTime: "00:00" });
+    // Terminal cleanup flips terminal_prune_fast_first, which the per-test reset keeps. A later
+    // test depends on that flag (SM-1716), so this pass must not run terminal cleanup.
+    await pool.query(
+      `UPDATE workhorse.maintenance_state SET last_completed_at = clock_timestamp()
+        WHERE routine_name = 'terminal_storage'`,
+    );
+    const worker = new Worker(queue, { workerId: "fast-clock-worker" });
+
+    // Only Date moves. The worker's intervals use the monotonic clock, so the pass still runs.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 2 * 86_400_000 });
+    try {
+      await worker.runOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const occurrences = await pool.query(
+      "SELECT 1 FROM workhorse.schedule_occurrence WHERE namespace = 'clock-skew'",
+    );
+    expect(occurrences.rowCount).toBe(1);
+    const routines = await pool.query<{ routine_name: string; ahead: boolean; started: boolean }>(
+      `SELECT routine_name, last_started_at > clock_timestamp() AS ahead,
+              last_started_at IS NOT NULL AS started
+         FROM workhorse.maintenance_state
+        WHERE routine_name IN ('history_partitions', 'history_retention')
+        ORDER BY routine_name`,
+    );
+    expect(routines.rows).toEqual([
+      { routine_name: "history_partitions", ahead: false, started: true },
+      { routine_name: "history_retention", ahead: false, started: true },
+    ]);
   });
 
   it("retains bounded routine history while omitting idle tick executions", async () => {

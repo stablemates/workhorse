@@ -1235,6 +1235,59 @@ class WorkerDatabaseTest {
   private record HeartbeatSend(long connectStartedAt, long connectedAt, long sentAt) {}
 
   /**
+   * A source over {@code source} that adds each value bound to run_maintenance_v1 to {@code bound}.
+   */
+  private static DataSource recordingMaintenanceTime(DataSource source, List<Object> bound) {
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) -> {
+              Object result;
+              try {
+                result = method.invoke(source, arguments);
+              } catch (InvocationTargetException error) {
+                throw error.getCause();
+              }
+              if (!method.getName().equals("getConnection")) {
+                return result;
+              }
+              Connection connection = (Connection) result;
+              return Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (inner, call, values) -> {
+                    Object answer;
+                    try {
+                      answer = call.invoke(connection, values);
+                    } catch (InvocationTargetException error) {
+                      throw error.getCause();
+                    }
+                    if (!call.getName().equals("prepareStatement")
+                        || !String.valueOf(values[0]).contains("run_maintenance_v1")) {
+                      return answer;
+                    }
+                    PreparedStatement prepared = (PreparedStatement) answer;
+                    return Proxy.newProxyInstance(
+                        PreparedStatement.class.getClassLoader(),
+                        new Class<?>[] {PreparedStatement.class},
+                        (statement, set, parameters) -> {
+                          if (set.getName().startsWith("set")
+                              && parameters != null
+                              && parameters.length >= 2) {
+                            bound.add(parameters[1]);
+                          }
+                          try {
+                            return set.invoke(prepared, parameters);
+                          } catch (InvocationTargetException error) {
+                            throw error.getCause();
+                          }
+                        });
+                  });
+            });
+  }
+
+  /**
    * A source over {@code source} whose first {@code count} {@code COMMIT}s after a heartbeat
    * statement return {@code delayMs} late, so each of those heartbeat rounds ends after its
    * deadline. It adds to {@code failedAt} when each of those commits returns, and adds each
@@ -2027,6 +2080,25 @@ class WorkerDatabaseTest {
 
     assertFalse(worker().build().runOnce());
     assertEquals(1, count(completed, "terminal_storage"));
+  }
+
+  /**
+   * Maintenance writes shared due times and retention cutoffs, so the worker binds the text {@code
+   * now} and PostgreSQL chooses the time. A host clock that runs fast or slow cannot move them.
+   */
+  @Test
+  void bindsTheDatabaseClockToMaintenance() throws Exception {
+    List<Object> bound = new CopyOnWriteArrayList<>();
+    Worker subject =
+        Worker.builder(recordingMaintenanceTime(dataSource, bound))
+            .queues(queueName)
+            .pollingOnly(true)
+            .pollInterval(Duration.ofMillis(10))
+            .disableRegistry(true)
+            .build();
+
+    assertFalse(subject.runOnce());
+    assertEquals(List.of("now"), bound);
   }
 
   // Options.

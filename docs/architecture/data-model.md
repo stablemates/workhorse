@@ -3658,6 +3658,28 @@ Workers poll all four database-scheduled routines, including the statistics roll
 maintenance interval of their SDK. PostgreSQL does the global due check and advisory-lock
 coordination.
 
+#### Maintenance time
+
+`run_maintenance_v1`, `prepare_history_partitions_v1`, `rollup_stats_v1`, `retain_history_v1`, and
+`prune_terminal_storage_v1` take a `p_now` argument. It sets the due checks, `last_started_at`,
+`last_completed_at`, `last_completed_local_date`, and the retention cutoffs. These values are shared
+by all workers, so the database clock chooses them. A host clock that is fast or slow cannot move a
+due time forward or delete history before its retention age.
+
+- Each SDK worker binds the text `now` to `p_now`. PostgreSQL resolves it to the start time of the
+  statement's transaction. The worker sends the call as one autocommit statement, so that time is
+  the database time of the call.
+- The Python asyncpg driver binds only a `datetime` to a `timestamptz` parameter. Thus that driver
+  first runs the internal `database_time` statement, `SELECT clock_timestamp() AS now`, and binds
+  the result. This adds one round trip to each routine pass.
+- The TypeScript `Queue` maintenance methods also bind `now` when the caller gives no `now`.
+- An explicit `now` is a seam for tests and for operator repairs at a fixed time. Workers never send
+  one.
+- Do not call maintenance inside a longer transaction. There, `now` is the start time of that
+  transaction, which can be old. This also applies to a TypeScript worker on a `Queue` that a caller
+  binds to one connection inside an open transaction.
+- A NULL or infinite `p_now` raises `maintenance time is required`.
+
 #### Run history
 
 `maintenance_run` retains the newest 50 recorded executions for each of those four routines. Each

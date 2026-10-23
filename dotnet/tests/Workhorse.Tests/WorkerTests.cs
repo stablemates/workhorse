@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Workhorse.Internal;
 using Workhorse.Tests.Testing;
 using static Workhorse.Tests.Testing.WorkerHarness;
@@ -502,6 +503,79 @@ public sealed class WorkerTests(ScratchDatabase database)
             await ScalarAsync(
                 database.DataSource,
                 "SELECT count(*) FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage' AND last_completed_at IS NOT NULL"));
+    }
+
+    [Fact]
+    public async Task AMaintenancePassBindsTheDatabaseClock()
+    {
+        // Maintenance writes shared due times and retention cutoffs, so the worker binds the text
+        // "now" and PostgreSQL chooses the time. A host clock that runs fast or slow cannot move them.
+        var log = new MaintenanceParameterLog();
+        var builder = database.CreateDataSourceBuilder();
+        builder.UseLoggerFactory(log);
+        builder.EnableParameterLogging();
+        await using var dataSource = builder.Build();
+        await using var worker = new Worker(dataSource, Options(UniqueQueue("maintenance-time")));
+
+        Assert.False(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(["now"], log.Bound);
+    }
+
+    /// <summary>Records the parameter values that Npgsql logs for each <c>run_maintenance_v1</c> call.</summary>
+    private sealed class MaintenanceParameterLog : ILoggerFactory, ILogger
+    {
+        private readonly List<object?> _bound = [];
+
+        internal IReadOnlyList<object?> Bound
+        {
+            get
+            {
+                lock (_bound)
+                {
+                    return [.. _bound];
+                }
+            }
+        }
+
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            // Npgsql logs each command when it starts and when it completes. Only the second one counts.
+            if (state is not IReadOnlyList<KeyValuePair<string, object?>> fields
+                || !fields.Any(field => field.Key == "DurationMs")
+                || !fields.Any(field => field.Value is string text && text.Contains("run_maintenance_v1", StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            foreach (var field in fields)
+            {
+                if (field.Key == "Parameters" && field.Value is System.Collections.IEnumerable values and not string)
+                {
+                    lock (_bound)
+                    {
+                        foreach (var value in values)
+                        {
+                            _bound.Add(value);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     [Fact]

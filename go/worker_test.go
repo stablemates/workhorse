@@ -2135,6 +2135,78 @@ func TestWorkerParticipatesInSlowMaintenance(t *testing.T) {
 	}
 }
 
+// maintenanceTimeTracer records the arguments of each run_maintenance_v1 call.
+type maintenanceTimeTracer struct {
+	mu        sync.Mutex
+	arguments [][]any
+}
+
+func (tracer *maintenanceTimeTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if strings.Contains(data.SQL, "run_maintenance_v1") {
+		tracer.mu.Lock()
+		tracer.arguments = append(tracer.arguments, data.Args)
+		tracer.mu.Unlock()
+	}
+	return ctx
+}
+
+func (*maintenanceTimeTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Maintenance writes shared due times and retention cutoffs, so the worker binds the text "now"
+// and PostgreSQL chooses the time. A host clock that runs fast or slow cannot move them.
+func TestWorkerBindsTheDatabaseClockToMaintenance(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-maintenance-time")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer := &maintenanceTimeTracer{}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.maintenance_state SET last_started_at = NULL, last_completed_at = NULL "+
+			"WHERE routine_name = 'history_partitions'",
+	); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-maintenance-time", WorkerID: "go-maintenance-time-worker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := worker.RunOnce(ctx); err != nil || processed {
+		t.Fatalf("maintenance run: processed=%t err=%v", processed, err)
+	}
+	tracer.mu.Lock()
+	arguments := tracer.arguments
+	tracer.mu.Unlock()
+	if len(arguments) != 1 || len(arguments[0]) != 1 || arguments[0][0] != "now" {
+		t.Fatalf("run_maintenance_v1 arguments = %#v, want one call with \"now\"", arguments)
+	}
+	var ahead bool
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT last_started_at > clock_timestamp() FROM workhorse.maintenance_state "+
+			"WHERE routine_name = 'history_partitions' AND last_started_at IS NOT NULL",
+	).Scan(&ahead); err != nil {
+		t.Fatal(err)
+	}
+	if ahead {
+		t.Fatal("history partition preparation started after the database time")
+	}
+}
+
 func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-single-connection")
 	ctx := context.Background()

@@ -239,7 +239,10 @@ Three rows carry a condition the setting name alone cannot.
   heartbeat connection. An explicit cohort count is never capped.
 - **Maintenance routine offer interval.** All seven tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
-  the global due decision and a faster offer only adds rejected calls.
+  the global due decision and a faster offer only adds rejected calls. All seven bind the text
+  `now` as the maintenance time, so the database clock sets due times and retention cutoffs. The
+  Python asyncpg driver reads `database_time` first, which adds one round trip to each routine
+  pass.
 
 The shutdown deadline agrees at 25,000 ms, and it sits under the 30 second termination grace a
 container platform gives a process by default. What follows that deadline cannot agree, and it is

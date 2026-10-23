@@ -10,6 +10,20 @@ adds.
 
 ## Unreleased
 
+### Workers use the database clock for maintenance
+
+Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before
+this change, the Python worker sent its host clock as the maintenance time. If that clock was two days
+fast, other workers skipped a routine until that future time. Retention also deleted a 13-day-old
+schedule occurrence under a 14-day policy (SM-1645).
+
+Now `Worker` and `AsyncWorker` over psycopg bind the text `now`, and PostgreSQL resolves it to its
+own time at the start of the call. asyncpg binds only a `datetime` to a `timestamptz` parameter.
+Thus `AsyncWorker.from_asyncpg` first reads the time with the internal `database_time` statement,
+which adds one round trip to each routine pass.
+
+The schema does not change.
+
 ### A lost notification subscription restarts the poll backoff
 
 A worker without a live subscription waits 250 ms after an empty claim, and doubles that wait

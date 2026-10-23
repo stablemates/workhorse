@@ -61,6 +61,13 @@ public sealed class ScratchDatabase : IAsyncLifetime
         return NpgsqlDataSource.Create(builder);
     }
 
+    /// <summary>A new data source builder for the scratch database. The caller builds and disposes the data source.</summary>
+    public NpgsqlDataSourceBuilder CreateDataSourceBuilder()
+    {
+        _ = DataSource;
+        return new NpgsqlDataSourceBuilder(_connectionString!.ConnectionString);
+    }
+
     /// <inheritdoc />
     public async ValueTask InitializeAsync()
     {

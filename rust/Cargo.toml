@@ -32,7 +32,6 @@ sqlx = ["dep:sqlx"]
 opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 # The embedded dashboard backend. A build without it compiles no HTTP dependency.
 dashboard = [
-  "dep:bytes",
   "dep:flate2",
   "dep:http",
   "dep:http-body",
@@ -72,7 +71,7 @@ opentelemetry = { version = "0.32", optional = true, default-features = false, f
   "metrics",
 ] }
 tracing-opentelemetry = { version = "0.33", optional = true, default-features = false }
-bytes = { version = "1", optional = true }
+bytes = "1"
 flate2 = { version = "1", optional = true }
 http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }

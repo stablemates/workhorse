@@ -655,6 +655,7 @@ var internalStatementRegistry = map[string]string{
         ORDER BY usage.queue_name`,
 	"postgres_support": `SELECT current_setting('server_version_num') AS number,
             current_setting('server_version') AS version`,
+	"database_time":              `SELECT clock_timestamp() AS now`,
 	"create_task_group_v1":       `SELECT group_id, ordinal, task_id, outcome, reason FROM workhorse.create_task_group_v1($1::jsonb, $2::jsonb, $3::boolean)`,
 	"add_task_group_members_v1":  `SELECT ordinal, task_id, outcome, reason FROM workhorse.add_task_group_members_v1($1::uuid, $2::jsonb, $3::uuid, $4::text, $5::bigint) ORDER BY ordinal`,
 	"seal_task_group_v1":         `SELECT group_id, state, result, total, succeeded, failed, canceled, pending, created_at, sealed_at, finished_at, canceled_at, canceled_by, cancel_reason, callbacks FROM workhorse.seal_task_group_v1($1::uuid)`,

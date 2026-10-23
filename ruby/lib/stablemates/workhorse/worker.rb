@@ -43,6 +43,9 @@ module Stablemates
       STARTUP_STOP_CHECK = 0.05
       COMPLETION_BATCH_LIMIT = 100
       TIER_PROBE_INTERVAL = 30
+      # Maintenance writes shared due times and retention cutoffs, so the database clock chooses its
+      # time. PostgreSQL resolves this timestamptz input at the start of the autocommit statement.
+      DATABASE_NOW = "now"
       STATUS_OUTCOMES = {
         "cancel_requested" => :cancelled, "deadline_exceeded" => :deadline_exceeded,
         "timeout_exceeded" => :attempt_timeout, "stale" => :lease_expired
@@ -66,7 +69,7 @@ module Stablemates
       JSON_ESCAPE = /\\(?:u(\h{4})|.)/m
       private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
         :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
-        :STARTUP_BUDGET_FLOOR, :STARTUP_STOP_CHECK, :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL,
+        :STARTUP_BUDGET_FLOOR, :STARTUP_STOP_CHECK, :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL, :DATABASE_NOW,
         :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER,
         :UNSTORABLE_ESCAPE_START, :JSON_ESCAPE
 
@@ -1366,7 +1369,7 @@ module Stablemates
             end
             if now - @last_routine_at >= @routine_ms / 1000.0
               @last_routine_at = now
-              @executor.rows(SqlCatalogue::RUN_MAINTENANCE_V1, [Values.timestamp(Time.now, "now")]).each do |row|
+              @executor.rows(SqlCatalogue::RUN_MAINTENANCE_V1, [DATABASE_NOW]).each do |row|
                 total += record_maintenance(row, nil, log: false)
               end
             end

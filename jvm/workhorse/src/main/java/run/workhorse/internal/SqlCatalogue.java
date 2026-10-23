@@ -1261,6 +1261,14 @@ public final class SqlCatalogue {
           0,
           new int[] {});
 
+  /** {@code database_time} (internal). */
+  public static final Statement DATABASE_TIME =
+      new Statement(
+          "database_time",
+          "SELECT clock_timestamp() AS now",
+          0,
+          new int[] {});
+
   /** {@code current_database} (admin). */
   public static final Statement CURRENT_DATABASE =
       new Statement(
@@ -1516,6 +1524,7 @@ public final class SqlCatalogue {
           METRICS_OBSERVER,
           QUEUE_METRIC_SNAPSHOT,
           POSTGRES_SUPPORT,
+          DATABASE_TIME,
           CURRENT_DATABASE,
           CREATE_TASK_GROUP_V1,
           ADD_TASK_GROUP_MEMBERS_V1,

@@ -1103,6 +1103,9 @@ module Stablemates
       POSTGRES_SUPPORT = 'SELECT current_setting(\'server_version_num\') AS number,
             current_setting(\'server_version\') AS version'
 
+      # `database_time` (internal)
+      DATABASE_TIME = 'SELECT clock_timestamp() AS now'
+
       # `current_database` (admin)
       CURRENT_DATABASE = 'SELECT current_database() AS database'
 
