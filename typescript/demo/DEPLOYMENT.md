@@ -541,8 +541,8 @@ therefore makes this release one offline cutover. For this release only, deploy 
    applies 0025 and leaves the database at version 25. Without `--yes`, the command applies nothing
    and names any old worker that still heartbeated inside its lease.
 4. From the same image, run `workhorse schema migrate` again against each database. It applies the
-   additive steps after 0025 and leaves the database at version 83.
-5. Deploy the new release as usual. Its pre-deploy hook finds version 83, installs the demo's own
+   additive steps after 0025 and leaves the database at version 84.
+5. Deploy the new release as usual. Its pre-deploy hook finds version 84, installs the demo's own
    tables, and verifies both workspaces before any container starts.
 
 The CLI reads the database from `--database-url`, `WORKHORSE_DATABASE_URL`, or `DATABASE_URL`. Pass
@@ -631,13 +631,19 @@ stage, so a new commit invalidates none of the cached layers.
 
 ### Dashboard schema
 
-The current build ships Workhorse schema version 83; its packaged migrations carry a version 6
+The current build ships Workhorse schema version 84; its packaged migrations carry a version 6
 baseline forward to it. Version 25 is a contract step, which the
 [fast-tier cutover](#the-fast-tier-release-needs-one-offline-cutover) applies. Versions 26 through
-83 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
+84 are additive, so the ordinary schema step applies them to a database at version 25. Every client in
 this build refuses mutations against a schema below 76, because every statement catalogue of this
 build names `deregister_worker_v2`, which version 76 adds. Run
-`workhorse schema migrate` before any process from this build starts. Migration 0084, which
+`workhorse schema migrate` before any process from this build starts. Migration 0085, which
+produces version 84, replaces `create_history_day_v1`, `retire_history_day_v1`,
+`retire_history_partitions_v1`, `prepare_history_partitions_v1`, `fire_schedule_v1`, and
+`fire_due_schedules_v2`. After it, one history day has the same advisory lock and partition name
+under every session `DateStyle` and `TimeZone`. Two schedules whose namespace or name contains a
+colon no longer share an occurrence lock. It also renames a history partition that has the name of
+the wrong UTC day. It does not raise the floor and changes no rows. Migration 0084, which
 produces version 83, replaces `prune_full_terminal_tasks_internal_v1`, `recover_expired_v1`, and
 `tick_v1`. After it, terminal cleanup keeps a task that got a new reference during a batch and
 deletes the rest of the batch. A recovery scan that fills its limit no longer spaces the next scan.

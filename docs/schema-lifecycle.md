@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 6 is the migration baseline and schema version 83 is current. `sql/schema/current.sql` is the tracked source and
+Schema version 6 is the migration baseline and schema version 84 is current. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/` holds the frozen
 clean-install artifact of every supported published release: `0006.sql` is 0.2.0, `0009.sql` is
 0.2.1, `0023.sql` is 0.3.0, `0024.sql` is 0.4.0, `0043.sql` is 0.5.0, `0052.sql` is 0.6.0, `0064.sql` is 0.7.0, `0071.sql` is 0.8.0, and `0073.sql` is 0.9.0.
@@ -326,6 +326,26 @@ The test names migration 0061 as its one exemption, with the reason. Two earlier
 `0003-named-budgets.sql` and `0006-bounded-dashboard-reads.sql`, also built indexes without
 `CONCURRENTLY`. Both start below the 0.2.0 baseline, so pruning the chain removed them
 ([ADR 0073](decisions/0073-prune-the-migration-chain-to-the-0-2-0-baseline.md)).
+
+### Shipped migrations that repair names
+
+**Migration 0085 renames a history partition that has the name of the wrong day.** Before that
+step, a history partition name converted its date with the session `TimeZone`. Only a calendar day
+that the session time zone skipped can produce a wrong name, for example 2011-12-30 in
+`Pacific/Apia` or `Pacific/Fakaofo`. A partition of that day then got the name of the next day.
+Before the repair, `retire_history_day_v1` for the next day dropped that partition, which holds the
+rows of the wrong day.
+
+The step reads the bounds of each child of `attempt_history` and `task_event` in the `workhorse`
+schema. It renames only a child whose bounds cover exactly one UTC day and whose name is not the
+name of that day. If the correct name is taken, the step raises a NOTICE that names both tables
+and changes nothing.
+
+The step takes `ACCESS SHARE` on each child while it reads the bounds. Each rename takes
+`ACCESS EXCLUSIVE` on that one child. The 5-second `lock_timeout` of the migration body bounds both
+waits. If a long transaction holds a child, the step fails and rolls back. The next
+`workhorse schema migrate` tries it again. A database without such a name requests no
+`ACCESS EXCLUSIVE` lock.
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol

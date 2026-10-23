@@ -594,6 +594,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "recheck terminal cleanup references and continue lease scans",
     kind: "additive",
   },
+  {
+    fromVersion: 83,
+    toVersion: 84,
+    file: "0085-make-the-day-and-schedule-lock-keys-unambiguous.sql",
+    description: "make the day and schedule lock keys unambiguous",
+    kind: "additive",
+  },
 ];
 
 /**

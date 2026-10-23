@@ -649,6 +649,10 @@ describe("schema installation", () => {
         version: 83,
         description: "recheck terminal cleanup references and continue lease scans",
       },
+      {
+        version: 84,
+        description: "make the day and schedule lock keys unambiguous",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
