@@ -125,10 +125,6 @@ export const dashboardRefreshBlockers = {
     description: "Auto refresh paused while settings have unsaved changes",
     priority: 10,
   },
-  dirtyHumanWait: {
-    description: "Auto refresh paused while a human wait result is being composed",
-    priority: 10,
-  },
   pinnedTaskPage: {
     description: "Auto refresh paused while the task list is pinned to a page",
     priority: 5,

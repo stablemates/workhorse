@@ -1012,14 +1012,15 @@ The SPA shares identical in-flight reads by route and filter.
   result.
 - A failure releases the pending entry, so a later refresh can try again.
 
-#### Auto refresh on pinned pages
+#### Auto refresh pauses
 
-Auto refresh pauses while a task listing is pinned to a cursor or to a page after the first page.
-Update-time ordering moves tasks out of the pinned window. These are exactly the tasks that a
-refresh would report.
+Auto refresh pauses while a refresh could replace data that the operator reads or edits.
+[Dashboard: Pause conditions](dashboard.md#pause-conditions) lists every condition, its source, and
+its priority. That page also owns the resume countdown and manual refresh.
 
-This pause does not affect manual refresh. If you go back to the first page, auto refresh resumes
-the configured cadence through the usual resume countdown.
+A pinned task listing is one of these conditions. The listing is pinned to a cursor or to a page
+after the first page. Update-time ordering moves tasks out of the pinned window, and a refresh
+reports exactly those tasks.
 
 #### `dashboard_system_v1`
 
