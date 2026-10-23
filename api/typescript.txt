@@ -5598,11 +5598,21 @@ interface WorkerOptions {
   * Registration is not part of the dispatch contract, so a failure must never stop a worker from
   * claiming. It must not be invisible either: a worker that cannot register disappears from every
   * operator surface while continuing to run, which is indistinguishable from being dead.
+  *
+  * If the callback throws or returns a promise that rejects, the worker writes the failure to the
+  * console and continues. It writes at most one such report for each callback in each minute.
   */
   onRegistrationError?: (error: unknown) => void;
-  /** Receives LISTEN connection failures while durable fallback polling continues. */
+  /**
+  * Receives LISTEN connection failures while durable fallback polling continues. A failure of
+  * this callback has the same isolation as a failure of `onRegistrationError`.
+  */
   onNotificationError?: (error: unknown) => void;
-  /** Receives one telemetry event for every SQL-owned maintenance phase. */
+  /**
+  * Receives one telemetry event for every SQL-owned maintenance phase. A failure of this callback
+  * has the same isolation as a failure of `onRegistrationError`, and the worker keeps the
+  * telemetry that it recorded before the call.
+  */
   onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
   scheduleNamespaces?: readonly string[];

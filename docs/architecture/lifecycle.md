@@ -1011,6 +1011,24 @@ These process-local controls do not apply queue weights. `concurrency_policy` en
 active-work budget across worker processes. `rate_limit_policy` enforces a durable start-rate budget
 across worker processes.
 
+#### Reporter callbacks
+
+A reporter callback is a `WorkerOptions` callback that observes the worker:
+`onRegistrationError`, `onNotificationError`, and `onMaintenance`. A reporter is not part of the
+dispatch contract. Thus, a failure of a reporter never stops a TypeScript worker run.
+
+- If a reporter throws, or returns a promise or a thenable that rejects, the worker catches the
+  failure. Claims, maintenance passes, and registry refreshes continue.
+- The worker records its own result before it calls the reporter. `worker.maintenanceTelemetry()`
+  and the maintenance metrics keep the phase row. A failed registration keeps the last known pause
+  value.
+- The worker writes the failure to the console with `console.error`, as
+  `Workhorse worker <callback> reporter failed`. It never calls the failed reporter for its own
+  failure. If `console.error` throws, the worker ignores that error.
+- For each callback, the worker writes the first failure and then at most one failure in each
+  60,000 ms (`REPORTER_FAILURE_REPORT_INTERVAL_MS`). The next report after unreported failures
+  adds `after <n> unreported failures`.
+
 #### Capacity release notifications
 
 An update that moves a governed runtime away from active, or deletes it, runs
