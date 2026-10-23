@@ -106,6 +106,8 @@ writes, so a worker that redacts locally cannot produce a different shape from P
 every accepted document and reject the same remote references, dynamic applicators, unevaluated
 applicators, and custom keywords before validating the shared instances. An instance can give its
 value as JSON text in `json`, so each runner reads it through its own value path.
+`minLength` and `maxLength` count Unicode code points. Thus a string with one character outside the
+Basic Multilingual Plane has length 1 in every SDK, also when JSON text gives it as a surrogate pair.
 
 An instance with `needs` set to `exactFraction`, `exactInteger`, or `exactBigInteger` runs only in
 the SDKs that can hold that kind of number exactly (ADR 0039). Go, the JVM, and .NET run every
@@ -173,3 +175,5 @@ It preserves the current attempt even when retry budget remains. NULL, zero, and
 value retain their retry semantics. Ownership, cancellation, and expiration checks still run first.
 The replay-conflict runtime fixture checks that all SDKs select this override for deterministic
 conflicts, preserve conflict names, and leave transient and capacity refusals retryable.
+In its `checkpoint-input` case, the handler saves a checkpoint with one input and then calls the
+same checkpoint with another input. Thus each SDK raises its own typed checkpoint input conflict.

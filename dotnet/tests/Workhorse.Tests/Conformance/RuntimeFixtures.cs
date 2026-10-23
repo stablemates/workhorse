@@ -966,25 +966,38 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                     return TimeSpan.FromSeconds(60);
                 };
                 await using var subject = new Worker(pool.DataSource, options);
-                subject.Handle<JsonElement>(TaskType(fixture), (_, _) => Task.FromException(kind switch
+                subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
                 {
-                    "checkpoint" => new ConflictException("checkpoint", "saved"),
+                    if (kind == "checkpoint-input")
+                    {
+                        // The second call replays the saved checkpoint with another input, so the SDK
+                        // throws its own input conflict.
+                        Func<CancellationToken, Task<JsonElement>> saved = _ => Task.FromResult(Json.Element(Json.Members(("saved", true))));
+                        await context.CheckpointAsync("saved", new CheckpointOptions { Input = Json.Members(("version", 1)) }, saved);
+                        await context.CheckpointAsync("saved", new CheckpointOptions { Input = Json.Members(("version", 2)) }, saved);
+                        throw new InvalidOperationException("the second checkpoint did not conflict");
+                    }
 
-                    // A conflict inside a plain wrapper is still terminal (SM-1512).
-                    "wrapped-checkpoint" => new InvalidOperationException("wrapped", new ConflictException("checkpoint", "saved")),
-                    "wait" => new ConflictException("sleep", "saved"),
-                    "child" or "redacted-child" => new ConflictException("runChild", "saved"),
-                    "child-set" => new ConflictException("runChildren", "saved"),
-                    "human" => new ConflictException("waitForHuman", "saved"),
-                    "child-limit" => new LimitExceededException("runChild", "saved"),
-                    "signal-wait" => new AlreadyWaitingException("waitForSignal", "saved"),
+                    throw kind switch
+                    {
+                        "checkpoint" => new ConflictException("checkpoint", "saved"),
 
-                    // The C# counterpart of the Ruby lane's StandardError, as the JVM lane throws Exception.
+                        // A conflict inside a plain wrapper is still terminal (SM-1512).
+                        "wrapped-checkpoint" => new InvalidOperationException("wrapped", new ConflictException("checkpoint", "saved")),
+                        "wait" => new ConflictException("sleep", "saved"),
+                        "child" or "redacted-child" => new ConflictException("runChild", "saved"),
+                        "child-set" => new ConflictException("runChildren", "saved"),
+                        "human" => new ConflictException("waitForHuman", "saved"),
+                        "child-limit" => new LimitExceededException("runChild", "saved"),
+                        "signal-wait" => new AlreadyWaitingException("waitForSignal", "saved"),
+
+                        // The C# counterpart of the Ruby lane's StandardError, as the JVM lane throws Exception.
 #pragma warning disable CA2201
-                    "transient" => new Exception("transient"),
+                        "transient" => new Exception("transient"),
 #pragma warning restore CA2201
-                    _ => new InvalidOperationException($"unknown error kind {kind}"),
-                }));
+                        _ => new InvalidOperationException($"unknown error kind {kind}"),
+                    };
+                });
                 Failure.Check(await subject.RunOnceAsync(), $"{kind}: the conflict handler did not run");
             }
 

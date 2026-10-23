@@ -2448,9 +2448,21 @@ async fn replay_conflict(database: &ScratchDatabase, fixture: &Value) -> Checked
             },
         )?;
         let kind = text(entry, "errorKind").to_owned();
-        subject.handle(task_type, move |_: Value, _| {
+        subject.handle(task_type, move |_: Value, context: HandlerContext| {
             let kind = kind.clone();
             async move {
+                if kind == "checkpoint-input" {
+                    // The second call replays the saved checkpoint with another input, so the SDK
+                    // returns its own input conflict.
+                    let saved = || async { Ok(json!({ "saved": true })) };
+                    let _: Value = context
+                        .checkpoint_with_input("saved", &json!({ "version": 1 }), saved)
+                        .await?;
+                    let _: Value = context
+                        .checkpoint_with_input("saved", &json!({ "version": 2 }), saved)
+                        .await?;
+                    return Err(HandlerError::new("the second checkpoint did not conflict"));
+                }
                 let operation = match kind.as_str() {
                     "checkpoint" | "wrapped-checkpoint" => workhorse::Operation::Checkpoint,
                     "wait" => workhorse::Operation::Sleep,

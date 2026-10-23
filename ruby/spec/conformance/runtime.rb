@@ -780,10 +780,16 @@ module Conformance
               delay_calls += 1
               60
             })
-            .handle(fixture["taskType"]) do
+            .handle(fixture["taskType"]) do |_payload, context|
               operation = {"checkpoint" => :checkpoint, "wait" => :sleep, "child" => :run_child,
                            "redacted-child" => :run_child, "child-set" => :run_children, "human" => :wait_for_human}
               case entry["errorKind"]
+              when "checkpoint-input"
+                # The second call replays the saved checkpoint with another input, so the SDK
+                # raises its own input conflict.
+                context.checkpoint("saved", input: {"version" => 1}) { {"saved" => true} }
+                context.checkpoint("saved", input: {"version" => 2}) { {"saved" => true} }
+                raise "the second checkpoint did not conflict"
               when "child-limit" then raise W::LimitExceededError.new(:run_child, "saved")
               when "signal-wait" then raise W::AlreadyWaitingError.new(:wait_for_signal, "saved")
               when "transient" then raise StandardError, "transient"
