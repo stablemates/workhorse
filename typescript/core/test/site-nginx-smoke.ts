@@ -10,6 +10,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { gunzipSync } from "node:zlib";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const webRoot = resolve(repositoryRoot, "site/dist/client");
@@ -158,7 +159,11 @@ interface Response {
 // Node's `fetch` sends `Accept: */*` when none is given, and the no-header case
 // is the one a plain `curl` or a crawler sends, so requests go through
 // `node:http`, which sends only what it is told.
-function get(path: string, accept: string | undefined): Promise<Response> {
+function get(
+  path: string,
+  accept: string | undefined,
+  extra: Record<string, string> = {},
+): Promise<Response> {
   return new Promise((resolveResponse, reject) => {
     const request = httpRequest(
       {
@@ -166,7 +171,7 @@ function get(path: string, accept: string | undefined): Promise<Response> {
         port,
         path,
         method: "GET",
-        headers: accept === undefined ? {} : { Accept: accept },
+        headers: { ...(accept === undefined ? {} : { Accept: accept }), ...extra },
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -191,7 +196,10 @@ interface Vector {
   status: number;
   /** A prefix of `Content-Type`; the charset parameter is asserted where it matters. */
   type: string;
-  /** `true` for `Vary: Accept` exactly, `false` for no `Vary` header at all. */
+  /**
+   * `true` for `Vary: Accept`, `false` for no `Accept` in `Vary`. `Accept-Encoding` is checked
+   * apart from it: see `varyEncoding`.
+   */
   vary: boolean;
   /** The expected `X-Robots-Tag`, or `false` for no such header at all. */
   robots?: string | false;
@@ -235,6 +243,7 @@ function twinVectors(path: string, twin: string): Vector[] {
       type: "text/markdown; charset=utf-8",
       vary: true,
       robots: false as const,
+      cacheControl: "no-cache",
       twin,
     })),
     ...[undefined, "*/*", chrome, rejectsMarkdown].map((accept) => ({
@@ -244,6 +253,7 @@ function twinVectors(path: string, twin: string): Vector[] {
       type: "text/html",
       vary: true,
       robots: false as const,
+      cacheControl: "no-cache",
       token: "<!DOCTYPE html>",
     })),
   ];
@@ -300,6 +310,7 @@ vectors.push(
     status: 404,
     type: "text/html",
     vary: true,
+    cacheControl: "no-cache",
     token: "This page does not exist",
   },
   { path: "/nope", accept: "*/*", status: 404, type: "text/html", vary: true },
@@ -314,6 +325,7 @@ vectors.push(
     type: "text/html",
     vary: false,
     location: "/docs/task-dependencies",
+    cacheControl: "public, max-age=3600",
   },
   {
     path: "/docs/child-jobs",
@@ -356,7 +368,14 @@ vectors.push(
     vary: true,
     json: notFoundJson,
   },
-  { path: "/api/search", accept: undefined, status: 200, type: "application/json", vary: false },
+  {
+    path: "/api/search",
+    accept: undefined,
+    status: 200,
+    type: "application/json",
+    vary: false,
+    cacheControl: "no-cache",
+  },
   // One page, one URL: a trailing slash is a permanent redirect to the
   // canonical path, and the query string survives it.
   {
@@ -382,6 +401,7 @@ vectors.push(
     type: "text/html",
     vary: false,
     location: "/docs?q=1",
+    cacheControl: "public, max-age=3600",
   },
   // The root is exempt: its trailing slash is the canonical form, and the
   // twinVectors("/") rows above prove it still answers 200.
@@ -394,6 +414,7 @@ vectors.push(
     type: "text/html",
     vary: false,
     location: "/icon.png",
+    cacheControl: "public, max-age=3600",
   },
   // A file named with its extension is one representation: no negotiation, no Vary.
   // A twin and the agent indexes restate a page a search engine already has, so
@@ -413,6 +434,7 @@ vectors.push(
     type: "text/markdown; charset=utf-8",
     vary: false,
     robots: "noindex",
+    cacheControl: "no-cache",
   },
   {
     path: "/docs.md",
@@ -448,8 +470,49 @@ vectors.push(
     vary: false,
     robots: false,
   },
-  { path: "/robots.txt", accept: undefined, status: 200, type: "text/plain", vary: false },
-  { path: "/up", accept: markdownOnly, status: 200, type: "text/plain", vary: false, token: "ok" },
+  {
+    path: "/robots.txt",
+    accept: undefined,
+    status: 200,
+    type: "text/plain",
+    vary: false,
+    cacheControl: "no-cache",
+  },
+  {
+    path: "/up",
+    accept: markdownOnly,
+    status: 200,
+    type: "text/plain",
+    vary: false,
+    cacheControl: "no-store",
+    token: "ok",
+  },
+  // An image is one representation with a URL that stays the same when it changes: no Vary:
+  // Accept, and a cache keeps it for one hour. An SVG is text, so it varies by Accept-Encoding.
+  {
+    path: "/icon.png",
+    accept: chrome,
+    status: 200,
+    type: "image/png",
+    vary: false,
+    cacheControl: "public, max-age=3600",
+  },
+  {
+    path: "/diagrams/task-lifecycle-light.png",
+    accept: undefined,
+    status: 200,
+    type: "image/png",
+    vary: false,
+    cacheControl: "public, max-age=3600",
+  },
+  {
+    path: "/brand/workhorse-mark.svg",
+    accept: markdownOnly,
+    status: 200,
+    type: "image/svg+xml",
+    vary: false,
+    cacheControl: "public, max-age=3600",
+  },
   // The bodies error_page serves are internal, so a direct request gets a 404
   // rather than an indexable 200. /not-found is the same page under the URL the
   // prerenderer emits, and it answers the same way.
@@ -484,11 +547,52 @@ if (assets.length > 0) {
     status: 200,
     type: "",
     vary: false,
-    cacheControl: "max-age=31536000, public, immutable",
+    cacheControl: "public, max-age=31536000, immutable",
   });
 } else {
   notes.push("site/dist/client/assets is empty; its vector was skipped");
 }
+
+// The types site/nginx.conf compresses. nginx compresses only a 200, 403, or 404 response of at
+// least gzip_min_length bytes, and gzip_vary sends `Vary: Accept-Encoding` with exactly those
+// responses, also to a client that does not accept gzip.
+const compressibleTypes = [
+  "text/html",
+  "text/markdown",
+  "text/css",
+  "text/plain",
+  "text/xml",
+  "application/javascript",
+  "text/javascript",
+  "application/json",
+  "application/xml",
+  "application/rss+xml",
+  "image/svg+xml",
+];
+function varyEncoding(status: number, contentType: string, length: number): boolean {
+  return (
+    [200, 403, 404].includes(status) &&
+    length >= 256 &&
+    compressibleTypes.some((type) => contentType.startsWith(type))
+  );
+}
+
+// A client that sends `Accept-Encoding: gzip` gets a compressed text response whose content is the
+// uncompressed body, and an image that is compressed already as it is.
+const css = assets.find((name) => name.endsWith(".css"));
+const javascript = assets.find((name) => name.endsWith(".js"));
+const gzipVectors: { path: string; accept: string | undefined; compressed: boolean }[] = [
+  { path: "/docs/quickstart", accept: chrome, compressed: true },
+  { path: "/docs/quickstart", accept: markdownOnly, compressed: true },
+  { path: "/docs/quickstart.md", accept: undefined, compressed: true },
+  { path: "/api/search", accept: undefined, compressed: true },
+  { path: "/brand/workhorse-mark.svg", accept: undefined, compressed: true },
+  { path: "/icon.png", accept: undefined, compressed: false },
+  ...(css === undefined ? [] : [{ path: `/assets/${css}`, accept: undefined, compressed: true }]),
+  ...(javascript === undefined
+    ? []
+    : [{ path: `/assets/${javascript}`, accept: undefined, compressed: true }]),
+];
 
 function describe(vector: Vector): string {
   return `${vector.path} with ${vector.accept === undefined ? "no Accept" : `Accept: ${vector.accept}`}`;
@@ -516,7 +620,11 @@ try {
     const response = await get(vector.path, vector.accept);
     const problems: string[] = [];
     const contentType = String(response.headers["content-type"] ?? "");
-    const vary = response.headers.vary;
+    const varyTokens = String(response.headers.vary ?? "")
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    const vary = varyTokens.filter((token) => token !== "Accept-Encoding").join(", ") || undefined;
     const cacheControl = response.headers["cache-control"];
     if (response.status !== vector.status) {
       problems.push(`status ${response.status}, expected ${vector.status}`);
@@ -525,10 +633,16 @@ try {
       problems.push(`Content-Type ${contentType}, expected a ${vector.type} prefix`);
     }
     if (vector.vary && vary !== "Accept") {
-      problems.push(`Vary ${String(vary)}, expected exactly Accept`);
+      problems.push(`Vary ${String(response.headers.vary)}, expected Accept`);
     }
     if (!vector.vary && vary !== undefined) {
-      problems.push(`Vary ${String(vary)}, expected no Vary header`);
+      problems.push(`Vary ${String(response.headers.vary)}, expected no Accept`);
+    }
+    const encodingVary = varyTokens.includes("Accept-Encoding");
+    if (encodingVary !== varyEncoding(response.status, contentType, response.body.length)) {
+      problems.push(
+        `Vary ${String(response.headers.vary)}, expected ${encodingVary ? "no " : ""}Accept-Encoding`,
+      );
     }
     if (vector.cacheControl !== undefined && cacheControl !== vector.cacheControl) {
       problems.push(`Cache-Control ${String(cacheControl)}, expected ${vector.cacheControl}`);
@@ -573,6 +687,22 @@ try {
       }
     }
     if (problems.length > 0) failures.push(`${describe(vector)}: ${problems.join("; ")}`);
+  }
+  for (const vector of gzipVectors) {
+    const plain = await get(vector.path, vector.accept);
+    const response = await get(vector.path, vector.accept, { "Accept-Encoding": "gzip" });
+    const encoding = response.headers["content-encoding"];
+    const label = `${vector.path} with Accept-Encoding: gzip`;
+    if (response.status !== 200) failures.push(`${label}: status ${response.status}`);
+    else if (vector.compressed && encoding !== "gzip") {
+      failures.push(`${label}: Content-Encoding ${String(encoding)}, expected gzip`);
+    } else if (!vector.compressed && encoding !== undefined) {
+      failures.push(`${label}: Content-Encoding ${String(encoding)}, expected none`);
+    } else if (
+      !(vector.compressed ? gunzipSync(response.body) : response.body).equals(plain.body)
+    ) {
+      failures.push(`${label}: the decoded body differs from the uncompressed body`);
+    }
   }
   if (failures.length > 0) {
     throw new Error(

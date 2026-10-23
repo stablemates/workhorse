@@ -1,3 +1,11 @@
+# The Alpine python3 package of the node:24-alpine base below. The python-build stage installs the
+# Python dependencies with this interpreter, and the runtime stage runs the Python worker on it, so
+# a compiled dependency such as rpds-py always matches the interpreter that imports it (SM-1674).
+# Alpine keeps only the newest build of a package in its repository. When it publishes a Python
+# fix, `apk add` can no longer find this version and the build stops; update the pin as
+# typescript/demo/DEPLOYMENT.md describes.
+ARG ALPINE_PYTHON_VERSION=3.14.8-r0
+
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS go-build
 
 WORKDIR /workhorse/go
@@ -47,13 +55,19 @@ COPY ruby/examples/demo_worker.rb ./
 
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
-FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS python-build
+# The dependencies install on the runtime stage's base and its pinned python3, not on a Python
+# image, so the build and the runtime use one interpreter. uv leaves its install lock in the target
+# directory, and anyone can write that file, so the step removes it.
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS python-build
 
+ARG ALPINE_PYTHON_VERSION
+RUN apk add --no-cache python3=${ALPINE_PYTHON_VERSION}
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
 ENV UV_CONCURRENT_DOWNLOADS=${BUILD_CONCURRENCY}
 ENV UV_CONCURRENT_INSTALLS=${BUILD_CONCURRENCY}
+ENV UV_PYTHON_DOWNLOADS=never
 COPY python/pyproject.toml python/uv.lock ./python/
 RUN uv export \
       --project python \
@@ -63,9 +77,11 @@ RUN uv export \
       --quiet \
       --output-file /tmp/requirements.txt \
   && uv pip install \
+      --python /usr/bin/python3 \
       --require-hashes \
       --target /opt/workhorse-python \
-      --requirement /tmp/requirements.txt
+      --requirement /tmp/requirements.txt \
+  && rm /opt/workhorse-python/.lock
 COPY python/src/workhorse/ /opt/workhorse-python/workhorse/
 
 FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
@@ -137,16 +153,34 @@ ENV WORKHORSE_DEMO_LOG_DIRECTORY=/opt/workhorse-demo/logs
 ENV PYTHONPATH=/opt/workhorse-python
 
 WORKDIR /opt/workhorse-demo
-COPY --from=build --chown=node:node /opt/workhorse-demo/ ./
+# root owns the application code, the dependencies, and the worker sources, and the node user can
+# only read them. A compromised process therefore cannot replace the code that the next restart
+# loads (SM-1667). The log directory is the one path the node user writes.
+COPY --from=build /opt/workhorse-demo/ ./
 COPY --from=go-build /opt/workhorse-go-demo-worker /usr/local/bin/workhorse-go-demo-worker
 COPY --from=rust-build /opt/workhorse-rust-demo-worker /usr/local/bin/workhorse-rust-demo-worker
 COPY --from=python-build /opt/workhorse-python /opt/workhorse-python
 COPY --from=ruby-build /opt/workhorse-ruby /opt/workhorse-ruby
-COPY --chown=node:node python/examples/demo_worker.py /opt/workhorse-python-worker.py
-RUN apk add --no-cache libpq python3 ruby ruby-bundler
+COPY python/examples/demo_worker.py /opt/workhorse-python-worker.py
+ARG ALPINE_PYTHON_VERSION
+RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler
 RUN mkdir logs && chown node:node logs
 
 USER node
+# The image build stops here if the runtime contract breaks: the interpreter is not the pinned
+# version, a worker cannot load its SDK, the node user cannot write its log directory, or the node
+# user can write any other file under the application paths. BusyBox find has no `-writable`, so
+# a file fails the check when node owns it, its group is node, or anyone can write it. `-B` keeps
+# Python from writing bytecode into the layer.
+RUN set -eu \
+  && python3 -B -c "import platform, sys; expected = sys.argv[1].split('-r')[0]; actual = platform.python_version(); sys.exit(0 if actual == expected else f'python3 is {actual}, the pin is {expected}')" "${ALPINE_PYTHON_VERSION}" \
+  && python3 -B -c "import workhorse._contracts" \
+  && BUNDLE_GEMFILE=/opt/workhorse-ruby/Gemfile ruby -rbundler/setup -e 'require "stablemates/workhorse"' \
+  && node -e 'import("@stablemates/workhorse").then(() => import("@stablemates/workhorse-dashboard-server"))' \
+  && probe="logs/.write-probe-$$" && : > "$probe" && rm "$probe" \
+  && if touch /opt/workhorse-demo/.write-probe 2>/dev/null; then echo "The node user can write /opt/workhorse-demo" >&2; exit 1; fi \
+  && writable="$(find /opt/workhorse-demo /opt/workhorse-python /opt/workhorse-python-worker.py /opt/workhorse-ruby /usr/local/bin/workhorse-go-demo-worker /usr/local/bin/workhorse-rust-demo-worker -path /opt/workhorse-demo/logs -prune -o ! -type l \( -user node -o -group node -o -perm -0002 \) -print)" \
+  && if [ -n "$writable" ]; then echo "The node user can write application files:" >&2; echo "$writable" >&2; exit 1; fi
 EXPOSE 3000
 
 # The source commit the dashboard shows beside the version. The build context excludes `.git`, so

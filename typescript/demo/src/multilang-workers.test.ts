@@ -48,6 +48,25 @@ describe("multilanguage demo worker topology", () => {
     expect(dockerfile).toMatch(/^RUN apk add --no-cache .*\bruby ruby-bundler$/m);
   });
 
+  it("installs the Python dependencies with the runtime stage's pinned interpreter", async () => {
+    const dockerfile = await readFile(resolve("Dockerfile"), "utf8");
+    const base = (stage: string) =>
+      new RegExp(`^FROM (\\S+) AS ${stage}$`, "m").exec(dockerfile)?.[1];
+    const pin = /^ARG ALPINE_PYTHON_VERSION=(\d+\.\d+\.\d+-r\d+)$/m.exec(dockerfile)?.[1];
+
+    // One interpreter for the build and the runtime, so a compiled dependency such as rpds-py
+    // matches the Python that imports it (SM-1674).
+    expect(pin).toBeDefined();
+    expect(base("python-build")).toBe(base("runtime"));
+    expect(dockerfile.match(/^RUN apk add --no-cache .*\bpython3\b.*$/gm)).toEqual([
+      "RUN apk add --no-cache python3=${ALPINE_PYTHON_VERSION}",
+      "RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler",
+    ]);
+    expect(dockerfile).toContain("--python /usr/bin/python3");
+    expect(dockerfile).toContain('python3 -B -c "import workhorse._contracts"');
+    expect(dockerfile).toContain("python3 is {actual}, the pin is {expected}");
+  });
+
   it("declares one equal-capacity worker in each runtime", () => {
     expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3, 3, 3]);
     expect([
@@ -91,7 +110,6 @@ describe("multilanguage demo worker topology", () => {
     ]);
 
     expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
-    expect(dockerfile).toContain("FROM python:3.14-alpine@sha256:");
     expect(dockerfile).toContain("cargo build --locked --release -p workhorse-demo-worker");
     expect(dockerfile).toMatch(
       /^FROM ghcr\.io\/astral-sh\/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} AS uv$/m,

@@ -6,10 +6,12 @@ import { repositoryRoot } from "./packages.js";
 import { diagramSizes, diagrams } from "./diagrams.js";
 
 /**
- * Write or verify the documentation diagrams in `site/public/diagrams/`.
+ * Write or verify the documentation diagrams.
  *
- * Each diagram has a light and a dark SVG, the source of record, and a PNG at twice the size for
- * the README, because GitHub cannot load the Geist fonts in an embedded SVG. The PNGs use the
+ * Each diagram has a light and a dark SVG in `site/diagrams/`, the source of record, and a PNG at
+ * twice the size in `site/public/diagrams/`. The site and the README show the PNGs, because GitHub
+ * cannot load the Geist fonts in an embedded SVG. The SVGs stay outside `site/public`, so the site
+ * build does not publish them (SM-1673). The PNGs use the
  * Geist TTF files from the pinned `geist` package and no system fonts, so the output does not
  * depend on the machine. It also writes `site/lib/diagram-sizes.json`, the CSS width and height of
  * each diagram, so the site can reserve the space of an image before it loads. `--check` compares
@@ -17,7 +19,8 @@ import { diagramSizes, diagrams } from "./diagrams.js";
  */
 
 const themes: readonly Theme[] = ["light", "dark"];
-const outputDirectory = path.join(repositoryRoot, "site/public/diagrams");
+const svgDirectory = path.join(repositoryRoot, "site/diagrams");
+const pngDirectory = path.join(repositoryRoot, "site/public/diagrams");
 const sizesFile = path.join(repositoryRoot, "site/lib/diagram-sizes.json");
 const fonts = path.join(repositoryRoot, "node_modules/geist/dist/fonts");
 const fontFiles = [
@@ -40,15 +43,16 @@ const check = process.argv.includes("--check");
 const stale: string[] = [];
 for (const diagram of diagrams) {
   for (const theme of themes) {
-    const file = path.join(outputDirectory, `${diagram.slug}-${theme}`);
+    const name = `${diagram.slug}-${theme}`;
+    const svgFile = path.join(svgDirectory, `${name}.svg`);
     const svg = diagram.render(theme);
     if (check) {
-      const current = await readFile(`${file}.svg`, "utf8").catch(() => "");
-      if (current !== svg) stale.push(path.relative(repositoryRoot, `${file}.svg`));
+      const current = await readFile(svgFile, "utf8").catch(() => "");
+      if (current !== svg) stale.push(path.relative(repositoryRoot, svgFile));
       continue;
     }
-    await writeFile(`${file}.svg`, svg);
-    await writeFile(`${file}.png`, renderPng(svg));
+    await writeFile(svgFile, svg);
+    await writeFile(path.join(pngDirectory, `${name}.png`), renderPng(svg));
   }
 }
 const sizeLines = Object.entries(diagramSizes()).map(

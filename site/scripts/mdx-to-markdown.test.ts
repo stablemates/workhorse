@@ -306,7 +306,9 @@ describe("the origin's negotiation and Markdown type", () => {
   // slash, so the redirect is what keeps the second URL from answering 200.
   it("redirects a trailing slash to the canonical path, and exempts the root", async () => {
     const source = await config();
-    const block = /^  location ~ ([^{]+)\{\s*return 301 \$1\$is_args\$args;\s*\}/m.exec(source);
+    const block = /^  location ~ ([^{]+)\{[^}]*?\breturn 301 \$1\$is_args\$args;\s*\}/m.exec(
+      source,
+    );
     expect(block).toBeDefined();
     const pattern = new RegExp(block![1]!.trim());
     expect(pattern.test("/docs/quickstart/")).toBe(true);

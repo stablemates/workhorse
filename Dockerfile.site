@@ -61,6 +61,10 @@ ENV GOMODCACHE=/root/go/pkg/mod
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/root/go/pkg/mod \
     pnpm build:core && pnpm docs:build
+# The site build copies all of site/public. Some diagram PNGs there serve only the repository's
+# Markdown, so the image would ship files that no page uses (SM-1673). This step removes them and
+# fails if a built page still names one.
+RUN pnpm exec tsx scripts/site-public-assets.ts --prune site/dist/client
 
 # nginx-unprivileged is the nginx image with its master process moved off root: it runs as UID 101,
 # listens on 8080 rather than 80, and keeps its pid and temporary paths under /tmp. The site serves

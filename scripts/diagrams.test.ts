@@ -8,7 +8,7 @@ describe("documentation diagrams", () => {
   for (const diagram of diagrams) {
     for (const theme of ["light", "dark"] as const) {
       it(`matches the committed ${diagram.slug}-${theme}.svg`, async () => {
-        const file = path.join(repositoryRoot, `site/public/diagrams/${diagram.slug}-${theme}.svg`);
+        const file = path.join(repositoryRoot, `site/diagrams/${diagram.slug}-${theme}.svg`);
         expect(diagram.render(theme), "Run `pnpm diagrams:generate`.").toBe(
           await readFile(file, "utf8"),
         );
