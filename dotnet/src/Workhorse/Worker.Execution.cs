@@ -177,7 +177,7 @@ public sealed partial class Worker
             return;
         }
 
-        await CompleteAsync(task, encoded, arbiter, token).ConfigureAwait(false);
+        await CompleteAsync(task, ownership, encoded, arbiter, token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -261,7 +261,7 @@ public sealed partial class Worker
         _ => false,
     };
 
-    private async Task CompleteAsync(Active active, string encoded, Arbiter arbiter, CancellationToken cancellationToken)
+    private async Task CompleteAsync(Active active, Ownership ownership, string encoded, Arbiter arbiter, CancellationToken cancellationToken)
     {
         var task = active.Task;
         bool accepted;
@@ -279,14 +279,49 @@ public sealed partial class Worker
         }
 
         WorkerLog.CompletionRejected(_logger, task.Id);
-        if (await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
-        {
-            arbiter.Submit(Outcome.Cancelled);
-            return;
-        }
+        await ReconcileRejectedCompletionAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false);
+    }
 
-        arbiter.Submit(Outcome.LeaseExpired);
-        throw new LeaseLostException(task.Id, "complete");
+    /// <summary>
+    /// Settles the boundary that made PostgreSQL refuse this attempt's completion. A completion
+    /// refuses a requested cancellation, a due deadline, or a due attempt timeout without writing it.
+    /// Renewal stops when the handler returns, so the attempt settles them here under its own fence and
+    /// does not leave the task to recovery. Only a lost lease throws <see cref="LeaseLostException"/>.
+    /// </summary>
+    internal async Task ReconcileRejectedCompletionAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, CancellationToken cancellationToken)
+    {
+        // A heartbeat round that read the membership before the release can still settle the
+        // attempt. Both take the settlement lock, so the first one decides. If the round decided
+        // first, the attempt finishes with its outcome and writes nothing more.
+        await ownership.Settlement.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            if (arbiter.Current is not null && await FinishOwnershipAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            var status = await ExpireOwnedAsync(task, cancellationToken).ConfigureAwait(false);
+            Outcome? outcome = status == "not_due" ? null : OutcomeFor(status, "complete");
+            if (outcome == Outcome.Cancelled && await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
+            {
+                arbiter.Submit(Outcome.Cancelled);
+                return;
+            }
+
+            if (outcome is Outcome.DeadlineExceeded or Outcome.AttemptTimeout)
+            {
+                arbiter.Submit(outcome.Value);
+                return;
+            }
+
+            arbiter.Submit(Outcome.LeaseExpired);
+            throw new LeaseLostException(task.Id, "complete");
+        }
+        finally
+        {
+            ownership.Settlement.Release();
+        }
     }
 
     /// <summary>Hands an owned task back to PostgreSQL without charging the attempt.</summary>
@@ -600,16 +635,30 @@ public sealed partial class Worker
 
     private async Task<string?> SettleExpirationAsync(Active task, Arbiter arbiter)
     {
-        var row = await FencedRowAsync(SqlCatalogue.ExpireOwnedTelemetryV1, task.Task, () => [], task.Run.StopPath.Token).ConfigureAwait(false);
+        var status = await ExpireOwnedAsync(task.Task, task.Run.StopPath.Token).ConfigureAwait(false);
+        if (status != "not_due")
+        {
+            DeliverStatus(status, arbiter, task.Cancellation);
+        }
+
+        return status;
+    }
+
+    /// <summary>
+    /// Asks PostgreSQL to settle a due deadline or attempt timeout under the attempt's fence, and
+    /// records the telemetry and the log line for a settled one. Returns the expiration status.
+    /// </summary>
+    private async Task<string?> ExpireOwnedAsync(ClaimedTask task, CancellationToken cancellationToken)
+    {
+        var row = await FencedRowAsync(SqlCatalogue.ExpireOwnedTelemetryV1, task, () => [], cancellationToken).ConfigureAwait(false);
         var status = row.Text("status");
         if (status == "not_due")
         {
             return status;
         }
 
-        WorkerTelemetry.Expired(task.Task, row);
-        WorkerLog.OwnershipExpired(_logger, task.Task.Id, status);
-        DeliverStatus(status, arbiter, task.Cancellation);
+        WorkerTelemetry.Expired(task, row);
+        WorkerLog.OwnershipExpired(_logger, task.Id, status);
         return status;
     }
 

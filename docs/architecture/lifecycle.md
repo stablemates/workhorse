@@ -1456,6 +1456,21 @@ The SDKs differ in what a refusal does after the handler has returned.
     It writes `deadline_exceeded` or `timeout_exceeded`, or acknowledges a `cancel_requested` answer
     with `acknowledge_cancel_v1`. Go `reconcileRejectedSettlement` does the same.
   - A `stale` or `not_due` answer leaves the task to recovery. Python raises `StaleLeaseError`.
+- Ruby `reconcile_rejected_completion`, JVM `reconcileRejectedCompletion`, and .NET
+  `ReconcileRejectedCompletionAsync` do the same after `complete_v1` or the fast-tier completion
+  refuses the write. They call `expire_owned_telemetry_v1` under the attempt's fence before the
+  completion path returns. A `cancel_requested` answer goes to `acknowledge_cancel_v1`. A `stale`
+  or `not_due` answer submits `lease_expired` and raises `LeaseLostError` (Ruby) or throws
+  `LeaseLostException` (JVM and .NET) with the operation `complete` (SM-1649).
+  - A heartbeat round that read the membership before the release can still settle the attempt.
+    The reconciliation waits for that settlement on the attempt's settlement lock. If the round
+    decided first, the reconciliation writes nothing more. It finishes with the outcome of the
+    round, as `finish_lifecycle` (Ruby), `finishOwnership` (JVM), or `FinishOwnershipAsync` (.NET)
+    does.
+  - The JVM and .NET workers settle a heartbeat status off the heartbeat thread, so their
+    reconciliation holds the lock for its statements. The Ruby heartbeat thread delivers each
+    status inline. Thus the Ruby reconciliation takes the lock only to wait, and a status that
+    takes the lock after `Ownership#release` changes nothing.
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.

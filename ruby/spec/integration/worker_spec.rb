@@ -352,6 +352,55 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(status(task_id)["state"]).to eq("active")
   end
 
+  # The handler moves a boundary into the past in PostgreSQL and returns at once. The worker's own
+  # timers still wait for the claimed values and the heartbeat does not run in between, so the
+  # boundary is due only when the completion write arrives.
+  [["deadline", "deadline_at", "deadline_exceeded", "deadline_exceeded"],
+    ["attempt timeout", "attempt_timeout_at", "timeout_exceeded", "timeout"]].each do |boundary, column, expiration, outcome|
+    it "settles a #{boundary} that comes due before the completion write as #{outcome}" do
+      task_id = queue.enqueue("late", {}, max_attempts: 1, deadline: Time.now + 3600,
+        execution_timeout: 3600).task_id
+      output = StringIO.new
+      worker(lease: 30, heartbeat: 10, logger: Logger.new(output)).handle("late") {
+        @connection.exec_params("UPDATE workhorse.task_runtime SET #{column} = clock_timestamp() - interval '1 second'
+          WHERE task_id = $1", [task_id])
+        {"late" => true}
+      }.run_once
+
+      row = status(task_id)
+      expect(row["state"]).to eq("failed")
+      expect(row["result"]).to be_nil
+      expect(output.string).to include("workhorse.task.completion_rejected")
+      expect(output.string).to include(%("workhorse.expiration.status":"#{expiration}"))
+      expect(output.string).to include(%("workhorse.handler.outcome":"#{outcome}"))
+    end
+  end
+
+  it "acknowledges a cancellation requested before the completion write" do
+    task_id = queue.enqueue("late", {}, max_attempts: 1).task_id
+    output = StringIO.new
+    worker(lease: 30, heartbeat: 10, logger: Logger.new(output)).handle("late") {
+      expect(queue.cancel(task_id, requested_by: "spec").status).to eq(:cancel_requested)
+      {"late" => true}
+    }.run_once
+
+    expect(status(task_id)["state"]).to eq("canceled")
+    expect(output.string).to include(%("workhorse.handler.outcome":"canceled"))
+  end
+
+  it "leaves a task whose lease was taken over before the completion write to recovery" do
+    task_id = queue.enqueue("late", {}, max_attempts: 1, deadline: Time.now + 3600).task_id
+    output = StringIO.new
+    worker(lease: 30, heartbeat: 10, logger: Logger.new(output)).handle("late") {
+      @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1,
+        deadline_at = clock_timestamp() - interval '1 second' WHERE task_id = $1", [task_id])
+      {"late" => true}
+    }.run_once
+
+    expect(status(task_id)["state"]).to eq("active")
+    expect(output.string).to include(%("workhorse.handler.outcome":"lease_lost"))
+  end
+
   it "rejects a result that breaks the task type's registered contract" do
     task_type = "typed.#{@queue_name}"
     version = W::TaskContractVersion.new(result_schema: {"type" => "object", "required" => ["ok"]})
