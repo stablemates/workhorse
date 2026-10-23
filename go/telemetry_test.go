@@ -59,7 +59,7 @@ func TestGoWorkerMetricsMatchTypeScriptInstrumentCatalog(t *testing.T) {
 	emitGoFailureMetrics(t, ctx, pool)
 	emitGoBatchMetrics(t, ctx, pool)
 	emitGoRecoveryMetrics(t, ctx, pool)
-	emitGoHeartbeatFailureMetric(t, ctx, pool)
+	emitGoHeartbeatFailureMetric(t, ctx, pool, reader)
 
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &collected); err != nil {
@@ -215,7 +215,21 @@ func emitGoRecoveryMetrics(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	}
 }
 
-func emitGoHeartbeatFailureMetric(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+// heartbeatMetricWait bounds each wait of emitGoHeartbeatFailureMetric. A wait that reaches it fails
+// the test with a clear message.
+const heartbeatMetricWait = 10 * time.Second
+
+// emitGoHeartbeatFailureMetric makes PostgreSQL reject a heartbeat. Then it waits for the worker to
+// record workhorse.worker.heartbeat.failure. The lease is much longer than the heartbeat interval.
+// Thus the lease watchdog does not end the attempt first. The watchdog records no heartbeat status.
+// If the lease is short, the watchdog can end the attempt on a loaded host before a rejection.
+// Then the metric does not come.
+func emitGoHeartbeatFailureMetric(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	reader *sdkmetric.ManualReader,
+) {
 	t.Helper()
 	queueName := "go-worker-catalog-heartbeat"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
@@ -226,8 +240,8 @@ func emitGoHeartbeatFailureMetric(t *testing.T, ctx context.Context, pool *pgxpo
 		t.Fatal(err)
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue: queueName, WorkerID: "go-catalog-heartbeat", LeaseDuration: 100 * time.Millisecond,
-		HeartbeatInterval: 10 * time.Millisecond,
+		Queue: queueName, WorkerID: "go-catalog-heartbeat", LeaseDuration: 30 * time.Second,
+		HeartbeatInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -245,29 +259,67 @@ func emitGoHeartbeatFailureMetric(t *testing.T, ctx context.Context, pool *pgxpo
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat metric handler did not start")
+	case <-time.After(heartbeatMetricWait):
+		t.Fatalf("heartbeat metric handler did not start within %s", heartbeatMetricWait)
 	}
-	if _, err := pool.Exec(
+	// One transaction expires the lease and recovers the task, so no heartbeat can renew the lease
+	// between the two statements. The next heartbeat then gets a stale status.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(
 		ctx,
 		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
 		taskID,
 	); err != nil {
+		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(
+	if _, err := tx.Exec(
 		ctx,
 		"SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
 		100,
 		nil,
 	); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-result:
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat metric worker did not observe lease loss")
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("heartbeat metric worker: %v", err)
+		}
+	case <-time.After(heartbeatMetricWait):
+		t.Fatalf("heartbeat metric worker did not observe the lease loss within %s", heartbeatMetricWait)
 	}
+	deadline := time.Now().Add(heartbeatMetricWait)
+	for !collectedMetric(t, ctx, reader, "workhorse.worker.heartbeat.failure") {
+		if time.Now().After(deadline) {
+			t.Fatalf("Go worker did not record workhorse.worker.heartbeat.failure within %s", heartbeatMetricWait)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// collectedMetric reports whether reader has a value for the instrument name.
+func collectedMetric(t *testing.T, ctx context.Context, reader *sdkmetric.ManualReader, name string) bool {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &collected); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, instrument := range scope.Metrics {
+			if instrument.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestGoWorkerMetricsDistinguishRetryFromTerminalFailure(t *testing.T) {

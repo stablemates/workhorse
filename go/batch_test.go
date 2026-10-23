@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-batch-fixture", Concurrency: fixture.Concurrency,
-		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+		LeaseDuration: batchTestLease, PollInterval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,9 +93,7 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 	} {
 		runContext, cancel := context.WithCancel(ctx)
 		stop = cancel
-		if err := worker.Run(runContext); err != nil {
-			t.Fatalf("run %d: %v", run+1, err)
-		}
+		runWorkerWithDeadline(t, worker, runContext, cancel, fmt.Sprintf("run %d: the worker did not call the batch handler", run+1))
 		assertBatchTaskStates(t, ctx, pool, taskIDs, expected)
 	}
 	if !reflect.DeepEqual(handlerOrder[:len(fixture.ExpectedHandlerOrder)], fixture.ExpectedHandlerOrder) {
@@ -124,21 +123,18 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-batch-panic", Concurrency: 2,
-		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+		LeaseDuration: batchTestLease, PollInterval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runContext, stop := context.WithCancel(ctx)
-	invocations := 0
+	var invocations atomic.Int32
 	worker.HandleBatch("batch.panic", workhorse.BatchHandlerOptions{
 		MaxSize: 2, Linger: time.Second,
 	}, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
-		invocations++
-		if invocations == 1 {
+		if invocations.Add(1) == 1 {
 			panic("provider batch failed")
 		}
-		stop()
 		outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
 		for index := range items {
 			outcomes[index] = workhorse.BatchSucceeded{Result: nil}
@@ -146,9 +142,12 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 		return outcomes
 	})
 
-	if err := worker.Run(runContext); err != nil {
-		t.Fatal(err)
-	}
+	// The worker stops when every task has an outcome, so the stop does not depend on how many
+	// batch calls the worker makes.
+	runContext, stop := context.WithCancel(ctx)
+	settled := stopWhenTasksSettle(runContext, stop, pool, taskIDs)
+	runWorkerWithDeadline(t, worker, runContext, stop, "every task did not get an outcome")
+	settled.Wait()
 	assertBatchTaskStates(t, ctx, pool, taskIDs, map[string]batchTaskState{
 		"first": {State: "failed", Attempt: 1}, "second": {State: "failed", Attempt: 1},
 		"following": {State: "succeeded", Attempt: 1},
@@ -164,6 +163,11 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 		t.Fatalf("unexpected batch evidence: dispatched=%d failed=%d", dispatched, failed)
 	}
 }
+
+// batchTestLease is longer than a stall of a loaded host. The batch linger is 1 s. If the lease is
+// also 1 s, a late heartbeat can let the lease expire before the batch call. Then the attempt ends
+// without a handler call. A test that stops the worker only from that call then waits forever.
+const batchTestLease = 30 * time.Second
 
 func loadBatchRuntimeFixture(t *testing.T, id string) batchRuntimeFixture {
 	t.Helper()

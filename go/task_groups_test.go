@@ -816,9 +816,7 @@ func TestTaskGroupBatchHandlerReadsAndAddsForEachTaskInTheBatch(t *testing.T) {
 		stop()
 		return outcomes
 	})
-	if err := worker.Run(runContext); err != nil {
-		t.Fatalf("run batch: %v", err)
-	}
+	runWorkerWithDeadline(t, worker, runContext, stop, "the worker did not call the batch handler")
 
 	if len(links) != 2 {
 		t.Fatalf("expected a read for each task in the batch, received %d", len(links))

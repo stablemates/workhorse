@@ -139,6 +139,16 @@ func releaseOnce(t *testing.T) (<-chan struct{}, func()) {
 	return release, closeRelease
 }
 
+// reservedHeartbeatInterval gives each round a bound of 375 ms. An interval of 20 ms gives a bound of
+// 20 ms, and on a loaded host the statement timeout ends rounds. A failed round discards the
+// reserved connection. The test holds every other pooled connection. Thus no later round can renew
+// the lease.
+const reservedHeartbeatInterval = 500 * time.Millisecond
+
+// reservedRenewalWait is how long the test waits for each renewal. It is shorter than the lease of
+// 5 s, so a missed renewal fails the test before the lease expires.
+const reservedRenewalWait = 4 * time.Second
+
 // TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection pins the reservation: a
 // heartbeat never queues behind handlers, because its connection left the pool before they ran.
 func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *testing.T) {
@@ -166,7 +176,7 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 		Queue:               queueName,
 		WorkerID:            "reserved-heartbeat-worker",
 		LeaseDuration:       5 * time.Second,
-		HeartbeatInterval:   20 * time.Millisecond,
+		HeartbeatInterval:   reservedHeartbeatInterval,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
 	})
@@ -198,8 +208,8 @@ func TestWorkerHeartbeatsRenewWhileHandlersHoldEveryOtherPooledConnection(t *tes
 	// so the heartbeat round does not compete for these.
 	releaseHeld := holdLendableConnections(t, ctx, pool)
 	expiresAt := leaseExpiry(t, ctx, observer, taskID)
-	renewed := waitForLeaseRenewal(t, ctx, observer, taskID, expiresAt, 2*time.Second)
-	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, 2*time.Second)
+	renewed := waitForLeaseRenewal(t, ctx, observer, taskID, expiresAt, reservedRenewalWait)
+	waitForLeaseRenewal(t, ctx, observer, taskID, renewed, reservedRenewalWait)
 	releaseHeld()
 
 	releaseHandler()
