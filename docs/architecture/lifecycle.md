@@ -307,6 +307,7 @@ Only registered workers set the spacing. A worker that opts out of the registry 
 | Go         | `WorkerOptions.DisableRegistry`   |
 | Rust       | `WorkerOptions::disable_registry` |
 | Ruby       | `disable_registry: true`          |
+| .NET       | `WorkerOptions.DisableRegistry`   |
 
 For example, one registered worker has a 60 s maintenance interval, and ten unregistered workers
 tick every 1 s. The shortest live registered interval is 60 s. Thus the spacing is 30 s.
@@ -332,9 +333,9 @@ decrease the maintenance interval of the registered workers.
 
 Concurrent callers return immediately with `skipped_lock = true` and do not change the state.
 
-A skipped tick still uses the interval of the caller. The TypeScript, Python, Ruby, and JVM workers
-record their last tick time, also if a phase skipped. The Go and Rust maintenance loops wait for
-their next ticker fire.
+A skipped tick still uses the interval of the caller. The TypeScript, Python, Ruby, JVM, and .NET
+workers record their last tick time, also if a phase skipped. The Go and Rust maintenance loops wait
+for their next ticker fire.
 
 This behavior is intentional. At that moment, the lock holder does promotion and recovery. Thus a
 skip gives the work to the lock holder and does not drop it. A retry can become due after the
@@ -351,7 +352,8 @@ maintenance pass. These entry points start that pass at the same time as dispatc
 - the Go `Worker.Run`;
 - the Rust `Worker::run`;
 - the Ruby `Worker#run`;
-- the JVM `Worker.run()` and `Worker.start()`.
+- the JVM `Worker.run()` and `Worker.start()`;
+- the .NET `Worker.RunAsync`.
 
 Thus the first claim of a new worker skips one `tick_v1`, schedule evaluation, and
 `run_maintenance_v1` round. [ADR 0078
@@ -359,8 +361,8 @@ Thus the first claim of a new worker skips one `tick_v1`, schedule evaluation, a
 records this order.
 
 A single pass (TypeScript `runOnce()`, Go `RunOnce`, Rust `run_once`) runs maintenance before it
-claims. The Python `run_once()`, the Ruby `run_once`, and the JVM `runOnce()` do this each time their
-maintenance interval has elapsed.
+claims. The Python `run_once()`, the Ruby `run_once`, the JVM `runOnce()`, and the .NET
+`RunOnceAsync` do this each time their maintenance interval has elapsed.
 
 The Python worker runs the first pass and every later pass on a dedicated maintenance thread:
 
@@ -372,8 +374,8 @@ The Python worker runs the first pass and every later pass on a dedicated mainte
 
 #### Background routines
 
-Every TypeScript, Python, Go, Rust, Ruby, and JVM worker calls `run_maintenance_v1(p_now)` from its
-slow maintenance cycle. The function calls, in order:
+Every TypeScript, Python, Go, Rust, Ruby, JVM, and .NET worker calls `run_maintenance_v1(p_now)`
+from its slow maintenance cycle. The function calls, in order:
 
 1. `rollup_stats_v1`
 2. `prepare_history_partitions_v1`
@@ -389,6 +391,7 @@ slow maintenance cycle. The function calls, in order:
 | Rust       | `WorkerOptions::maintenance_routine_interval` | 60 seconds |
 | Ruby       | `maintenance_routine_interval:`               | 60 seconds |
 | JVM        | `Worker.Builder.maintenanceRoutineInterval`   | 60 seconds |
+| .NET       | `WorkerOptions.MaintenanceRoutineInterval`    | 60 seconds |
 
 [ADR 0011](../decisions/0011-daily-retention-and-split-maintenance.md) decided that default, and
 [ADR 0072](../decisions/0072-converge-the-worker-runtime-defaults.md) holds the SDKs to it.
@@ -1147,13 +1150,15 @@ of `heartbeat_many_v2` carries at most 100 leases of one worker. A fused complet
 register its tasks before the completing attempts leave the round, so a TypeScript, Python, Go,
 Ruby, or JVM round can hold more than 100 leases. The worker then makes one batch for each 100
 leases. A Rust round cannot hold more than 100 leases, because a completing attempt leaves the round
-before its fused claim runs. Per-task deadline timers and abort signals stay independent.
+before its fused claim runs. For the same reason, a .NET round cannot hold more than 100 leases of
+one worker. Per-task deadline timers and abort signals stay independent.
 
 Under the shared heartbeats opt-out, a round sends one `heartbeat_many_v2` statement for each batch,
 each in autocommit. Go is the exception: under `SharedHeartbeats`, it sends each batch in a bounded
 transaction of its own, on a connection that it borrows from the pool. On the dedicated heartbeat
 connection, one statement sends every batch of the
-round, as [Pool renewal](#pool-renewal) describes.
+round, as [Pool renewal](#pool-renewal) describes. .NET is the exception: on its dedicated
+connection, it sends each batch in a transaction of its own.
 
 #### Pool renewal
 
@@ -1194,10 +1199,14 @@ round waits for that `COMMIT`, as it waited for the `COMMIT` of the worker's own
 
 **All or nothing.** If the statement or the `COMMIT` fails, the round renews no lease. Before
 SM-1633, Ruby and JVM counted the renewals of the transactions that committed before a failure.
+The .NET SDK still sends one transaction for each batch. Thus it counts the renewals of the
+batches that committed before a failure.
 
 **Who shares the transaction.** Ruby and JVM have one heartbeat thread for each pool. Its round
-holds the leases of every worker on the pool, so it sends one statement. TypeScript, Go, Python, and
-Rust keep one scheduler for each worker
+holds the leases of every worker on the pool, so it sends one statement. .NET also has one heartbeat
+thread for each pool (`Workhorse.Internal.Runtime.Heartbeat`). But its round sends one transaction
+with one `heartbeat_many_v2` statement for each worker and each 100 leases. TypeScript, Go, Python,
+and Rust keep one scheduler for each worker
 ([ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)
 rule 1). In these SDKs, the rounds that wait for the connection share one transaction:
 
@@ -1224,14 +1233,17 @@ bound is 750 ms.
 2. Now the round sends `BEGIN`, the settings statement, `heartbeat_pool_v1`, and `COMMIT`: 320 ms of
    round trips for all eight workers.
 
-| SDK        | Who builds the batches                                                | Where the transaction is shared                                                             |
-| ---------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| TypeScript | each worker                                                           | `ReservedConnection.renew` in `heartbeat-connection.ts`                                     |
-| Go         | each worker                                                           | the `leading` flag and `waiting` list of `heartbeatConnection` in `heartbeat_connection.go` |
-| Python     | each worker                                                           | `HeartbeatGroup` in `_pool_hub.py`, in front of `HeartbeatReservation`                      |
-| Rust       | each worker                                                           | the `Group` of `shared::HeartbeatConnection` in `worker/shared.rs`                          |
-| Ruby       | the heartbeat thread of the pool (`Heartbeat`)                        | the round of that thread                                                                    |
-| JVM        | the heartbeat thread of the pool (`run.workhorse.internal.Heartbeat`) | the round of that thread                                                                    |
+A .NET round still sends the eight transactions of step 1.
+
+| SDK        | Who builds the batches                                                    | Where the transaction is shared                                                             |
+| ---------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| TypeScript | each worker                                                               | `ReservedConnection.renew` in `heartbeat-connection.ts`                                     |
+| Go         | each worker                                                               | the `leading` flag and `waiting` list of `heartbeatConnection` in `heartbeat_connection.go` |
+| Python     | each worker                                                               | `HeartbeatGroup` in `_pool_hub.py`, in front of `HeartbeatReservation`                      |
+| Rust       | each worker                                                               | the `Group` of `shared::HeartbeatConnection` in `worker/shared.rs`                          |
+| Ruby       | the heartbeat thread of the pool (`Heartbeat`)                            | the round of that thread                                                                    |
+| JVM        | the heartbeat thread of the pool (`run.workhorse.internal.Heartbeat`)     | the round of that thread                                                                    |
+| .NET       | the heartbeat thread of the pool (`Workhorse.Internal.Runtime.Heartbeat`) | not shared: each batch has its own transaction (`HeldConnection.Round`)                     |
 
 #### A renewal that meets a lock
 
@@ -1316,6 +1328,7 @@ A busy retry is an opportunity to renew, not a guarantee.
 | Rust       | `BUSY_RETRY_BASE`    | `BUSY_RETRY_MINIMUM`    | `run_heartbeats` and `State::retry_selection` in `worker/heartbeat.rs`                       |
 | Ruby       | `BUSY_RETRY_BASE`    | `BUSY_RETRY_MINIMUM`    | `rounds` and `take_busy_retry` in `worker/heartbeat.rb`, on the heartbeat thread of the pool |
 | JVM        | `BUSY_RETRY_BASE_MS` | `BUSY_RETRY_MIN_NANOS`  | `rounds` and `takeBusyRetry` in `Heartbeat.java`, on the heartbeat thread of the pool        |
+| .NET       | `BusyRetryBaseMs`    | `BusyRetryMinNanos`     | `Rounds` and `TakeBusyRetryLocked` in `Heartbeat.cs`, on the heartbeat thread of the pool    |
 
 **Lease margin with the defaults.** The lease is 30,000 ms and the interval 10,000 ms. After an
 accepted round sent at 0 s, the watchdog ends at 30 s. The regular rounds at 10 s and 20 s can both
@@ -1348,6 +1361,7 @@ Each attempt instead keeps a local lease watchdog:
 | Rust         | the `watchdog` timer in `Inner::execute`, which cancels the `CancellationToken` with `CancelReason::LeaseLost`                                              |
 | Ruby         | the `workhorse-expiration-<task ID>` thread that `Worker#own` starts, which runs `watch_expiration` and cancels with `:lease_lost`                          |
 | Java, Kotlin | the `workhorse-expiration-<task ID>` virtual thread that `Worker.own` starts, which runs `watchExpiration` and cancels with `CancellationReason.LEASE_LOST` |
+| .NET         | the `WatchLeaseAsync` task that `Worker.Own` starts on the thread pool, which cancels with `CancelReason.LeaseLost`                                         |
 
 The watchdog measures from the time when the claim request left. Every `accepted` heartbeat moves
 the start to the time when the request of that round left. A `busy` answer does not move it. Both times are earlier than the renewal
@@ -1384,13 +1398,13 @@ stays in the heartbeat round, and keeps its watchdog, until the worker writes it
 Thus result validation and the fenced write can wait on the pool for longer than a lease. They do
 not give a finished task to recovery. Every accepted renewal still extends the lease.
 
-A Ruby or JVM task keeps its heartbeat membership and its watchdog while the handler runs, which
-includes its checkpoint and durable wait writes, and while the worker encodes and checks the
-result. Then `Worker.Ownership.release` (Ruby `Worker::Ownership#release`) leaves the heartbeat
-round and waits for the watchdog. The final write runs after that release: the completion, the
-failure, the release for shutdown, or the acknowledgement of a cancellation. No round renews the
-lease while that write waits. If the write waits until the lease expires, recovery can take the
-task, and the fence then refuses the write.
+A Ruby, JVM, or .NET task keeps its heartbeat membership and its watchdog while the handler runs,
+which includes its checkpoint and durable wait writes, and while the worker encodes and checks the
+result. Then `Worker.Ownership.release` (Ruby `Worker::Ownership#release`, .NET
+`Ownership.ReleaseAsync`) leaves the heartbeat round and waits for the watchdog. The final write
+runs after that release: the completion, the failure, the release for shutdown, or the
+acknowledgement of a cancellation. No round renews the lease while that write waits. If the write
+waits until the lease expires, recovery can take the task, and the fence then refuses the write.
 
 The SDKs differ in what a refusal does after the handler has returned.
 
@@ -1773,7 +1787,10 @@ Each bounded round does these steps, all before one deadline:
    takes a new one in its loop before the next round waits for its slot. JVM holds its connection
    between rounds. When a failed round closed or aborted it, the JVM checkout thread gives it back
    to the pool, and then starts the replacement at once. A JVM round waits for that checkout only
-   until its own deadline. A round that gets the replacement during its bound sends nothing on it.
+   until its own deadline. .NET also holds its connection between rounds. When a failed round left
+   it unusable, the .NET checkout task (`Heartbeat.CheckOutAsync`) starts the replacement at once.
+   A .NET round waits for it only until its own deadline. A round that gets the replacement during
+   its bound sends nothing on it.
    A regular round then runs at once on the replacement, with a full bound, whatever the intervals
    of the leases are by then.
 3. Sends `BEGIN`.
@@ -1781,9 +1798,12 @@ Each bounded round does these steps, all before one deadline:
    as its own statement, so that both values apply to the statements after it. Rust sends steps 3
    and 4 as one simple query, `BEGIN; SELECT set_config(...)`, with the budgets written as
    whole-number literals. The 8 ms check and the settings check then apply to that one query.
+   .NET sends steps 3 and 4 as one `NpgsqlBatch`, with the budgets as parameters.
 5. Sends one `heartbeat_pool_v1` statement for every batch of the round, or of a busy retry's
    selection ([Pool renewal](#pool-renewal)). In TypeScript, Go, Python, and Rust, the batches of
-   the rounds that join the transaction go into the same statement.
+   the rounds that join the transaction go into the same statement. .NET sends one
+   `heartbeat_many_v2` statement instead, for one batch. It does steps 3 to 6 again for each batch
+   of the round, in order, and sends no batch after the deadline of the round.
 6. Sends `COMMIT`. The worker counts the renewals only after `COMMIT` succeeds.
 
 PostgreSQL measures `statement_timeout` for each statement and
@@ -1801,6 +1821,9 @@ Before SM-1633, `statement_timeout` was one half and each idle gap one eighth. A
 one round trip, because PostgreSQL waits for the next statement of the client. With 80 ms for each
 round trip and a bound of 750 ms, one eighth was about 84 ms, so the client time could make
 PostgreSQL end the session. One quarter leaves room for the round trip.
+
+.NET still uses one half and one eighth (`HeldConnection.Send`). It sets them from the time that
+remains before step 3, and it makes the 8 ms check at that point.
 
 The heartbeat and both idle gaps together end within three quarters of the time that remains. The
 settings statement in step 4 also uses time, so it may use at most the last quarter. If it takes
@@ -1840,8 +1863,8 @@ If a preparation uses the time that remains, the Python round fails before it se
 
 A failed statement rolls back while time remains. In TypeScript, Go, and Python, a deadlock
 (`40P01`) is then sent again in a new transaction with the time that remains, for every round of
-the transaction, at most 3 times in total. In Rust, Ruby, and JVM, a deadlock fails the round, and a
-later round sends again. A round
+the transaction, at most 3 times in total. In Rust, Ruby, JVM, and .NET, a deadlock fails the
+round, and a later round sends again. A round
 that fails or passes its deadline discards its connection, because the worker cannot know its state.
 As before, a failed round changes no lease: every task continues, and the next round tries again.
 
@@ -1877,14 +1900,15 @@ The bound depends on the interval:
 Thus no interval gets a shorter bound than it had before SM-1444, unless the bound is still at
 least 50 ms. A short interval still leaves time for a round.
 
-| SDK        | Named value             | Helper                      | Interval                     | Where the round runs                                                                            |
-| ---------- | ----------------------- | --------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
-| TypeScript | `heartbeatRoundMs`      | `heartbeatRoundBoundMs`     | `heartbeatMs`                | the reservation (`ReservedConnection`)                                                          |
-| Go         | `heartbeatRoundBound`   | `heartbeatRoundBoundFor`    | `HeartbeatInterval`          | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`       |
-| Python     | `_heartbeat_round_ms`   | `heartbeat_round_bound_ms`  | `heartbeat_ms`               | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline |
-| Rust       | `heartbeat_round_bound` | `heartbeat_round_bound_for` | `heartbeat_interval`         | the shared heartbeat connection of the pool identity                                            |
-| Ruby       | `round_bound`           | `Heartbeat.round_bound`     | the shortest member interval | the dedicated connection                                                                        |
-| JVM        | `roundBoundNanos`       | `roundBoundNanos`           | the shortest member interval | the dedicated connection; each read gets a network timeout of the time that remains             |
+| SDK        | Named value             | Helper                      | Interval                     | Where the round runs                                                                                       |
+| ---------- | ----------------------- | --------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| TypeScript | `heartbeatRoundMs`      | `heartbeatRoundBoundMs`     | `heartbeatMs`                | the reservation (`ReservedConnection`)                                                                     |
+| Go         | `heartbeatRoundBound`   | `heartbeatRoundBoundFor`    | `HeartbeatInterval`          | the shared heartbeat connection, or one acquired pool connection under `SharedHeartbeats`                  |
+| Python     | `_heartbeat_round_ms`   | `heartbeat_round_bound_ms`  | `heartbeat_ms`               | the dedicated connection, on a thread of its own, so the heartbeat thread stops at the deadline            |
+| Rust       | `heartbeat_round_bound` | `heartbeat_round_bound_for` | `heartbeat_interval`         | the shared heartbeat connection of the pool identity                                                       |
+| Ruby       | `round_bound`           | `Heartbeat.round_bound`     | the shortest member interval | the dedicated connection                                                                                   |
+| JVM        | `roundBoundNanos`       | `roundBoundNanos`           | the shortest member interval | the dedicated connection; each read gets a network timeout of the time that remains                        |
+| .NET       | `RoundBoundNanos`       | `Heartbeat.RoundBoundNanos` | the shortest member interval | the dedicated connection, on the thread of `HeldConnection`, so the heartbeat thread stops at the deadline |
 
 **Short intervals.** A round fails before its heartbeat if less than 8 ms remains at the settings
 statement. Near this minimum, renewal depends on the load of the host and on the driver. The payload,
@@ -1895,7 +1919,9 @@ More than half of its rounds failed before the heartbeat. Thus the smallest supp
 
 Rounds under `sharedHeartbeats` (TypeScript), `shared_heartbeats` (Python, Rust, Ruby), and the
 JVM's shared heartbeats do not change. They have no client deadline and no server timeouts. The
-worker waits for the statement, so it never leaves an abandoned heartbeat statement.
+worker waits for the statement, so it never leaves an abandoned heartbeat statement. Rounds under
+the .NET `SharedHeartbeats` also have no round bound and no server timeouts. Each of their
+statements has a driver command timeout of 30 s (`BorrowedTimeoutSeconds`).
 
 The Go driver also sends a cancel request when a deadline interrupts a query. That request needs a
 second connection and can be lost, so the server timeouts do not depend on it.
@@ -1907,10 +1933,12 @@ schedule that [Heartbeat schedule](#heartbeat-schedule) describes.
 
 #### Supported heartbeat interval
 
-The smallest supported heartbeat interval is 100 ms, in all six SDKs. At 100 ms, the round bound is
-75 ms. With that bound, a worker renewed its leases in tests on a loaded host. A supported interval
-does not guarantee renewal: the [margin rule](#heartbeat-schedule) and the load of the host still
-apply.
+The smallest supported heartbeat interval is 100 ms, in the TypeScript, Python, Go, Rust, Ruby, and
+JVM SDKs. At 100 ms, the round bound is 75 ms. With that bound, a worker renewed its leases in tests
+on a loaded host. The .NET worker uses the same round bound, but no .NET test measures renewal at
+100 ms yet. A supported
+interval does not guarantee renewal: the [margin rule](#heartbeat-schedule) and the load of the host
+still apply.
 
 Below 100 ms, the behavior of the worker does not change. The worker accepts the interval, and it
 does not reject or warn about it. But on a loaded host, the round bound can be shorter than one
@@ -1919,14 +1947,16 @@ connection, so the worker must take a new one, as step 2 of [Heartbeat round
 deadline](#heartbeat-round-deadline) describes.
 
 If every renewal of a lease misses its deadline, the worker never renews that lease. On the
-dedicated connection, one transaction renews every batch of a round
-([Pool renewal](#pool-renewal)). If it misses its deadline, the worker counts no renewal of that
-round, and the next round sends every lease again. When the watchdog of an attempt expires, the
-attempt loses its lease, and recovery makes the task available again.
+dedicated connection, one transaction renews every batch of a round ([Pool renewal](#pool-renewal)).
+If it misses its deadline, the worker counts no renewal of that round, and the next round sends
+every lease again. In .NET, each batch has its own transaction. Thus the .NET worker counts the
+batches that committed before the deadline. When the watchdog of an attempt expires, the attempt
+loses its lease, and recovery makes the task available again.
 
-In Ruby and JVM, one heartbeat thread sends the rounds of every worker on a pool that uses its
-dedicated connection. The shortest interval among the leases in those rounds sets the round bound.
-Thus one worker below 100 ms also shortens the rounds of the other workers on that connection.
+In Ruby, JVM, and .NET, one heartbeat thread sends the rounds of every worker on a pool that uses
+its dedicated connection. The shortest interval among the leases in those rounds sets the round
+bound. Thus one worker below 100 ms also shortens the rounds of the other workers on that
+connection.
 
 The minimum applies to the interval option of each SDK:
 
@@ -1938,16 +1968,17 @@ The minimum applies to the interval option of each SDK:
 | Rust       | `WorkerOptions::heartbeat_interval`                    | 100 ms                   |
 | Ruby       | `heartbeat:` of `Worker`, in seconds                   | 0.1                      |
 | JVM        | `Worker.Builder.heartbeat` and `WorkerScope.heartbeat` | 100 ms                   |
+| .NET       | `WorkerOptions.Heartbeat`                              | 100 ms                   |
 
 The minimum also applies to a worker that uses shared heartbeats.
 
 #### Heartbeat schedule
 
 Each heartbeat scheduler starts its rounds on a fixed schedule. A scheduler is the loop that sends
-the rounds of one worker, or of every worker on one pool in Ruby and JVM. Thus a slow or failed round
-does not move later rounds toward the end of the lease. Before SM-1444, the next round fell due one
-interval after a failed round ended. So one timed-out round left about 0 s of margin with the
-defaults.
+the rounds of one worker, or of every worker on one pool in Ruby, JVM, and .NET. Thus a slow or
+failed round does not move later rounds toward the end of the lease. Before SM-1444, the next round
+fell due one interval after a failed round ended. So one timed-out round left about 0 s of margin
+with the defaults.
 
 The scheduler follows these rules in every SDK:
 
@@ -1966,6 +1997,11 @@ The scheduler follows these rules in every SDK:
    A failed JVM round that leaves its connection open keeps it. After a failed round that closed or
    aborted it, JVM starts a new checkout at once. A failed checkout runs again after a backoff that
    starts at 100 ms, doubles, and stops at the shortest interval, also when no lease remains.
+   .NET (`_previous`) keeps the start of the latest round in `Heartbeat` in the same way. A failed
+   .NET round that leaves its connection usable keeps it. After a failed round that left it
+   unusable, `Heartbeat.Discard` starts a new checkout at once. A failed .NET checkout runs again
+   after a backoff that starts at 100 ms, doubles, and stops at the shortest interval. That interval
+   includes the workers that hold a reservation, so the checkout continues while a worker runs.
 6. When no lease remains, the scheduler stops. The next lease starts a new schedule. In TypeScript,
    a lease that registers while the round of an earlier lease is in flight gets its slot one
    interval after it registers.
@@ -1973,7 +2009,7 @@ The scheduler follows these rules in every SDK:
    retry](#busy-retry)). It shares the in-flight rule of rule 2.
 8. The schedule uses a monotonic clock: `monotonicNow()` in TypeScript, the monotonic reading of
    `time.Now()` in Go, `time.monotonic()` in Python, `tokio::time::Instant` in Rust,
-   `CLOCK_MONOTONIC` in Ruby, and `System.nanoTime()` in JVM.
+   `CLOCK_MONOTONIC` in Ruby, `System.nanoTime()` in JVM, and `Stopwatch.GetTimestamp()` in .NET.
 
 A replacement connection never starts a second round. Each SDK opens at most one replacement at a
 time:
@@ -1986,16 +2022,17 @@ time:
 | Rust       | when the failed round ends, in the keeper task of `shared::HeartbeatConnection`                                                                                                                          | one round bound                                                                                                                                            |
 | Ruby       | when the failed round has ended its checkout. A separate checkout thread (`Heartbeat::Acquisition`) opens it.                                                                                            | the heartbeat thread waits one round bound for each attempt. A `ConnectionPool` checkout uses the round bound as its timeout, not the timeout of the pool. |
 | JVM        | after the failed round, once its connection is back, on the checkout thread                                                                                                                              | one round bound; the open itself has the `getConnection` timeout                                                                                           |
+| .NET       | after the failed round, once its connection is back or its cleanup task owns it, in the checkout task `Heartbeat.CheckOutAsync`                                                                          | one round bound, through a token that cancels `OpenConnectionAsync`. At startup, an open can use the rest of the startup budget.                           |
 
-In TypeScript, Go, Python, Rust, and JVM, the open does not hold the scheduler. The next round
+In TypeScript, Go, Python, Rust, JVM, and .NET, the open does not hold the scheduler. The next round
 starts at its slot. If the replacement is not ready, the round waits for it only until its own
 deadline. No round starts a checkout of its own.
 
 - A Rust acquisition that reaches its bound stops, and the keeper tries again after its delay.
 - A Python attempt that reaches its bound fails. The acquirer thread then tries again after its
   backoff. The backoff has ±10% jitter, and no wait is longer than the shortest `heartbeat_ms`.
-- A JVM round that gets the connection during its bound sends nothing. A regular round then runs at
-  once with a full bound.
+- A JVM or .NET round that gets the connection during its bound sends nothing. A regular round then
+  runs at once with a full bound.
 - In Ruby, the heartbeat thread sends no round while it has no connection. It waits for the checkout
   thread one round bound at a time. A checkout that is still pending stays the current one, so the
   next attempt waits for it and starts no second checkout. If the connection arrives after the next
@@ -2009,9 +2046,10 @@ deadline of the round: the start of the round plus the round bound. If it fails 
 deadline, the round fails, and every lease waits for the next round. Before SM-1633, Ruby and JVM
 sent one transaction for each worker and each 100 leases, and gave the statements turns from one
 round to the next (`ordered_groups` in Ruby, `nextFirstBatch` in JVM). One statement needs no turns,
-so SM-1633 removed them. A shared round sends one statement for each worker and each 100 leases. It has
-no deadline and uses autocommit, except in Go, where each statement is a bounded transaction of its
-own.
+so SM-1633 removed them. .NET still sends one transaction for each worker and each 100 leases. It
+moves the first batch by one from one round to the next (`Heartbeat.NextFirstBatch`). A shared round
+sends one statement for each worker and each 100 leases. It has no deadline and uses autocommit,
+except in Go, where each statement is a bounded transaction of its own.
 
 **Margin rule.** After one timed-out round, the next round falls due two intervals after the start
 of the last accepted round. That round ends by its deadline. So an attempt keeps its lease after one
@@ -2041,8 +2079,8 @@ an interval that breaks the margin rule. For example, take an interval of 20,000
 ended at 30,000 ms, so one timed-out round gives no margin.
 
 Rounds without a client deadline (`sharedHeartbeats` in TypeScript, `shared_heartbeats` in Python,
-Rust, and Ruby, and the shared heartbeats of JVM) follow the same schedule. They have no round
-bound, so a slow shared round can delay the next round past the margin.
+Rust, and Ruby, the shared heartbeats of JVM, and `SharedHeartbeats` in .NET) follow the same
+schedule. They have no round bound, so a slow shared round can delay the next round past the margin.
 
 ### Cancellation
 
@@ -2271,8 +2309,8 @@ sends a notification, so the continuous loop starts a release wait that a notifi
 ##### Continuous loop
 
 The continuous loop is TypeScript `Worker.run()`, Python `Worker.run()` and `AsyncWorker.run()`, Go
-`Worker.Run`, Rust `Worker::run`, Ruby `Worker#run`, and JVM `Worker.run()`. All six do the same
-steps:
+`Worker.Run`, Rust `Worker::run`, Ruby `Worker#run`, JVM `Worker.run()`, and .NET
+`Worker.RunAsync`. All seven do the same steps:
 
 1. The worker claims a task that it has no handler for. The claim counts as empty.
 2. The loop starts a release wait. Its deadline is the next empty wait: the base poll interval
@@ -2298,12 +2336,12 @@ An empty claim that returned no task keeps the earlier rule: a notification that
 claim started ends its empty wait. The next claim then waits the notification claim delay, a random
 time from 0 through 50 ms. The SDKs name that delay `NOTIFICATION_CLAIM_DELAY_MS` (TypeScript),
 `_NOTIFICATION_CLAIM_DELAY_SECONDS` (Python), `notificationClaimDelay` (Go),
-`MAX_NOTIFICATION_DELAY_MS` (Rust), and `NOTIFICATION_CLAIM_DELAY` (Ruby). Rust picks the delay in
-whole milliseconds.
+`MAX_NOTIFICATION_DELAY_MS` (Rust), `NOTIFICATION_CLAIM_DELAY` (Ruby), and
+`NotificationClaimDelayMs` (.NET). Rust and .NET pick the delay in whole milliseconds.
 
 The SDKs mark the release wait in the empty-wait state of the loop. TypeScript and Go set a
 `release` flag on `emptyWait`. Python, Rust, and Ruby store no wake version (`None` or `nil`) in
-`empty_wait`. The shared runtime fixture
+`empty_wait`. .NET stores a `null` `Version` in its `EmptyWait` record. The shared runtime fixture
 `a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval` runs a listening
 worker with a 1,000 ms poll interval for 2,500 ms. It requires 2 or 3 releases, at least 900 ms
 apart. Each runner also requires a session in `pg_stat_activity` whose last query is
@@ -2317,10 +2355,10 @@ that returns only tasks of unregistered types releases them and does not change 
 ##### Single-pass call
 
 The single-pass call is TypeScript `runOnce()`, Python `run_once()` and `AsyncWorker.run_once()`,
-Go `Worker.RunOnce`, Rust `Worker::run_once`, Ruby `Worker#run_once`, and JVM `Worker.runOnce()`. It
-opens no listener, so a notification does not affect it.
+Go `Worker.RunOnce`, Rust `Worker::run_once`, Ruby `Worker#run_once`, JVM `Worker.runOnce()`, and
+.NET `Worker.RunOnceAsync`. It opens no listener, so a notification does not affect it.
 [ADR 0099](../decisions/0099-report-a-released-only-single-pass-as-no-progress.md)
-gives all six SDKs one result and one wait rule:
+gave the six SDKs of that time one result and one wait rule. The .NET SDK follows the same rule:
 
 1. The call returns `true` only if a handler ran. If the call released every task that it claimed,
    it returns `false`, as a call that claimed no task does.
@@ -2397,7 +2435,8 @@ call it:
 
 - TypeScript `Queue.health()`;
 - Go `Queue.Health()`;
-- Python `Queue.health()` and `AsyncQueue.health()`.
+- Python `Queue.health()` and `AsyncQueue.health()`;
+- .NET `Queue.HealthAsync()`.
 
 The function reads every correctness-sensitive value in one statement. One MVCC snapshot covers the
 verified schema version, state counts, and dispatch depths. It also covers dependency, child,
@@ -2407,7 +2446,8 @@ deadline, timeout, promotion, concurrency, rate-limit, rollup, and retention pre
 - `capturedAt` is PostgreSQL's transaction timestamp for the statement.
 - `terminal_cleanup_backlog_since` copies `maintenance_state.terminal_cleanup_backlog_since`. It is
   the start of the pass that first ended with a full batch. It is null while terminal cleanup has
-  no backlog. Go, Python, Rust, and Ruby return the document as a map. Thus the key reaches callers.
+  no backlog. Go, Python, Rust, and Ruby return the document as a map, and .NET returns it as the
+  `QueueHealth.Snapshot` dictionary. Thus the key reaches callers.
   TypeScript `Queue.health()` maps it to `terminalCleanupBacklogSince`.
 
 #### Snapshot cost

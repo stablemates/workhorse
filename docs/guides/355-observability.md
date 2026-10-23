@@ -38,7 +38,8 @@ The Rust worker records the metrics of the worker when its `opentelemetry` featu
 the same worker metrics as the Go worker. It does not record schedule firing or routines.
 
 The Ruby and JVM workers record the same metrics as the Python worker. The JVM worker is the Java
-worker, which the Kotlin module and the Spring Boot starter also run.
+worker, which the Kotlin module and the Spring Boot starter also run. The .NET worker records the
+same metrics as the Python worker, and also `workhorse.maintenance.drift`.
 
 Execution metrics use the queue, the task type, and the outcome as attributes. They never use a
 task ID, a payload, a worker ID, or an error message. These values have no stable bound. As metric
@@ -48,18 +49,18 @@ use traces.
 <details>
 <summary>Reference: runtime instruments by runtime</summary>
 
-| Instrument                                                     | TypeScript | Python | Go  | Rust | Ruby | JVM |
-| -------------------------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- |
-| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  |
-| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  | No   | No   | No  |
-| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes |
-| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes |
-| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes |
-| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  |
+| Instrument                                                     | TypeScript | Python | Go  | Rust | Ruby | JVM | .NET |
+| -------------------------------------------------------------- | ---------- | ------ | --- | ---- | ---- | --- | ---- |
+| `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  | No   |
+| `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.tasks.cancellation`, `workhorse.tasks.redrive`      | Yes        | No     | No  | No   | No   | No  | No   |
+| `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.leases.expired`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
+| `workhorse.schedule.fired`, `workhorse.schedule.lag`           | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
+| `workhorse.maintenance.runs`, `.rows`, `.duration`, `.errors`  | Yes        | Yes    | No  | No   | Yes  | Yes | Yes  |
+| `workhorse.maintenance.drift`                                  | Yes        | No     | No  | No   | No   | No  | Yes  |
 
 The five handler instruments are `workhorse.handler.executions`, `workhorse.handler.duration`,
 `workhorse.handler.runtime`, `workhorse.handler.batch.size`, and `workhorse.handler.batch.linger`.
@@ -75,9 +76,10 @@ both, as the TypeScript fallback does.
 Rust recovery counts one retry for each queue and type that its result lists. It counts a retry
 that the result does not list with `unknown` for both, as the other workers do.
 
-The JVM column covers Java, Kotlin, and the Spring Boot starter.
+The JVM column covers Java, Kotlin, and the Spring Boot starter. The .NET column covers every
+.NET package.
 
-More detail: [Telemetry: Synchronous instruments](../architecture/telemetry.md#synchronous-instruments), [Telemetry: Go worker metrics](../architecture/telemetry.md#go-worker-metrics), [Telemetry: Rust worker metrics](../architecture/telemetry.md#rust-worker-metrics), [Telemetry: Ruby worker metrics](../architecture/telemetry.md#ruby-worker-metrics), [Telemetry: JVM worker metrics](../architecture/telemetry.md#jvm-worker-metrics), and [Telemetry: Python worker metrics](../architecture/telemetry.md#python-worker-metrics).
+More detail: [Telemetry: Synchronous instruments](../architecture/telemetry.md#synchronous-instruments), [Telemetry: Go worker metrics](../architecture/telemetry.md#go-worker-metrics), [Telemetry: Rust worker metrics](../architecture/telemetry.md#rust-worker-metrics), [Telemetry: Ruby worker metrics](../architecture/telemetry.md#ruby-worker-metrics), [Telemetry: JVM worker metrics](../architecture/telemetry.md#jvm-worker-metrics), [Telemetry: Python worker metrics](../architecture/telemetry.md#python-worker-metrics), and [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 

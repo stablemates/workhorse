@@ -24,7 +24,7 @@ runtime state from process-local `Worker` objects, so it only ever knew about wo
 own process.
 
 The worker registry removes that constraint. By default, TypeScript, Python, Go, Rust, Ruby, Java,
-and Kotlin workers upsert `workhorse.worker_registry` on their configured cadence. Each row holds
+Kotlin, and C# workers upsert `workhorse.worker_registry` on their configured cadence. Each row holds
 declared concurrency, busy slots, and drain state, together with the client protocol version and the
 SDK the worker runs. Each refresh reads the operator-requested pause flag in the same round trip. A
 dashboard mounted anywhere reads the fleet from that relation, which is also how an operator sees

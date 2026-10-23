@@ -347,6 +347,7 @@ checkpoints and durable sleeps.
 | Python     | `HandlerContext.checkpoint` and `AsyncHandlerContext.checkpoint` |
 | Go         | `HandlerContext.Checkpoint`                                      |
 | Rust       | `HandlerContext::checkpoint`                                     |
+| .NET       | `HandlerContext.CheckpointAsync`                                 |
 
 | Limit            | Value                                                        |
 | ---------------- | ------------------------------------------------------------ |
@@ -366,7 +367,7 @@ checkpoints and durable sleeps.
   Overlapping calls for one name in one handler share the first call's result or error.
 - A checkpoint has no separate retirement path. It is deleted only with its task.
 
-More detail: [Data model: Key and write rules](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-write-rules).
+More detail: [Data model: Key and write rules](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#key-and-write-rules) and [Schema and SQL protocol: .NET handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 

@@ -11,7 +11,7 @@ Each task in the call keeps its own lease, fence token, retry budget, checkpoint
 cancellation. Register a batch handler with `Worker.handleBatch` in TypeScript,
 `Worker.handle_batch` in Python, `Worker.HandleBatch` in Go, `Worker::handle_batch` in Rust,
 `Worker#handle_batch` in Ruby. In Java, use `Worker.Builder.handleBatch`. In Kotlin, call
-`handleBatch` in the `workhorseWorker` block.
+`handleBatch` in the `workhorseWorker` block. In C#, call `Worker.HandleBatch`.
 
 ## Send several tasks to one handler call
 
@@ -41,7 +41,7 @@ time that a partial batch waits for more tasks. A batch is not a
 [task group](/docs/task-groups), which is a set of tasks that Workhorse tracks until all of them
 finish.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
@@ -146,6 +146,22 @@ finish.
       }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var worker = new Worker(dataSource, new WorkerOptions { Queues = ["email"], Concurrency = 32 });
+    worker.HandleBatch<Email>(
+        "email.send",
+        new BatchOptions { MaxSize = 20, Linger = TimeSpan.FromMilliseconds(50) },
+        async (items, cancellationToken) =>
+        {
+            var deliveries = await emailProvider.SendManyAsync(
+                [.. items.Select(item => item.Payload)], cancellationToken);
+            return [.. deliveries.Select(delivery => delivery.Error is { } error
+                ? (BatchHandlerOutcome)new BatchFailed(error)
+                : new BatchSucceeded(new { providerId = delivery.Id }))];
+        });
+    ```
+  </Tab>
 </Tabs>
 
 `maxSize` sets the maximum size of a batch. `lingerMs` sets the linger. The linger timer does not
@@ -164,6 +180,7 @@ Each SDK names the two options in its own way:
 - Rust uses `max_size` and `linger` in `BatchOptions`.
 - Ruby uses the keywords `max_size:` and `linger:`.
 - Java uses `maxSize` and `linger` in `BatchOptions`.
+- C# uses `MaxSize` and `Linger` in `BatchOptions`.
 
 <details>
 <summary>Reference: options</summary>
@@ -174,12 +191,13 @@ Each SDK names the two options in its own way:
 | Python     | `Worker.handle_batch(type, fn, *, max_size, linger_ms)`                | `max_size`: integer, 1 to 100           | `linger_ms`: integer, 0 to 60,000 ms              |
 | Go         | `Worker.HandleBatch(taskType, options, fn)`                            | `BatchHandlerOptions.MaxSize`: 1 to 100 | `BatchHandlerOptions.Linger`: 0 to 60 s, whole ms |
 | Java       | `Worker.Builder.handleBatch(taskType, payloadClass, options, handler)` | `BatchOptions.maxSize`: 1 to 100        | `BatchOptions.linger`: 0 to 60 s, whole ms        |
+| .NET       | `Worker.HandleBatch<TPayload>(taskType, options, handler)`             | `BatchOptions.MaxSize`: 1 to 100        | `BatchOptions.Linger`: 0 to 60 s, whole ms        |
 
 Both options are required. The batch size cannot exceed the `concurrency` of the worker
 (`WorkerOptions.Concurrency` in Go). `AsyncWorker.handle_batch` takes the same limits as
 `Worker.handle_batch`.
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers).
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers), and [Schema and SQL protocol: .NET batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-batch-handlers).
 
 </details>
 
@@ -188,7 +206,7 @@ More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/wor
 A producer does not change for a batch handler. The app enqueues one ordinary task for each email.
 The producer cannot see that a batch handler runs the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("email.send", { to: "person@example.com" });
@@ -226,6 +244,11 @@ The producer cannot see that a batch handler runs the task.
   <Tab value="Kotlin">
     ```kotlin
     queue.enqueueSuspend("email.send", mapOf("to" to "person@example.com"))
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    await queue.EnqueueAsync("email.send", new { to = "person@example.com" });
     ```
   </Tab>
 </Tabs>
@@ -287,6 +310,8 @@ own fence token.
   `BatchHandlerContext`. The block returns one hash for each item, in item order.
 - Java handlers get `BatchHandlerItem` values. Each item has a payload and its own
   `BatchHandlerContext`. The handler returns one `BatchHandlerOutcome` for each item, in item order.
+- C# handlers get `BatchHandlerItem<TPayload>` values. Each item has a `Payload` and its own
+  `Context`. The handler returns one `BatchHandlerOutcome` for each item, in item order.
 
 <details>
 <summary>Reference: outcomes</summary>
@@ -302,6 +327,7 @@ a `BatchHandlerOutcome`.
 | Rust       | `BatchResult::Succeeded`                        | `BatchResult::Failed`                                            |
 | Ruby       | `{status: :succeeded, result: value}`           | `{status: :failed, error: exception}`                            |
 | Java       | `new BatchSucceeded(value)`                     | `new BatchFailed(exception)`                                     |
+| .NET       | `new BatchSucceeded(value)`                     | `new BatchFailed(exception)`                                     |
 
 A failed outcome goes through the persisted retry policy and the remaining attempt budget of that
 task.
@@ -312,10 +338,11 @@ task.
 - Python: a raised exception, a non-sequence return, a wrong outcome count, or an invalid mapping.
 - Go: a panic, a wrong outcome count, a nil outcome, or `BatchFailed` with a nil error.
 - Java: a thrown exception or error, a `null` list, a wrong outcome count, or a `null` outcome.
+- .NET: a thrown exception, a `null` list, a wrong outcome count, or a `null` outcome.
 
 The execution path of each task still submits the failure under its own fence.
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), and [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers).
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), [Schema and SQL protocol: JVM batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handlers), and [Schema and SQL protocol: .NET batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-batch-handlers).
 
 </details>
 
@@ -342,11 +369,12 @@ TypeScript `BatchHandlerContext` omits `sleep`, `sleepUntil`, `waitForSignal`, `
 `runChild`, `runChildren`, and `runChildrenAll`. It keeps the task, the abort signal, checkpoint
 reads and writes, wait reads, progress reads and writes, and `taskGroup`.
 
-| SDK    | Calls in the context                                                                                             |
-| ------ | ---------------------------------------------------------------------------------------------------------------- |
-| Python | `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, `set_progress`, `task_group`             |
-| Go     | `Task`, the cancellation `Context`, `Checkpoint`, `GetProgress`, `SetProgress`, `GetTaskGroup`, `AddToTaskGroup` |
-| Java   | `task`, `cancellation`, `getCheckpoint`, `checkpoint`, `getProgress`, `setProgress`, `taskGroup`                 |
+| SDK    | Calls in the context                                                                                                                      |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Python | `task`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`, `set_progress`, `task_group`                                      |
+| Go     | `Task`, the cancellation `Context`, `Checkpoint`, `GetProgress`, `SetProgress`, `GetTaskGroup`, `AddToTaskGroup`                          |
+| Java   | `task`, `cancellation`, `getCheckpoint`, `checkpoint`, `getProgress`, `setProgress`, `taskGroup`                                          |
+| .NET   | `Task`, `CancellationToken`, `CancelReason`, `GetCheckpointAsync`, `CheckpointAsync`, `GetProgressAsync`, `SetProgressAsync`, `TaskGroup` |
 
 **Task groups.** The batch context reads the task group and adds to it in every SDK:
 
@@ -356,8 +384,9 @@ reads and writes, wait reads, progress reads and writes, and `taskGroup`.
 - Rust: `BatchHandlerContext::task_group`
 - Ruby: `BatchHandlerContext#task_group`
 - Java: `BatchHandlerContext.taskGroup`
+- .NET: `BatchHandlerContext.TaskGroup`
 
-More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls), and [Schema and SQL protocol: JVM batch handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handler-context).
+More detail: [Task lifecycle: Batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-handlers), [Schema and SQL protocol: Go batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#go-batch-handlers), [Task groups: SDK calls](https://github.com/stablemates/workhorse/blob/main/docs/architecture/task-groups.md#sdk-calls), [Schema and SQL protocol: JVM batch handler context](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-batch-handler-context), and [Schema and SQL protocol: .NET batch handlers](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-batch-handlers).
 
 </details>
 

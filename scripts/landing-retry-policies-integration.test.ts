@@ -7,7 +7,9 @@ import { createDatabaseTestHarness } from "../typescript/core/test/support/db.js
 // This test reads the policy literal of every landing snippet and gives it to
 // `workhorse.normalize_retry_policy_v1`, the function that the enqueue path calls. The tests that
 // run each snippet against PostgreSQL also catch it; this test names the key in all seven
-// languages at once.
+// languages at once. C# builds a policy with the `RetryPolicy` factory methods, so a wrong key does
+// not compile, and `LandingExamplesTests` reads the stored policy back from PostgreSQL. This test
+// therefore skips the C# snippets.
 
 const languages = ["ts", "python", "go", "rust", "ruby", "java", "kotlin"] as const;
 
@@ -24,13 +26,15 @@ beforeAll(harness.setup);
 afterAll(harness.teardown);
 
 describe("landing snippet retry policies", () => {
-  const policies = Object.entries(landingSnippets).flatMap(([id, source]) =>
-    retryPolicies(source).map((policy) => ({
-      id,
-      language: landingSnippetLanguages[id as LandingSnippetId] ?? "ts",
-      policy,
-    })),
-  );
+  const policies = Object.entries(landingSnippets)
+    .filter(([id]) => landingSnippetLanguages[id as LandingSnippetId] !== "csharp")
+    .flatMap(([id, source]) =>
+      retryPolicies(source).map((policy) => ({
+        id,
+        language: landingSnippetLanguages[id as LandingSnippetId] ?? "ts",
+        policy,
+      })),
+    );
 
   it("finds a retry policy in the landing snippets of each language", () => {
     expect(new Set(policies.map(({ language }) => language))).toEqual(new Set(languages));

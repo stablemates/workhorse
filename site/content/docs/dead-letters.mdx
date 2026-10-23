@@ -12,7 +12,8 @@ from the `Queue` client of the application. TypeScript makes an `Admin` with a p
 `Admin` or `AsyncAdmin`. Go calls `NewAdmin` with a pgx or `database/sql` executor that the caller
 owns. Rust uses `Admin::connect` or `Admin::new`, and Ruby calls `Admin.new` with a connection or a
 pool. Java builds `new Admin(ConnectionSource.of(dataSource))`, and Kotlin calls the suspend
-wrapper of each `Admin` method. An operator can also redrive from the dashboard.
+wrapper of each `Admin` method. C# builds `new Admin(dataSource)` on an `NpgsqlDataSource`, and each
+method is asynchronous. An operator can also redrive from the dashboard.
 
 ## Find the tasks that failed
 
@@ -27,7 +28,7 @@ wrapper of each `Admin` method. An operator can also redrive from the dashboard.
 The set of failed tasks is the dead-letter list. Other queue products call it a dead letter queue.
 Use `Admin.listDeadLetters` to filter the list and to read it one page at a time.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const page = await admin.listDeadLetters({
@@ -101,6 +102,16 @@ Use `Admin.listDeadLetters` to filter the list and to read it one page at a time
       )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var page = await admin.ListDeadLettersAsync(new DeadLetterQuery
+    {
+        Queue = "payments",
+        ErrorName = "ProviderTimeout",
+        FinishedAfter = new DateTimeOffset(2026, 3, 14, 9, 0, 0, TimeSpan.Zero),
+    });
+    ```
+  </Tab>
 </Tabs>
 
 Each `DeadLetter` holds the payload, the last error, the attempt counts, and `redriveCount`. The
@@ -159,7 +170,7 @@ More detail: [Data model: Dead-letter index](https://github.com/stablemates/work
   alt="Redrive copies the work into a new task and keeps the failed task as evidence"
 />
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await admin.redrive(sourceTaskId, {
@@ -213,6 +224,13 @@ More detail: [Data model: Dead-letter index](https://github.com/stablemates/work
         sourceTaskId,
         AdminAudit("ops@example.com", "Provider outage ended", "r-77"),
       )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await admin.RedriveAsync(
+        sourceTaskId,
+        new AdminAudit { Actor = "ops@example.com", Reason = "Provider outage ended", RequestId = "r-77" });
     ```
   </Tab>
 </Tabs>
@@ -372,7 +390,7 @@ run shows the tasks of a page and changes nothing.
    the 100 oldest failures and returns a cursor.
 4. You send the request with the cursor two more times. Workhorse redrives the remaining 200 tasks.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "payments", errorName: "ProviderTimeout" };
@@ -481,6 +499,18 @@ run shows the tasks of a page and changes nothing.
     var page = admin.redriveManySuspend(filter, audit)
     while (page.nextCursor() != null) {
       page = admin.redriveManySuspend(filter.toBuilder().cursor(page.nextCursor()).build(), audit)
+    }
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var filter = new RedriveFilter { Queue = "payments", ErrorName = "ProviderTimeout", Limit = 100 };
+    var audit = new AdminAudit { Actor = "ops@example.com", Reason = "Provider outage ended", RequestId = "outage-0314" };
+    var preview = await admin.RedriveManyAsync(filter with { DryRun = true }, audit);
+    var page = await admin.RedriveManyAsync(filter, audit);
+    while (page.NextCursor is { } cursor)
+    {
+        page = await admin.RedriveManyAsync(filter with { Cursor = cursor }, audit);
     }
     ```
   </Tab>

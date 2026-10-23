@@ -84,6 +84,15 @@ function isExampleFile(language: string, relativePath: string): boolean {
       name !== "Programs.java"
     );
   }
+  // The C# scenario programs are the files in Scenarios/ of the Workhorse.Examples.Programs
+  // project. Its Program.cs only starts the scenario that its first argument names. The other
+  // projects in dotnet/examples hold the regions that the documentation embeds, or the tests.
+  if (language === "dotnet") {
+    return (
+      relativePath.startsWith("dotnet/examples/Workhorse.Examples.Programs/Scenarios/") &&
+      name.endsWith(".cs")
+    );
+  }
   if (language === "typescript") {
     return (
       /\.(?:mjs|cjs|js|mts|cts|ts)$/.test(name) &&
@@ -437,6 +446,22 @@ describe("example scenario coverage", () => {
         "jvm/examples/src/main/java/run/workhorse/examples/QuickstartExamples.java",
         "jvm/examples/src/main/kotlin/run/workhorse/examples/QuickstartExamples.kt",
       ].map((file) => isExampleFile("jvm", file)),
+    ).toEqual([true, true, false, false, false, false, false, false]);
+  });
+
+  it("counts the C# scenario programs as examples, and not the documentation regions", () => {
+    const programs = "dotnet/examples/Workhorse.Examples.Programs";
+    expect(
+      [
+        `${programs}/Scenarios/QuickstartProgram.cs`,
+        `${programs}/Scenarios/AgenticFlowProgram.cs`,
+        `${programs}/Program.cs`,
+        `${programs}/ProgramDatabase.cs`,
+        `${programs}/Workhorse.Examples.Programs.csproj`,
+        `${programs}/obj/Debug/net10.0/Workhorse.Examples.Programs.AssemblyInfo.cs`,
+        "dotnet/examples/Workhorse.Examples.Programs.Tests/ScenarioProgramsTests.cs",
+        "dotnet/examples/Workhorse.Examples/Pages/RetriesExamples.cs",
+      ].map((file) => isExampleFile("dotnet", file)),
     ).toEqual([true, true, false, false, false, false, false, false]);
   });
 

@@ -463,12 +463,113 @@ More detail: [Schema and SQL protocol: Spring Boot starter](../architecture/sche
 
 </details>
 
+## Enqueue in an Npgsql transaction with .NET
+
+The .NET SDK runs every statement on an `NpgsqlConnection`. A `Queue` has two forms. The source form
+is the `Queue` that you build on an `NpgsqlDataSource`. It opens a connection for each call and runs
+the call in autocommit. The caller form is the `Queue` that `queue.Using(connection)` returns. It
+runs every call on your open connection, in your transaction.
+
+To enqueue in an Npgsql transaction:
+
+1. Open a connection from your `NpgsqlDataSource`.
+2. Begin a transaction on the connection.
+3. Insert the account row on the connection.
+4. Enqueue the task through `queue.Using(connection)`.
+5. Commit the transaction.
+
+```csharp
+public async Task CreateAccountAsync(string id, string email, CancellationToken cancellationToken)
+{
+    await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+    await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+    await using (var insert = new NpgsqlCommand(
+        "INSERT INTO account (id, email) VALUES ($1, $2)", connection))
+    {
+        insert.Parameters.AddWithValue(id);
+        insert.Parameters.AddWithValue(email);
+        await insert.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    await queue.Using(connection)
+        .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+    await transaction.CommitAsync(cancellationToken);
+}
+```
+
+The queue in this example is `new Queue(dataSource)`. If a step throws an exception before the
+commit, `await using` disposes the transaction. Npgsql then rolls back the transaction, so the account
+row and the task disappear together.
+
+The caller form gives your `CancellationToken` to Npgsql. If you cancel the token while a statement
+runs, Npgsql asks PostgreSQL to cancel the statement. The statement fails, and PostgreSQL aborts
+your transaction.
+
+An ambient `TransactionScope` does not change a call of the source form. That call always runs in
+autocommit. To enqueue in a transaction, use the caller form.
+
+## Enqueue in an EF Core transaction with .NET
+
+An application that uses EF Core with the Npgsql provider uses the `Workhorse.EntityFrameworkCore`
+package. Its extension method `GetWorkhorseConnection` returns the connection of the `DbContext`.
+Give that connection to `queue.Using`.
+
+To enqueue in an EF Core transaction:
+
+1. Begin a transaction with `db.Database.BeginTransactionAsync`.
+2. Add the account, and call `SaveChangesAsync`.
+3. Enqueue the task through `queue.Using(db.Database.GetWorkhorseConnection())`.
+4. Commit the transaction.
+
+```csharp
+public async Task CreateAccountAsync(
+    AccountsDbContext db, string id, string email, CancellationToken cancellationToken)
+{
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    db.Accounts.Add(new Account { Id = id, Email = email });
+    await db.SaveChangesAsync(cancellationToken);
+    await queue.Using(db.Database.GetWorkhorseConnection())
+        .EnqueueAsync("account.created", new { accountId = id }, cancellationToken);
+    await transaction.CommitAsync(cancellationToken);
+}
+```
+
+Npgsql runs the enqueue inside the transaction that EF Core began. If the code does not commit, the
+transaction rolls back, and the task disappears with the account row.
+
+<details>
+<summary>Reference: .NET connection forms</summary>
+
+| Form        | Call                                                  | Connection                                              |
+| ----------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| Caller form | `queue.Using(connection).EnqueueAsync(type, payload)` | Your open `NpgsqlConnection`, in your transaction       |
+| Source form | `queue.EnqueueAsync(type, payload)`                   | One connection from the `NpgsqlDataSource` for the call |
+| EF Core     | `queue.Using(db.Database.GetWorkhorseConnection())`   | The connection of the `DbContext`, in its transaction   |
+
+- The caller form never opens, closes, begins, commits, or rolls back the connection. It changes no
+  session state.
+- If the connection of the caller form is closed, the first call throws `InvalidOperationException`.
+- `GetWorkhorseConnection` throws `InvalidOperationException` if the provider is not Npgsql or if
+  the connection is not open.
+- The source form opens each connection inside a suppressed `TransactionScope`, so an ambient scope
+  never changes its autocommit call.
+- The caller form passes the `CancellationToken` of the caller to Npgsql. A cancellation fails the
+  statement, and PostgreSQL then aborts the transaction.
+- Each Workhorse exception derives from `WorkhorseException`. Any other `NpgsqlException` becomes
+  `DatabaseException`, with the original as `InnerException`.
+- `Admin` has the same two forms.
+
+More detail: [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections), [Schema and SQL protocol: .NET EF Core transactions](../architecture/schema-and-protocol.md#net-ef-core-transactions), and [Schema and SQL protocol: .NET errors](../architecture/schema-and-protocol.md#net-errors).
+
+</details>
+
 ## Use the Workhorse package for your ORM
 
 If your TypeScript application uses an ORM to access PostgreSQL, use the Workhorse package for that
 ORM. Do not manage a separate raw client next to the ORM. Python, Go, Rust, Ruby, Java, and Kotlin
 have no such package. In these languages, give your own connection or transaction, as the sections
-above show. A Spring Boot application uses the starter, as the previous section shows.
+above show. A Spring Boot application uses the starter, and a .NET application with EF Core uses
+`Workhorse.EntityFrameworkCore`, as the sections above show.
 
 Each provider wraps the database object that you already have. Its `forTransaction` method returns
 a `Queue` bound to your open transaction. The provider does not commit, roll back, or close that

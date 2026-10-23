@@ -24,9 +24,20 @@ columns, and limits of that area. For an explanation of a concept, read the
 - The [Python](architecture/schema-and-protocol.md#python-sdk),
   [Go](architecture/schema-and-protocol.md#go-sdk),
   [Ruby](architecture/schema-and-protocol.md#ruby-sdk),
-  [Rust](architecture/schema-and-protocol.md#rust-sdk), and
-  [JVM](architecture/schema-and-protocol.md#jvm-sdk) SDKs. The JVM section covers the Java core,
-  the Kotlin module, and the Spring Boot starter.
+  [Rust](architecture/schema-and-protocol.md#rust-sdk),
+  [JVM](architecture/schema-and-protocol.md#jvm-sdk), and
+  [.NET](architecture/schema-and-protocol.md#net-sdk) SDKs. The JVM section covers the Java core,
+  the Kotlin module, and the Spring Boot starter. The .NET section covers
+  [connections](architecture/schema-and-protocol.md#net-connections), the
+  [queue](architecture/schema-and-protocol.md#net-queue),
+  [`Admin`](architecture/schema-and-protocol.md#net-admin), the
+  [worker](architecture/schema-and-protocol.md#net-worker),
+  [batch handlers](architecture/schema-and-protocol.md#net-batch-handlers),
+  [hosting](architecture/schema-and-protocol.md#net-hosting),
+  [EF Core transactions](architecture/schema-and-protocol.md#net-ef-core-transactions),
+  [telemetry](architecture/schema-and-protocol.md#net-telemetry),
+  [values and JSON](architecture/schema-and-protocol.md#net-values-and-json), and the
+  [handler context](architecture/schema-and-protocol.md#net-handler-context).
 - [Documentation and release checks](architecture/schema-and-protocol.md#documentation-and-release-checks)
 - [PostgreSQL and runtime responsibilities](architecture/schema-and-protocol.md#postgresql-and-runtime-responsibilities)
 
@@ -60,8 +71,8 @@ columns, and limits of that area. For an explanation of a concept, read the
 - The [dashboard package boundary](architecture/dashboard.md#dashboard-package-boundary), including
   the [Task groups page](architecture/dashboard.md#task-groups-page) and authentication
 - The embedded [Python](architecture/dashboard.md#python-backend),
-  [Go](architecture/dashboard.md#go-backend), and [JVM](architecture/dashboard.md#jvm-backend)
-  backends
+  [Go](architecture/dashboard.md#go-backend), [JVM](architecture/dashboard.md#jvm-backend), and
+  [.NET](architecture/dashboard.md#net-backend) backends
 - The SPA [browser preferences](architecture/dashboard.md#browser-preferences) and their defaults
   when browser storage fails
 

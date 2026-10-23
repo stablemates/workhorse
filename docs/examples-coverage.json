@@ -1,5 +1,5 @@
 {
-  "languages": ["typescript", "python", "go", "rust", "ruby", "jvm"],
+  "languages": ["typescript", "python", "go", "rust", "ruby", "jvm", "dotnet"],
   "scenarios": {
     "objection-transaction": {
       "typescript": { "file": "typescript/examples/objection.ts" },
@@ -26,6 +26,11 @@
       "jvm": {
         "exclusion": {
           "reason": "Objection and Knex are JavaScript libraries; JVM transactional enqueue passes a JDBC connection to the queue."
+        }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "Objection and Knex are JavaScript libraries; .NET transactional enqueue passes an Npgsql connection to the queue."
         }
       }
     },
@@ -55,6 +60,11 @@
         "exclusion": {
           "reason": "GORM is a Go ORM; the JVM uses JDBC connections, not Go executors."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "GORM is a Go ORM; .NET uses Npgsql connections, not Go executors."
+        }
       }
     },
     "bun": {
@@ -73,7 +83,8 @@
       "ruby": {
         "exclusion": { "reason": "Bun is a Go ORM and exposes no Ruby transaction handle." }
       },
-      "jvm": { "exclusion": { "reason": "Bun is a Go ORM and exposes no JDBC connection." } }
+      "jvm": { "exclusion": { "reason": "Bun is a Go ORM and exposes no JDBC connection." } },
+      "dotnet": { "exclusion": { "reason": "Bun is a Go ORM and exposes no Npgsql connection." } }
     },
     "stripe-invoice-paid": {
       "typescript": { "file": "typescript/examples/stripe-invoice-paid.ts" },
@@ -101,6 +112,11 @@
         "exclusion": {
           "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "This bounded Stripe signing recipe is TypeScript-only, not a cross-language integration claim."
+        }
       }
     },
     "quickstart": {
@@ -111,6 +127,9 @@
       "ruby": { "file": "ruby/examples/quickstart.rb" },
       "jvm": {
         "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/QuickstartProgram.java"
+      },
+      "dotnet": {
+        "file": "dotnet/examples/Workhorse.Examples.Programs/Scenarios/QuickstartProgram.cs"
       }
     },
     "transaction": {
@@ -121,6 +140,9 @@
       "ruby": { "file": "ruby/examples/transaction.rb" },
       "jvm": {
         "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/TransactionProgram.java"
+      },
+      "dotnet": {
+        "file": "dotnet/examples/Workhorse.Examples.Programs/Scenarios/TransactionProgram.cs"
       }
     },
     "sqlx-transaction": {
@@ -149,6 +171,9 @@
         "exclusion": {
           "reason": "SQLx is a Rust PostgreSQL driver; the JVM uses JDBC connections."
         }
+      },
+      "dotnet": {
+        "exclusion": { "reason": "SQLx is a Rust PostgreSQL driver; .NET uses Npgsql connections." }
       }
     },
     "sequel-transaction": {
@@ -176,6 +201,11 @@
       "jvm": {
         "exclusion": {
           "reason": "Sequel is a Ruby database library; the JVM uses JDBC connections."
+        }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "Sequel is a Ruby database library; .NET uses Npgsql connections."
         }
       }
     },
@@ -205,6 +235,11 @@
         "exclusion": {
           "reason": "SQLAlchemy is a Python ORM; the JVM enqueues through a JDBC connection."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "SQLAlchemy is a Python ORM; .NET enqueues through an Npgsql connection."
+        }
       }
     },
     "dedicated-worker": {
@@ -215,6 +250,9 @@
       "ruby": { "file": "ruby/examples/dedicated_worker.rb" },
       "jvm": {
         "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DedicatedWorkerProgram.java"
+      },
+      "dotnet": {
+        "file": "dotnet/examples/Workhorse.Examples.Programs/Scenarios/DedicatedWorkerProgram.cs"
       }
     },
     "orchestration": {
@@ -228,6 +266,9 @@
           "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/OrchestrationProgram.java",
           "jvm/examples/programs/src/main/kotlin/run/workhorse/examples/programs/OrchestrationProgram.kt"
         ]
+      },
+      "dotnet": {
+        "file": "dotnet/examples/Workhorse.Examples.Programs/Scenarios/OrchestrationProgram.cs"
       }
     },
     "demo-worker": {
@@ -242,6 +283,11 @@
       "ruby": { "file": "ruby/examples/demo_worker.rb" },
       "jvm": {
         "file": "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/DemoWorkerProgram.java"
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "The .NET demo worker is the program in dotnet/demo, which SM-1630 adds, so dotnet/examples has no demo-worker program."
+        }
       }
     },
     "agentic-flow": {
@@ -271,6 +317,9 @@
           "jvm/examples/programs/src/main/java/run/workhorse/examples/programs/AgenticFlowProgram.java",
           "jvm/examples/programs/src/main/kotlin/run/workhorse/examples/programs/AgenticFlowProgram.kt"
         ]
+      },
+      "dotnet": {
+        "file": "dotnet/examples/Workhorse.Examples.Programs/Scenarios/AgenticFlowProgram.cs"
       }
     },
     "slack-approvals": {
@@ -296,6 +345,11 @@
         }
       },
       "jvm": {
+        "exclusion": {
+          "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
+        }
+      },
+      "dotnet": {
         "exclusion": {
           "reason": "The signed Slack approval recipe is a TypeScript application example, not a cross-language SDK surface."
         }
@@ -327,6 +381,11 @@
         "exclusion": {
           "reason": "Django is a Python framework; this framework-specific transaction recipe has no JVM counterpart."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "Django is a Python framework; this framework-specific transaction recipe has no .NET counterpart."
+        }
       }
     },
     "django-tasks": {
@@ -354,6 +413,11 @@
       "jvm": {
         "exclusion": {
           "reason": "Django Tasks is a Python-only framework interface, not a JVM interface."
+        }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "Django Tasks is a Python-only framework interface, not a .NET interface."
         }
       }
     },
@@ -383,6 +447,11 @@
         "exclusion": {
           "reason": "This scenario tests sqlc's Go pgx/v5 generation; the JVM uses JDBC connections."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "This scenario tests sqlc's Go pgx/v5 generation; .NET uses Npgsql connections."
+        }
       }
     },
     "sqlx": {
@@ -410,6 +479,11 @@
       "jvm": {
         "exclusion": {
           "reason": "github.com/jmoiron/sqlx is a Go library; the JVM uses JDBC connections."
+        }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "github.com/jmoiron/sqlx is a Go library; .NET uses Npgsql connections."
         }
       }
     },
@@ -441,6 +515,11 @@
         "exclusion": {
           "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no JVM receiver is maintained."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "This GitHub App recipe tests the Node raw-body receiver and TypeScript worker; no .NET receiver is maintained."
+        }
       }
     },
     "pydanticai-approval": {
@@ -466,6 +545,11 @@
         }
       },
       "jvm": {
+        "exclusion": {
+          "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
+        }
+      },
+      "dotnet": {
         "exclusion": {
           "reason": "PydanticAI is a Python agent framework; this recipe uses its Python deferred-tool interface."
         }
@@ -497,6 +581,11 @@
         "exclusion": {
           "reason": "By default the JVM Worker runs each handler on its own virtual thread. Kotlin suspend handlers run on the same Worker, so there is no separate async-worker example."
         }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "The .NET Worker is already asynchronous, because each handler returns a Task, so there is no separate async-worker example."
+        }
       }
     },
     "langgraph-approval": {
@@ -524,6 +613,11 @@
       "jvm": {
         "exclusion": {
           "reason": "LangGraph's Python checkpointer is not a JVM graph runtime; this recipe does not claim a JVM bridge."
+        }
+      },
+      "dotnet": {
+        "exclusion": {
+          "reason": "LangGraph's Python checkpointer is not a .NET graph runtime; this recipe does not claim a .NET bridge."
         }
       }
     }

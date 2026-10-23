@@ -46,6 +46,11 @@ other.
 Python workers use the optional `telemetry` package extra. Go applications install their own
 providers, and the Go worker uses `log/slog` for logs.
 
+The .NET SDK emits through the `ActivitySource` and the `Meter` of the runtime. Both are named
+`workhorse`, and the SDK depends on no OpenTelemetry package. An application that uses the
+OpenTelemetry SDK for .NET calls `AddSource("workhorse")` and `AddMeter("workhorse")`. Without a
+listener, the SDK starts no span and records no measurement.
+
 <details>
 <summary>Reference: TypeScript provider registration</summary>
 
@@ -65,6 +70,23 @@ function.
   import.
 
 More detail: [Telemetry: Telemetry provider contract](../architecture/telemetry.md#telemetry-provider-contract) and [Telemetry: OpenTelemetry adapter](../architecture/telemetry.md#opentelemetry-adapter).
+
+</details>
+
+<details>
+<summary>Reference: .NET instrumentation</summary>
+
+- The `ActivitySource` and the `Meter` both use the instrumentation name `workhorse` and the SDK
+  version.
+- The application calls `AddSource("workhorse")` on its tracer provider and `AddMeter("workhorse")`
+  on its meter provider.
+- The SDK uses `Counter<T>` and `Histogram<T>` from `System.Diagnostics.Metrics`.
+- The enqueue injects W3C trace context through `DistributedContextPropagator.Current`. The worker
+  extracts it and starts the handler span with the enqueue as its parent.
+- The worker logs through the `ILoggerFactory` in `WorkerOptions.LoggerFactory`. Without one, it
+  uses `NullLoggerFactory`.
+
+More detail: [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -94,7 +116,7 @@ with a run time 10 minutes later. A worker in another process runs the task.
 In your backend, one trace shows the HTTP request, the enqueue, and the handler run. The handler ran
 10 minutes later in another process.
 
-The TypeScript and Java queues make an enqueue span and store its context. Python, Go, Rust, and
+The TypeScript, Java, and .NET queues make an enqueue span and store its context. Python, Go, Rust, and
 Ruby queues store the active context of the caller. Each worker can restore the two forms, and all
 workers use the same span names. Thus, one trace can include workers in different languages. The Go
 host installs its own providers, and the library adds no SDK or exporter.
@@ -111,7 +133,8 @@ difficult to limit and to remove.
 
 - Each language enforces 1,024 bytes before enqueue: TypeScript `MAX_TRACE_CONTEXT_BYTES`, Python
   `_telemetry.MAX_TRACE_CONTEXT_BYTES`, Go `maxTraceContextBytes`, Ruby
-  `Telemetry::MAX_TRACE_CONTEXT_BYTES`, and Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`. Rust checks
+  `Telemetry::MAX_TRACE_CONTEXT_BYTES`, Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`, and .NET
+  `MaxTraceContextBytes`. Rust checks
   the same limit inline.
 - The column is separate from `task.payload` and excluded from operator projections.
 - An idempotent replay keeps the first accepted context.
@@ -132,9 +155,10 @@ names:
 - Python and Ruby workers: `workhorse.claim`, `workhorse.handler`, `workhorse.retry`,
   `workhorse.complete`, `workhorse.recovery`, and `workhorse.maintenance`.
 - The Java queue and worker: the same six spans and `workhorse.enqueue`.
+- The .NET queue and worker: the same six spans and `workhorse.enqueue`.
 - The Go and Rust workers: only `workhorse.handler`.
 
-More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](../architecture/telemetry.md#python-spans), [Telemetry: Go spans](../architecture/telemetry.md#go-spans), [Telemetry: Rust spans](../architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](../architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](../architecture/telemetry.md#jvm-spans), and [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry).
+More detail: [Telemetry: Trace context propagation](../architecture/telemetry.md#trace-context-propagation), [Telemetry: TypeScript spans](../architecture/telemetry.md#typescript-spans), [Telemetry: Python spans](../architecture/telemetry.md#python-spans), [Telemetry: Go spans](../architecture/telemetry.md#go-spans), [Telemetry: Rust spans](../architecture/telemetry.md#rust-spans), [Telemetry: Ruby spans](../architecture/telemetry.md#ruby-spans), [Telemetry: JVM spans](../architecture/telemetry.md#jvm-spans), [Schema and SQL protocol: JVM telemetry](../architecture/schema-and-protocol.md#jvm-telemetry), and [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 
@@ -167,6 +191,9 @@ Go applications give an `*slog.Logger` in `WorkerOptions.Logger`. The Go worker 
 event names and attributes as the JavaScript worker. This applies to handler boundaries, claims,
 settlements, rejected heartbeats, recovery, and batch dispatch.
 
+.NET applications give an `ILoggerFactory` in `WorkerOptions.LoggerFactory`. In a Generic Host,
+`Workhorse.Hosting` takes the logger factory of the host.
+
 <details>
 <summary>Reference: log severities and content</summary>
 
@@ -186,7 +213,9 @@ progress and checkpoint values.
 **Go.** A nil `WorkerOptions.Logger` uses a disabled handler, so routine records do not reach the
 process default logger.
 
-More detail: [Telemetry: Structured logs](../architecture/telemetry.md#structured-logs).
+**.NET.** A null `WorkerOptions.LoggerFactory` uses `NullLoggerFactory`, so the worker logs nothing.
+
+More detail: [Telemetry: Structured logs](../architecture/telemetry.md#structured-logs) and [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 
 </details>
 

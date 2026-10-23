@@ -19,7 +19,7 @@ to run in 10 min. At 2 min, the customer withdraws the order.
 
 Thus, if no worker holds a task, cancellation ends the task in one step.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.cancel(taskId, {
@@ -67,6 +67,13 @@ Thus, if no worker holds a task, cancellation ends the task in one step.
     ```kotlin
     val result =
       queue.cancelSuspend(taskId, requestedBy = actor.email, reason = "customer withdrew the order")
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await queue.CancelAsync(
+        taskId,
+        new CancelOptions { RequestedBy = actor.Email, Reason = "customer withdrew the order" });
     ```
   </Tab>
 </Tabs>
@@ -187,7 +194,7 @@ Pass `ctx.signal` to each API that accepts an `AbortSignal`. Check the signal be
 work. If the signal is aborted, start no new work and throw `ctx.signal.reason`. Do not start an API
 call that you then cannot use.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     for (const part of payload.parts) {
@@ -250,11 +257,25 @@ call that you then cannot use.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    foreach (var part in payload.Parts)
+    {
+        context.CancellationToken.ThrowIfCancellationRequested();
+        await UploadPartAsync(part, context.CancellationToken);
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If the handler throws `ctx.signal.reason`, the worker confirms the cancellation. The same signal is
 also aborted for a [deadline or an execution timeout](/docs/deadlines). Each case has
 a different reason. Thus, one pattern stops the handler in all three cases.
+
+A C# handler checks `context.CancellationToken`, and it gives the token to each call that accepts
+one. `HandlerContext.CancelReason` is beside the token and gives the reason. The worker sets the
+reason before it cancels the token. A durable method of the context takes no token. Only the
+operation of a checkpoint receives the token of the handler.
 
 Cancellation does not undo effects that the handler started. In the example, the parts that the
 handler uploaded before 20 s stay uploaded. These effects are

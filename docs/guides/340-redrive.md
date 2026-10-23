@@ -11,7 +11,8 @@ from the `Queue` client of the application. TypeScript makes an `Admin` with a p
 `Admin` or `AsyncAdmin`. Go calls `NewAdmin` with a pgx or `database/sql` executor that the caller
 owns. Rust uses `Admin::connect` or `Admin::new`, and Ruby calls `Admin.new` with a connection or a
 pool. Java builds `new Admin(ConnectionSource.of(dataSource))`, and Kotlin calls the suspend
-wrapper of each `Admin` method. An operator can also redrive from the dashboard.
+wrapper of each `Admin` method. C# builds `new Admin(dataSource)` on an `NpgsqlDataSource`, and each
+method is asynchronous. An operator can also redrive from the dashboard.
 
 ## Find the tasks that failed
 

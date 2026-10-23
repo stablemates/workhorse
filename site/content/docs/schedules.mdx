@@ -33,7 +33,7 @@ increases with each change.
 To declare your schedules, call `queue.syncSchedules` with all the definitions of one namespace.
 Make this call each time that you deploy.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncSchedules("billing-production", [{
@@ -118,6 +118,28 @@ Make this call each time that you deploy.
     )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var task = new ScheduledTask
+    {
+        TaskType = "invoice.generate",
+        Payload = new { scope = "due" },
+        Queue = "billing",
+    };
+    await queue.SyncSchedulesAsync(
+        "billing-production",
+        [
+            new ScheduleDefinition
+            {
+                Name = "invoice-run",
+                Schedule = nightlyCron,
+                Task = task,
+                Timezone = "America/New_York",
+                CatchupPolicy = CatchupPolicy.Skip,
+            },
+        ]);
+    ```
+  </Tab>
 </Tabs>
 
 Workhorse creates or updates each definition in the list. If pruning is on, Workhorse disables each
@@ -158,7 +180,8 @@ so your code controls the schedules.
 | `task.retryPolicy`    | Optional. Normalized like an enqueue retry policy.       |
 | `options.prune`       | Optional. Default `true`.                                |
 
-Python, Rust, and Ruby expose `sync_schedules`, and Go exposes `SyncSchedules`.
+Python, Rust, and Ruby expose `sync_schedules`, Go exposes `SyncSchedules`, and .NET exposes
+`Queue.SyncSchedulesAsync`.
 
 **Synchronization.** The SDK first validates each payload against the current payload contract of
 its task type. `sync_schedule_definitions_v2` then validates every definition before it writes any
@@ -171,7 +194,7 @@ them into the task, so a later deploy cannot reinterpret an existing definition.
   cron expression, timezone, or catch-up policy changed. A `skip` definition that a deploy enables
   again starts there too.
 
-More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization-3).
+More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization-3) and [Schema and SQL protocol: .NET queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -187,9 +210,10 @@ More detail: [Data model: Synchronization](https://github.com/stablemates/workho
 
 Workhorse has no scheduler process. A worker evaluates the namespaces that you list, as part of its
 maintenance. To make a TypeScript worker offer a namespace, set `scheduleNamespaces`. Python, Rust,
-and Ruby workers use `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`.
+and Ruby workers use `schedule_namespaces`, and Go and .NET workers use
+`WorkerOptions.ScheduleNamespaces`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, { scheduleNamespaces: ["billing-production"] });
@@ -233,6 +257,13 @@ and Ruby workers use `schedule_namespaces`, and Go workers use `WorkerOptions.Sc
     val worker = workhorseWorker(dataSource) { scheduleNamespaces = listOf("billing-production") }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var worker = new Worker(
+        dataSource,
+        new WorkerOptions { ScheduleNamespaces = ["billing-production"] });
+    ```
+  </Tab>
 </Tabs>
 
 A worker with an empty list fires no schedule. Configure at least one worker to offer each
@@ -254,11 +285,12 @@ A worker offers no namespace by default, so it fires no schedule.
 | Go         | `WorkerOptions.ScheduleNamespaces`     |
 | Rust       | `WorkerOptions.schedule_namespaces`    |
 | Ruby       | `schedule_namespaces:` on `Worker.new` |
+| .NET       | `WorkerOptions.ScheduleNamespaces`     |
 
 Every runtime calls `fire_due_schedules_v2` on its maintenance cadence, with a null `now`. The
 catch-up limit is also a worker option, as the catch-up reference shows.
 
-More detail: [Data model: Namespace locking](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#namespace-locking).
+More detail: [Data model: Namespace locking](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#namespace-locking) and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -311,10 +343,11 @@ limit advances the position only to its last occurrence.
 | Go         | `ScheduleDefinition.CatchupPolicy`            | `WorkerOptions.ScheduleCatchupLimit`      |
 | Rust       | `ScheduleDefinition.catchup_policy`           | `WorkerOptions.schedule_catchup_limit`    |
 | Ruby       | `catchup_policy:` on `ScheduleDefinition.new` | `schedule_catchup_limit:` on `Worker.new` |
+| .NET       | `ScheduleDefinition.CatchupPolicy`            | `WorkerOptions.ScheduleCatchupLimit`      |
 
 The policy defaults to `skip`. The limit accepts 1 to 10,000 and defaults to 100.
 
-More detail: [Data model: Firing due schedules](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#firing-due-schedules) and [Data model: SDK options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#sdk-options).
+More detail: [Data model: Firing due schedules](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#firing-due-schedules), [Data model: SDK options](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#sdk-options), and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -340,7 +373,7 @@ time, because UTC has no clock changes.
 - If several cron fields give the same instant, Workhorse creates one occurrence.
 
 An `H` field gives a schedule a fixed offset, so that schedules do not all fire at the same time.
-PostgreSQL calculates this offset. Thus, TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin
+PostgreSQL calculates this offset. Thus, TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and .NET
 workers get the same occurrence.
 
 <details>

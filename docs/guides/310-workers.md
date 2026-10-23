@@ -92,8 +92,8 @@ It stops claiming when its slots are full or its queues are empty. PostgreSQL ch
 claim separately, so ordering and admission policies apply to each task.
 
 In TypeScript, Python, and Go, a task stays in the heartbeat batch after its handler returns, until
-its final write is done. In Rust, a task leaves the batch when its handler returns. In Ruby and the
-JVM, a task leaves the batch after the result checks, before its final write. Each task has its own
+its final write is done. In Rust, a task leaves the batch when its handler returns. In Ruby, the
+JVM, and .NET, a task leaves the batch after the result checks, before its final write. Each task has its own
 abort signal and its own final write. Thus, the cancellation and the result of one task do not
 depend on another task.
 
@@ -207,7 +207,8 @@ does the same. Thus, tasks on one queue do not wake the workers of another queue
 wakes the claim loop only. It does not change the timing of maintenance or registration.
 
 TypeScript, Go, Ruby, and Python workers that share a database pool also share one listener
-connection. A Rust, Java, or Kotlin worker holds its own.
+connection. .NET workers that share one `NpgsqlDataSource` also share one listener connection. A
+Rust, Java, or Kotlin worker holds its own.
 
 <details>
 <summary>Reference: polling cadence</summary>
@@ -287,11 +288,32 @@ The other SDKs give the same process boundary:
   the `DataSource` closes. Keep `spring.lifecycle.timeout-per-shutdown-phase` above
   `workhorse.worker.shutdown-grace` and the cleanup after it. If the Spring timeout is shorter,
   Spring continues its shutdown before the drain ends.
+- A .NET app uses the Generic Host and the `Workhorse.Hosting` package.
+  `services.AddWorkhorse(configuration)` registers `Queue` and `Admin`, and `AddWorkhorseWorker`
+  registers the hosted worker. Then `host.RunAsync()` runs the worker until the host stops. The
+  core package has no process helper. The `ConsoleLifetime` of the host handles `SIGINT`,
+  `SIGQUIT`, and `SIGTERM`, and the worker drains. A program without a host calls
+  `worker.RunAsync(token)` with a token that it cancels itself.
 
-In Go and Rust, a handler panic becomes a recorded failure of the attempt. In Ruby, Java, and
-Kotlin, an exception from a handler does the same. In each case, the worker process continues to
+A .NET handler can also be a service of the host. Implement `ITaskHandler<TPayload>`, and register
+the type with `AddWorkhorseHandler<THandler, TPayload>()`. For each attempt, the worker resolves the
+handler in a new service scope. Thus, the handler can take a scoped service, such as a `DbContext`.
+The scope ends when the handler task completes.
+
+Write each .NET handler so that it awaits its I/O. The worker starts each handler with `Task.Run`,
+so a synchronous start of a handler does not block dispatch. But a handler that blocks thread-pool
+threads can starve the pool. Then dispatch and the other handlers slow down. The heartbeat runs on
+a dedicated thread, so the lease renewals continue.
+
+Keep `HostOptions.ShutdownTimeout` above the `ShutdownGrace` of the worker plus the unwind window.
+If the timeout is shorter, the host can stop before the worker drains. The hosted worker then logs
+one warning at startup.
+
+In Go and Rust, a handler panic becomes a recorded failure of the attempt. In Ruby, Java, Kotlin,
+and C#, an exception from a handler does the same. In each case, the worker process continues to
 run later tasks. A fatal JVM error from an ordinary Java or Kotlin handler, such as an
-out-of-memory error, is different. It ends the run of the worker.
+out-of-memory error, is different. It ends the run of the worker. A C# handler exception never
+ends the run or stops the host. The worker records each exception as the error of the attempt.
 
 <details>
 <summary>Reference: process entry points</summary>
@@ -307,16 +329,24 @@ out-of-memory error, is different. It ends the run of the worker.
 | Java        | `WorkerProcess.runWorkerProcess(worker)`, bounded by `shutdownGrace` plus about 2 s of cleanup |
 | Kotlin      | The same Java call, on a `Worker` from `workhorseWorker`                                       |
 | Spring Boot | `workhorse.worker.enabled=true`; `WorkerLifecycle` drains the worker                           |
+| .NET        | The Generic Host: `AddWorkhorse`, `AddWorkhorseWorker`, then `host.RunAsync()`                 |
+| .NET        | `Worker.RunAsync(stoppingToken)`, without a host                                               |
 
 - A Spring Boot application keeps `spring.lifecycle.timeout-per-shutdown-phase` above
   `workhorse.worker.shutdown-grace` plus 2 s.
 - A `java.lang.Error` from an ordinary Java handler ends the run, and `run` throws it after the
   drain. A batch handler `Error` fails each task in the batch instead.
+- A .NET host keeps `HostOptions.ShutdownTimeout`, default 30 s, above `ShutdownGrace`, default
+  25 s, plus the unwind window of 250 ms. Otherwise the hosted worker logs one warning at startup.
+- The .NET hosted worker is a `BackgroundService`. If `Worker.RunAsync` throws, the service logs
+  the error, sets `Environment.ExitCode` to 1, and throws again, so the host stops.
+- A .NET handler exception fails the attempt. The error `name` is the type name of the exception
+  without a generic arity suffix, and the `stack` is `exception.ToString()`.
 
 The optional TypeScript probe listener reports liveness while the process runs or drains. It
 reports readiness only while the process accepts claims.
 
-More detail: [Operations and CLI: Worker process lifecycle](../architecture/operations.md#worker-process-lifecycle), [Schema and SQL protocol: JVM worker processes](../architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter), and [Schema and SQL protocol: JVM failure settlement](../architecture/schema-and-protocol.md#jvm-failure-settlement).
+More detail: [Operations and CLI: Worker process lifecycle](../architecture/operations.md#worker-process-lifecycle), [Schema and SQL protocol: JVM worker processes](../architecture/schema-and-protocol.md#jvm-worker-processes), [Schema and SQL protocol: Spring Boot starter](../architecture/schema-and-protocol.md#spring-boot-starter), [Schema and SQL protocol: JVM failure settlement](../architecture/schema-and-protocol.md#jvm-failure-settlement), [Schema and SQL protocol: .NET hosting](../architecture/schema-and-protocol.md#net-hosting), [Schema and SQL protocol: .NET handler threads](../architecture/schema-and-protocol.md#net-handler-threads), and [Schema and SQL protocol: .NET failure settlement](../architecture/schema-and-protocol.md#net-failure-settlement).
 
 </details>
 
@@ -459,6 +489,59 @@ More detail: [Schema and SQL protocol: Shutdown](../architecture/schema-and-prot
 
 </details>
 
+## Shut down a .NET worker
+
+A .NET worker stops when its stopping token is cancelled. In a Generic Host, the `ConsoleLifetime`
+cancels that token when the process gets a stop signal. A grace period limits the time that the
+worker waits for running handlers.
+
+**Example.** `mailer-1` is a .NET worker in a Generic Host. A deploy sends `SIGTERM` while two
+handlers run.
+
+1. The host cancels the stopping token of `Worker.RunAsync`. The worker stops claiming, and the
+   leases of the two tasks continue to renew.
+2. One handler finishes within the `ShutdownGrace` of the worker, and the worker completes its task.
+3. The other handler ignores its cancellation token. At the end of the grace period, the worker
+   sets `CancelReason.Shutdown` and cancels the token of that handler.
+4. The handler does not finish in the unwind window. The worker stops renewing its lease, and
+   `RunAsync` throws `ShutdownIncompleteException`.
+5. The lease expires. Then [recovery](020-leases-and-fences.md) gives the task to another worker.
+
+Thus, the stop takes at most the grace period plus the unwind window. With the defaults, this time
+fits inside the shutdown timeout of the host. The worker cannot stop a handler that ignores its
+token, because .NET has no safe way to abort a thread. The worker abandons that handler.
+
+A handler that stops for the shutdown does not use an attempt. If it throws the cancellation of its
+own token, the worker returns its task to the queue. In a host, a `ShutdownIncompleteException` makes
+the hosted worker set a failure exit code for the process.
+
+<details>
+<summary>Reference: .NET shutdown</summary>
+
+When the stopping token of `Worker.RunAsync` is cancelled, the worker acts in this order:
+
+1. It stops claiming.
+2. It lets the running handlers finish within `WorkerOptions.ShutdownGrace`, default 25 s.
+3. It sets `CancelReason.Shutdown` on each `HandlerContext` that still runs. Then it cancels the
+   `CancellationToken` of that context.
+4. It allows 250 ms for those handlers to unwind.
+5. It stops renewing the leases of the handlers that still run. `RunAsync` throws
+   `ShutdownIncompleteException`, and `Abandoned` holds the number of those handlers.
+
+- A handler that throws an `OperationCanceledException` of its own token after
+  `CancelReason.Shutdown` charges no attempt. `release_owned_v1` returns its task to the queue.
+- The total stop time is `ShutdownGrace` plus 250 ms. With the defaults, it fits inside the
+  `HostOptions.ShutdownTimeout` default of 30 s.
+- `Worker` installs no signal handler. The `ConsoleLifetime` of the Generic Host handles `SIGINT`,
+  `SIGQUIT`, and `SIGTERM`.
+- `Worker.DisposeAsync` stops the worker and waits for the drain.
+- If `RunAsync` throws in a host, the hosted worker logs the error and sets `Environment.ExitCode`
+  to 1.
+
+More detail: [Schema and SQL protocol: .NET running and stopping](../architecture/schema-and-protocol.md#net-running-and-stopping), [Schema and SQL protocol: .NET hosting](../architecture/schema-and-protocol.md#net-hosting), and [Schema and SQL protocol: Shutdown grace period](../architecture/schema-and-protocol.md#shutdown-grace-period).
+
+</details>
+
 ## Pause, stop, and drain a worker
 
 A pause stops new claims for a time, and the running tasks finish. Your code can pause a worker, and
@@ -478,11 +561,11 @@ Thus, two different controls use the word "pause":
 - **Local.** In TypeScript and Python, `Worker.pause` stops this worker from claiming, and active
   handlers finish. `Worker.resume` lets the worker claim again, and `Worker.isPaused` reads the
   effective state. A Ruby worker has the same `pause` and `resume` methods. A Java worker has
-  `pause`, `resume`, and `isPaused`.
+  `pause`, `resume`, and `isPaused`. A .NET worker has `Pause`, `Resume`, and `IsPaused`.
 - **Operator.** `Admin.setWorkerPaused` stores the pause in `worker_registry`. A dashboard, or
   `workhorse admin pause-worker` in the [terminal](380-admin-cli-and-tui.md), can then pause a
-  process that it does not host. TypeScript, Python, Go, Rust, Ruby, and Java workers read the
-  pause at their next registry refresh.
+  process that it does not host. TypeScript, Python, Go, Rust, Ruby, Java, and .NET workers read
+  the pause at their next registry refresh.
 
 A local resume cannot clear an operator pause. If it could, the fleet could undo a pause that an
 operator sets from a dashboard. But an operator pause applies only to the process that it names. A
@@ -528,7 +611,7 @@ are alive when workers run in separate deployments. `Worker.runtimeState` reads 
 process state of a TypeScript worker. The dashboard and `Admin.listWorkers` read the registry that
 each worker refreshes. The slot counts in the registry are recent observations, not live reads.
 
-TypeScript, Python, Go, Rust, Ruby, and Java workers all write this row by default. A worker on an
+TypeScript, Python, Go, Rust, Ruby, Java, and .NET workers all write this row by default. A worker on an
 older SDK can report none of the three identity fields. Then the registry records that the worker
 reported nothing. It does not guess. `workhorse schema status --json` counts the live workers by
 their reported protocol. Producers never register, so these counts describe only workers.
@@ -570,10 +653,11 @@ operator stopped.
 | Ruby       | `registry_interval:` in seconds    | 5 s     | `disable_registry: true`          |
 | Java       | `Worker.Builder.registryInterval`  | 5 s     | `disableRegistry(true)`           |
 | Kotlin     | `WorkerScope.registryInterval`     | 5 s     | `disableRegistry = true`          |
+| .NET       | `WorkerOptions.RegistryInterval`   | 5 s     | `WorkerOptions.DisableRegistry`   |
 
 **Client identity.** All three fields are nullable. Each SDK stamps its own `sdk_language`
-(`typescript`, `python`, `go`, `rust`, `ruby`, `java`) and package version. A Kotlin worker stamps
-`java`. A refresh overwrites all three.
+(`typescript`, `python`, `go`, `rust`, `ruby`, `java`, `csharp`) and package version. A Kotlin
+worker stamps `java`. A refresh overwrites all three.
 
 **Claims.** `claim_v1` and the other claim functions never read `worker_registry`.
 
@@ -588,7 +672,7 @@ expiry of a lease by at most one interval of the fastest registered worker. That
 while recovery reaches the scan. If other recovery work fills the limit, the scan waits for a later
 tick. With no live registered worker, every tick runs the scan.
 
-More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry), [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence), and [Schema and SQL protocol: JVM running and stopping](../architecture/schema-and-protocol.md#jvm-running-and-stopping).
+More detail: [Data model: `worker_registry`](../architecture/data-model.md#worker_registry), [Task lifecycle: Maintenance cadence](../architecture/lifecycle.md#maintenance-cadence), [Schema and SQL protocol: JVM running and stopping](../architecture/schema-and-protocol.md#jvm-running-and-stopping), and [Schema and SQL protocol: .NET worker](../architecture/schema-and-protocol.md#net-worker).
 
 </details>
 

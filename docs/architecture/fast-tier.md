@@ -81,7 +81,8 @@ TypeScript exposes `Admin.setQueueTier(queueName, tier, { actor, reason, request
 `Admin.setQueueHistory(queueName, settings)`. The other SDKs expose the same pair: Python
 `Admin.set_queue_tier` and `set_queue_history(queue_name, *, record_attempts=None,
 record_claims=None)` returning `QueueHistory`, Go `Admin.SetQueueTier` and `SetQueueHistory` with
-`*bool` switches, and Rust `set_queue_tier` and `set_queue_history`.
+`*bool` switches, Rust `set_queue_tier` and `set_queue_history`, and .NET `Admin.SetQueueTierAsync`
+and `Admin.SetQueueHistoryAsync` with `bool?` switches.
 
 `Admin.setQueueTier` validates the whole `AdminAudit` and wraps `set_queue_tier_v1`:
 
@@ -263,12 +264,13 @@ measured fused completion only on the fast tier.
 
 Every SDK maps `P1007` to one error:
 
-| SDK        | Error                                                         |
-| ---------- | ------------------------------------------------------------- |
-| TypeScript | `FastTierUnsupportedError(queue, feature, ordinal?)`          |
-| Python     | `FastTierUnsupportedError`                                    |
-| Go         | `*FastTierUnsupportedError` matching `ErrFastTierUnsupported` |
-| Rust       | `Error::FastTierUnsupported { queue, feature, ordinal }`      |
+| SDK        | Error                                                                 |
+| ---------- | --------------------------------------------------------------------- |
+| TypeScript | `FastTierUnsupportedError(queue, feature, ordinal?)`                  |
+| Python     | `FastTierUnsupportedError`                                            |
+| Go         | `*FastTierUnsupportedError` matching `ErrFastTierUnsupported`         |
+| Rust       | `Error::FastTierUnsupported { queue, feature, ordinal }`              |
+| .NET       | `FastTierUnsupportedException` with `Queue`, `Feature`, and `Ordinal` |
 
 TypeScript raises `FastTierUnsupportedError(queue, feature, ordinal?)
 ` with the message `Fast-tier queue <queue> does not support <feature>`; `fastTierRejection`
@@ -434,8 +436,8 @@ Thus the effect of an oversized result differs by tier:
 - `fast_complete_v1` keeps the full tier's behavior: it raises for one oversized result before it
   calls `fast_complete_many_v1`.
 
-The TypeScript, Go, Python, Ruby, and Rust workers measure results before they call, so they reach
-this path only through a bug.
+The TypeScript, Go, Python, Ruby, Rust, and .NET workers measure results before they call, so they
+reach this path only through a bug.
 
 #### Lock order
 
@@ -542,8 +544,8 @@ again through `queryFencedWrite`. It tries up to `FENCED_WRITE_DEADLOCK_ATTEMPTS
 total, because nothing in it committed.
 
 Since schema 39 the fused claim leaves a lock wait before it can deadlock
-([Fast claim](#fast-claim)). Thus the Go, Python, Rust, and TypeScript workers keep this resend only
-as a second protection. It still covers:
+([Fast claim](#fast-claim)). Thus the Go, Python, Rust, TypeScript, and .NET workers keep this
+resend only as a second protection. It still covers:
 
 - a server whose `deadlock_timeout` is below the claim's `lock_timeout`;
 - a cycle through the completion half of the statement;
@@ -688,6 +690,7 @@ then claims through `claim_many_v1` until the next probe.
 | Python     | `_TIER_PROBE_INTERVAL_SECONDS` |
 | Go         | `fastTierProbeInterval`        |
 | Rust, Ruby | `TIER_PROBE_INTERVAL`          |
+| .NET       | `TierProbeNanos`               |
 
 A stale belief is safe, because PostgreSQL routes each claim by the current tier.
 
@@ -877,9 +880,9 @@ raise the same error before any durable write.
 
 #### Deferred tier read after a full-tier claim
 
-A queue can move to the fast tier while the Ruby or TypeScript worker still claims it through
-`claim_many_v1`. That statement then returns fast-tier tasks with no tier marker. The deferred tier
-read lets the handler context reject durable calls for those tasks.
+A queue can move to the fast tier while the Ruby, TypeScript, or .NET worker still claims it
+through `claim_many_v1`. That statement then returns fast-tier tasks with no tier marker. The
+deferred tier read lets the handler context reject durable calls for those tasks.
 
 In Ruby, `Worker#track_full_tier_claim` gives the tasks of a non-empty `claim_many_v1` result one
 shared, deferred tier read.
@@ -902,6 +905,14 @@ The TypeScript worker does the same:
   capability.
 - The context of a task in a batch comes from the same `createHandlerContext`, so its `checkpoint`
   and `setProgress` reject the same way.
+
+The .NET worker reads the tier once for each handler context, not once for each claim:
+
+- `Worker.TierRead` gives each context of a task that `claim_many_v1` claimed a read of
+  `queue_control`. A task that a fast-tier statement claimed reads nothing.
+- The first durable call of the context runs the read, and the context caches the answer.
+- On `tier = 'fast'`, the call throws `FastTierUnsupportedException`.
+- A `BatchHandlerContext` uses the `HandlerContext` of its task, so it rejects the same way.
 
 The read runs inside the handler, where the heartbeat already renews the lease.
 

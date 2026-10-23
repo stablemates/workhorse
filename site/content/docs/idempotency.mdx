@@ -21,7 +21,7 @@ endpoint runs two times.
 
 To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const taskId = await queue.enqueue("invoice.capture", { invoiceId }, {
@@ -107,6 +107,24 @@ To use enqueue idempotency, give an `idempotency` key when you enqueue a task.
         .taskId()
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await queue.EnqueueAsync(
+        "invoice.capture",
+        new { invoiceId },
+        new EnqueueOptions
+        {
+            Queue = "billing",
+            Idempotency = new Idempotency
+            {
+                Key = $"capture:{invoiceId}",
+                Scope = "invoice-capture",
+                Ttl = TimeSpan.FromDays(1),
+            },
+        });
+    var taskId = result.TaskId;
+    ```
+  </Tab>
 </Tabs>
 
 To choose a key, use the identity of the operation that must occur one time. For example, use the
@@ -168,7 +186,7 @@ More detail: [Data model: Key and limits](https://github.com/stablemates/workhor
 `Queue.enqueueWithResult`. Its `outcome` is `accepted` for a new task and `replayed` for a duplicate
 request. The other outcomes are for [debounce](/docs/debounce) and [throttle](/docs/throttle).
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const result = await queue.enqueueWithResult(
@@ -240,6 +258,22 @@ request. The other outcomes are for [debounce](/docs/debounce) and [throttle](/d
           .idempotency(Idempotency(key, "invoice-capture", Duration.ofDays(1)))
           .build(),
       )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var result = await queue.EnqueueAsync(
+        "invoice.capture",
+        new { invoiceId },
+        new EnqueueOptions
+        {
+            Idempotency = new Idempotency
+            {
+                Key = key,
+                Scope = "invoice-capture",
+                Ttl = TimeSpan.FromDays(1),
+            },
+        });
     ```
   </Tab>
 </Tabs>
@@ -365,8 +399,12 @@ transaction fails too. The error shows the existing task and the fields that are
 | Go         | `EnqueueIdempotencyConflictError`, through `errors.As` |
 | Rust       | `Error::EnqueueIdempotencyConflict`                    |
 | Ruby       | `EnqueueIdempotencyConflictError`                      |
+| .NET       | `EnqueueIdempotencyConflictException`, with `Details`  |
 
-More detail: [Data model: Fingerprint and replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#fingerprint-and-replay).
+The C# client throws `EnqueueIdempotencyConflictException`. Its `Details` dictionary holds the
+same fields. `DiagnosedException.Details` gets these fields with the default Npgsql settings.
+
+More detail: [Data model: Fingerprint and replay](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#fingerprint-and-replay) and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

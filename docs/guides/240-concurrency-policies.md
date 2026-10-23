@@ -49,6 +49,8 @@ Python applications use `Queue.sync_concurrency_policies` or `AsyncQueue.sync_co
 through the connection that they own. `Queue.list_concurrency_policies` and
 `AsyncQueue.list_concurrency_policies` return the stored policy rows.
 
+.NET applications use `Queue.SyncConcurrencyPoliciesAsync` and `Queue.ListConcurrencyPoliciesAsync`.
+
 Workers do not need the policy in their own configuration, because each claim reads the policy from
 PostgreSQL. Thus, a policy change applies without a new deploy of the workers.
 
@@ -102,18 +104,19 @@ namespace atomically.
 | TypeScript | `Queue.syncConcurrencyPolicies(namespace, definitions, { prune })`        | `Queue.listConcurrencyPolicies(queueNames)`                               |
 | Python     | `Queue.sync_concurrency_policies`, `AsyncQueue.sync_concurrency_policies` | `Queue.list_concurrency_policies`, `AsyncQueue.list_concurrency_policies` |
 | Go         | `Queue.SyncConcurrencyPolicies(ctx, namespace, definitions, options...)`  | `Queue.ListConcurrencyPolicies(ctx, queueNames)`                          |
+| .NET       | `Queue.SyncConcurrencyPoliciesAsync(namespace, definitions, prune)`       | `Queue.ListConcurrencyPoliciesAsync(queues)`                              |
 
 - One call accepts at most 10,000 definitions.
 - The function rejects a queue owned by another namespace.
 - Pruning is on by default. With pruning, an empty set removes every policy the namespace owns.
-  TypeScript `{ prune: false }`, Python `prune=False`, and Go `SyncPolicyOptions{Prune: false}`
-  keep omitted rows.
+  TypeScript `{ prune: false }`, Python `prune=False`, Go `SyncPolicyOptions{Prune: false}`, and
+  C# `prune: false` keep omitted rows.
 - A fast-tier queue rejects a concurrency policy.
 - An empty or omitted list filter returns every policy, ordered by `queue_name`.
 - `claim_v1` reads the policy rows during admission, so workers need no copy of the policy.
 - `Queue.concurrencyPolicies` is a deprecated TypeScript alias, removed in `1.0.0`.
 
-More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization), [Data model: Columns](../architecture/data-model.md#columns-2), [Data model: Concurrency key](../architecture/data-model.md#concurrency-key), and [Data model: Listing](../architecture/data-model.md#listing-1).
+More detail: [Data model: Synchronization](../architecture/data-model.md#synchronization), [Data model: Columns](../architecture/data-model.md#columns-2), [Data model: Concurrency key](../architecture/data-model.md#concurrency-key), [Data model: Listing](../architecture/data-model.md#listing-1), and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -191,8 +194,9 @@ order, pause control, and health row.
 `Queue.syncBudgets` stores budgets in PostgreSQL, as `Queue.syncConcurrencyPolicies` stores
 policies. `Queue.listBudgets` returns them. Go applications use `Queue.SyncBudgets` and
 `Queue.ListBudgets`. Python applications use `Queue.sync_budgets` or `AsyncQueue.sync_budgets`, and
-`Queue.list_budgets` or `AsyncQueue.list_budgets`. The namespace owns its budgets. Workhorse removes
-the omitted budgets, unless you disable pruning.
+`Queue.list_budgets` or `AsyncQueue.list_budgets`. .NET applications use `Queue.SyncBudgetsAsync`
+and `Queue.ListBudgetsAsync`. The namespace owns its budgets. Workhorse removes the omitted budgets,
+unless you disable pruning.
 
 A task names its budget when you enqueue it, with the `budget` option beside `concurrencyKey`.
 

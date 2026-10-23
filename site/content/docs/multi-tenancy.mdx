@@ -43,7 +43,7 @@ three enqueue options. Workhorse already enforces each of these options:
 - A `tenant:` tag lets an operator filter by tenant. Dead-letter lists, redrive filters, and the
   dashboard task list accept a tag filter.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const tenant = "acme";
@@ -187,6 +187,30 @@ three enqueue options. Workhorse already enforces each of these options:
     ```
 
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var tenant = "acme";
+
+    await queue.SyncConcurrencyPoliciesAsync(
+        "workers",
+        [new ConcurrencyPolicyDefinition { Queue = "reports", MaxActive = 40, MaxActivePerKey = 4 }]);
+    await queue.SyncBudgetsAsync(
+        "workers",
+        [new BudgetDefinition { Name = tenant, MaxActive = 8 }]);
+
+    var result = await queue.EnqueueAsync(
+        "report.generate",
+        new { month = "2026-08" },
+        new EnqueueOptions
+        {
+            Queue = "reports",
+            ConcurrencyKey = tenant,
+            Budget = tenant,
+            Tags = [$"tenant:{tenant}"],
+        });
+    ```
+
+  </Tab>
 </Tabs>
 
 In Go, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synchronize with
@@ -194,6 +218,8 @@ In Go, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synch
 `Queue.sync_budgets` or `AsyncQueue.sync_budgets`. In Rust, set the same snake_case fields, and synchronize with
 `Queue::sync_budgets`. In Ruby, give the same names as keywords, and synchronize with
 `Queue#sync_budgets`.
+In C#, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synchronize with
+`Queue.SyncBudgetsAsync`.
 
 If a tenant is at its limit, the claim skips the tasks of that tenant. The claim examines only a
 limited window of the first ready tasks. If the waiting tasks of one tenant fill that whole window,

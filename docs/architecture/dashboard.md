@@ -176,7 +176,7 @@ Two functions return one document or SQL `NULL`:
 - `workhorse.dashboard_event_detail_v1(p_input jsonb)` returns one complete event-detail document.
   It returns SQL `NULL` when the stable event identity does not exist.
 
-TypeScript, Python, Go, Rust, Ruby, and JVM hosts validate the wire input. They call the matching
+TypeScript, Python, Go, Rust, Ruby, JVM, and .NET hosts validate the wire input. They call the matching
 function and decode its single `jsonb` result. The TypeScript host can add its application-owned
 durability summary after `dashboard_tasks_v1` or `dashboard_task_detail_v1` returns.
 `DashboardDurabilityProjector` is an in-process callback, not database state.
@@ -279,6 +279,90 @@ an internal translator before `java.util.regex` reads it:
 
 `DashboardConformanceTest` replays every shared fixture exchange against a writable and a read-only
 filter in an embedded servlet container.
+
+### .NET backend
+
+`Workhorse.AspNetCore` is the .NET backend. The extension method
+`IEndpointRouteBuilder.MapWorkhorseDashboard(string pattern, DashboardOptions options)` maps one
+route group under `pattern`, with a catch-all route for the browser application. It returns the
+`IEndpointConventionBuilder` of the group. Thus the host can add its own metadata, for example
+`RequireAuthorization("operators")` or a rate limiter. `Authorize` still runs for each request.
+
+`pattern` is a literal mount path, such as `/workhorse`, and `/` mounts the dashboard at the root. A
+pattern with a route parameter throws `ArgumentException`. A request outside the group goes to the
+other endpoints of the host, because endpoint routing matches only the routes of the group. The
+backend reads `HttpRequest.PathBase`, so an application under a path base still works.
+
+`DashboardOptions` has these properties and defaults:
+
+| Property            | Default                                            |
+| ------------------- | -------------------------------------------------- |
+| `DataSource`        | `required`                                         |
+| `Authorize`         | `required`                                         |
+| `Environment`       | `"development"`                                    |
+| `AuditActor`        | `"dashboard"`                                      |
+| `ReadOnly`          | `false`                                            |
+| `BrowserModules`    | empty                                              |
+| `ConfiguredWorkers` | empty                                              |
+| `MaintenanceLoops`  | `{"tickIntervalMs": 1000}`                         |
+| `AllowedHosts`      | empty                                              |
+| `Procedures`        | empty                                              |
+| `EnqueueTest`       | unset, so the procedure 403                        |
+| `SetSchedulePaused` | unset, so the procedure 403                        |
+| `Json`              | `null`, which selects `JsonSerializerDefaults.Web` |
+
+`Authorize` is a `Func<HttpContext, ValueTask<DashboardAuthorization>>`. `DashboardAuthorization` is
+a closed result family with four factory methods: `Principal(actor, claims)`, `Allow()`, `Deny()`,
+and `Response(status, headers, body)`. A principal names its own actor. `AuditActor` names the actor
+only when `Authorize` returns `Allow()`. `Deny()` answers 401 with `{"error":"Unauthorized"}`.
+`Response` sends its status, headers, and body as they are. If `Authorize` throws, the backend logs
+the error and answers 500.
+
+A `DashboardProcedure` is a delegate over the `JsonElement` input, the actor, and a
+`CancellationToken`. `Procedures` adds or replaces procedures by name. A procedure can throw
+`DashboardRpcException` with a status, a code, an error message, and optional details. The backend encodes
+the result of a host procedure with `Json`.
+
+The backend handles a request under the mount path in this order:
+
+1. A non-empty `AllowedHosts` refuses any other `Host` with 421, before `Authorize` runs.
+2. `Authorize` runs. A `Deny()` or a `Response` ends the request here.
+3. The schema compatibility check runs. The backend caches only a passing answer.
+4. The backend rejects a cross-origin request with 403. It rejects a mutation that is not
+   same-origin with 403, before it decodes the input, and a mutation on a read-only host with 403.
+5. It reads at most 2 MiB of request body, and answers 413 for a larger body. It answers 400 for a
+   body that is not JSON, or for a number token with more than 1,000 characters after an optional
+   minus sign.
+6. It validates the input against the generated `dashboard/v1` schemas. A mutation
+   `audit.requestId` of more than 512 UTF-8 bytes answers 400.
+7. It overwrites `audit.actor`, and calls the procedure.
+
+Each `AllowedHosts` entry is a bare `host[:port]`. The backend compares hosts in lowercase, without
+the default port of the request scheme. The backend is same-origin only, so a CORS policy must not cover the group. The CORS middleware
+answers a preflight request before the backend sees it. A host
+behind a proxy that ends TLS must apply the forwarded headers middleware first.
+
+Reads and controls go through `Admin`, `Queue`, and the generated `DashboardSqlCatalogue`
+statements. `typescript/dashboard-server/spec/generate-bindings.ts` writes the procedure bindings
+into `V1.g.cs`. Each call uses its own connection in autocommit, and the backend opens no
+transaction. The assembly embeds the browser bundle as resources, and the backend unpacks it once.
+It serves each asset with `Cache-Control: public, max-age=31536000, immutable`. The backend is
+asynchronous throughout, so it needs no synchronous I/O from Kestrel.
+
+The `dashboard/v1` input schemas use ECMA-262 `pattern`. The backend compiles each pattern through
+an internal translator before `System.Text.RegularExpressions` reads it:
+
+- Outside a bracket expression, `^` becomes `\A` and `$` becomes `\z`. Thus a final line terminator
+  does not match.
+- `\d` becomes `[0-9]` outside a bracket expression, and `0-9` inside one. Thus a non-ASCII digit does not match.
+- The translator accepts literals, escapes, bracket expressions, `\d`, `^`, `$`, groups,
+  non-capturing groups, alternation, and quantifiers.
+- It refuses every other construct, such as `.`, a lookaround, a backreference, `\s`, `\w`, `\b`, a
+  property escape, or a flag, with `ArgumentException`.
+- It compiles the result with `RegexOptions.NonBacktracking` and `RegexOptions.CultureInvariant`.
+
+`DashboardConformanceTests` replays every shared fixture exchange against a writable and a
+read-only backend.
 
 ### Presentation policy
 
@@ -775,7 +859,8 @@ The input limits are:
 
 `typescript/dashboard-server/src/server/task-group-statements.ts` holds the SQL of the three
 procedures. `typescript/dashboard-server/spec/generate-bindings.ts` copies it into the Go, Python,
-Rust, Ruby, and Java bindings. Thus the six backends send the same SQL for the list and the detail.
+Rust, Ruby, Java, and C# bindings. Thus the seven backends send the same SQL for the list and the
+detail.
 The cancel uses a different path in TypeScript, as [Cancel](#cancel) describes. The statements call
 only functions and name no task group table. Thus the task group tables are not a governed dashboard
 read ([Task groups: Reads](task-groups.md#reads)).
@@ -839,10 +924,10 @@ change, and the procedure returns its snapshot.
 
 The backends differ in how they cancel and in when they allow it:
 
-| Backend                         | Cancel path                                                                                                                 | `canCancel` is true when                                                                     | `FORBIDDEN` when                    |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------- |
-| TypeScript                      | `DashboardTaskController.cancelTaskGroup`. `createDashboardOperatorControllers` implements it with `Admin.cancelTaskGroup`. | The operator mode is `writable` and the host gives `DashboardTaskController.cancelTaskGroup` | The host gives no cancel controller |
-| Go, Python, Rust, Ruby, and JVM | The shared cancel statement, which calls `cancel_task_group_v1`                                                             | The host is not read-only                                                                    | The host is read-only               |
+| Backend                               | Cancel path                                                                                                                 | `canCancel` is true when                                                                     | `FORBIDDEN` when                    |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------- |
+| TypeScript                            | `DashboardTaskController.cancelTaskGroup`. `createDashboardOperatorControllers` implements it with `Admin.cancelTaskGroup`. | The operator mode is `writable` and the host gives `DashboardTaskController.cancelTaskGroup` | The host gives no cancel controller |
+| Go, Python, Rust, Ruby, JVM, and .NET | The shared cancel statement, which calls `cancel_task_group_v1`                                                             | The host is not read-only                                                                    | The host is read-only               |
 
 Every backend also returns `FORBIDDEN` for a mutation when its operator mode is read-only. The
 authenticated actor replaces the browser `audit.actor`, as
@@ -934,6 +1019,7 @@ document for three seconds:
 | Rust       | `Backend::queue_health`            |
 | Ruby       | `Backend#queue_health`             |
 | JVM        | `Backend.queueHealth`              |
+| .NET       | `Backend.QueueHealthAsync`         |
 
 `dashboard_task_detail_v1` takes the same input from the same cache.
 
@@ -959,7 +1045,7 @@ The concurrency utilization of a live task comes from the supplied `health` docu
 caller supplied none, it comes from `queue_health_v1()`.
 
 TypeScript replaces the returned `durability: null` with `DashboardDurabilityProjector`. Python,
-Go, Rust, Ruby, and the JVM leave it null.
+Go, Rust, Ruby, the JVM, and .NET leave it null.
 
 #### Current state and result
 
@@ -1335,13 +1421,17 @@ records the archive name, read-surface version, and SHA-256 digest.
 - The JVM has no language copy. `processResources` in `jvm/workhorse/build.gradle.kts` puts the
   canonical `bundle.json` and `read-surface-*.tar.gz` into the jar under `run/workhorse/dashboard`.
   `Bundle` reads both files as jar resources.
+- .NET has no language copy. `Workhorse.AspNetCore.csproj` embeds the canonical `bundle.json` and
+  `read-surface-*.tar.gz` as resources with the prefix `Workhorse.AspNetCore.Bundle.`. The internal
+  `Bundle` type reads both resources and unpacks the `.tar.gz` file once.
 
 #### Version injection
 
-The archive contains no Workhorse package version. Each TypeScript, Python, Go, Rust, Ruby, or JVM
-host adds its own published version to `DashboardRuntimeConfig.workhorseVersion` when it renders
+The archive contains no Workhorse package version. Each TypeScript, Python, Go, Rust, Ruby, JVM, or
+.NET host adds its own published version to `DashboardRuntimeConfig.workhorseVersion` when it renders
 `app/index.html`. The JVM host reads the version through `SdkVersion.current()`. It sends `unknown`
-if the build wrote no version resource.
+if the build wrote no version resource. The .NET host reads the informational version of its
+assembly, which is the train version.
 The browser passes that value to `DashboardProps.workhorseVersion`. A direct React embed can supply
 the same prop or omit the version display. A package-only version change therefore leaves the
 archive digest unchanged.
@@ -1372,8 +1462,8 @@ development. `renderDashboardHtml` is the only assembler:
 3. It HTML-attribute escapes each host-owned browser module URL.
 4. It fills that placeholder with another callback.
 
-The Python, Ruby, and Rust hosts write their own runtime configuration and escape each `<` the
-same way. Python and Ruby also escape `>` and `&`.
+The Python, Ruby, Rust, and .NET hosts write their own runtime configuration and escape each `<`
+the same way. Python, Ruby, and .NET also escape `>` and `&`. .NET also escapes U+2028 and U+2029.
 
 Dollar patterns in either input stay literal data, not `String.prototype.replace` syntax.
 `typescript/dashboard-server/test/html.test.ts` exercises both substitutions against the packaged
@@ -1557,7 +1647,7 @@ The authenticated actor comes from one of these sources:
   `dashboard`.
 
 A principal always wins over the configured audit actor. The Python and Ruby hosts follow the same
-rule with `audit_actor`. The Go `Authorize` and Rust `authorize` callbacks cannot return `true`, so
+rule with `audit_actor`, and the .NET host with `AuditActor`. The Go `Authorize` and Rust `authorize` callbacks cannot return `true`, so
 the returned principal's actor is their only attribution.
 
 `auditWithOccurredAt` replaces the parsed browser `audit.actor` with that authenticated actor
@@ -1585,6 +1675,7 @@ request. It caches only a passing answer.
 | Ruby       | the Rack `rack.errors` stream                                           |
 | Go         | `slog.ErrorContext` on the default logger                               |
 | Rust       | `tracing::error!`                                                       |
+| .NET       | the `ILogger` category `Workhorse.AspNetCore.Dashboard`, at `Error`     |
 
 ### Listener exposure
 

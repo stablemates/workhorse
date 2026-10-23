@@ -15,6 +15,7 @@ interface SupportManifest {
 
 /** Minimum language versions a package manifest enforces rather than support.json. */
 interface DeclaredMinimums {
+  readonly dotnet: string;
   readonly ruby: string;
   readonly rust: string;
 }
@@ -23,7 +24,7 @@ interface ReadmeContract {
   readonly example: string;
   readonly exampleLanguage: string;
   /**
-   * A Java or Kotlin example sits inside a class or a function body, so its README excerpt drops
+   * A Java, Kotlin, or C# example sits inside a class or a function body, so its README excerpt drops
    * that indentation. The comparison then ignores the indentation of each line.
    */
   readonly indented?: boolean;
@@ -115,6 +116,14 @@ const contracts: readonly ReadmeContract[] = [
     indented: true,
     languageSupport: (support) => `Java ${support.java.minimum} or newer`,
   },
+  // The .NET README quotes the regions of the README examples, which Workhorse.Examples.Tests runs.
+  {
+    readme: "dotnet/README.md",
+    example: "dotnet/examples/Workhorse.Examples/Readme/ReadmeExamples.cs",
+    exampleLanguage: "csharp",
+    indented: true,
+    languageSupport: (_support, declared) => `.NET ${declared.dotnet} or newer`,
+  },
 ];
 
 function withoutIndentation(contents: string): string {
@@ -132,15 +141,19 @@ describe("SDK README alignment", () => {
   it("derives every language and PostgreSQL support sentence from support.json", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
     const postgresSupport = `PostgreSQL ${versionRange(manifest.support.postgres.tested)}`;
-    // The crate's rust-version and the gem's required_ruby_version are their minimums, so a README
-    // cannot drift from what Cargo or RubyGems enforces.
+    // The crate's rust-version, the gem's required_ruby_version, and the target framework of the
+    // .NET packages are their minimums, so a README cannot drift from what the build enforces.
     const rust = /^rust-version = "([^"]+)"$/m.exec(await read("rust/Cargo.toml"))?.[1];
     const ruby = /^\s*spec\.required_ruby_version = ">= ([^"]+)"$/m.exec(
       await read("ruby/stablemates-workhorse.gemspec"),
     )?.[1];
+    const dotnet = /<TargetFramework>net(\d+)\.0<\/TargetFramework>/.exec(
+      await read("dotnet/Directory.Build.props"),
+    )?.[1];
     expect(rust).toBeDefined();
     expect(ruby).toBeDefined();
-    const declared = { rust: rust!, ruby: ruby! };
+    expect(dotnet).toBeDefined();
+    const declared = { dotnet: dotnet!, rust: rust!, ruby: ruby! };
 
     for (const contract of contracts) {
       const expected = `Requires ${contract.languageSupport(manifest.support, declared)} and ${postgresSupport}.`;

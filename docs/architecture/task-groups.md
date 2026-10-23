@@ -439,10 +439,10 @@ when the group has older events.
 `listTaskGroupMembers` takes `after` (default 0) and `limit` (1 through 1,000; default 100). It
 returns at most `limit` members after the position `after`, and `nextAfter`. `nextAfter` is the
 position of the last member of the page when one or more members follow it. It is `null` on the
-last page, also when the page is full. The Python, Rust, and Ruby SDKs name it `next_after`, and
-Go names it `NextAfter`. When a page is full, the SDK calls `list_task_group_members_v1` a second
-time for one member after the last position. A read of `limit + 1` members cannot serve a page of
-1,000, because the function reads at most 1,000. The two reads are separate statements. `workhorse admin task-groups` and `workhorse admin task-group` make the reads of
+last page, also when the page is full. The Python, Rust, and Ruby SDKs name it `next_after`. Go
+and .NET name it `NextAfter`. When a page is full, the SDK calls `list_task_group_members_v1` a
+second time for one member after the last position. A read of `limit + 1` members cannot serve a
+page of 1,000, because the function reads at most 1,000. The two reads are separate statements. `workhorse admin task-groups` and `workhorse admin task-group` make the reads of
 the dashboard list and detail, as [Operations and CLI: Task groups](operations.md#task-groups)
 describes. A handler reads the group of its task through `ctx.taskGroup.get()`, which
 calls `task_group_for_task_v1` one time for each handler activation.
@@ -474,14 +474,23 @@ Java spells each operation as TypeScript does: `Queue.createTaskGroup`, `Queue.t
 suspend wrapper of each `Queue` and `Admin` method, such as `createTaskGroupSuspend`, and
 `ctx.taskGroup.get()` and `ctx.taskGroup.add(requests)` in a handler.
 
+In C#, each operation is an asynchronous method: `Queue.CreateTaskGroupAsync`,
+`Queue.TaskGroupAsync`, `Queue.AddToTaskGroupAsync`, `Queue.SealTaskGroupAsync`,
+`Queue.FindTaskGroupAsync`, `Admin.CancelTaskGroupAsync`, `Admin.ListTaskGroupDriftAsync`, and
+`Admin.RepairTaskGroupDriftAsync`. A C# handler reads and adds with
+`HandlerContext.TaskGroup.GetAsync()` and `HandlerContext.TaskGroup.AddAsync(requests)`.
+
 The callbacks are `onFinish`, `onSuccess`, and `onFailure` in TypeScript. Go uses `OnFinish`,
 `OnSuccess`, and `OnFailure`. Python, Rust, and Ruby use `on_finish`, `on_success`, and
 `on_failure`.
+In .NET, the `TaskGroupCallbacks` record holds the callbacks in its `OnFinish`, `OnSuccess`, and
+`OnFailure` properties.
 
 The block form takes a builder function in TypeScript and Go. Python uses a `with` block, and Ruby
 uses a block. In Rust, `Queue::task_group` takes a list of requests in place of a block. Java takes
 a `Consumer<TaskGroupBuilder>`, and a `TaskGroupCallbacks(onFinish, onSuccess, onFailure)` record
 holds the callbacks. Kotlin `taskGroupSuspend` takes a block with a `TaskGroupBuilder` receiver.
+C# `Queue.TaskGroupAsync` takes a `TaskGroupCallbacks` and an `Action<TaskGroupBuilder>`.
 
 The SDKs map the refusals of an add to these errors:
 
@@ -494,6 +503,7 @@ The SDKs map the refusals of an add to these errors:
 
 Java and Kotlin throw `FastTierUnsupportedException`, `TaskGroupClosedException`,
 `TaskGroupLimitExceededException`, and `TaskGroupMembershipConflictException` for these four codes.
+.NET throws exceptions with the same four names.
 
 ### Queue of a request with no queue
 
@@ -504,14 +514,15 @@ A request that names a queue keeps that queue. [ADR
 0097](../decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the
 rule.
 
-| SDK        | Where the SDK sets the queue of a handler add request with no queue                      |
-| ---------- | ---------------------------------------------------------------------------------------- |
-| TypeScript | `TaskGroups.addAsMember` in `typescript/core/src/queue/task-groups.ts`                   |
-| Python     | `add_to_task_group` of the handler context in `python/src/workhorse/worker.py`           |
-| Go         | `HandlerContext.AddToTaskGroup` in `go/task_groups.go`, from `handler.Task.Queue`        |
-| Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                        |
-| Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`         |
-| JVM        | `Queue.addToTaskGroupAsMember` in `jvm/workhorse/src/main/java/run/workhorse/Queue.java` |
+| SDK        | Where the SDK sets the queue of a handler add request with no queue                               |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| TypeScript | `TaskGroups.addAsMember` in `typescript/core/src/queue/task-groups.ts`                            |
+| Python     | `add_to_task_group` of the handler context in `python/src/workhorse/worker.py`                    |
+| Go         | `HandlerContext.AddToTaskGroup` in `go/task_groups.go`, from `handler.Task.Queue`                 |
+| Rust       | `HandlerContext::new` in `rust/src/context.rs`, from `task.queue`                                 |
+| Ruby       | `Queue#add_to_task_group_as_member` in `ruby/lib/stablemates/workhorse/queue.rb`                  |
+| JVM        | `Queue.addToTaskGroupAsMember` in `jvm/workhorse/src/main/java/run/workhorse/Queue.java`          |
+| .NET       | `Queue.AddToTaskGroupAsMemberAsync` in `dotnet/src/Workhorse/Queue.Durable.cs`, from `task.Queue` |
 
 A child task request with no queue follows the same rule: the child goes to the queue of the parent
 task. [Data model: Queue of a child request with no
@@ -529,6 +540,7 @@ every SDK gives each task in the batch the task group calls of that task:
 | Go         | `BatchHandlerContext.GetTaskGroup` and `BatchHandlerContext.AddToTaskGroup` |
 | Rust       | `BatchHandlerContext::task_group`                                           |
 | Ruby       | `BatchHandlerContext#task_group`                                            |
+| .NET       | `BatchHandlerContext.TaskGroup`                                             |
 
 Each batch context uses the `HandlerContext` of its task. Thus the read and the add of a task in the
 batch behave as they do in an ordinary handler. The read calls `task_group_for_task_v1` one time for

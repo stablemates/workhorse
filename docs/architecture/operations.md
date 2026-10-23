@@ -33,16 +33,17 @@ definition row locking makes the deployment wait for the fire before the deploym
 Before the write, every SDK applies the current payload contract of each task type to the
 definitions:
 
-| SDK        | How it applies the contract                                                                                     |
-| ---------- | --------------------------------------------------------------------------------------------------------------- |
-| TypeScript | `taskAcceptance`                                                                                                |
-| Go         | `applyScheduleContracts`                                                                                        |
-| Python     | `Queue.sync_schedules` and `AsyncQueue.sync_schedules` read `get_contract_definition_v1` once per distinct type |
-| Rust       | `Queue::sync_schedules` reads `get_contract_definition_v1` once per distinct type                               |
-| Ruby       | `Queue#sync_schedules` reads `get_contract_definition_v1` once per distinct type                                |
-| JVM        | `Queue.syncSchedules` reads `get_contract_definition_v1` once per distinct type through `Contracts.load`        |
+| SDK        | How it applies the contract                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `taskAcceptance`                                                                                                       |
+| Go         | `applyScheduleContracts`                                                                                               |
+| Python     | `Queue.sync_schedules` and `AsyncQueue.sync_schedules` read `get_contract_definition_v1` once per distinct type        |
+| Rust       | `Queue::sync_schedules` reads `get_contract_definition_v1` once per distinct type                                      |
+| Ruby       | `Queue#sync_schedules` reads `get_contract_definition_v1` once per distinct type                                       |
+| JVM        | `Queue.syncSchedules` reads `get_contract_definition_v1` once per distinct type through `Contracts.load`               |
+| .NET       | `Queue.SyncSchedulesAsync` reads `get_contract_definition_v1` once per distinct type through `ContractStore.LoadAsync` |
 
-The five SDKs other than TypeScript skip their contract cache. The reason is that
+The six SDKs other than TypeScript skip their contract cache. The reason is that
 `fire_schedule_v1` never checks `contract_policy`. Thus a stale version would stay on every
 occurrence.
 

@@ -144,6 +144,21 @@ result does not attribute. The worker records `workhorse.maintenance.drift` with
 the `background_routines` loop. The first pass of a loop records no drift. The Java worker does not
 record enqueue, cancellation, or redrive instruments.
 
+### .NET worker metrics
+
+The .NET worker records metrics through a `System.Diagnostics.Metrics.Meter` named `workhorse`. The
+runtime supplies that type, so the core has no OpenTelemetry package dependency. Without a listener,
+an instrument records nothing. An application that uses OpenTelemetry adds the meter with
+`AddMeter("workhorse")`.
+
+The .NET worker emits the 19 instruments of the JVM worker.
+`Workhorse.Internal.Telemetry.Instrumentation` declares them with the same units and descriptions,
+and `WorkerTelemetry` records the same attribute keys. Recovery uses `unknown` for the queue and the
+task type of a retry that its result does not attribute. The worker records
+`workhorse.maintenance.drift` with the `tick` loop and the `background_routines` loop. The first
+pass of a loop records no drift. The .NET worker does not record enqueue, cancellation, or redrive
+instruments.
+
 ### Metrics observer
 
 `WorkhorseMetricsObserver` is in `typescript/core/src/metrics-observer.ts`. It records its gauges
@@ -258,10 +273,14 @@ Each enqueue path stores a W3C trace context in the new task's `task.trace_conte
 - Rust enqueue injects the active OpenTelemetry context when the `opentelemetry` feature is on.
 - Ruby `Queue` injects the active caller context when the application loads `opentelemetry-api`.
 - The Java `Queue` creates `workhorse.enqueue` and injects that span's context.
+- The .NET `Queue` creates `workhorse.enqueue`. It injects the context of `Activity.Current`
+  through `DistributedContextPropagator.Current`. While a listener samples the enqueue span,
+  `Activity.Current` is that span.
 
 Each language enforces 1,024 bytes before enqueue. The constants are TypeScript
 `MAX_TRACE_CONTEXT_BYTES`, Python `_telemetry.MAX_TRACE_CONTEXT_BYTES`, Go `maxTraceContextBytes`,
-Ruby `Telemetry::MAX_TRACE_CONTEXT_BYTES`, and Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`. Rust
+Ruby `Telemetry::MAX_TRACE_CONTEXT_BYTES`, Java `Telemetry.MAX_TRACE_CONTEXT_BYTES`, and .NET
+`Instrumentation.MaxTraceContextBytes`. Rust
 `queue::trace_context` checks the same limit inline.
 
 The `task.trace_context` column has these rules:
@@ -293,6 +312,8 @@ follows:
   stored context onto it.
 - Java `OpenTelemetryTelemetry.consumerSpan` starts from `Context.root()` and extracts a stored
   context onto it.
+- .NET `WorkerTelemetry.StartAttempt` sets `Activity.Current` to `null` when the task has no stored
+  context. It starts the consumer span with the extracted `ActivityContext` as its parent.
 
 Child tasks prefer the stored context of the parent task over the ambient handler context. Thus
 replay keeps the original trace chain.
@@ -382,6 +403,19 @@ request, and `workhorse.enqueue.count`.
 `MAX_TRACE_CONTEXT_BYTES = 1,024`. The Java SDK does not emit `workhorse.heartbeat` or
 `workhorse.schedule.synchronize`.
 
+#### .NET spans
+
+The .NET worker and queue emit the spans of the JVM SDK: `workhorse.enqueue`, `workhorse.claim`,
+`workhorse.handler`, `workhorse.retry`, `workhorse.complete`, `workhorse.recovery`, and
+`workhorse.maintenance`. `Workhorse.Internal.Telemetry.Names` declares these names. They come from
+a `System.Diagnostics.ActivitySource` named `workhorse`. An application that uses OpenTelemetry
+adds it with `AddSource("workhorse")`. The `workhorse.enqueue` span has the attributes of the JVM
+span.
+
+`Instrumentation` holds `TraceAttributeCountLimit = 8` and `MaxTraceContextBytes = 1,024` as
+internal constants. The .NET SDK does not emit `workhorse.heartbeat` or
+`workhorse.schedule.synchronize`.
+
 ### Structured logs
 
 The TypeScript runtime submits vendor-neutral structured records to `WorkhorseTelemetryProvider`.
@@ -410,6 +444,17 @@ The Java SDK does not emit these TypeScript events: the enqueue, debounce, and t
 cancellation, run-now, redrive, promotion, recovery, and policy events, the queue administration
 events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`, and
 `workhorse.worker_registry.pruned`.
+
+#### .NET logs
+
+The .NET worker logs through `ILogger` from `Microsoft.Extensions.Logging.Abstractions`. It gets its
+logger from `WorkerOptions.LoggerFactory`. Without a factory, it logs nothing. The internal types
+`WorkerLog` and `DurableLog` declare each record with `LoggerMessage`. The `EventId` name of a
+record is its Workhorse event name, such as `workhorse.task.heartbeat_rejected`. The
+`Workhorse.Hosting` package logs its own `workhorse.hosting.*` events in the same way.
+
+The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log record itself. The
+.NET `Queue` writes no log record.
 
 #### Severity coverage
 
@@ -550,6 +595,9 @@ The embedded SDK hosts read at most 2,097,152 bytes (`2 << 20`) of an RPC reques
   bound fails decoding with `400`. Bytes after a complete envelope are never read.
 - Rust `MAX_REQUEST_BYTES` bounds the body with `http_body_util::Limited`. A longer body answers
   `400`.
+- .NET `DashboardHost.MaxRequestBytes` in `Workhorse.AspNetCore` checks the declared length first.
+  If it is larger, the host answers `413` with the `PAYLOAD_TOO_LARGE` envelope before it reads.
+  Otherwise, it reads the body and answers `413` when the body passes the bound.
 
 #### RPC logs
 

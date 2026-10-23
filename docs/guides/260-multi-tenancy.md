@@ -64,6 +64,8 @@ await queue.enqueue(
 In Go, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synchronize with
 `Queue.SyncBudgets`. In Python, set `concurrency_key`, `budget`, and `tags`, and synchronize with
 `Queue.sync_budgets` or `AsyncQueue.sync_budgets`.
+In C#, set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions`, and synchronize with
+`Queue.SyncBudgetsAsync`.
 
 If a tenant is at its limit, the claim skips the tasks of that tenant. The claim examines only a
 limited window of the first ready tasks. If the waiting tasks of one tenant fill that whole window,

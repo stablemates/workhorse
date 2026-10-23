@@ -203,7 +203,7 @@ with the same error.
 
 In Ruby, some argument checks occur before the tier check. If a checkpoint, wait, signal, human
 wait, or child name is not valid, Ruby raises `ArgumentError` first. Ruby also checks the type and
-the size of a child set before its names. Java and Kotlin keep the same order. They refuse a name
+the size of a child set before its names. Java, Kotlin, and C# keep the same order. They refuse a name
 that is not valid with an argument error before the tier check.
 
 <details>
@@ -225,13 +225,14 @@ that is not valid with an argument error before the tier check.
 
 **SDK errors**
 
-| SDK          | Error                                                         |
-| ------------ | ------------------------------------------------------------- |
-| TypeScript   | `FastTierUnsupportedError(queue, feature, ordinal?)`          |
-| Python       | `FastTierUnsupportedError`                                    |
-| Go           | `*FastTierUnsupportedError` matching `ErrFastTierUnsupported` |
-| Rust         | `Error::FastTierUnsupported { queue, feature, ordinal }`      |
-| Java, Kotlin | `FastTierUnsupportedException(queue, feature, ordinal)`       |
+| SDK          | Error                                                             |
+| ------------ | ----------------------------------------------------------------- |
+| TypeScript   | `FastTierUnsupportedError(queue, feature, ordinal?)`              |
+| Python       | `FastTierUnsupportedError`                                        |
+| Go           | `*FastTierUnsupportedError` matching `ErrFastTierUnsupported`     |
+| Rust         | `Error::FastTierUnsupported { queue, feature, ordinal }`          |
+| Java, Kotlin | `FastTierUnsupportedException(queue, feature, ordinal)`           |
+| .NET         | `FastTierUnsupportedException` with `Queue`, `Feature`, `Ordinal` |
 
 **Handler context rejections.** The handler context raises `FastTierUnsupportedError` before any
 statement reaches PostgreSQL. The rejection is a handler failure, so the retry policy of the task
@@ -255,7 +256,15 @@ raises `LimitExceededError`.
 `IllegalArgumentException` first. A child set of more than 100 children throws
 `LimitExceededException` before the name checks.
 
-More detail: [Fast tier: Rejected features and P1007](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#rejected-features-and-p1007), [Fast tier: Handler context rejections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#handler-context-rejections), [Fast tier: Ruby argument validation order](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#ruby-argument-validation-order), and [Schema and SQL protocol: JVM argument validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-argument-validation).
+**.NET order.** An invalid checkpoint, wait, signal, human wait, or child name throws
+`ArgumentException` first. A child set of more than 100 children throws `LimitExceededException`
+before the name checks.
+
+**.NET fields.** `FastTierUnsupportedException.Queue`, `.Feature`, and `.Ordinal` are filled with
+the default Npgsql settings. Workhorse writes the same JSON to `HINT` as to `DETAIL`, and the .NET
+SDK reads `HINT` when Npgsql hides `DETAIL`.
+
+More detail: [Fast tier: Rejected features and P1007](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#rejected-features-and-p1007), [Fast tier: Handler context rejections](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#handler-context-rejections), [Fast tier: Ruby argument validation order](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#ruby-argument-validation-order), [Schema and SQL protocol: JVM argument validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-argument-validation), and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
 
 </details>
 
@@ -370,6 +379,7 @@ that is too large only because of a defect. On the full tier, a result that is t
 | Go         | `fastTierProbeInterval`        |
 | Rust, Ruby | `TIER_PROBE_INTERVAL`          |
 | Java       | `TIER_PROBE_NANOS`             |
+| .NET       | `TierProbeNanos`               |
 
 **Combined completion.** `complete_many_and_claim_v1` completes up to 100 tasks and claims up to
 `p_limit` more from one fast-tier queue. `p_limit` is 0 to 100. `p_lease_ms` is 100 to 86,400,000,
@@ -380,8 +390,8 @@ with a default of 30,000. The combined claim of a worker asks for its free slots
 `result_max_bytes` of its row to `fast_fail_v1` with a `TaskValueSizeLimitError` error. It then
 reads the clock again, completes the rest of the batch whose leases are still live, and the
 combined claim still runs. On the full tier, `complete_v1` raises for an oversized result, and the
-statement or transaction of the caller rolls back. The TypeScript, Go, Python, Ruby, Rust, and Java
-workers measure results before they call, so they reach this path only through a bug.
+statement or transaction of the caller rolls back. The TypeScript, Go, Python, Ruby, Rust, Java, and
+.NET workers measure results before they call, so they reach this path only through a bug.
 
 **Cohorts.** Without an explicit count, `defaultDispatchCohorts(concurrency, spareConnections)`
 gives:
@@ -392,7 +402,7 @@ gives:
 
 Spare connections are the pool size minus the pooled connections that the worker keeps for its
 listener and its heartbeats. Each SDK reads its own pool settings. A Java `DataSource` reports no
-pool size, so the Java default has no pool-size cap. In TypeScript, pools of 3, 4, 6,
+pool size, so the Java default has no pool-size cap. The .NET default also has no pool-size cap. In TypeScript, pools of 3, 4, 6,
 and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 
 | SDK        | Option                   | Rule                                                      |
@@ -404,10 +414,11 @@ and 10 connections give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
 | Ruby       | `Worker.new(cohorts:)`   | 1 through `concurrency`                                   |
 | Java       | `Worker.Builder.cohorts` | 1 through `concurrency`; the default has no pool-size cap |
 | Kotlin     | `cohorts = n`            | 1 through `concurrency`                                   |
+| .NET       | `WorkerOptions.Cohorts`  | 1 through `Concurrency`; 0 selects the default            |
 
 An explicit count is never capped.
 
-More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue), [Fast tier: `complete_many_and_claim_v1`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#complete_many_and_claim_v1), [Fast tier: Oversized results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#oversized-results), and [Schema and SQL protocol: JVM worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-worker).
+More detail: [Fast tier: Workers on a fast-tier queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#workers-on-a-fast-tier-queue), [Fast tier: `complete_many_and_claim_v1`](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#complete_many_and_claim_v1), [Fast tier: Oversized results](https://github.com/stablemates/workhorse/blob/main/docs/architecture/fast-tier.md#oversized-results), [Schema and SQL protocol: JVM worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#jvm-worker), and [Schema and SQL protocol: .NET worker](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-worker).
 
 </details>
 
@@ -471,7 +482,7 @@ More detail: [Fast tier: Changing the history switches](https://github.com/stabl
 - Choose the fast tier for a high-volume queue whose handlers never wait.
 - Make sure that the queue is empty before you change its tier.
 - Expect `FastTierUnsupportedError` when code asks a fast-tier queue for a feature that it does not
-  have. In Ruby, a name that is not valid raises `ArgumentError` first. In Java and Kotlin, an
+  have. In Ruby, a name that is not valid raises `ArgumentError` first. In Java, Kotlin, and C#, an
   argument error comes first.
 - Set the history switches only for the records that you need.
 

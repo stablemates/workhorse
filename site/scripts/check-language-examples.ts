@@ -226,7 +226,7 @@ for (const guidePath of crossSdkGuidePaths) {
   const source = readFileSync(resolve(siteRoot, "content/docs", guidePath), "utf8");
   const languageTabs = [
     ...source.matchAll(
-      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?(?:, "Ruby")?(?:, "Java", "Kotlin")?\]\}>([\s\S]*?)<\/Tabs>/g,
+      /<Tabs items=\{\["TypeScript", "Python", "Go"(?:, "Rust")?(?:, "Ruby")?(?:, "Java", "Kotlin")?(?:, "C#")?\]\}>([\s\S]*?)<\/Tabs>/g,
     ),
   ];
   if (languageTabs.length === 0) throw new Error(`${guidePath} has no cross-SDK feature examples`);
@@ -301,6 +301,7 @@ function assertVerifiedLanguageSnippets(
     ruby?: LandingSnippetId;
     java?: LandingSnippetId;
     kotlin?: LandingSnippetId;
+    csharp?: LandingSnippetId;
   },
 ) {
   if (
@@ -310,12 +311,14 @@ function assertVerifiedLanguageSnippets(
     snippets.ruby === undefined ||
     snippets.java === undefined ||
     snippets.kotlin === undefined ||
+    snippets.csharp === undefined ||
     landingSnippetLanguages[snippets.python] !== "python" ||
     landingSnippetLanguages[snippets.go] !== "go" ||
     landingSnippetLanguages[snippets.rust] !== "rust" ||
     landingSnippetLanguages[snippets.ruby] !== "ruby" ||
     landingSnippetLanguages[snippets.java] !== "java" ||
-    landingSnippetLanguages[snippets.kotlin] !== "kotlin"
+    landingSnippetLanguages[snippets.kotlin] !== "kotlin" ||
+    landingSnippetLanguages[snippets.csharp] !== "csharp"
   ) {
     throw new Error(`landing example ${name} has unverified language snippets`);
   }
@@ -353,15 +356,16 @@ for (const pattern of examplePatterns) {
   }
 }
 
-// Rust, Ruby, Java, and Kotlin examples live as `docs:start <name>` regions in `rust/examples/`,
-// `ruby/examples/`, and `jvm/examples/src/main/`. `cargo clippy --all-targets` compiles the Rust
-// regions in CI, `rust/tests/landing_postgres.rs` runs each Rust `landing-*` region, and a
-// documentation spec runs the Ruby regions against PostgreSQL. `pnpm jvm:build`
-// compiles the Java and Kotlin regions, and `pnpm jvm:test` runs them against PostgreSQL. Every
-// fence in one of these languages and every landing snippet in Rust or Ruby must equal one region
-// after both lose their common indentation, and every region must appear somewhere, so a page
-// cannot carry code that no compiler or test saw. A formatter can leave blank lines before
-// `docs:end`, and the region does not include them.
+// Rust, Ruby, Java, Kotlin, and C# examples live as `docs:start <name>` regions in `rust/examples/`,
+// `ruby/examples/`, `jvm/examples/src/main/`, and `dotnet/examples/Workhorse.Examples/`.
+// `cargo clippy --all-targets` compiles the Rust regions in CI, `rust/tests/landing_postgres.rs`
+// runs each Rust `landing-*` region, and a documentation spec runs the Ruby regions against
+// PostgreSQL. `pnpm jvm:build` compiles the Java and Kotlin regions, and `pnpm jvm:test` runs them
+// against PostgreSQL. `pnpm dotnet:build` compiles the C# regions, and `pnpm dotnet:test` runs
+// them against PostgreSQL. Every fence in one of these languages and every landing snippet in
+// Rust, Ruby, Java, Kotlin, or C# must equal one region after both lose their common indentation,
+// and every region must appear somewhere, so a page cannot carry code that no compiler or test
+// saw. A formatter can leave blank lines before `docs:end`, and the region does not include them.
 function dedent(code: string): string {
   const lines = code.split("\n");
   const indent = Math.min(
@@ -371,13 +375,17 @@ function dedent(code: string): string {
 }
 
 function sourceFiles(directory: string, extension: string): string[] {
-  return readdirSync(resolve(repositoryRoot, directory), { recursive: true })
-    .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(extension))
-    .map((entry) => resolve(repositoryRoot, directory, entry))
-    .toSorted();
+  return (
+    readdirSync(resolve(repositoryRoot, directory), { recursive: true })
+      .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(extension))
+      // The .NET build writes generated sources into obj/ and bin/ beside each project.
+      .filter((entry) => !entry.split("/").some((part) => part === "obj" || part === "bin"))
+      .map((entry) => resolve(repositoryRoot, directory, entry))
+      .toSorted()
+  );
 }
 
-// The Java and Kotlin fences also appear in the architecture pages and the READMEs. The scan skips
+// The Java, Kotlin, and C# fences also appear in the architecture pages and the READMEs. The scan skips
 // `docs/decisions/`, because a decision record keeps the design at the time of its decision.
 const jvmFencePaths = [
   ...new Set([
@@ -399,10 +407,11 @@ const languageAliases = {
   ruby: ["rb"],
   java: [],
   kotlin: ["kt", "kts"],
+  csharp: ["cs"],
 } as const satisfies Record<string, readonly string[]>;
 
 function assertDocumentationRegions(
-  language: "rust" | "ruby" | "java" | "kotlin",
+  language: "rust" | "ruby" | "java" | "kotlin" | "csharp",
   label: string,
   examplesDirectory: string,
   extension: string,
@@ -477,6 +486,14 @@ assertDocumentationRegions("rust", "Rust", "rust/examples", ".rs", "//", goFence
 assertDocumentationRegions("ruby", "Ruby", "ruby/examples", ".rb", "#", goFencePaths);
 assertDocumentationRegions("java", "Java", "jvm/examples/src/main", ".java", "//", jvmFencePaths);
 assertDocumentationRegions("kotlin", "Kotlin", "jvm/examples/src/main", ".kt", "//", jvmFencePaths);
+assertDocumentationRegions(
+  "csharp",
+  "C#",
+  "dotnet/examples/Workhorse.Examples",
+  ".cs",
+  "//",
+  jvmFencePaths,
+);
 
 // Each Python and Go landing snippet is a whole module, so it is a file of its own in
 // `python/tests/landing_snippets/` or `go/internal/landing/`, named after its snippet. These are
@@ -550,15 +567,18 @@ for (const name of goRegions.keys()) {
   if (!(name in goRegionPages)) throw new Error(`Go docs region ${name} names no page`);
 }
 
-// Every tab group that carries Go carries Rust, Ruby, Java, and Kotlin in that order, except where
-// that SDK has no example on the page yet. Each exclusion names the Issue that removes it, and an
-// exclusion a page no longer needs fails the check.
+// Every tab group that carries Go carries Rust, Ruby, Java, Kotlin, and C# in that order, except where
+// that SDK has no example on the page yet. Every tab group that carries Java also carries C#, also
+// when it has no Go tab. Each exclusion names the Issue that removes it, and an exclusion a page no
+// longer needs fails the check.
 const rustPendingPages: Record<string, string> = {};
 const rustPendingExamples: Record<string, string> = {};
 const rubyPendingPages: Record<string, string> = {};
 const rubyPendingExamples: Record<string, string> = {};
 const jvmPendingPages: Record<string, string> = {};
 const jvmPendingExamples: Record<string, string> = {};
+const csharpPendingPages: Record<string, string> = {};
+const csharpPendingExamples: Record<string, string> = {};
 for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry) =>
   entry.endsWith(".mdx"),
 )) {
@@ -574,26 +594,35 @@ for (const name of readdirSync(resolve(siteRoot, "content/docs")).filter((entry)
       throw new Error(`${name} has a tab group this check could not read`);
     }
     const goGroups = groups.filter((group) => group.items.includes('"Go"'));
+    const javaGroups = groups.filter((group) => group.items.includes('"Java"'));
     const label = title === undefined ? name : `${name} ${title}`;
     for (const [tab, suffix, pendingPages, pendingExamples] of [
       [
         "Rust",
-        /"Go", "Rust"(?:, "Ruby")?(?:, "Java", "Kotlin")?$/,
+        /"Go", "Rust"(?:, "Ruby")?(?:, "Java", "Kotlin")?(?:, "C#")?$/,
         rustPendingPages,
         rustPendingExamples,
       ],
-      ["Ruby", /"Rust", "Ruby"(?:, "Java", "Kotlin")?$/, rubyPendingPages, rubyPendingExamples],
-      ["Java", /"Ruby", "Java", "Kotlin"$/, jvmPendingPages, jvmPendingExamples],
-      ["Kotlin", /"Ruby", "Java", "Kotlin"$/, jvmPendingPages, jvmPendingExamples],
+      [
+        "Ruby",
+        /"Rust", "Ruby"(?:, "Java", "Kotlin")?(?:, "C#")?$/,
+        rubyPendingPages,
+        rubyPendingExamples,
+      ],
+      ["Java", /"Ruby", "Java", "Kotlin"(?:, "C#")?$/, jvmPendingPages, jvmPendingExamples],
+      ["Kotlin", /"Ruby", "Java", "Kotlin"(?:, "C#")?$/, jvmPendingPages, jvmPendingExamples],
+      ["C#", /"Java", "Kotlin", "C#"$/, csharpPendingPages, csharpPendingExamples],
     ] as const) {
       const pending = title === undefined ? pendingPages[name] : pendingExamples[title];
-      const tabGroups = goGroups.filter((group) => suffix.test(group.items));
+      // C# follows the Java tab, so a Java group without Go also needs C#.
+      const [baseTab, baseGroups] = tab === "C#" ? ["Java", javaGroups] : ["Go", goGroups];
+      const tabGroups = baseGroups.filter((group) => suffix.test(group.items));
       if (pending !== undefined) {
-        if (goGroups.length === 0 || tabGroups.length === goGroups.length) {
+        if (baseGroups.length === 0 || tabGroups.length === baseGroups.length) {
           throw new Error(`${label} no longer needs its pending-${tab} exclusion (${pending})`);
         }
-      } else if (tabGroups.length !== goGroups.length) {
-        throw new Error(`${label} has a tab group with Go but no ${tab}`);
+      } else if (tabGroups.length !== baseGroups.length) {
+        throw new Error(`${label} has a tab group with ${baseTab} but no ${tab}`);
       }
       for (const [index, group] of groups.entries()) {
         const listed = group.items.includes(`"${tab}"`) ? 1 : 0;

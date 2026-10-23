@@ -24,7 +24,7 @@ go out before the import is complete.
 An edge is the link from one dependent to one prerequisite. To make a task wait, give
 `EnqueueOptions.dependencies` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -126,6 +126,24 @@ An edge is the link from one dependent to one prerequisite. To make a task wait,
     )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var importId = (await queue.EnqueueAsync("contacts.import", new { source = "upload" })).TaskId;
+    await queue.EnqueueAsync(
+        "contacts.notify",
+        new { importId },
+        new EnqueueOptions
+        {
+            Dependencies = new Dependencies
+            {
+                PrerequisiteTaskIds = [importId],
+                OnSuccess = DependencyPolicy.Release,
+                OnFailure = DependencyPolicy.Fail,
+                OnCancellation = DependencyPolicy.Cancel,
+            },
+        });
+    ```
+  </Tab>
 </Tabs>
 
 PostgreSQL checks both tasks and creates the dependency in the enqueue transaction. If the
@@ -151,7 +169,7 @@ policies. Put the prerequisite IDs in `EnqueueOptions.dependencies`.
 
 The same `Dependencies` value names the prerequisite IDs in every SDK. TypeScript uses
 `prerequisiteTaskIds`. Python, Rust, and Ruby use `prerequisite_task_ids`. Go uses
-`PrerequisiteTaskIDs`.
+`PrerequisiteTaskIDs`, and C# uses `PrerequisiteTaskIds`.
 
 - The deprecated `prerequisiteTaskId` names one prerequisite with `onSuccess: "release"`,
   `onFailure: "fail"`, and `onCancellation: "cancel"`. One request cannot set both fields.
@@ -420,12 +438,16 @@ code can handle the error without matching database text.
   which carries `taskId`, `limit`, and `max`.
 - PostgreSQL raises a cycle with SQLSTATE `P1003`. `Queue` throws `DependencyCycleError`, which
   carries `dependentTaskId`, `prerequisiteTaskId`, `cycleTaskIds`, and `truncated`.
+- The C# `Queue` throws `DependencyLimitExceededException` and `DependencyCycleException`. Their
+  `Details` holds the same fields. `DiagnosedException.Details` gets the fields with the default
+  Npgsql settings.
 - One request names at most 100 prerequisites (`MAX_TASK_DEPENDENCIES`). The TypeScript SDK
-  rejects a longer list with a `RangeError` before it queries.
+  rejects a longer list with a `RangeError` before it queries. The C# SDK rejects it with an
+  `ArgumentException` before it queries.
 - `prune_released_dependencies_v1` removes a released edge after its dependent has a terminal
   outcome.
 
-More detail: [Data model: Columns and bounds](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-bounds) and [Data model: Edge validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#edge-validation).
+More detail: [Data model: Columns and bounds](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-and-bounds), [Data model: Edge validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#edge-validation), and [Schema and SQL protocol: .NET errors](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-errors).
 
 </details>
 

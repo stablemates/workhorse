@@ -138,19 +138,21 @@ stored stage with `HandlerContext.getProgress`. It writes the new stage with
 Java and Kotlin use `getProgress` and `setProgress`, as TypeScript does. Python, Rust, and Ruby use
 `get_progress` and `set_progress`. In Python, these are
 `HandlerContext.get_progress` and `HandlerContext.set_progress`. Go uses
-`HandlerContext.GetProgress` and `HandlerContext.SetProgress`. All SDKs write the same value, so the
-dashboard shows one progress value for each task.
+`HandlerContext.GetProgress` and `HandlerContext.SetProgress`. C# uses
+`HandlerContext.GetProgressAsync` and `HandlerContext.SetProgressAsync`. All SDKs write the same
+value, so the dashboard shows one progress value for each task.
 
 <details>
 <summary>Reference: progress</summary>
 
-| SDK          | Read           | Write          |
-| ------------ | -------------- | -------------- |
-| TypeScript   | `getProgress`  | `setProgress`  |
-| Python       | `get_progress` | `set_progress` |
-| Go           | `GetProgress`  | `SetProgress`  |
-| Rust, Ruby   | `get_progress` | `set_progress` |
-| Java, Kotlin | `getProgress`  | `setProgress`  |
+| SDK          | Read               | Write              |
+| ------------ | ------------------ | ------------------ |
+| TypeScript   | `getProgress`      | `setProgress`      |
+| Python       | `get_progress`     | `set_progress`     |
+| Go           | `GetProgress`      | `SetProgress`      |
+| Rust, Ruby   | `get_progress`     | `set_progress`     |
+| Java, Kotlin | `getProgress`      | `setProgress`      |
+| C#           | `GetProgressAsync` | `SetProgressAsync` |
 
 - `update_progress_v1` accepts only the exact unexpired worker and fence.
 - Workhorse keeps one latest value per task. Each accepted change replaces it and increments a
@@ -162,7 +164,7 @@ dashboard shows one progress value for each task.
 - A stale write raises `ProgressLeaseLostError`.
 - The latest value survives retry and terminal materialization.
 
-More detail: [Data model: Limits and lifetime](../architecture/data-model.md#limits-and-lifetime) and [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context).
+More detail: [Data model: Limits and lifetime](../architecture/data-model.md#limits-and-lifetime), [Schema and SQL protocol: JVM handler context](../architecture/schema-and-protocol.md#jvm-handler-context), and [Schema and SQL protocol: .NET handler context](../architecture/schema-and-protocol.md#net-handler-context).
 
 </details>
 

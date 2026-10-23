@@ -50,7 +50,9 @@ Python applications use `Queue.sync_concurrency_policies` or `AsyncQueue.sync_co
 through the connection that they own. `Queue.list_concurrency_policies` and
 `AsyncQueue.list_concurrency_policies` return the stored policy rows.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+.NET applications use `Queue.SyncConcurrencyPoliciesAsync` and `Queue.ListConcurrencyPoliciesAsync`.
+
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncConcurrencyPolicies("workers", [
@@ -112,6 +114,13 @@ through the connection that they own. `Queue.list_concurrency_policies` and
       )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    var policies = await queue.SyncConcurrencyPoliciesAsync(
+        "workers",
+        [new ConcurrencyPolicyDefinition { Queue = "mail", MaxActive = 20, MaxActivePerKey = 3 }]);
+    ```
+  </Tab>
 </Tabs>
 
 Workers do not need the policy in their own configuration, because each claim reads the policy from
@@ -124,7 +133,7 @@ pruning.
 Each policy limits one queue. It can also limit the tasks that share a `concurrencyKey` in that
 queue. The key can name a tenant, a destination host, or an account.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
@@ -183,6 +192,14 @@ queue. The key can name a tenant, a destination host, or an account.
     )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    await queue.EnqueueAsync(
+        "mail.send",
+        new { messageId },
+        new EnqueueOptions { Queue = "mail", ConcurrencyKey = tenantId });
+    ```
+  </Tab>
 </Tabs>
 
 The same key text in a different queue is a separate key. A task without a key uses queue capacity,
@@ -212,18 +229,19 @@ namespace atomically.
 | Go         | `Queue.SyncConcurrencyPolicies(ctx, namespace, definitions, options...)`  | `Queue.ListConcurrencyPolicies(ctx, queueNames)`                          |
 | Rust       | `Queue::sync_concurrency_policies(namespace, definitions, prune)`         | `Queue::list_concurrency_policies`                                        |
 | Ruby       | `Queue#sync_concurrency_policies(namespace, definitions, prune:)`         | `Queue#list_concurrency_policies`                                         |
+| .NET       | `Queue.SyncConcurrencyPoliciesAsync(namespace, definitions, prune)`       | `Queue.ListConcurrencyPoliciesAsync(queues)`                              |
 
 - One call accepts at most 10,000 definitions.
 - The function rejects a queue owned by another namespace.
 - Pruning is on by default. With pruning, an empty set removes every policy the namespace owns.
-  TypeScript `{ prune: false }`, Python `prune=False`, and Go `SyncPolicyOptions{Prune: false}`
-  keep omitted rows.
+  TypeScript `{ prune: false }`, Python `prune=False`, Go `SyncPolicyOptions{Prune: false}`, and
+  C# `prune: false` keep omitted rows.
 - A fast-tier queue rejects a concurrency policy.
 - An empty or omitted list filter returns every policy, ordered by `queue_name`.
 - `claim_v1` reads the policy rows during admission, so workers need no copy of the policy.
 - `Queue.concurrencyPolicies` is a deprecated TypeScript alias, removed in `1.0.0`.
 
-More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization), [Data model: Columns](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-2), [Data model: Concurrency key](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#concurrency-key), and [Data model: Listing](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#listing-1).
+More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization), [Data model: Columns](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#columns-2), [Data model: Concurrency key](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#concurrency-key), [Data model: Listing](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#listing-1), and [Schema and SQL protocol: .NET queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-queue).
 
 </details>
 
@@ -300,12 +318,13 @@ order, pause control, and health row.
 policies. `Queue.listBudgets` returns them. Go applications use `Queue.SyncBudgets` and
 `Queue.ListBudgets`. Python applications use `Queue.sync_budgets` or `AsyncQueue.sync_budgets`, and
 `Queue.list_budgets` or `AsyncQueue.list_budgets`. Rust applications use `Queue::sync_budgets` and
-`Queue::list_budgets`. Ruby applications use `Queue#sync_budgets` and `Queue#list_budgets`. The
-namespace owns its budgets. Workhorse removes the omitted budgets, unless you disable pruning.
+`Queue::list_budgets`. Ruby applications use `Queue#sync_budgets` and `Queue#list_budgets`. .NET
+applications use `Queue.SyncBudgetsAsync` and `Queue.ListBudgetsAsync`. The namespace owns its
+budgets. Workhorse removes the omitted budgets, unless you disable pruning.
 
 A task names its budget when you enqueue it, with the `budget` option beside `concurrencyKey`.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncBudgets("workers", [{ name: "vendor-api", maxActive: 4 }]);
@@ -398,6 +417,23 @@ A task names its budget when you enqueue it, with the `budget` option beside `co
       mapOf("id" to 2),
       EnqueueOptions.builder().queue("crm").budget("vendor-api").build(),
     )
+    ```
+
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var budgets = await queue.SyncBudgetsAsync(
+        "workers",
+        [new BudgetDefinition { Name = "vendor-api", MaxActive = 4 }]);
+
+    await queue.EnqueueAsync(
+        "invoice.sync",
+        new { id = 1 },
+        new EnqueueOptions { Queue = "billing", Budget = "vendor-api" });
+    await queue.EnqueueAsync(
+        "contact.sync",
+        new { id = 2 },
+        new EnqueueOptions { Queue = "crm", Budget = "vendor-api" });
     ```
 
   </Tab>

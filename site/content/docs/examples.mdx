@@ -19,8 +19,9 @@ the order commit together, or they roll back together.
   that holds it.
 - In Java, give the JDBC `Connection` that holds the transaction as the first argument to
   `enqueue`. In Kotlin, give it as the `connection` argument of `enqueueSuspend`.
+- In C#, call `queue.Using(connection)` with the `NpgsqlConnection` that holds the transaction.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     import { Admin, Pool, Queue } from "@stablemates/workhorse";
@@ -203,6 +204,28 @@ the order commit together, or they roll back together.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public async Task CreateOrderAsync(string orderId, string[] items)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var insert = new NpgsqlCommand(
+            "INSERT INTO orders (id, items) VALUES ($1, $2)", connection))
+        {
+            insert.Parameters.AddWithValue(orderId);
+            insert.Parameters.AddWithValue(items);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await queue.Using(connection).EnqueueAsync(
+            "order.fulfill",
+            new { orderId },
+            new EnqueueOptions { Queue = "orders" });
+        await transaction.CommitAsync();
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If the insert fails, no task exists. If the enqueue fails, no order exists. At no time can a reader
@@ -220,7 +243,7 @@ so a later run of the handler does not run the code again.
 - Give the mail provider an idempotency key that you make from the task ID. A checkpoint alone
   cannot stop a repeated send.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
@@ -455,6 +478,38 @@ so a later run of the handler does not run the code again.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public sealed record Trial(string To, DateTimeOffset FollowUpAt);
+
+    public sealed record Sent(string DeliveredTo, string Kind, string IdempotencyKey);
+
+    public sealed record Delivered(string DeliveredTo);
+
+    // Stand-ins for a mail provider. A real send passes the key to the provider's
+    // idempotency option, and the provider drops a repeated send with the same key.
+    public static Task<Sent> SendWelcomeAsync(string to, string idempotencyKey) =>
+        Task.FromResult(new Sent(to, "welcome", idempotencyKey));
+
+    public static Task<Sent> SendFollowUpAsync(string to, string idempotencyKey) =>
+        Task.FromResult(new Sent(to, "follow-up", idempotencyKey));
+
+    public static void RegisterTrialHandler(Worker worker)
+    {
+        worker.Handle<Trial, Delivered>("trial.lifecycle", async (context, trial) =>
+        {
+            await context.CheckpointAsync(
+                "welcome",
+                _ => SendWelcomeAsync(trial.To, $"welcome:{context.Task.Id}"));
+            await context.SleepUntilAsync("follow-up-window", trial.FollowUpAt);
+            await context.CheckpointAsync(
+                "follow-up",
+                _ => SendFollowUpAsync(trial.To, $"follow-up:{context.Task.Id}"));
+            return new Delivered(trial.To);
+        });
+    }
+    ```
+  </Tab>
 </Tabs>
 
 The sleep stores a named timer, and the worker releases the task. The task waits in the state
@@ -482,7 +537,7 @@ An invoice run must occur each night at 03:00. You do not want a separate schedu
 the schedule in your code, and sync it during the deployment. Each worker that watches the
 namespace of the schedule can start the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     // Deployment step: reconcile the namespace to exactly this set.
@@ -706,6 +761,37 @@ namespace of the schedule can start the task.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public async Task RunBillingWorkerAsync(CancellationToken stoppingToken)
+    {
+        // Deployment step: reconcile the namespace to exactly this set.
+        var nightly = new ScheduleDefinition
+        {
+            Name = "nightly-invoice-run",
+            Schedule = "0 3 * * *",
+            Task = new ScheduledTask
+            {
+                TaskType = "invoice.generate",
+                Payload = new { scope = "due" },
+                Queue = "billing",
+            },
+        };
+        await queue.SyncSchedulesAsync("billing-production", [nightly], stoppingToken);
+
+        // Worker process: evaluate and fire schedules for that namespace.
+        await using var worker = new Worker(dataSource, new WorkerOptions
+        {
+            Queues = ["billing"],
+            ScheduleNamespaces = ["billing-production"],
+        });
+        worker.Handle<JsonElement, object>(
+            "invoice.generate",
+            (context, payload) => Task.FromResult<object>(new { generated = true, payload }));
+        await worker.RunAsync(stoppingToken);
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Two workers cannot start the same occurrence two times. Each occurrence has a durable key: the
@@ -719,7 +805,7 @@ A payment provider can send the same webhook event more than one time. Each even
 one task. Make the idempotency key from the event ID of the provider. A repeated delivery then
 returns the first task and does not make a new task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
@@ -888,6 +974,29 @@ returns the first task and does not make a new task.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public sealed record StripeEvent(string Id, string Type, JsonElement? Data);
+
+    public async Task<Guid> HandleStripeWebhookAsync(StripeEvent stripeEvent)
+    {
+        var result = await queue.EnqueueAsync(
+            "stripe.event",
+            new { eventId = stripeEvent.Id, eventType = stripeEvent.Type },
+            new EnqueueOptions
+            {
+                Queue = "webhooks",
+                Idempotency = new Idempotency
+                {
+                    Key = $"stripe:{stripeEvent.Id}",
+                    Scope = "stripe-webhooks",
+                    Ttl = TimeSpan.FromDays(1),
+                },
+            });
+        return result.TaskId;
+    }
+    ```
+  </Tab>
 </Tabs>
 
 An equal repeated request returns the same task ID. It makes no new task, event, or notification.
@@ -899,6 +1008,7 @@ If a request uses the key again with a _different_ payload, each SDK gives an er
 - Go returns the matching typed error.
 - Rust returns `Error::EnqueueIdempotencyConflict`.
 - Ruby raises `EnqueueIdempotencyConflictError`.
+- .NET throws `EnqueueIdempotencyConflictException`.
 
 No SDK ignores the difference. The handler still runs at least one time, and sometimes more. Thus,
 its external effects must also be safe to repeat.
@@ -913,7 +1023,7 @@ A redrive makes a new task from a failed task. Like each task, the new task runs
 2. Use one request ID for the incident on all pages. Then, if the script crashes, you can run it
    again without duplicate work.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
@@ -1150,6 +1260,36 @@ A redrive makes a new task from a failed task. Like each task, the new task runs
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public async Task RedriveIncidentAsync()
+    {
+        var filter = new RedriveFilter { Queue = "billing", ErrorName = "ProviderTimeout", Limit = 100 };
+        var audit = new AdminAudit
+        {
+            Actor = "reviewer@example.com",
+            Reason = "provider incident INC-2041 resolved",
+            RequestId = "INC-2041",
+        };
+
+        var preview = await admin.RedriveManyAsync(filter with { DryRun = true }, audit);
+        Console.WriteLine($"{preview.Results.Count} tasks eligible");
+
+        DeadLetterCursor? cursor = null;
+        do
+        {
+            var page = await admin.RedriveManyAsync(filter with { Cursor = cursor }, audit);
+            foreach (var result in page.Results)
+            {
+                Console.WriteLine($"{result.Status} {result.SourceTaskId} -> {result.TargetTaskId}");
+            }
+
+            cursor = page.NextCursor;
+        }
+        while (cursor is not null);
+    }
+    ```
+  </Tab>
 </Tabs>
 
 Each redrive creates a new task. The new task copies the queue, the type, the payload, and the
@@ -1163,7 +1303,7 @@ A customer cancels an order while its export task runs. A worker cannot safely s
 arbitrary point. Thus, a cancellation is a durable request. Each SDK gives the request to the
 handler. The handler must check for the request and stop.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     // Operator side: record who asked and why.
@@ -1372,6 +1512,35 @@ handler. The handler must check for the request and stop.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public sealed record Export(IReadOnlyList<string> Parts);
+
+    public sealed record ExportResult(bool Exported);
+
+    public static void UploadPart(string part) => Console.WriteLine($"uploading {part}");
+
+    public async Task ConfigureExportAsync(Worker worker, Guid taskId)
+    {
+        await queue.CancelAsync(taskId, new CancelOptions
+        {
+            RequestedBy = "support@example.com",
+            Reason = "customer withdrew the order",
+        });
+
+        worker.Handle<Export, ExportResult>("export.build", (context, export) =>
+        {
+            foreach (var part in export.Parts)
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                UploadPart(part);
+            }
+
+            return Task.FromResult(new ExportResult(Exported: true));
+        });
+    }
+    ```
+  </Tab>
 </Tabs>
 
 If no worker runs the task, Workhorse cancels it immediately. For example, the task waits in the
@@ -1385,6 +1554,7 @@ handler:
 - Go cancels the standard context of the handler.
 - Rust reports the request through `context.cancellation()`.
 - Ruby reports the request through `context.cancellation`.
+- .NET cancels `context.CancellationToken`, and sets `context.CancelReason` to `Requested`.
 
 If a handler ignores the request, the worker loses the task after some time. Then Workhorse records
 the cancellation and does not retry the task.
@@ -1399,7 +1569,7 @@ must continue after a deployment.
 3. Wait on a durable timer.
 4. Wait for an approval signal, which the application sends with an idempotency key.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
@@ -1751,6 +1921,52 @@ must continue after a deployment.
     }
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    public interface IModel
+    {
+        Task<Plan> PlanAsync(string prompt, string idempotencyKey, CancellationToken cancellationToken);
+    }
+
+    public sealed record AgentRun(string Prompt, string ConversationId);
+
+    public sealed record Tool(string Id, string? Query);
+
+    public sealed record Plan(IReadOnlyList<Tool> Tools);
+
+    public sealed record Approval(bool Approved);
+
+    public sealed record AgentResult(
+        Plan Plan,
+        IReadOnlyDictionary<string, JsonElement> Tools,
+        bool Approved);
+
+    public static void RegisterAgent(Worker worker, IModel model, TimeSpan cooldown)
+    {
+        worker.Handle<AgentRun, AgentResult>("agent.run", async (context, run) =>
+        {
+            var plan = await context.CheckpointAsync(
+                "plan",
+                token => model.PlanAsync(run.Prompt, $"plan:{context.Task.Id}", token));
+
+            var children = plan.Tools
+                .Select(tool => new ChildRequest
+                {
+                    Name = tool.Id,
+                    TaskType = "agent.tool",
+                    Payload = tool,
+                    Options = new EnqueueOptions { Queue = "tools", ConcurrencyKey = run.ConversationId },
+                })
+                .ToList();
+
+            var tools = await context.RunChildrenAllAsync(children);
+            await context.SleepAsync("model-cooldown", cooldown);
+            var approval = await context.WaitForSignalAsync<Approval>("approval", null);
+            return new AgentResult(plan, tools, approval.Approved);
+        });
+    }
+    ```
+  </Tab>
 </Tabs>
 
 At each wait, the worker releases the task, and later the handler starts again from the start.
@@ -1768,6 +1984,8 @@ The repository has complete examples for each language:
 - `jvm/examples/programs/` shows the same steps in `OrchestrationProgram.java` and
   `OrchestrationProgram.kt`, and the full loop in `AgenticFlowProgram.java` and
   `AgenticFlowProgram.kt`.
+- `dotnet/examples/Workhorse.Examples.Programs/Scenarios/` shows the same steps in
+  `OrchestrationProgram.cs`, and the full loop in `AgenticFlowProgram.cs`.
 
 Each release lane checks the imports of the public package.
 

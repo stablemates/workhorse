@@ -25,7 +25,7 @@ default priority. All worker slots run earlier reminders.
 
 To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", priority: 10 });
@@ -78,6 +78,14 @@ To set a priority, give `EnqueueOptions.priority` when you enqueue the task.
     )
     ```
   </Tab>
+  <Tab value="C#">
+    ```csharp
+    await queue.EnqueueAsync(
+        "invoice.remind",
+        new { invoiceId },
+        new EnqueueOptions { Queue = "billing", Priority = 10 });
+    ```
+  </Tab>
 </Tabs>
 
 When a worker asks for work, PostgreSQL gives it the ready task with the highest priority. Tasks
@@ -128,12 +136,13 @@ creates a scan task with that stored priority.
 | Recurring schedules       | `ScheduledTask.priority`                            | 0 to 100, default 0 |
 | Go                        | `EnqueueOptions.Priority`, `ScheduledTask.Priority` | 0 to 100, default 0 |
 | Python, Rust, Ruby        | `priority`                                          | 0 to 100, default 0 |
+| .NET                      | `EnqueueOptions.Priority`, `ScheduledTask.Priority` | 0 to 100, default 0 |
 
 - `enqueue_batch_v1` rejects the whole batch when the priority of any member is outside the range.
 - `fire_schedule_v1` copies the stored priority of the definition into each occurrence task.
   `Queue.fireSchedule` and the schedule tick both use it.
 
-More detail: [Task lifecycle: Batch validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-validation).
+More detail: [Task lifecycle: Batch validation](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#batch-validation) and [Schema and SQL protocol: .NET queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-queue).
 
 </details>
 

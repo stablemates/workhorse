@@ -100,12 +100,13 @@ await queue.syncSchedules("billing", [
 | `Queue.enqueue` and batch | `EnqueueOptions.priority`                           | 0 to 100, default 0 |
 | Recurring schedules       | `ScheduledTask.priority`                            | 0 to 100, default 0 |
 | Go                        | `EnqueueOptions.Priority`, `ScheduledTask.Priority` | 0 to 100, default 0 |
+| .NET                      | `EnqueueOptions.Priority`, `ScheduledTask.Priority` | 0 to 100, default 0 |
 
 - `enqueue_batch_v1` rejects the whole batch when the priority of any member is outside the range.
 - `fire_schedule_v1` copies the stored priority of the definition into each occurrence task.
   `Queue.fireSchedule` and the schedule tick both use it.
 
-More detail: [Task lifecycle: Batch validation](../architecture/lifecycle.md#batch-validation).
+More detail: [Task lifecycle: Batch validation](../architecture/lifecycle.md#batch-validation) and [Schema and SQL protocol: .NET queue](../architecture/schema-and-protocol.md#net-queue).
 
 </details>
 

@@ -41,7 +41,7 @@ token.
 
 To set a rate limit, synchronize a rate-limit policy for the queue.
 
-<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin"]}>
+<Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
     await queue.syncRateLimitPolicies("workers", [{
@@ -120,6 +120,20 @@ To set a rate limit, synchronize a rate-limit policy for the queue.
           ),
         ),
       )
+    ```
+  </Tab>
+  <Tab value="C#">
+    ```csharp
+    var policies = await queue.SyncRateLimitPoliciesAsync(
+        "workers",
+        [
+            new RateLimitPolicyDefinition
+            {
+                Queue = "provider-api",
+                Rate = new RateLimit { Limit = 60, Interval = TimeSpan.FromMinutes(1), Burst = 10 },
+                PerKey = new RateLimit { Limit = 5, Interval = TimeSpan.FromMinutes(1), Burst = 2 },
+            },
+        ]);
     ```
   </Tab>
 </Tabs>
@@ -247,6 +261,9 @@ connection that your application owns. `Queue.list_rate_limit_policies` and
 In Rust, use `Queue::sync_rate_limit_policies` and `Queue::list_rate_limit_policies`. In Ruby, use
 `Queue#sync_rate_limit_policies` and `Queue#list_rate_limit_policies`.
 
+In C#, use `Queue.SyncRateLimitPoliciesAsync`. `Queue.ListRateLimitPoliciesAsync` returns the stored
+definitions.
+
 Use the same queue name when you enqueue. If the traffic of a caller needs its own bucket, set
 `concurrencyKey` to that caller.
 
@@ -263,6 +280,7 @@ with a full burst.
 | Go         | `Queue.SyncRateLimitPolicies(ctx, namespace, definitions, options...)`                             | `Queue.ListRateLimitPolicies(ctx, queueNames)`                              |
 | Rust       | `Queue::sync_rate_limit_policies(namespace, definitions, prune)`                                   | `Queue::list_rate_limit_policies`                                           |
 | Ruby       | `Queue#sync_rate_limit_policies(namespace, definitions, prune:)`                                   | `Queue#list_rate_limit_policies`                                            |
+| .NET       | `Queue.SyncRateLimitPoliciesAsync(namespace, definitions, prune)`                                  | `Queue.ListRateLimitPoliciesAsync(queues)`                                  |
 
 - Every SDK wraps `sync_rate_limit_policies_v1(namespace, definitions, prune)`.
 - A definition contains only `queue`, `rate`, and optional `perKey`.
@@ -277,7 +295,7 @@ with a full burst.
 - A listing has no implicit result cap. An omitted or empty list of names reads every policy.
 - A fast-tier queue rejects a rate-limit policy with `P1007`.
 
-More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization-1).
+More detail: [Data model: Synchronization](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#synchronization-1) and [Schema and SQL protocol: .NET queue](https://github.com/stablemates/workhorse/blob/main/docs/architecture/schema-and-protocol.md#net-queue).
 
 </details>
 

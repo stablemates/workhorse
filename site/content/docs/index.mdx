@@ -9,7 +9,7 @@ two systems that can disagree. An order can exist without its task, or a task ca
 that rolled back.
 
 Workhorse removes the second system. It is a durable task queue that uses PostgreSQL tables and
-versioned SQL functions. It has SDKs for TypeScript, Python, Go, Rust, Ruby, Java, and Kotlin.
+versioned SQL functions. It has SDKs for TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C#.
 It needs no broker, no Redis, and no PostgreSQL extension. One database holds your business data, your
 queued work, the state of each task, and the record of what occurred.
 
@@ -127,7 +127,7 @@ More detail: [Overview: Design objective](https://github.com/stablemates/workhor
 ## Decide if Workhorse fits your application
 
 Use Workhorse if your application uses PostgreSQL and needs reliable background work. Choose the
-TypeScript, Python, Go, Rust, Ruby, or JVM SDK. [Compatibility](/docs/compatibility) gives the supported
+TypeScript, Python, Go, Rust, Ruby, JVM, or .NET SDK. [Compatibility](/docs/compatibility) gives the supported
 versions of PostgreSQL and of each runtime.
 
 Workhorse is a public beta. You can use it for evaluation and for early production use. A minor
