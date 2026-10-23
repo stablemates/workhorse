@@ -3,6 +3,7 @@
 //
 // Documentation: https://workhorse.run/docs/worker-processes
 
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -15,6 +16,10 @@ import {
   runWorkerProcess,
   startWorkerProcess,
 } from "@stablemates/workhorse";
+
+// A guard against a stuck worker, not a performance bound. A busy PostgreSQL slows the claim, the
+// checkpoint, and the completion, so the wait has a deadline that a loaded host meets.
+const TASK_WAIT_MS = 30_000;
 
 export function createDedicatedWorker(databaseUrl) {
   return defineWorkerProcess({
@@ -41,7 +46,7 @@ export function createDedicatedWorker(databaseUrl) {
   });
 }
 
-async function verifyDedicatedWorker(databaseUrl) {
+export async function verifyDedicatedWorker(databaseUrl) {
   const runtime = await startWorkerProcess(createDedicatedWorker(databaseUrl));
   const observer = new Pool({ connectionString: databaseUrl });
   try {
@@ -49,15 +54,20 @@ async function verifyDedicatedWorker(databaseUrl) {
       orderId: "order-42",
     });
     const admin = new Admin(observer);
-    for (let pass = 0; pass < 100; pass += 1) {
-      const task = await admin.getTask(taskId);
+    const deadline = performance.now() + TASK_WAIT_MS;
+    let task;
+    do {
+      task = await admin.getTask(taskId);
       if (task?.state === "succeeded") return { taskId, result: task.result };
       if (task?.state === "failed" || task?.state === "canceled") {
         throw new Error(`Dedicated worker task finished in ${task.state} state`);
       }
       await delay(20);
-    }
-    throw new Error(`Dedicated worker did not finish ${taskId}`);
+    } while (performance.now() < deadline);
+    throw new Error(
+      `Dedicated worker did not finish ${taskId} within ${TASK_WAIT_MS} ms; ` +
+        `its last state was ${task?.state ?? "missing"}`,
+    );
   } finally {
     await runtime.shutdown();
     await observer.end();
