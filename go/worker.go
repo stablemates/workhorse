@@ -319,7 +319,9 @@ type WorkerOptions struct {
 	OnRegistrationError func(error)
 	// RetryDelay overrides the delay the persisted retry policy would choose, for one failed
 	// attempt. It returns nil to leave the choice to the policy, which is what a worker without
-	// this option always does.
+	// this option always does. Otherwise it returns a duration from 0 through 2147483647 ms. The
+	// worker rounds the duration to the nearest millisecond, half up. A negative duration, or one
+	// that rounds above the limit, makes the failure settlement return an error before fail_v1.
 	RetryDelay func(attempt int, task ClaimedTask) *time.Duration
 }
 
@@ -3531,18 +3533,26 @@ func (worker *Worker) releaseOwned(
 	return nil
 }
 
+// maxRetryDelay is the largest retry delay that fail_v1 accepts: the PostgreSQL integer maximum,
+// in milliseconds.
+const maxRetryDelay = 2147483647 * time.Millisecond
+
 // retryDelayOverride reports the delay this attempt sends to fail_v1, in milliseconds. A worker
 // without the option, or a callback that declines, sends nil and PostgreSQL applies the persisted
-// retry policy.
-func (worker *Worker) retryDelayOverride(task ClaimedTask) any {
+// retry policy. The delay rounds to the nearest millisecond, half up. A negative delay, or one that
+// rounds above maxRetryDelay, is an error before fail_v1 (ADR 0111).
+func (worker *Worker) retryDelayOverride(task ClaimedTask) (any, error) {
 	if worker.retryDelay == nil {
-		return nil
+		return nil, nil
 	}
 	delay := worker.retryDelay(task.Attempt, task)
-	if delay == nil || *delay < 0 {
-		return nil
+	if delay == nil {
+		return nil, nil
 	}
-	return delay.Milliseconds()
+	if *delay < 0 || *delay >= maxRetryDelay+time.Millisecond/2 {
+		return nil, fmt.Errorf(retryDelayRangeMessage, *delay, maxRetryDelay)
+	}
+	return int64((*delay + time.Millisecond/2) / time.Millisecond), nil
 }
 
 // durableReplayConflictName recognizes typed conflicts through ordinary Go error wrapping.
@@ -3583,8 +3593,8 @@ func (worker *Worker) failWithState(
 	var delay any
 	if durableReplayConflictName(handlerError) != emptyString {
 		delay = int64(-1)
-	} else {
-		delay = worker.retryDelayOverride(task)
+	} else if delay, err = worker.retryDelayOverride(task); err != nil {
+		return emptyString, err
 	}
 	arguments := append(lease.parameters(), encoded, delay)
 	rows, err := queryFencedWrite(ctx, executor, protocolStatementRegistry[failStatementName], arguments...)

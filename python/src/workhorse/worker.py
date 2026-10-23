@@ -1475,6 +1475,25 @@ class _HandlerDurability:
         return versions
 
 
+# fail_v1 takes the delay as a PostgreSQL integer. A larger delay would fail the failure write,
+# so the worker refuses it first (ADR 0111).
+_MAX_RETRY_DELAY_MS = 2_147_483_647
+
+
+def _checked_retry_delay_ms(value: object, prefix: str) -> int:
+    """Return a retry delay override that fail_v1 accepts, or raise ValueError."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= _MAX_RETRY_DELAY_MS
+    ):
+        raise ValueError(
+            f"{prefix} an integer number of milliseconds between 0 and "
+            f"{_MAX_RETRY_DELAY_MS}, or None"
+        )
+    return value
+
+
 class Worker:
     """A synchronous worker over a Psycopg connection pool.
 
@@ -1615,6 +1634,8 @@ class Worker:
         # retention routines on their own cadence, because PostgreSQL decides which phase is due.
         self.maintenance_routine_poll_ms = maintenance_routine_poll_ms
         self._last_routine_offer_at = float("-inf")
+        if retry_delay_ms is not None and not callable(retry_delay_ms):
+            _checked_retry_delay_ms(retry_delay_ms, "retry_delay_ms must be")
         self.retry_delay_ms = retry_delay_ms
         self.registry_interval_ms = registry_interval_ms
         self.schedule_namespaces = unique_namespaces
@@ -3159,9 +3180,7 @@ class Worker:
             override = override(task.attempt, task)
         if override is None:
             return None
-        if isinstance(override, bool) or not isinstance(override, int) or override < 0:
-            raise ValueError("retry_delay_ms must be a whole number of milliseconds, or None")
-        return override
+        return _checked_retry_delay_ms(override, "retry_delay_ms must return")
 
     def _seconds_until_maintenance_due(self) -> float:
         """Report how long the maintenance thread waits before the tick or the routines are due."""

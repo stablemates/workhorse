@@ -99,3 +99,26 @@ def test_a_retry_delay_that_is_not_milliseconds_is_rejected() -> None:
     worker = _worker(retry_delay_ms=lambda _attempt, _task: -1)
     with pytest.raises(ValueError, match="retry_delay_ms"):
         worker._retry_delay_override(_task())
+
+
+_LIMIT = 2_147_483_647
+
+
+@pytest.mark.parametrize("delay", [_LIMIT, 0, 1])
+def test_a_retry_delay_inside_the_sql_integer_range_is_sent(delay: int) -> None:
+    assert _worker(retry_delay_ms=delay)._retry_delay_override(_task()) == delay
+    callable_worker = _worker(retry_delay_ms=lambda _attempt, _task: delay)
+    assert callable_worker._retry_delay_override(_task()) == delay
+
+
+@pytest.mark.parametrize("delay", [_LIMIT + 1, -1, 1.5, 2.0, True])
+def test_a_fixed_retry_delay_outside_the_range_is_refused_at_construction(delay: object) -> None:
+    with pytest.raises(ValueError, match="retry_delay_ms must be an integer"):
+        _worker(retry_delay_ms=delay)
+
+
+@pytest.mark.parametrize("delay", [_LIMIT + 1, -1, 1.5, True])
+def test_a_callable_retry_delay_outside_the_range_is_refused_before_fail(delay: object) -> None:
+    worker = _worker(retry_delay_ms=lambda _attempt, _task: delay)
+    with pytest.raises(ValueError, match="retry_delay_ms must return an integer"):
+        worker._retry_delay_override(_task())

@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### retry_delay refuses a small negative value and rounds exact values exactly
+
+`fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, the worker rounded a
+`retry_delay` to milliseconds first. Thus a negative value such as `-0.0004` became 0 and passed.
+The worker also converted the value to a Float first, so `Rational(1001, 2000)`, which is exactly
+500.5 ms, became 500 ms (SM-1668).
+
+Now the worker raises `ArgumentError` for every negative `retry_delay`, at construction for a fixed
+value and before `fail_v1` for a callable result. It converts Integer, Rational, and BigDecimal
+seconds exactly and rounds half up, so that value becomes 501 ms. ADR 0111 records the rule for all
+seven SDKs.
+
 ### A raising reporter callback no longer stops the worker
 
 An application can give `on_registration_error` to the worker to send an alert. Before this change,

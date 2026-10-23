@@ -115,6 +115,27 @@ public sealed class WorkerUnitTests
         Assert.Equal(Monotonic.Millis(20), Heartbeat.BusyRetryMinNanos);
     }
 
+    // fail_v1 takes an integer, so the override range ends at 2147483647 ms (SM-1668 PAR-06).
+    [Theory]
+    [InlineData(2_147_483_647L * TimeSpan.TicksPerMillisecond, 2_147_483_647)]
+    [InlineData(2_147_483_647L * TimeSpan.TicksPerMillisecond + 4_999, 2_147_483_647)]
+    [InlineData(0L, 0)]
+    [InlineData(5_000L, 1)]
+    [InlineData(14_000L, 1)]
+    [InlineData(15_000L, 2)]
+    [InlineData(25_000L, 3)]
+    public void ARetryDelayRoundsHalfUpToMilliseconds(long ticks, int milliseconds) =>
+        Assert.Equal(milliseconds, Worker.RetryDelayMilliseconds(TimeSpan.FromTicks(ticks)));
+
+    [Theory]
+    [InlineData(2_147_483_648L * TimeSpan.TicksPerMillisecond)]
+    [InlineData(2_147_483_647L * TimeSpan.TicksPerMillisecond + 5_000)]
+    [InlineData(-TimeSpan.TicksPerMillisecond)]
+    [InlineData(-1L)]
+    [InlineData(long.MaxValue)]
+    public void ARetryDelayOutsideTheSqlIntegerRangeIsRefused(long ticks) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => Worker.RetryDelayMilliseconds(TimeSpan.FromTicks(ticks)));
+
     [Fact]
     public void TheOptionDefaultsAreTheAdr0072Values()
     {

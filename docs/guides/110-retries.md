@@ -144,6 +144,9 @@ You can also give a delay that has priority over the policy. `Queue.fail` takes 
 delay of 0 retries the task at once. If the function returns `undefined`, Workhorse uses the policy
 of the task.
 
+The worker refuses a delay that is negative or too large for PostgreSQL to store. It refuses the
+delay before it writes the failure, and it never changes the delay to a value that fits.
+
 <details>
 <summary>Reference: delay precedence</summary>
 
@@ -163,10 +166,15 @@ of the task.
 `WorkerOptions.retryDelayMs` is a number or `(attempt, task) => number | undefined`. A callback that
 returns `undefined` gives no override, so step 2 or 3 applies.
 
+A `WorkerOptions.retryDelayMs` override must be a safe integer from 0 through 2,147,483,647. A fixed
+value outside that range throws at construction. A callback result outside it rejects the worker
+run before `fail_v1`. The SDKs that take a duration round it to the nearest millisecond, half up,
+and then check the same range.
+
 `fail_v1` reserves a delay of `-1` for a terminal failure: the task fails with no retry, even with
 attempts left. The worker sends it for a durable replay conflict.
 
-More detail: [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection) and [Schema and SQL protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
+More detail: [Data model: Retry delay selection](../architecture/data-model.md#retry-delay-selection), [Lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Schema and SQL protocol: Durable replay conflicts](../architecture/schema-and-protocol.md#durable-replay-conflicts).
 
 </details>
 

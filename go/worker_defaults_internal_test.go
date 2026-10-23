@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,7 +155,7 @@ func TestWorkerRejectsAnUnusableMaintenanceRoutineInterval(t *testing.T) {
 func TestWorkerSendsTheRetryDelayOverrideInMilliseconds(t *testing.T) {
 	task := ClaimedTask{ID: "task", Attempt: 2}
 	worker := newDefaultWorker(t, WorkerOptions{})
-	if override := worker.retryDelayOverride(task); override != nil {
+	if override, _ := worker.retryDelayOverride(task); override != nil {
 		t.Fatalf("a worker without the option sends %v, want nil", override)
 	}
 
@@ -166,7 +167,7 @@ func TestWorkerSendsTheRetryDelayOverrideInMilliseconds(t *testing.T) {
 			return &delay
 		},
 	})
-	if override := worker.retryDelayOverride(task); override != int64(1500) {
+	if override, _ := worker.retryDelayOverride(task); override != int64(1500) {
 		t.Fatalf("override: got %v, want 1500", override)
 	}
 	if observed != task.Attempt {
@@ -176,7 +177,44 @@ func TestWorkerSendsTheRetryDelayOverrideInMilliseconds(t *testing.T) {
 	declining := newDefaultWorker(t, WorkerOptions{
 		RetryDelay: func(int, ClaimedTask) *time.Duration { return nil },
 	})
-	if override := declining.retryDelayOverride(task); override != nil {
+	if override, _ := declining.retryDelayOverride(task); override != nil {
 		t.Fatalf("a callback that declines sends %v, want nil", override)
+	}
+}
+
+func TestWorkerRefusesARetryDelayOutsideTheSQLIntegerRange(t *testing.T) {
+	task := ClaimedTask{ID: "task", Attempt: 2}
+	cases := []struct {
+		name  string
+		delay time.Duration
+		want  any
+	}{
+		{"the limit", 2147483647 * time.Millisecond, int64(2147483647)},
+		{"below the limit by less than half a millisecond", 2147483647*time.Millisecond + 499*time.Microsecond, int64(2147483647)},
+		{"zero", 0, int64(0)},
+		{"a fraction that rounds down", 1400 * time.Microsecond, int64(1)},
+		{"a fraction that rounds up", 1500 * time.Microsecond, int64(2)},
+		{"one above the limit", 2147483648 * time.Millisecond, nil},
+		{"half a millisecond above the limit", 2147483647*time.Millisecond + 500*time.Microsecond, nil},
+		{"a negative delay", -time.Millisecond, nil},
+		{"a negative delay that rounds to zero", -time.Nanosecond, nil},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			delay := testCase.delay
+			worker := newDefaultWorker(t, WorkerOptions{
+				RetryDelay: func(int, ClaimedTask) *time.Duration { return &delay },
+			})
+			override, err := worker.retryDelayOverride(task)
+			if testCase.want == nil {
+				if err == nil || !strings.Contains(err.Error(), "RetryDelay") {
+					t.Fatalf("override %v: got %v and err %v, want a RetryDelay error", delay, override, err)
+				}
+				return
+			}
+			if err != nil || override != testCase.want {
+				t.Fatalf("override %v: got %v and err %v, want %v", delay, override, err, testCase.want)
+			}
+		})
 	}
 }
