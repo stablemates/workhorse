@@ -13,6 +13,7 @@ import { Menu } from "./dropdown-activity.js";
 import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DashboardNotifications } from "./notifications.js";
+import { readStoredValue, storeValue } from "./browser-storage.js";
 
 export type DashboardColorScheme = "light" | "dark";
 
@@ -54,7 +55,7 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function readInitialScheme(): DashboardColorScheme {
-  const stored = localStorage.getItem(themeStorageKey) as DashboardColorScheme | null;
+  const stored = readStoredValue(themeStorageKey) as DashboardColorScheme | null;
   if (stored && themeSchemes.has(stored)) return stored;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -63,7 +64,7 @@ export function WorkhorseThemeProvider({ children }: { children: ReactNode }) {
   const [scheme, setScheme] = useState<DashboardColorScheme>(readInitialScheme);
 
   useEffect(() => {
-    localStorage.setItem(themeStorageKey, scheme);
+    storeValue(themeStorageKey, scheme);
     document.documentElement.style.colorScheme = scheme;
 
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
