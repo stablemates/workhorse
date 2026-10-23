@@ -33,36 +33,64 @@ client, `Admin` client, dashboard backend, worker runtime, durable handler conte
 batch delivery, and OpenTelemetry support are tested today. Every JVM cell of the capability tables
 below is Supported. Maven Central serves the JVM artifacts from `0.9.0`.
 
+The .NET SDK is the seventh SDK ([ADR
+0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)).
+Its `.NET` column describes the `Workhorse` package. Every `Workhorse.Hosting`,
+`Workhorse.EntityFrameworkCore`, and `Workhorse.AspNetCore` caller uses that package. Its client,
+`Admin` client, dashboard backend, worker runtime, durable handler context, fast task tier, batch
+delivery, and telemetry are tested today. Every .NET cell of the capability tables below is
+Supported. Two known differences do not change a cell:
+
+- The public demo runs no .NET worker. [SM-1630](https://linear.app/stablemates/issue/SM-1630) adds
+  a .NET demo worker program that only tests run. The maintainer decides in
+  [SM-1680](https://linear.app/stablemates/issue/SM-1680) whether the public demo runs it.
+- CI tests `Workhorse.EntityFrameworkCore` on EF Core 10 only. EF Core 11 waits for its Npgsql
+  provider ([SM-1678](https://linear.app/stablemates/issue/SM-1678)). The "Transactional enqueue in a
+  caller-owned tx" cell describes the `Workhorse` package, so EF Core 10 does not limit it.
+
 ## Client (enqueue side)
 
 <!-- BEGIN GENERATED PARITY CLIENT -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       |
-| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- | --------- |
-| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Task groups with completion callbacks      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Priority                                   | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Tags and max attempts                      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Persisted retry policies                   | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Enqueue idempotency                        | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Keyed debounce                             | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Keyed throttle                             | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Task dependencies with terminal policies   | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Concurrency keys                           | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Concurrency policy management              | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Rate-limit policy management               | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Named budget management                    | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Payload and result contracts               | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Public startup schema compatibility check  | Supported  | Supported | Supported | Supported | Supported | Supported |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Enqueue trace-context propagation          | Supported  | Supported | Supported | Supported | Supported | Supported |
+| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       | .NET      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- | --------- | --------- |
+| Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Atomic batch enqueue                       | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Task groups with completion callbacks      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Priority                                   | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Tags and max attempts                      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Persisted retry policies                   | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Enqueue idempotency                        | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Keyed debounce                             | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Keyed throttle                             | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Task dependencies with terminal policies   | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Concurrency keys                           | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Concurrency policy management              | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Rate-limit policy management               | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Named budget management                    | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Recurring schedule definition sync         | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Payload and result contracts               | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Compatibility refusal before mutation      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Public startup schema compatibility check  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Enqueue trace-context propagation          | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY CLIENT -->
+
+The .NET "Enqueue trace-context propagation" cell cites the C# implementation and its test.
+`Instrumentation.InjectTraceContext` in `dotnet/src/Workhorse/Internal/Telemetry/Instrumentation.cs`
+stores the W3C trace context of the caller at enqueue. The test
+`TelemetryDatabaseTests.TheHandlerSpanContinuesTheTraceOfTheEnqueue` checks that the handler span
+continues that trace.
+
+A .NET caller gets the PostgreSQL diagnostic details with the default Npgsql settings. Npgsql hides
+DETAIL unless the connection string sets `Include Error Detail=true`. So the SDK reads the same JSON
+from HINT when DETAIL is hidden ([ADR
+0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md),
+"Amendment: HINT carries the diagnostic details"). The test
+`ErrorDetailTests.ADefaultDataSourceFillsTheTypedValuesFromTheHint` holds this.
 
 ## Worker runtime
 
@@ -72,30 +100,30 @@ telemetry, and graceful shutdown.
 
 <!-- BEGIN GENERATED PARITY WORKER -->
 
-| Capability                                                  | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       |
-| ----------------------------------------------------------- | ---------- | --------- | --------- | --------- | --------- | --------- |
-| Claiming and handler execution                              | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Checkpoint input check                                      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Task group reads and adds from a handler                    | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Batch handler delivery                                      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Graceful stop and signal drain                              | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Retention maintenance participation                         | Supported  | Supported | Supported | Supported | Supported | Supported |
-| OpenTelemetry tracing and metrics                           | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Shared runtime fixtures executed                            | Supported  | Supported | Supported | Supported | Supported | Supported |
+| Capability                                                  | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       | .NET      |
+| ----------------------------------------------------------- | ---------- | --------- | --------- | --------- | --------- | --------- | --------- |
+| Claiming and handler execution                              | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Bounded worker concurrency                                  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Fast task tier with one outcome row per task                | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Fused fast-tier completion and refill claim in slot cohorts | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Unhandled task type released to its queue                   | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Heartbeats, lease recovery, fenced ownership                | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Cooperative cancellation delivery                           | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Notification-assisted dispatch with polling                 | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Durable checkpoints (handler context)                       | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Checkpoint input check                                      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Durable timers (`sleep` / `sleepUntil`)                     | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Signal and human-decision waits                             | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Linked child fan-out and result join                        | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Task group reads and adds from a handler                    | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Latest-value progress reporting                             | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Batch handler delivery                                      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Schedule firing (database cron evaluation)                  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Worker fleet registration and remote pause                  | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Graceful stop and signal drain                              | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Retention maintenance participation                         | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| OpenTelemetry tracing and metrics                           | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Shared runtime fixtures executed                            | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY WORKER -->
 
@@ -103,6 +131,11 @@ The `workhorse-kotlin` module reaches every cell of the JVM column through the c
 handlers, its worker DSL, and its suspend wrappers call the `workhorse` artifact and add no protocol
 behavior. The Spring Boot starter reaches every Client, Worker, and Operator cell through the
 `Queue` and `Admin` beans and the `Worker` that it builds.
+
+`Workhorse.Hosting` reaches every Client and Worker cell of the .NET column through the services it
+registers: the `Queue`, the `Admin`, and the hosted `Worker`. A .NET `Worker` installs no signal
+handler. The Generic Host stops it when the process gets a stop signal. The "Graceful stop and
+signal drain" cell cites the test that drains a hosted worker when the host stops.
 
 ## Active Job reachability
 
@@ -159,7 +192,7 @@ Job cell can be Supported only while the native Ruby cell for the same capabilit
 
 A capability row answers whether a language can do something. It says nothing about what that
 language does when the caller configures nothing, and that is the behavior an operator actually
-runs. Six runtimes can agree on every row above and still drain, poll, and retry differently out
+runs. Seven runtimes can agree on every row above and still drain, poll, and retry differently out
 of the box.
 
 The table below is the whole list. A default differs only where the host language forces it, which
@@ -168,23 +201,23 @@ differ today, and the reasons follow the table.
 
 <!-- BEGIN GENERATED PARITY DEFAULTS -->
 
-| Setting                                           | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                                      | JVM                                                       |
-| ------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
-| Worker concurrency                                | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
-| Lease duration                                    | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 |
-| Heartbeat interval                                | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           |
-| Claim poll interval (subscription live)           | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Claim poll interval (polling only)                | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
-| Empty-claim backoff ceiling                       | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Maintenance tick interval                         | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  |
-| Maintenance routine offer interval                | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 |
-| Worker registry interval                          | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
-| Schedule catch-up limit                           | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
-| Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
-| Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
-| Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       |
-| Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
-| Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
+| Setting                                           | TypeScript                                                | Python                                                    | Go                                                        | Rust                                                      | Ruby                                                      | JVM                                                       | .NET                                                      |
+| ------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| Worker concurrency                                | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         | 1                                                         |
+| Lease duration                                    | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 | 30,000 ms                                                 |
+| Heartbeat interval                                | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           | max(100 ms, lease duration / 3)                           |
+| Claim poll interval (subscription live)           | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Claim poll interval (polling only)                | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    | 250 ms                                                    |
+| Empty-claim backoff ceiling                       | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Maintenance tick interval                         | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  | 1,000 ms                                                  |
+| Maintenance routine offer interval                | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 | 60,000 ms                                                 |
+| Worker registry interval                          | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  | 5,000 ms                                                  |
+| Schedule catch-up limit                           | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       | 100                                                       |
+| Dispatch cohorts                                  | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 | 1 below concurrency 8, else concurrency / 8 within 2 to 8 |
+| Shutdown grace, then                              | 25,000 ms, then exit the process                          | 25,000 ms, then exit the process                          | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      | 25,000 ms, then abandon the handlers                      |
+| Handler retry delay override                      | `retryDelayMs`, unset                                     | `retry_delay_ms`, unset                                   | `RetryDelay`, unset                                       | `retry_delay`, unset                                      | `retry_delay`, unset                                      | `retryDelay`, unset                                       | `RetryDelay`, unset                                       |
+| Queue of a handler task group add without a queue | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              | The queue of the member task                              |
+| Queue of a child task request without a queue     | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              | The queue of the parent task                              |
 
 <!-- END GENERATED PARITY DEFAULTS -->
 
@@ -199,7 +232,7 @@ Three rows carry a condition the setting name alone cannot.
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
   default at the connections left after its listener and heartbeat connection. An explicit
   cohort count is never capped.
-- **Maintenance routine offer interval.** All six tick maintenance every 1,000 ms, which bounds
+- **Maintenance routine offer interval.** All seven tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls.
 
@@ -208,31 +241,31 @@ container platform gives a process by default. What follows that deadline cannot
 the one accepted exception.
 
 A TypeScript or Python worker owns a process, so its deadline ends that process. A Go, Rust, Ruby,
-or JVM `Worker` runs inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
+JVM, or .NET `Worker` runs inside a caller's process, and a library that ends someone else's process is wrong. Its deadline
 cancels the handlers, gives them one short window to unwind, then stops renewing the leases of
 whatever still runs. It returns `ErrShutdownIncomplete` in Go or `Error::ShutdownIncomplete` in
 Rust. It raises `ShutdownIncompleteError` in Ruby and throws `ShutdownIncompleteException` on the
-JVM. The caller decides whether to exit.
+JVM and in .NET. The caller decides whether to exit.
 
 PostgreSQL sees the same thing either way. An abandoned handler holds a lease no one renews, so
 `recover_expired_telemetry_v1` recovers its task exactly as it recovers the task of a process that
-exited at its own deadline. What differs is what the handler observes: a Go, Rust, Ruby, or JVM
+exited at its own deadline. What differs is what the handler observes: a Go, Rust, Ruby, JVM, or .NET
 handler observes cancellation, where a TypeScript or Python handler observes termination.
 
 The queue of a handler task group add agrees. A handler can add a task to its own task group. If
-the request names no queue, all six SDKs put the task in the queue of the member task that adds it.
+the request names no queue, all seven SDKs put the task in the queue of the member task that adds it.
 A worker just ran that member task, so a worker serves its queue. The queue of a child task request
-agrees for the same reason. If a child task request names no queue, all six SDKs put the child in
+agrees for the same reason. If a child task request names no queue, all seven SDKs put the child in
 the queue of the parent task. [ADR
 0097](decisions/0097-put-work-that-a-handler-creates-on-the-queue-of-its-task.md) records the rule.
 
 The retry delay override sends one attempt's delay to `fail_v1` in place of the persisted policy's
-choice. All six SDKs carry it and all six leave it unset, so the persisted retry policy chooses
+choice. All seven SDKs carry it and all seven leave it unset, so the persisted retry policy chooses
 every delay until a caller says otherwise.
 
 ## Integer semantics
 
-PostgreSQL stores a `jsonb` number at full precision, but the six SDKs do not read one the same way.
+PostgreSQL stores a `jsonb` number at full precision, but the SDKs do not read one the same way.
 Python decodes a JSON integer as a Python `int`, which is unbounded. Ruby decodes it through
 `JSON.parse` as an `Integer`, which is also unbounded. The JVM default codec,
 `JsonCodec.standard()`, decodes it as a `Long` inside the signed 64-bit range and as a `BigInteger`
@@ -295,23 +328,23 @@ through its own public SDK.
 
 <!-- BEGIN GENERATED PARITY OPERATOR -->
 
-| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       |
-| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- | --------- |
-| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Queue health snapshot                      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Queue tier and history controls            | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Task group cancel                          | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Task group drift listing and repair        | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Durable operator worker pause              | Supported  | Supported | Supported | Supported | Supported | Supported |
-| Embedded dashboard backend                 | Supported  | Supported | Supported | Supported | Supported | Supported |
+| Capability                                 | TypeScript | Python    | Go        | Rust      | Ruby      | JVM       | .NET      |
+| ------------------------------------------ | ---------- | --------- | --------- | --------- | --------- | --------- | --------- |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Queue health snapshot                      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Cancellation requests                      | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Queue tier and history controls            | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Dead-letter listing and redrive            | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Task group cancel                          | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Task group drift listing and repair        | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
+| Embedded dashboard backend                 | Supported  | Supported | Supported | Supported | Supported | Supported | Supported |
 
 <!-- END GENERATED PARITY OPERATOR -->
 
-TypeScript, Go, Rust, Ruby, and the JVM expose these methods through dedicated public `Admin`
+TypeScript, Go, Rust, Ruby, the JVM, and .NET expose these methods through dedicated public `Admin`
 clients. Python provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg.
 Their embedded dashboards call the same clients for shared operator reads and controls. Cancellation
 remains application-shaped, so every queue client exposes it with audit attribution.
@@ -336,7 +369,7 @@ operator surface. Only the TypeScript SDK has public methods for these operator 
 `Admin` also has `getRetentionPolicy`, `previewRetentionPolicy`, and `getMaintenancePolicy` in
 TypeScript only. The statement catalogue of each SDK holds the SQL of many of these operations,
 for example `run_task_now_v1` and `get_retention_policy_v1`. No public method in Python, Go, Rust,
-Ruby, or the JVM uses those statements. In those languages, the embedded dashboard gives some of
+Ruby, the JVM, or .NET uses those statements. In those languages, the embedded dashboard gives some of
 these operations: run now, the lineage reads, and the retention and maintenance policy controls.
 For the other operations, an operator must run TypeScript code.
 
@@ -344,9 +377,11 @@ ADR 0059 sets the 1.0.0 parity bar, and the TypeScript-only methods are not part
 Amendments to [ADR 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md),
 [ADR 0075](decisions/0075-shape-the-ruby-sdk-as-one-gem-with-an-active-job-adapter.md), and
 [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
-state this bar for the Rust, Ruby, and JVM `Admin` clients.
+state this bar for the Rust, Ruby, and JVM `Admin` clients. [ADR
+0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+states it for the .NET `Admin` client.
 
-The queue tier and history controls are in the `Admin` client of all six SDKs.
+The queue tier and history controls are in the `Admin` client of all seven SDKs.
 [SM-1417](https://linear.app/stablemates/issue/SM-1417) added them to Ruby and the JVM.
 
 The embedded dashboard backend row records which language can serve the dashboard from its own HTTP
@@ -355,13 +390,14 @@ that backend passes the shared `dashboard/v1` HTTP fixtures. [ADR
 0074](decisions/0074-shape-the-rust-sdk-as-one-python-shaped-crate.md) gives Rust a `tower::Service`
 backend behind the `dashboard` feature. Ruby serves it as a Rack application that a Rails route or
 `Rack::Builder#map` mounts. The JVM serves it as `run.workhorse.dashboard.Dashboard`, a Jakarta
-Servlet filter that the host application registers.
+Servlet filter that the host application registers. .NET serves it from `Workhorse.AspNetCore`,
+whose `MapWorkhorseDashboard` maps it on an ASP.NET Core route.
 
 ## Schema tooling is TypeScript-only, deliberately
 
 Schema installation and migration ship in `@stablemates/workhorse` and nowhere else. That is a
 decision, not a gap in the matrix. Thus no row above records it as Absent for Python, Go, Rust,
-Ruby, or the JVM.
+Ruby, the JVM, or .NET.
 
 Two reasons hold it there. No component can own an automatic migration, because no component is a
 singleton: the dashboard and every worker deploy on many nodes as part of an ordinary application
@@ -372,7 +408,7 @@ rejection, per-step atomic rollback, and a concurrent-migrator race that must be
 One implementation of that is worth more than five filled cells
 ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
 
-A Python, Go, Rust, Ruby, Java, or Kotlin deployment therefore runs the TypeScript CLI as a
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET deployment therefore runs the TypeScript CLI as a
 pipeline step, at the version its own SDK declares. It verifies with `workhorse schema status
 --json` before it starts. What every
 language does ship is the startup check that reads the result: the "Public startup schema
@@ -392,15 +428,17 @@ it does not promise a second migration runner in each language.
 If a cell says Supported, tests in this repository must exercise that capability in that language.
 The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
 suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
-`Worker`. All six SDKs execute `protocol/v1/contracts.json`. The Python suite runs the SQL
+`Worker`. All seven SDKs execute `protocol/v1/contracts.json`. The Python suite runs the SQL
 fixtures through `python/tests/test_protocol_conformance.py` and every runtime fixture through
 `python/tests/test_worker_runtime_conformance.py`. The Rust suite runs every `protocol/v1` fixture
 category through `rust/tests/protocol_conformance.rs`, and
 `rust/tests/conformance/expected-unsupported.json` lists no exception. The Ruby suite runs every
 `protocol/v1` fixture through `ruby/spec/conformance/protocol_conformance_spec.rb`. The JVM suite
 runs every `protocol/v1` fixture through
-`jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`. The Ruby and
-JVM `expected-unsupported.json` files list no exception. Each suite fails if a fixture that the file
+`jvm/workhorse/src/test/java/run/workhorse/conformance/ProtocolConformanceTest.java`. The .NET suite
+runs every `protocol/v1` fixture through
+`dotnet/tests/Workhorse.Tests/Conformance/ProtocolConformanceTests.cs`. The Ruby, JVM, and .NET
+`expected-unsupported.json` files list no exception. Each suite fails if a fixture that the file
 does not list does not pass.
 
 `scripts/generate-parity-tables.ts` renders every capability matrix from
@@ -432,6 +470,15 @@ listed fixture that passes, so a gap closes by removing its entry. `pnpm parity:
 cited fixture does not exist or the list still holds it. It also fails when no test file by that
 name exists or the file has no `@Test` method by that name. CI runs that suite with
 `WORKHORSE_REQUIRE_DATABASE=1`, so a database test cannot skip there.
+
+A .NET Supported cell follows the same rule. It names either `protocol/v1` fixtures or one xUnit
+test method in a test project that `pnpm dotnet:test` runs. The .NET runner fails on a fixture that
+neither passes nor appears on its expected-unsupported list. It also fails on a listed fixture that
+passes, so a gap closes by removing its entry. `pnpm parity:check` fails when a cited fixture does
+not exist or the list still holds it. It also fails when no test file by that name exists, or the
+file has no `[Fact]` or `[Theory]` method by that name, or that method sets `Skip`. CI sets `CI`, so
+a .NET database test cannot skip there. A cell can also name the C# implementation that its test
+proves. Then `pnpm parity:check` fails when that file does not contain the named text.
 
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
 can supply one. Naming a test file that never exercises the capability would satisfy it. The rule

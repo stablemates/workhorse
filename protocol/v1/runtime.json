@@ -343,7 +343,8 @@
           "go": "CheckpointConflictError",
           "rust": "CheckpointConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -357,7 +358,8 @@
           "go": "CheckpointConflictError",
           "rust": "CheckpointConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -371,7 +373,8 @@
           "go": "WaitConflictError",
           "rust": "WaitConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -385,7 +388,8 @@
           "go": "ChildConflictError",
           "rust": "ChildConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -399,7 +403,8 @@
           "go": "ChildConflictError",
           "rust": "ChildConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -413,7 +418,8 @@
           "go": "HumanWaitConflictError",
           "rust": "HumanWaitConflictError",
           "ruby": "Stablemates::Workhorse::ConflictError",
-          "java": "ConflictException"
+          "java": "ConflictException",
+          "csharp": "ConflictException"
         }
       },
       {
@@ -427,7 +433,8 @@
           "go": "ChildLimitExceededError",
           "rust": "Error",
           "ruby": "Stablemates::Workhorse::LimitExceededError",
-          "java": "LimitExceededException"
+          "java": "LimitExceededException",
+          "csharp": "LimitExceededException"
         }
       },
       {
@@ -441,7 +448,8 @@
           "go": "SignalWaitConflictError",
           "rust": "Error",
           "ruby": "Stablemates::Workhorse::AlreadyWaitingError",
-          "java": "AlreadyWaitingException"
+          "java": "AlreadyWaitingException",
+          "csharp": "AlreadyWaitingException"
         }
       },
       {
@@ -455,7 +463,8 @@
           "go": "Error",
           "rust": "Error",
           "ruby": "StandardError",
-          "java": "Exception"
+          "java": "Exception",
+          "csharp": "Exception"
         }
       },
       {
@@ -469,7 +478,8 @@
           "go": "RedactedTaskError",
           "rust": "RedactedTaskError",
           "ruby": "RedactedTaskError",
-          "java": "RedactedTaskError"
+          "java": "RedactedTaskError",
+          "csharp": "RedactedTaskError"
         }
       }
     ]
@@ -490,7 +500,8 @@
       "go": "TaskValueSizeLimitError",
       "rust": "TaskValueSizeLimitError",
       "ruby": "Stablemates::Workhorse::ValueSizeLimitError",
-      "java": "ValueSizeLimitException"
+      "java": "ValueSizeLimitException",
+      "csharp": "ValueSizeLimitException"
     },
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },
@@ -510,7 +521,8 @@
       "go": "TaskValueSizeLimitError",
       "rust": "TaskValueSizeLimitError",
       "ruby": "Stablemates::Workhorse::ValueSizeLimitError",
-      "java": "ValueSizeLimitException"
+      "java": "ValueSizeLimitException",
+      "csharp": "ValueSizeLimitException"
     },
     "expectedFitting": { "state": "succeeded", "attempt": 1 }
   },
@@ -529,7 +541,8 @@
       "go": "cancel",
       "rust": "cancel",
       "ruby": "cancel",
-      "java": "cancel"
+      "java": "cancel",
+      "csharp": "cancel"
     },
     "expectedCancelled": {
       "state": "ready",
@@ -553,7 +566,8 @@
       "go": "cancel",
       "rust": "cancel",
       "ruby": "cancel",
-      "java": "cancel"
+      "java": "cancel",
+      "csharp": "cancel"
     },
     "expectedCancelled": {
       "state": "succeeded",

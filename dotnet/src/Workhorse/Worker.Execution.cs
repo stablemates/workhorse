@@ -310,9 +310,9 @@ public sealed partial class Worker
     {
         var envelope = FailureEnvelope.Write(error, task.RedactErrorDetails);
         int? delay = null;
-        if (error is ConflictException)
+        if (FailureEnvelope.ReplayConflict(error) is not null)
         {
-            // A durable replay conflict is terminal (ADR 0098).
+            // A durable replay conflict is terminal (ADR 0098), also inside a wrapper (SM-1512).
             delay = -1;
         }
         else if (_retryDelay?.Invoke(task.Attempt, task) is { } chosen)

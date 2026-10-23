@@ -22,6 +22,35 @@ public sealed class WorkerUnitTests
     }
 
     [Fact]
+    public void AWrappedReplayConflictIsFoundAndNamesTheEnvelope()
+    {
+        var conflict = new ConflictException("checkpoint", "saved");
+        var wrapped = new InvalidOperationException("wrapped", new AggregateException(conflict, new TimeoutException()));
+        Assert.Same(conflict, FailureEnvelope.ReplayConflict(wrapped));
+
+        using var envelope = JsonDocument.Parse(FailureEnvelope.Write(wrapped, redact: false));
+        Assert.Equal("ConflictException", envelope.RootElement.GetProperty("name").GetString());
+        Assert.Equal("wrapped", envelope.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void TheConflictWalkReadsOnlyTheFirstInnerExceptionAndStopsAtItsBound()
+    {
+        // An aggregate is read through its first inner exception, as the JVM reads one cause.
+        Assert.Null(FailureEnvelope.ReplayConflict(new AggregateException(new TimeoutException(), new ConflictException("sleep", "saved"))));
+
+        Exception deep = new ConflictException("sleep", "saved");
+        for (var depth = 1; depth < FailureEnvelope.CauseDepth; depth++)
+        {
+            deep = new InvalidOperationException("wrapper", deep);
+        }
+
+        Assert.NotNull(FailureEnvelope.ReplayConflict(deep));
+        Assert.Null(FailureEnvelope.ReplayConflict(new InvalidOperationException("wrapper", deep)));
+        Assert.Null(FailureEnvelope.ReplayConflict(new InvalidOperationException("plain", new TimeoutException())));
+    }
+
+    [Fact]
     public void ACompilerGeneratedNameRecordsTheCSharpGenericName()
     {
         var generic = Repository.Json("protocol/v1/failures.json").GetProperty("envelope").GetProperty("genericName").GetProperty("csharp").GetString();

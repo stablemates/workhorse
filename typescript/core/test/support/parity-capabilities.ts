@@ -28,6 +28,11 @@
  * `pnpm jvm:test` runs. CI runs that suite with `WORKHORSE_REQUIRE_DATABASE=1`, so a cited test
  * cannot skip there.
  *
+ * A .NET Supported cell follows the same rule. It cites `protocol/v1` fixtures that the .NET
+ * conformance runner passes, or one xUnit test method in a test project that `pnpm dotnet:test`
+ * runs. CI runs that suite with `CI` set, so a cited database test cannot skip there. A .NET cell
+ * can also name the C# implementation beside its test, as a file and a text that it must contain.
+ *
  * A Planned cell carries the Ontrack Issue that owns the gap. The generator writes its link into
  * the document, so a Planned cell cannot outlive the work it points at unnoticed.
  */
@@ -94,6 +99,28 @@ interface JvmTestEvidence {
 
 export type JvmParityCell = RustFixtureEvidence | JvmTestEvidence | { planned: string };
 
+/**
+ * An xUnit test method, by exact name, in a test project that `pnpm dotnet:test` runs. The file is
+ * relative to `dotnet/tests`. `implementation` names the C# code that the test proves, as a file
+ * relative to the repository root and a text that it must contain.
+ */
+interface DotnetTestEvidence {
+  file: string;
+  test: string;
+  implementation?: { file: string; pattern: string };
+}
+
+/** Several xUnit test methods, when a capability has parts that no one test covers. */
+interface DotnetTestListEvidence {
+  tests: readonly DotnetTestEvidence[];
+}
+
+export type DotnetParityCell =
+  | RustFixtureEvidence
+  | DotnetTestEvidence
+  | DotnetTestListEvidence
+  | { planned: string };
+
 export interface ParityRow {
   /** The capability column, byte for byte as `docs/parity.md` writes it. */
   capability: string;
@@ -106,6 +133,8 @@ export interface ParityRow {
   ruby: RubyParityCell;
   /** The `workhorse` artifact of the JVM SDK. A JVM cell is Supported only with executed evidence. */
   jvm?: JvmParityCell;
+  /** The `Workhorse` package of the .NET SDK. A .NET cell is Supported only with executed evidence. */
+  dotnet?: DotnetParityCell;
 }
 
 /** Where each product operator surface's tests live, relative to the repository root. */
@@ -135,6 +164,10 @@ const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "EnqueuesInsideACallerTransactionAndRollsBackWithIt",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "enqueuesInsideACallerTransactionThatCommits",
@@ -153,6 +186,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Atomic batch enqueue",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "EnqueuesAnAtomicBatchInRequestOrder",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "aBatchCommitsAsOneStatement",
@@ -171,6 +208,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task groups with completion callbacks",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueTaskGroupTests.cs",
+      test: "AFinishedGroupEnqueuesItsCallbackTask",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
@@ -190,6 +231,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Delayed enqueue (`runAt` / `run_at`)",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -208,6 +253,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Priority",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -226,6 +275,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Tags and max attempts",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -244,6 +297,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Persisted retry policies",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -262,6 +319,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Absolute deadlines and execution timeouts",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -280,6 +341,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue idempotency",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "ReplaysAnIdempotentEnqueueAndRefusesADifferentRequest",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "replaysAnIdempotentEnqueue",
@@ -298,6 +363,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Keyed debounce",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "DebouncesAndThrottlesByKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "replacesAPendingTaskInsideItsDebounceWindow",
@@ -316,6 +385,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Keyed throttle",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "DebouncesAndThrottlesByKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "coalescesRequestsInsideAThrottleWindow",
@@ -331,6 +404,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task dependencies with terminal policies",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "BlocksATaskOnItsPrerequisites",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "blocksATaskOnItsDependencies",
@@ -349,6 +426,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Concurrency keys",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueEnqueueTests.cs",
+      test: "StoresDelayPriorityTagsAttemptsPolicyDeadlineTimeoutAndConcurrencyKey",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "storesEveryTaskOption",
@@ -364,6 +445,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Concurrency policy management",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueuePolicyTests.cs",
+      test: "SyncsAndListsConcurrencyPolicies",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesConcurrencyPolicies",
@@ -388,6 +473,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Rate-limit policy management",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueuePolicyTests.cs",
+      test: "SyncsAndListsRateLimitPolicies",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesRateLimitPolicies",
@@ -412,6 +501,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Named budget management",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueuePolicyTests.cs",
+      test: "SyncsAndListsBudgetsAndATaskNamesOne",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsListsAndPrunesBudgets",
@@ -436,6 +529,13 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Recurring schedule definition sync",
+    dotnet: {
+      fixtures: [
+        "schedules/recurring-schedule-definition",
+        "schedules/minimal-schedule-definition",
+        "schedules/contracted-schedule-definition",
+      ],
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "syncsAndPrunesScheduleDefinitions",
@@ -448,6 +548,18 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Payload and result contracts",
+    dotnet: {
+      tests: [
+        {
+          file: "Workhorse.Tests/Client/QueueContractTests.cs",
+          test: "ValidatesAndStampsAContractedPayload",
+        },
+        {
+          file: "Workhorse.Tests/WorkerTests.cs",
+          test: "AResultThatBreaksItsPayloadContractFailsOneAttemptAndTheWorkerContinues",
+        },
+      ],
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "validatesAndStampsAContractedPayload",
@@ -466,6 +578,10 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Compatibility refusal before mutation",
+    dotnet: {
+      file: "Workhorse.Tests/Client/QueueControlTests.cs",
+      test: "RefusesBeforeAMutationWhenTheSchemaIsMissing",
+    },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "refusesAnIncompatibleSchemaBeforeAnyMutation",
@@ -484,6 +600,32 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Public startup schema compatibility check",
+    dotnet: {
+      fixtures: [
+        "compatibility/current",
+        "compatibility/schema-newer-inside-major-line",
+        "compatibility/served-protocol-undeclared",
+        "compatibility/schema-before-single-child-rename-diagnosis",
+        "compatibility/schema-not-installed",
+        "compatibility/schema-before-the-fast-tier-contract",
+        "compatibility/schema-before-the-governed-drift-repair",
+        "compatibility/schema-before-terminal-failure-override",
+        "compatibility/schema-before-the-instance-fenced-deregistration",
+        "compatibility/schema-before-the-dashboard-retention-preview",
+        "compatibility/schema-before-the-one-lease-busy-heartbeat",
+        "compatibility/schema-before-busy-heartbeats",
+        "compatibility/schema-before-the-fenced-member-add",
+        "compatibility/schema-before-checkpoint-input-fingerprints",
+        "compatibility/schema-before-the-newest-task-group-events",
+        "compatibility/schema-before-task-groups",
+        "compatibility/schema-before-the-admission-shards",
+        "compatibility/schema-serves-only-older-protocols",
+        "compatibility/schema-below-the-statement-catalogues",
+        "compatibility/schema-no-longer-serves-client",
+        "compatibility/client-protocol-too-old",
+        "compatibility/client-protocol-too-new",
+      ],
+    },
     jvm: {
       fixtures: [
         "compatibility/current",
@@ -542,6 +684,31 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "SQL protocol conformance fixtures executed",
+    dotnet: {
+      fixtures: [
+        "interpreter/matcher-semantics",
+        "scenarios/successful-batch-lifecycle",
+        "scenarios/retry-and-terminal-failure",
+        "scenarios/ownership-expiration-and-recovery",
+        "scenarios/cancellation",
+        "scenarios/timer-wait",
+        "scenarios/coalescing-and-structured-errors",
+        "scenarios/dependencies",
+        "scenarios/children",
+        "scenarios/signals",
+        "scenarios/queue-health",
+        "scenarios/human-tokens",
+        "scenarios/contract-definition-sync-and-read",
+        "scenarios/batch-claim-admission",
+        "scenarios/retention-maintenance",
+        "scenarios/unknown-type-release",
+        "scenarios/fast-tier",
+        "scenarios/terminal-failure-override-full",
+        "scenarios/terminal-failure-override-fast",
+        "scenarios/task-groups",
+        "scenarios/worker-deregistration",
+      ],
+    },
     jvm: {
       fixtures: [
         "interpreter/matcher-semantics",
@@ -613,6 +780,14 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Enqueue trace-context propagation",
+    dotnet: {
+      file: "Workhorse.Tests/Telemetry/TelemetryDatabaseTests.cs",
+      test: "TheHandlerSpanContinuesTheTraceOfTheEnqueue",
+      implementation: {
+        file: "dotnet/src/Workhorse/Internal/Telemetry/Instrumentation.cs",
+        pattern: "internal static JsonObject? InjectTraceContext()",
+      },
+    },
     jvm: { fixtures: ["runtime/enqueue-trace-context-reaches-handler"] },
     ruby: { fixtures: ["runtime/enqueue-trace-context-reaches-handler"] },
     rust: { file: "enqueue_postgres.rs", test: "enqueue_propagates_the_current_trace_context" },
@@ -631,6 +806,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
 export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Claiming and handler execution",
+    dotnet: { file: "Workhorse.Tests/WorkerTests.cs", test: "CompletesAHandledTaskWithItsResult" },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "completesATaskAndStoresItsResult",
@@ -643,6 +819,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Bounded worker concurrency",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerTests.cs",
+      test: "ClaimedTasksNeverExceedTheConcurrency",
+    },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "runsAtMostConcurrencyHandlersOnVirtualThreads",
@@ -663,6 +843,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fast task tier with one outcome row per task",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerFastTierTests.cs",
+      test: "AFastTierTaskLeavesOneOutcomeRowAndNoHistory",
+    },
     jvm: {
       file: "run/workhorse/WorkerFastTierDatabaseTest.java",
       test: "runsFastTierTasksAndRecordsOneFastOutcomeRowForEach",
@@ -681,6 +865,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Fused fast-tier completion and refill claim in slot cohorts",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerFastTierTests.cs",
+      test: "FusedCompletionsRefillTheirCohortWithinTheConcurrency",
+    },
     jvm: {
       file: "run/workhorse/WorkerFastTierDatabaseTest.java",
       test: "fusesEachCompletionWithARefillClaimBoundedByItsSlotCohort",
@@ -702,6 +890,12 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Unhandled task type released to its queue",
+    dotnet: {
+      fixtures: [
+        "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
+        "runtime/a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval",
+      ],
+    },
     jvm: {
       fixtures: [
         "runtime/missing-handler-releases-the-task-with-its-attempt-intact",
@@ -726,6 +920,15 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Heartbeats, lease recovery, fenced ownership",
+    dotnet: {
+      fixtures: [
+        "runtime/heartbeats-never-overlap",
+        "runtime/failed-heartbeat-rounds-keep-the-attempt-running",
+        "runtime/busy-heartbeat-rounds-retry-and-keep-the-attempt-running",
+        "runtime/deadline-settles-after-database-first-heartbeat",
+        "runtime/lease-loss-fences-handler-writes",
+      ],
+    },
     jvm: {
       fixtures: [
         "runtime/heartbeats-never-overlap",
@@ -754,6 +957,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cooperative cancellation delivery",
+    dotnet: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     jvm: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     ruby: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
     rust: { fixtures: ["runtime/cooperative-cancellation-reaches-handler"] },
@@ -763,6 +967,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Notification-assisted dispatch with polling",
+    dotnet: { file: "Workhorse.Tests/WorkerTests.cs", test: "ANotificationWakesAListeningWorker" },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "wakesAnIdleWorkerOnANotificationWellBeforeItsFallbackPoll",
@@ -781,6 +986,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable checkpoints (handler context)",
+    dotnet: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     jvm: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     ruby: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
     rust: { fixtures: ["runtime/durable-wait-suspension-and-checkpoint-replay"] },
@@ -790,6 +996,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Checkpoint input check",
+    dotnet: {
+      file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+      test: "ADifferentCheckpointInputFailsTheTaskWithoutRunningTheOperation",
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aDifferentCheckpointInputFailsTheTaskWithoutRunningTheOperation",
@@ -815,6 +1025,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable timers (`sleep` / `sleepUntil`)",
+    dotnet: {
+      file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+      test: "AnAbsoluteTimerSuspendsUntilItsTimeAndThenReturns",
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "anAbsoluteTimerSuspendsUntilItsTimeAndThenReturns",
@@ -833,6 +1047,18 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Signal and human-decision waits",
+    dotnet: {
+      tests: [
+        {
+          file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+          test: "ASignalWaitSuspendsAndReturnsTheDeliveredPayload",
+        },
+        {
+          file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+          test: "AHumanWaitSuspendsAndReturnsTheRecordedDecision",
+        },
+      ],
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aSignalWaitSuspendsAndReturnsTheDeliveredPayload",
@@ -851,6 +1077,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Linked child fan-out and result join",
+    dotnet: {
+      file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+      test: "RunChildrenReturnsEachOutcomeByName",
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "runChildrenReturnsEachOutcomeByName",
@@ -866,6 +1096,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task group reads and adds from a handler",
+    dotnet: {
+      file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+      test: "AMemberTaskReadsItsGroupAndAddsATaskToIt",
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "aMemberTaskReadsItsGroupAndAddsATaskToIt",
@@ -884,6 +1118,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Latest-value progress reporting",
+    dotnet: {
+      file: "Workhorse.Tests/Durable/DurableContextTests.cs",
+      test: "SetProgressStoresTheLatestValueAndANewAttemptReadsIt",
+    },
     jvm: {
       file: "run/workhorse/DurableContextDatabaseTest.java",
       test: "setProgressStoresTheLatestValueAndANewAttemptReadsIt",
@@ -902,6 +1140,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Batch handler delivery",
+    dotnet: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     jvm: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     ruby: { fixtures: ["runtime/priority-ordered-mixed-batch"] },
     rust: { file: "worker_postgres.rs", test: "a_batch_handler_receives_its_members_in_one_call" },
@@ -911,6 +1150,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Schedule firing (database cron evaluation)",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerTests.cs",
+      test: "AMaintenancePassFiresTheDueSchedulesOfItsNamespaces",
+    },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "firesDueSchedulesInItsNamespacesDuringMaintenance",
@@ -926,6 +1169,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Worker fleet registration and remote pause",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerTests.cs",
+      test: "TheWorkerRegistersItselfAndAnOperatorCanPauseIt",
+    },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "registersTheWorkerAndStopsClaimingWhileAnOperatorPausesIt",
@@ -944,6 +1191,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Graceful stop and signal drain",
+    dotnet: {
+      file: "Workhorse.Tests/Hosting/HostedWorkerTests.cs",
+      test: "AHostRunsAServiceHandlerAndDrainsItOnStop",
+    },
     jvm: {
       file: "run/workhorse/WorkerProcessTest.java",
       test: "drainsTheWorkerOnSigtermBeforeTheProcessExits",
@@ -959,6 +1210,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Retention maintenance participation",
+    dotnet: {
+      file: "Workhorse.Tests/WorkerTests.cs",
+      test: "AMaintenancePassRunsTheRetentionRoutines",
+    },
     jvm: {
       file: "run/workhorse/WorkerDatabaseTest.java",
       test: "runsTerminalStorageMaintenance",
@@ -974,6 +1229,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "OpenTelemetry tracing and metrics",
+    dotnet: {
+      file: "Workhorse.Tests/Telemetry/TelemetryDatabaseTests.cs",
+      test: "TheHandlerSpanContinuesTheTraceOfTheEnqueue",
+    },
     jvm: {
       file: "run/workhorse/WorkerTelemetryDatabaseTest.java",
       test: "continuesTheEnqueuingTraceInTheHandlerSpanAndRecordsTheSharedMetrics",
@@ -989,6 +1248,23 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Shared runtime fixtures executed",
+    dotnet: {
+      fixtures: [
+        "runtime/deadline-settles-after-early-local-timer",
+        "runtime/execution-timeout-settles-after-early-local-timer",
+        "runtime/empty-polls-back-off-with-jitter",
+        "runtime/stop-drains-active-slots-without-new-claims",
+        "runtime/busy-worker-refills-slots-with-overlapping-batched-claims",
+        "runtime/budget-admission-holds-across-queues",
+        "runtime/json-values-survive-the-payload-and-result-round-trip",
+        "runtime/failing-maintenance-phase-leaves-the-worker-claiming",
+        "runtime/durable-replay-conflicts-are-terminal",
+        "runtime/oversized-full-tier-result-fails-through-the-retry-policy",
+        "runtime/oversized-fast-tier-result-fails-through-the-retry-policy",
+        "runtime/shutdown-cancellation-releases-the-task-without-an-attempt",
+        "runtime/shutdown-cancellation-completes-a-task-whose-handler-returns-a-value",
+      ],
+    },
     jvm: {
       fixtures: [
         "runtime/stop-drains-active-slots-without-new-claims",
@@ -1032,6 +1308,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Task lookup, listing, and timeline",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "ListsTasksWithFiltersProjectionAndACursor",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsTasksWithFiltersProjectionAndACursor",
@@ -1047,6 +1327,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue health snapshot",
+    dotnet: { file: "Workhorse.Tests/Client/QueueControlTests.cs", test: "ReadsTheHealthSnapshot" },
     jvm: {
       file: "run/workhorse/QueueDatabaseTest.java",
       test: "readsTheQueueHealthSnapshot",
@@ -1059,6 +1340,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Cancellation requests",
+    dotnet: { file: "Workhorse.Tests/Client/QueueControlTests.cs", test: "CancelsAReadyTask" },
     jvm: { file: "run/workhorse/QueueDatabaseTest.java", test: "cancelsATask" },
     ruby: {
       file: "integration/client_spec.rb",
@@ -1071,6 +1353,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue pause, resume, and purge",
+    dotnet: { file: "Workhorse.Tests/AdminDatabaseTests.cs", test: "PausesResumesAndPurgesAQueue" },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "pausesResumesAndPurgesAQueue",
@@ -1083,6 +1366,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue tier and history controls",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "MovesAQueueBetweenTiersAndSetsItsHistory",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "movesAQueueBetweenTiersAndSetsItsHistory",
@@ -1110,6 +1397,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Dead-letter listing and redrive",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "ListsDeadLettersAndRedrivesOne",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsDeadLettersAndRedrivesOne",
@@ -1122,6 +1413,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task group cancel",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "CancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
@@ -1140,6 +1435,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Task group drift listing and repair",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "CancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "cancelsAGroupReadsItsEventsAndRepairsACounterThatDrifted",
@@ -1155,6 +1454,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
+    dotnet: {
+      file: "Workhorse.Tests/AdminDatabaseTests.cs",
+      test: "ReadsCheckpointsProgressAndWaits",
+    },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "readsCheckpointsProgressAndWaits",
@@ -1167,6 +1470,7 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Durable operator worker pause",
+    dotnet: { file: "Workhorse.Tests/AdminDatabaseTests.cs", test: "ListsWorkersAndPausesOne" },
     jvm: {
       file: "run/workhorse/AdminDatabaseTest.java",
       test: "listsWorkersAndPausesOne",
@@ -1179,6 +1483,10 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Embedded dashboard backend",
+    dotnet: {
+      file: "Workhorse.AspNetCore.Tests/DashboardConformanceTests.cs",
+      test: "AnswersEverySharedExchangeAndReportsThePoliciesBehindAQueue",
+    },
     jvm: {
       file: "run/workhorse/dashboard/DashboardConformanceTest.java",
       test: "answersEverySharedExchangeAndReportsThePoliciesBehindAQueue",
@@ -1450,6 +1758,7 @@ export interface ParityDefaultRow {
   rust?: ParityDefaultCell | { absent: string } | { planned: string };
   ruby: ParityDefaultCell | { absent: string } | { planned: string };
   jvm?: ParityDefaultCell | { planned: string };
+  dotnet?: ParityDefaultCell | { planned: string };
 }
 
 /**
@@ -1462,6 +1771,11 @@ export interface ParityDefaultRow {
 export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   {
     setting: "Worker concurrency",
+    dotnet: {
+      value: "1",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public int Concurrency { get; set; } = 1;",
+    },
     jvm: {
       value: "1",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1487,6 +1801,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Lease duration",
+    dotnet: {
+      value: "30,000 ms",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public TimeSpan Lease { get; set; } = TimeSpan.FromSeconds(30);",
+    },
     jvm: {
       value: "30,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1520,6 +1839,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Heartbeat interval",
+    dotnet: {
+      value: "max(100 ms, lease duration / 3)",
+      file: "dotnet/src/Workhorse/Worker.cs",
+      pattern: "Math.Max(100, _leaseMs / 3)",
+    },
     jvm: {
       value: "max(100 ms, lease duration / 3)",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1553,6 +1877,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Claim poll interval (subscription live)",
+    dotnet: {
+      value: "5,000 ms",
+      file: "dotnet/src/Workhorse/Worker.cs",
+      pattern: "NotificationPollMs = 5_000",
+    },
     jvm: {
       value: "5,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1586,6 +1915,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Claim poll interval (polling only)",
+    dotnet: {
+      value: "250 ms",
+      file: "dotnet/src/Workhorse/Worker.cs",
+      pattern: "DefaultPollMs = 250",
+    },
     jvm: {
       value: "250 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1619,6 +1953,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Empty-claim backoff ceiling",
+    dotnet: {
+      value: "5,000 ms",
+      file: "dotnet/src/Workhorse/Worker.Dispatch.cs",
+      pattern: "MaxEmptyPollMs = 5_000",
+    },
     jvm: {
       value: "5,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1652,6 +1991,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Maintenance tick interval",
+    dotnet: {
+      value: "1,000 ms",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public TimeSpan MaintenanceInterval { get; set; } = TimeSpan.FromSeconds(1);",
+    },
     jvm: {
       value: "1,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1685,6 +2029,12 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Maintenance routine offer interval",
+    dotnet: {
+      value: "60,000 ms",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern:
+        "public TimeSpan MaintenanceRoutineInterval { get; set; } = TimeSpan.FromSeconds(60);",
+    },
     jvm: {
       value: "60,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1718,6 +2068,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Worker registry interval",
+    dotnet: {
+      value: "5,000 ms",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public TimeSpan RegistryInterval { get; set; } = TimeSpan.FromSeconds(5);",
+    },
     jvm: {
       value: "5,000 ms",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1751,6 +2106,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Schedule catch-up limit",
+    dotnet: {
+      value: "100",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public int ScheduleCatchupLimit { get; set; } = 100;",
+    },
     jvm: {
       value: "100",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1776,6 +2136,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Dispatch cohorts",
+    dotnet: {
+      value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
+      file: "dotnet/src/Workhorse/Worker.cs",
+      pattern: "concurrency < 8 ? 1 : Math.Clamp((concurrency + 7) / 8, 2, 8)",
+    },
     jvm: {
       value: "1 below concurrency 8, else concurrency / 8 within 2 to 8",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1809,6 +2174,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Shutdown grace, then",
+    dotnet: {
+      value: "25,000 ms, then abandon the handlers",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public TimeSpan ShutdownGrace { get; set; } = TimeSpan.FromSeconds(25);",
+    },
     jvm: {
       value: "25,000 ms, then abandon the handlers",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1842,6 +2212,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Handler retry delay override",
+    dotnet: {
+      value: "`RetryDelay`, unset",
+      file: "dotnet/src/Workhorse/WorkerOptions.cs",
+      pattern: "public RetryDelay? RetryDelay { get; set; }",
+    },
     jvm: {
       value: "`retryDelay`, unset",
       file: "jvm/workhorse/src/main/java/run/workhorse/Worker.java",
@@ -1875,6 +2250,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Queue of a handler task group add without a queue",
+    dotnet: {
+      value: "The queue of the member task",
+      file: "dotnet/src/Workhorse/Queue.Durable.cs",
+      pattern: "request with { Options = request.Options with { Queue = task.Queue } }",
+    },
     jvm: {
       value: "The queue of the member task",
       file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",
@@ -1908,6 +2288,11 @@ export const PARITY_DEFAULT_ROWS: readonly ParityDefaultRow[] = [
   },
   {
     setting: "Queue of a child task request without a queue",
+    dotnet: {
+      value: "The queue of the parent task",
+      file: "dotnet/src/Workhorse/Queue.Durable.cs",
+      pattern: 'input["queue"] = stored?.Queue ?? parent.Queue;',
+    },
     jvm: {
       value: "The queue of the parent task",
       file: "jvm/workhorse/src/main/java/run/workhorse/Queue.java",

@@ -41,6 +41,32 @@ public sealed class QueueTaskGroupTests(ScratchDatabase database)
     }
 
     [Fact]
+    public async Task AFinishedGroupEnqueuesItsCallbackTask()
+    {
+        var name = UniqueName("group-callback");
+        var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = name });
+        var group = await queue.CreateTaskGroupAsync(new TaskGroupCallbacks
+        {
+            OnFinish = new EnqueueRequest { TaskType = "group.finished", Payload = new { kind = "finish" } },
+        }, Token);
+        await queue.AddToTaskGroupAsync(group.Id, [new EnqueueRequest { TaskType = "member", Payload = 1 }], Token);
+        await queue.SealTaskGroupAsync(group.Id, Token);
+
+        await using var worker = new Worker(database.DataSource, WorkerHarness.Options(name));
+        worker.Handle<int>("member", (_, _) => Task.CompletedTask);
+        Assert.True(await worker.RunOnceAsync(Token));
+
+        // The last member finished the group, so PostgreSQL enqueued the callback task.
+        var finished = (await queue.GetTaskGroupAsync(group.Id, Token))!;
+        Assert.Equal(TaskGroupState.Finished, finished.State);
+        var callback = Assert.Single(finished.Callbacks);
+        Assert.Equal(TaskGroupCallbackKind.OnFinish, callback.Kind);
+        var stored = await TaskAsync(database, callback.TaskId!.Value);
+        Assert.Equal("group.finished", stored!.Text("task_type"));
+        Assert.Equal(name, stored.Text("queue_name"));
+    }
+
+    [Fact]
     public async Task TheBlockFormCreatesAndSealsInOneStatement()
     {
         var queue = new Queue(database.DataSource, new QueueOptions { DefaultQueue = UniqueName("block") });

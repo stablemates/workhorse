@@ -1,0 +1,4 @@
+{
+  "$comment": "protocol/v1 fixtures the .NET lane does not pass yet. Each entry names the open slice that owns the gap. ProtocolConformanceTests fails when an unlisted fixture does not pass and when a listed fixture passes.",
+  "fixtures": []
+}
