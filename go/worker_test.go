@@ -58,6 +58,10 @@ type workerRuntimeFixture struct {
 	EnqueueStallMS                       int                               `json:"enqueueStallMs"`
 	ExpectedMinimumDelayMS               int                               `json:"expectedMinimumDelayMs"`
 	ExpectedMaximumDelayMS               int                               `json:"expectedMaximumDelayMs"`
+	ExpectedMaximumClaimDelayMS          int                               `json:"expectedMaximumClaimDelayMs"`
+	ObserveAfterRecoveryMS               int                               `json:"observeAfterRecoveryMs"`
+	MaximumEmptyAfterRecovery            int                               `json:"expectedMaximumEmptyClaimsAfterRecovery"`
+	MaximumClaimDelayAfterLossMS         int                               `json:"expectedMaximumClaimDelayAfterLossMs"`
 	Mode                                 string                            `json:"mode"`
 	LocalClockLeadMS                     int                               `json:"localClockLeadMs"`
 	ExpectedCancelledAfterDatabaseExpiry bool                              `json:"expectedCancelledAfterDatabaseExpiry"`

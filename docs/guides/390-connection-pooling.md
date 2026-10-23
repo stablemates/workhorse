@@ -171,8 +171,10 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
   worker logs "PostgreSQL notification listener disabled; worker is using polling" instead. With
   `polling_only`, the Rust worker logs no listener warning.
 
-**Fallback poll.** A notification-capable `Worker.run()` polls every 5,000 ms by default, with ±10%
-jitter. An explicit `pollMs` replaces that base.
+**Fallback poll.** A `Worker.run()` with a live listener polls every 5,000 ms by default, with ±10%
+jitter. Before its `LISTEN` succeeds, and while it reconnects, the worker starts at 250 ms instead.
+A lost listener wakes the worker, and its backoff restarts at 250 ms. An explicit `pollMs` replaces
+both bases.
 
 More detail: [Operations and CLI: Polling-only cases](../architecture/operations.md#polling-only-cases), [Operations and CLI: Polling cadence](../architecture/operations.md#polling-cadence), [Overview: Listener under the opt-out](../architecture/overview.md#listener-under-the-opt-out), and [Schema and SQL protocol: .NET connections](../architecture/schema-and-protocol.md#net-connections).
 
@@ -403,12 +405,13 @@ rule does not apply. The .NET worker also uses only the first two rules.
 
 **Spare connections**
 
-| Language     | Spare connections                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------ |
-| TypeScript   | `options.max`, minus 1 for the listener when notifications are supported, minus 1 unless `sharedHeartbeats`. |
-| Go           | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 unless `SharedHeartbeats`.                                 |
-| Python, Ruby | Pool size, minus 1 for the listener, minus 1 unless `shared_heartbeats`.                                     |
-| Rust         | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
+| Language   | Spare connections                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------ |
+| TypeScript | `options.max`, minus 1 for the listener when notifications are supported, minus 1 unless `sharedHeartbeats`. |
+| Go         | `MaxConns`, minus 1 unless `PollingOnly`, minus 1 unless `SharedHeartbeats`.                                 |
+| Python     | Pool size, minus 1 for the listener when the size is at least 2, minus 1 unless `shared_heartbeats`.         |
+| Ruby       | Pool size, minus 1 unless `polling_only`, minus 1 unless `shared_heartbeats`.                                |
+| Rust       | `max_size`, minus 1 unless `shared_heartbeats`. The listener sits outside the pool.                          |
 
 In TypeScript, pools of 3, 4, 6, and 10 connections give a concurrency-64 worker 1, 2, 4, and 8
 cohorts. A TypeScript database with an attached pool, such as a Prisma or Kysely adapter, runs

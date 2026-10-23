@@ -869,15 +869,28 @@ connection.
 
 | Case                                        | Wait                                                |
 | ------------------------------------------- | --------------------------------------------------- |
-| Notification-capable `Worker.run()`         | 5,000 ms default fallback poll, ±10% jitter         |
+| Active listener, `Worker.run()`             | 5,000 ms default fallback poll, ±10% jitter         |
 | Notification after an empty claim           | Random delay from 0 through 50 ms before claiming   |
 | Claim that released every task              | The next empty wait; a notification does not end it |
-| Explicit `pollMs`                           | Replaces the fallback base                          |
+| Explicit `pollMs`                           | Replaces both default bases                         |
+| No active listener, first empty wait        | 250 ms, ±10% jitter                                 |
 | No active listener, consecutive empty waits | Double through a 5,000 ms cap, ±10% jitter          |
-| Query-only adapters                         | Start at 250 ms                                     |
 | `runOnce()`                                 | No wait; never opens a listener                     |
 
 Every pass uses authoritative `claim_many_v1` transitions.
+
+`nextDispatchPollMs()` reads `isListening()` of the subscriptions before each wait. Thus a listener
+that has not run `LISTEN` yet, or that reconnects after a lost connection, counts as no active
+listener. A query-only adapter never has one. When `LISTEN` succeeds again, the next wait uses the
+5,000 ms base.
+
+When a live subscription is lost, the listener clears its listening state and then wakes the
+worker. Thus a 5,000 ms wait that started while the subscription was live ends at once. When the
+worker chooses a wait without a live subscription, and its previous wait had one, the backoff
+restarts: the count of consecutive empty claims becomes at most 1. Thus the empty claims of the
+live period do not count, and the first wait after a loss is 250 ms. Go, Rust, Python, Ruby, the
+JVM, and .NET follow the same rules. The `subscription-recovery` runtime fixture checks them in
+every SDK.
 
 ### Dashboard refresh and build reuse
 

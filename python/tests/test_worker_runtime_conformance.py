@@ -13,9 +13,10 @@ from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any
 
+import asyncpg
 import psycopg
 import pytest
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -59,6 +60,7 @@ ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
         "maintenance-phase-error",
         "missing-handler",
         "release-wait",
+        "subscription-recovery",
     }
 )
 SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
@@ -127,6 +129,12 @@ def execute_runtime_fixture(
         ),
         "graceful-drain": execute_graceful_drain_fixture,
         "slot-refill": execute_slot_refill_fixture,
+        # The worker runs on a pool of its own, so the runner can hold its LISTEN.
+        "subscription-recovery": lambda enqueue_connection, recovery_fixture: (
+            execute_subscription_recovery_fixture(
+                enqueue_connection, recovery_fixture, database_url
+            )
+        ),
         "trace-propagation": execute_trace_propagation_fixture,
         # The race holds three sessions of its own besides the setup connection.
         "budget-admission-race": lambda setup_connection, race_fixture: (
@@ -748,6 +756,212 @@ def execute_poll_cadence_fixture(
     assert fixture["expectedMinimumDelayMs"] <= delay_ms <= fixture["expectedMaximumDelayMs"], (
         f"the claim after {empty} empty polls waited {delay_ms:.0f} ms, want "
         f"{fixture['expectedMinimumDelayMs']} to {fixture['expectedMaximumDelayMs']} ms"
+    )
+
+
+class HeldListenPool(ConnectionPool):
+    """A psycopg pool that holds each ``LISTEN`` until the test releases it.
+
+    The pool lends the shared listener its connection, so a held ``LISTEN`` keeps the worker
+    without a live subscription. Every other statement runs at once. The test can arm the hold
+    again for the next ``LISTEN``. The pool records the backend pid of the connection that runs
+    ``LISTEN``.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.listen_released = Event()
+        self.listener_pid: int | None = None
+        super().__init__(*args, **kwargs)
+
+    def hold_listen(self) -> None:
+        """Holds the next ``LISTEN`` until the test releases it."""
+        self.listen_released = Event()
+
+    @contextmanager
+    def connection(self, timeout: float | None = None) -> Iterator[Any]:
+        with super().connection(timeout=timeout) as connection:
+            yield HeldListenConnection(self, connection)
+
+
+class HeldListenConnection:
+    def __init__(self, pool: HeldListenPool, connection: psycopg.Connection[Any]) -> None:
+        self._pool = pool
+        self._connection = connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def execute(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(query, str) and query.startswith("LISTEN"):
+            released = self._pool.listen_released
+            assert released.wait(timeout=15), "held LISTEN was never released"
+            self._pool.listener_pid = self._connection.info.backend_pid
+        return self._connection.execute(query, *args, **kwargs)
+
+
+class ClaimTimingExecutor:
+    """Records each dispatch claim's start, its return to the worker, and whether it found a task."""
+
+    def __init__(self, executor: PooledSyncExecutor) -> None:
+        self._executor = executor
+        self._lock = Lock()
+        self.recording = True
+        self.claims: list[tuple[float, float, bool]] = []
+
+    def rows(self, statement: DriverStatement, parameters: Any = ()) -> Any:
+        if statement is not STATEMENTS.claim_many:
+            return self._executor.rows(statement, parameters)
+        started = monotonic()
+        rows = self._executor.rows(statement, parameters)
+        with self._lock:
+            if self.recording:
+                self.claims.append((started, monotonic(), bool(rows)))
+        return rows
+
+    def recorded(self) -> list[tuple[float, float, bool]]:
+        with self._lock:
+            return list(self.claims)
+
+
+def execute_subscription_recovery_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    """Measures the empty-claim wait without a live subscription, with one, and after its loss.
+
+    The worker can listen, but the pool holds its LISTEN until the runner releases it. Until then
+    the worker must poll at the polling-only base. After the release, it must wait the
+    notification poll interval. Then the runner ends the listener session. The loss must wake the
+    worker, and the worker must poll at the polling-only base again.
+    """
+    queue_name = runtime_queue(fixture)
+    handled: list[str] = []
+    errors: list[BaseException] = []
+    recovery_end = 0
+    lost_at = 0.0
+    enqueued_after_loss = 0.0
+
+    def wait_long(condition: Callable[[], bool], message: str) -> None:
+        # A bounded wait that is longer than the notification base.
+        deadline = monotonic() + 7
+        while not condition():
+            assert monotonic() < deadline, message
+            sleep(0.005)
+
+    with HeldListenPool(
+        database_url, min_size=1, max_size=4, kwargs={"autocommit": True}, open=True
+    ) as pool:
+        executor = ClaimTimingExecutor(PooledSyncExecutor(pool))
+        worker = Worker(
+            pool,
+            queue=queue_name,
+            worker_id=f"python-{fixture['id']}",
+            registry_interval_ms=0,
+            _executor=executor,
+        ).handle(
+            fixture["taskType"],
+            lambda payload, _context: handled.append(payload["task"]),
+        )
+        thread = run_in_thread(worker.run, errors)
+        try:
+            wait_for(
+                lambda: any(not claim[2] for claim in executor.recorded()),
+                "the worker made no empty claim before the first enqueue",
+            )
+            queue = Queue(connection)
+            queue.enqueue(fixture["taskType"], {"task": "first"}, EnqueueOptions(queue=queue_name))
+            wait_for(lambda: len(handled) == 1, "the worker did not run the first task")
+
+            pool.listen_released.set()
+            # Other test processes can listen on the same database, so the runner reads the
+            # worker's own flag. The listener sets it after LISTEN returns.
+            wait_for(worker._notification_listening.is_set, "the listener did not run LISTEN")
+            queue.enqueue(fixture["taskType"], {"task": "second"}, EnqueueOptions(queue=queue_name))
+            wait_long(lambda: len(handled) == 2, "the worker did not run the second task")
+            sleep(fixture["observeAfterRecoveryMs"] / 1000)
+            recovery_end = len(executor.recorded())
+
+            # The next empty claim starts a new wait at the notification base. Then the runner
+            # ends the live listener session and holds the next LISTEN, so the subscription is
+            # lost. The database is shared with other test processes, so the runner ends only
+            # the listener's own session.
+            wait_long(
+                lambda: any(not claim[2] for claim in executor.recorded()[recovery_end:]),
+                "the worker made no empty claim after the second task",
+            )
+            pool.hold_listen()
+            listener_pid = pool.listener_pid
+            assert listener_pid is not None, "the runner did not see the listener's LISTEN"
+            connection.execute("SELECT pg_terminate_backend(%s)", (listener_pid,))
+            wait_long(
+                lambda: (
+                    connection.execute(
+                        "SELECT 1 FROM pg_stat_activity WHERE pid = %s", (listener_pid,)
+                    ).fetchone()
+                    is None
+                ),
+                "the listener session did not end",
+            )
+            lost_at = monotonic()
+            # The loss wakes the worker. The third task waits for the claims after that wake.
+            wait_long(
+                lambda: any(claim[0] >= lost_at for claim in executor.recorded()),
+                "the worker made no claim after the subscription was lost",
+            )
+            enqueued_after_loss = monotonic()
+            queue.enqueue(fixture["taskType"], {"task": "third"}, EnqueueOptions(queue=queue_name))
+            wait_long(lambda: len(handled) == 3, "the worker did not run the third task")
+        finally:
+            executor.recording = False
+            pool.listen_released.set()
+            worker.stop()
+            join(thread)
+    assert errors == []
+    assert_subscription_recovery(
+        executor.recorded(), recovery_end, lost_at, enqueued_after_loss, fixture
+    )
+
+
+def assert_subscription_recovery(
+    recorded: list[tuple[float, float, bool]],
+    recovery_end: int,
+    lost_at: float,
+    enqueued_after_loss: float,
+    fixture: Mapping[str, Any],
+) -> None:
+    """Asserts the claim timing of the three phases of a subscription-recovery run.
+
+    ``recorded`` holds each claim's start, its return, and whether it found a task, in the order
+    the claims returned. ``recovery_end`` counts the claims recorded before the loss phase.
+    """
+    claims = sorted(recorded)
+    found = [index for index, claim in enumerate(claims) if claim[2]]
+    assert len(found) == 3, f"{len(found)} claims found a task, want 3"
+    first, _, third = found
+    assert first > 0, "no empty claim came before the first task"
+    delay_ms = (claims[first][0] - claims[first - 1][1]) * 1_000
+    assert delay_ms <= fixture["expectedMaximumClaimDelayMs"], (
+        f"the claim that found the first task waited {delay_ms:.0f} ms without a live "
+        f"subscription, want at most {fixture['expectedMaximumClaimDelayMs']} ms"
+    )
+    # With a live subscription, the worker waits the notification base after an empty claim.
+    recovered = sorted(recorded[:recovery_end])
+    second = max(index for index, claim in enumerate(recovered) if claim[2])
+    empty = sum(1 for claim in recovered[second:] if not claim[2])
+    assert empty <= fixture["expectedMaximumEmptyClaimsAfterRecovery"], (
+        f"{empty} empty claims after the second task with a live subscription, "
+        f"want at most {fixture['expectedMaximumEmptyClaimsAfterRecovery']}"
+    )
+    # After the loss, the worker claims at once and then polls at the polling-only base again.
+    maximum_ms = fixture["expectedMaximumClaimDelayAfterLossMs"]
+    woken_ms = (next(claim[0] for claim in claims if claim[0] >= lost_at) - lost_at) * 1_000
+    assert woken_ms <= maximum_ms, (
+        f"the first claim after the subscription was lost waited {woken_ms:.0f} ms, "
+        f"want at most {maximum_ms} ms"
+    )
+    third_ms = (claims[third][0] - enqueued_after_loss) * 1_000
+    assert third_ms <= maximum_ms, (
+        f"the claim that found the third task waited {third_ms:.0f} ms after the subscription "
+        f"was lost, want at most {maximum_ms} ms"
     )
 
 
@@ -1528,6 +1742,7 @@ async def execute_async_runtime_fixture(
         "maintenance-phase-error": execute_async_maintenance_phase_error_fixture,
         "missing-handler": execute_async_missing_handler_fixture,
         "release-wait": execute_async_release_wait_fixture,
+        "subscription-recovery": execute_async_subscription_recovery_fixture,
     }
     await executors[fixture["kind"]](connection, fixture, database_url)
 
@@ -1652,6 +1867,214 @@ async def execute_async_missing_handler_fixture(
         assert await newer.run_once() is True
     assert handled == [{"index": 1}]
     assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedAfterHandled"]})
+
+
+class AsyncListenHold:
+    """Holds each ``LISTEN`` of the async listener until the test releases it.
+
+    The test can arm the hold again for the next ``LISTEN``. The hold records the backend pid of
+    the connection that runs ``LISTEN``.
+    """
+
+    def __init__(self) -> None:
+        self.released = asyncio.Event()
+        self.listener_pid: int | None = None
+
+    def arm(self) -> None:
+        self.released = asyncio.Event()
+
+    async def wait(self, pid: int) -> None:
+        released = self.released
+        await asyncio.wait_for(released.wait(), timeout=15)
+        self.listener_pid = pid
+
+
+def held_listen_psycopg_connection(hold: AsyncListenHold) -> type[psycopg.AsyncConnection[Any]]:
+    """A psycopg connection class whose ``LISTEN`` waits for ``hold`` before PostgreSQL sees it."""
+
+    class HeldListenAsyncConnection(psycopg.AsyncConnection[Any]):
+        async def execute(self, query: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(query, str) and query.startswith("LISTEN"):
+                await hold.wait(self.info.backend_pid)
+            return await super().execute(query, *args, **kwargs)
+
+    return HeldListenAsyncConnection
+
+
+def held_listen_asyncpg_connection(hold: AsyncListenHold) -> type[asyncpg.Connection]:
+    """An asyncpg connection class whose listener waits for ``hold`` before PostgreSQL sees it."""
+
+    class HeldListenAsyncpgConnection(asyncpg.Connection):  # type: ignore[misc]
+        async def add_listener(self, channel: str, callback: Any) -> None:
+            await hold.wait(self.get_server_pid())
+            await super().add_listener(channel, callback)
+
+    return HeldListenAsyncpgConnection
+
+
+class AsyncClaimTimingExecutor:
+    """Records each claim of an AsyncWorker: its start, its return, and whether it found a task.
+
+    It runs on the event loop, so it uses the same clock as the runner.
+    """
+
+    # The bridge reads these from its executor. Other names stay absent, as on the sync recorder.
+    _FORWARDED = frozenset({"command", "connection", "dialect", "prepare"})
+
+    def __init__(self, executor: Any) -> None:
+        self._executor = executor
+        self.recording = True
+        self.claims: list[tuple[float, float, bool]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._FORWARDED:
+            raise AttributeError(name)
+        return getattr(self._executor, name)
+
+    async def rows(self, statement: DriverStatement, parameters: Any = ()) -> Any:
+        if statement is not STATEMENTS.claim_many:
+            return await self._executor.rows(statement, parameters)
+        started = monotonic()
+        rows = await self._executor.rows(statement, parameters)
+        if self.recording:
+            self.claims.append((started, monotonic(), bool(rows)))
+        return rows
+
+
+@asynccontextmanager
+async def held_listen_async_worker(
+    database_url: str, fixture: Mapping[str, Any], driver: str, hold: AsyncListenHold
+) -> AsyncIterator[AsyncWorker]:
+    """Opens an AsyncWorker over its own pool of ``driver``, whose ``LISTEN`` waits for ``hold``.
+
+    The worker can listen and keeps the default poll interval. The registry is off, because its
+    interval caps the claim wait.
+    """
+    options: dict[str, Any] = {
+        "queue": runtime_queue(fixture),
+        "worker_id": f"python-async-{driver}-{fixture['id']}",
+        "registry_interval_ms": 0,
+    }
+    if driver == "psycopg":
+        async with AsyncConnectionPool(
+            database_url,
+            min_size=4,
+            max_size=4,
+            kwargs={"autocommit": True},
+            connection_class=held_listen_psycopg_connection(hold),
+        ) as psycopg_pool:
+            yield AsyncWorker.from_psycopg(psycopg_pool, **options)
+        return
+    asyncpg_pool = await asyncpg.create_pool(
+        database_url,
+        min_size=4,
+        max_size=4,
+        connection_class=held_listen_asyncpg_connection(hold),
+    )
+    try:
+        yield AsyncWorker.from_asyncpg(asyncpg_pool, **options)
+    finally:
+        await asyncpg_pool.close()
+
+
+async def execute_async_subscription_recovery_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    """Runs the subscription-recovery phases through the async listener of each driver."""
+    for driver in ("psycopg", "asyncpg"):
+        await execute_async_subscription_recovery_driver(connection, fixture, database_url, driver)
+
+
+async def execute_async_subscription_recovery_driver(
+    connection: psycopg.Connection[Any],
+    fixture: Mapping[str, Any],
+    database_url: str,
+    driver: str,
+) -> None:
+    """Measures the empty-claim wait of an AsyncWorker without a live subscription, with one, and
+    after its loss. The phases and assertions are those of the sync runner.
+    """
+    queue_name = runtime_queue(fixture)
+    queue = Queue(connection)
+    hold = AsyncListenHold()
+    handled: list[str] = []
+    recovery_end = 0
+    lost_at = 0.0
+    enqueued_after_loss = 0.0
+
+    async def handler(payload: Any, _context: AsyncHandlerContext) -> None:
+        handled.append(payload["task"])
+
+    async def wait_long(condition: Callable[[], bool], message: str) -> None:
+        # A bounded wait that is longer than the notification base.
+        deadline = monotonic() + 7
+        while not condition():
+            assert monotonic() < deadline, f"{driver}: {message}"
+            await asyncio.sleep(0.005)
+
+    async def enqueue(task: str) -> None:
+        # The enqueue runs in a thread, so it cannot stall the loop the worker runs on.
+        await asyncio.to_thread(
+            queue.enqueue, fixture["taskType"], {"task": task}, EnqueueOptions(queue=queue_name)
+        )
+
+    async with held_listen_async_worker(database_url, fixture, driver, hold) as worker:
+        worker.handle(fixture["taskType"], handler)
+        executor = AsyncClaimTimingExecutor(worker._bridge._executor)
+        worker._bridge._executor = executor
+        running = asyncio.create_task(worker.run())
+        try:
+            await wait_long(
+                lambda: any(not claim[2] for claim in executor.claims),
+                "the worker made no empty claim before the first enqueue",
+            )
+            await enqueue("first")
+            await wait_long(lambda: len(handled) == 1, "the worker did not run the first task")
+
+            hold.released.set()
+            # The listener sets the worker's own flag after LISTEN returns.
+            await wait_long(
+                worker._inner._notification_listening.is_set, "the listener did not run LISTEN"
+            )
+            await enqueue("second")
+            await wait_long(lambda: len(handled) == 2, "the worker did not run the second task")
+            await asyncio.sleep(fixture["observeAfterRecoveryMs"] / 1000)
+            recovery_end = len(executor.claims)
+
+            # The next empty claim starts a new wait at the notification base. Then the runner
+            # ends the live listener session and holds the next LISTEN, so the subscription is
+            # lost. The runner ends only the listener's own session.
+            await wait_long(
+                lambda: any(not claim[2] for claim in executor.claims[recovery_end:]),
+                "the worker made no empty claim after the second task",
+            )
+            hold.arm()
+            listener_pid = hold.listener_pid
+            assert listener_pid is not None, f"{driver}: the runner did not see the LISTEN"
+            await read(connection, "SELECT pg_terminate_backend(%s)", (listener_pid,))
+            deadline = monotonic() + 7
+            while await read(
+                connection, "SELECT 1 FROM pg_stat_activity WHERE pid = %s", (listener_pid,)
+            ):
+                assert monotonic() < deadline, f"{driver}: the listener session did not end"
+                await asyncio.sleep(0.005)
+            lost_at = monotonic()
+            # The loss wakes the worker. The third task waits for the claims after that wake.
+            await wait_long(
+                lambda: any(claim[0] >= lost_at for claim in executor.claims),
+                "the worker made no claim after the subscription was lost",
+            )
+            enqueued_after_loss = monotonic()
+            await enqueue("third")
+            await wait_long(lambda: len(handled) == 3, "the worker did not run the third task")
+        finally:
+            executor.recording = False
+            hold.released.set()
+            worker.stop()
+            await running
+    assert_subscription_recovery(
+        executor.claims, recovery_end, lost_at, enqueued_after_loss, fixture
+    )
 
 
 async def execute_async_release_wait_fixture(

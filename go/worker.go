@@ -62,9 +62,9 @@ const (
 	minimumStartupBudget = 5 * time.Second
 	// deregistrationTimeout bounds the last statement a stopping worker issues.
 	deregistrationTimeout = time.Second
-	// A worker that subscribes to task notifications polls only as a fallback, so it waits the
-	// ceiling between empty claims. A worker that cannot subscribe starts at the shorter interval
-	// and backs off toward the same ceiling.
+	// A worker whose task notification subscription is live polls only as a fallback, so it waits
+	// the ceiling between empty claims. A worker without a live subscription starts at the shorter
+	// interval and backs off toward the same ceiling.
 	defaultNotificationPollInterval = maximumEmptyPollInterval
 	// A queue whose fast claim was refused is claimed through claim_many_v1 for this long before
 	// the worker tries the fast claim again, so a tier change reaches running workers.
@@ -88,6 +88,16 @@ func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) tim
 	}
 	jitter := 0.9 + pseudorand.Float64()*0.2
 	return max(time.Millisecond, time.Duration(float64(delay)*jitter))
+}
+
+// claimPollBase is the wait base after an empty claim: the caller's PollInterval, or the default
+// for the state of the subscription. A configured listener that is not live yet, or that
+// reconnects, wakes nobody. So the worker polls at the polling-only base until a LISTEN succeeds.
+func (worker *Worker) claimPollBase(listening bool) time.Duration {
+	if worker.explicitPollInterval || listening {
+		return worker.pollInterval
+	}
+	return defaultWorkerPollInterval
 }
 
 func resetTimer(timer *time.Timer, delay time.Duration) {
@@ -333,9 +343,12 @@ type Worker struct {
 	heartbeatRoundBound time.Duration
 	// startupBudget is max(heartbeatInterval, minimumStartupBudget). Run and RunOnce reserve the
 	// heartbeat connection and run the compatibility check inside it.
-	startupBudget       time.Duration
-	pollInterval        time.Duration
-	maintenanceInterval time.Duration
+	startupBudget time.Duration
+	pollInterval  time.Duration
+	// explicitPollInterval records that the caller set PollInterval. Otherwise the claim wait
+	// follows the state of the subscription (claimPollBase).
+	explicitPollInterval bool
+	maintenanceInterval  time.Duration
 	// maintenanceRoutineInterval and lastRoutineOffer gate the slow routines. RunOnce and the
 	// maintenance loop both offer them, so the last offer is shared state.
 	maintenanceRoutineInterval time.Duration
@@ -588,6 +601,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		heartbeatRoundBound:        heartbeatRoundBoundFor(heartbeatInterval),
 		startupBudget:              max(heartbeatInterval, minimumStartupBudget),
 		pollInterval:               pollInterval,
+		explicitPollInterval:       options.PollInterval != 0,
 		maintenanceInterval:        maintenanceInterval,
 		maintenanceRoutineInterval: maintenanceRoutineInterval,
 		registryInterval:           registryInterval,
@@ -1103,8 +1117,17 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 	stopTimer()
 	defer stopTimer()
 
+	// Whether the subscription was live when the loop chose its last wait.
+	listenedAtLastWait := false
 	pollDelay := func() time.Duration {
-		return workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !environment.listening())
+		listening := environment.listening()
+		// When the subscription is lost, the backoff restarts: the empty claims of the live period
+		// do not count.
+		if !listening && listenedAtLastWait {
+			consecutiveEmptyClaims = min(consecutiveEmptyClaims, 1)
+		}
+		listenedAtLastWait = listening
+		return workerPollDelay(worker.claimPollBase(listening), consecutiveEmptyClaims, !listening)
 	}
 	freeSlots := func() int {
 		// endedRunSlots only decreases while this loop runs, so an older value is safe.

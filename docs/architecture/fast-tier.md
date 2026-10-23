@@ -746,8 +746,9 @@ pool, so its default is not capped. An explicit `cohorts` is never capped.
 `Worker(cohorts=...)` takes an integer from 1 through `concurrency`.
 `_dispatch_cohorts(concurrency, spare_connections)` applies the same default.
 
-`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener,
-minus 1 for the heartbeat connection unless `shared_heartbeats` is true. A pool whose size is
+`spare_connections` is the pool's `max_size`, or its `get_max_size()`, minus 1 for the listener
+when the size is at least 2, minus 1 for the heartbeat connection unless `shared_heartbeats` is
+true. A pool whose size is
 unknown leaves the default uncapped.
 
 Fused completion works in these steps:
@@ -821,8 +822,8 @@ The Ruby worker follows the Python rules.
 - `Worker.new(cohorts:)` takes an Integer from 1 through `concurrency` and raises `ArgumentError`
   otherwise. An explicit value is never capped.
 - Without it, `dispatch_cohorts` applies the TypeScript default. It caps the default at the pool's
-  Integer `size`, minus 1 for the listener, minus 1 for the heartbeat connection unless
-  `shared_heartbeats` is true, and never below 1.
+  Integer `size`, minus 1 for the listener unless `polling_only` is true, minus 1 for the heartbeat
+  connection unless `shared_heartbeats` is true, and never below 1.
 - A pool without an Integer `size` leaves the default uncapped.
 - `DispatchSlots` splits the slots as TypeScript does.
 

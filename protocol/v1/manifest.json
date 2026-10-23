@@ -76,6 +76,7 @@
     "lease-loss-fencing",
     "non-overlapping-heartbeats",
     "empty-claim-backoff",
+    "subscription-poll-base",
     "graceful-drain",
     "batched-slot-refill",
     "enqueue-trace-propagation",

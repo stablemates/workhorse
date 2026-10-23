@@ -5,6 +5,26 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A lost notification subscription restarts the poll backoff
+
+A worker without a live subscription waits 250 ms after an empty claim, and doubles that wait
+toward 5,000 ms. Before this change, the empty claims of a live period counted toward that backoff.
+After a loss, a worker that was idle for some time therefore waited the 5,000 ms ceiling at once,
+and a new task waited up to 5 s (SM-1648).
+
+Now the backoff restarts at 250 ms when the subscription is lost. The `subscription-recovery` case
+in `protocol/v1/runtime.json` checks this rule in every SDK.
+
+### A polling-only worker keeps its listener connection for claims
+
+A worker without a `cohorts` option caps its default cohort count by the connections that its pool
+can lend. Before this change, a worker with `polling_only: true` also subtracted a connection for a
+listener that it never opens. With a pool of 4 and concurrency 64, it used 2 cohorts instead of 3
+(SM-1668).
+
+Now a polling-only worker reserves no listener connection. A worker that listens still reserves one,
+and a worker with dedicated heartbeats still reserves one more.
+
 ### A handler error with text that jsonb cannot store settles by its retry policy
 
 PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a

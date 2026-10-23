@@ -225,13 +225,18 @@ Three rows carry a condition the setting name alone cannot.
 
 - **Claim poll interval.** A worker claims on one of two schedules. While its `LISTEN` subscription
   is live, a notification wakes it, so polling is only a fallback and the worker waits the ceiling
-  between empty claims. A worker that cannot subscribe, because a connection pooler forbids
-  `LISTEN` or the caller asked for polling only, starts at 250 ms and doubles toward that same
-  ceiling. Most deployments therefore never use the shorter interval.
+  between empty claims. A worker without a live subscription starts at 250 ms and doubles toward
+  that same ceiling. That includes a worker that cannot subscribe, because a connection pooler
+  forbids `LISTEN` or the caller asked for polling only. It also includes a worker whose listener
+  has not run `LISTEN` yet, or reconnects after a lost connection. All seven read the subscription
+  state before each wait. A lost subscription wakes the worker, and the backoff then restarts at
+  250 ms, because the empty claims of the live period do not count. The `subscription-recovery`
+  runtime fixture checks these rules.
 - **Dispatch cohorts.** A worker splits its slots into cohorts so fused fast-tier completions do
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
-  default at the connections left after its listener and heartbeat connection. An explicit
-  cohort count is never capped.
+  default at the connections left after its listener and heartbeat connection. A worker that
+  only polls reserves no listener connection, and a worker with shared heartbeats reserves no
+  heartbeat connection. An explicit cohort count is never capped.
 - **Maintenance routine offer interval.** All seven tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls.

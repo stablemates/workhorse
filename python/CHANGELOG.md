@@ -10,6 +10,24 @@ adds.
 
 ## Unreleased
 
+### A lost notification subscription restarts the poll backoff
+
+A worker without a live subscription waits 250 ms after an empty claim, and doubles that wait
+toward 5,000 ms. Before this change, the empty claims of a live period counted toward that backoff.
+After a loss, a worker that was idle for some time therefore waited the 5,000 ms ceiling at once,
+and a new task waited up to 5 s (SM-1648).
+
+Now the backoff restarts at 250 ms when the subscription is lost. The `subscription-recovery` case
+in `protocol/v1/runtime.json` checks this rule in every SDK.
+
+### A worker on a pool of one reserves no listener connection for its cohorts
+
+A worker without a `cohorts` option caps its default cohort count by the connections that its pool
+can lend. A pool with a maximum size of 1 lends no listener, so the worker only polls. The worker
+now reserves no listener connection in that case. The cohort count does not change, because such a
+pool gives one cohort in both cases. Tests now pin the count for each heartbeat configuration
+(SM-1668).
+
 ### A handler error with text that jsonb cannot store settles by its retry policy
 
 PostgreSQL `jsonb` cannot store a NUL character or an unpaired surrogate. Before this change, a

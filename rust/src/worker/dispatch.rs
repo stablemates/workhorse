@@ -40,8 +40,11 @@ pub(super) trait Dispatch: Send + Sync + 'static {
     fn fast_tier_only(&self) -> bool;
     /// Whether every queue answered its last claim on the fast tier.
     fn tiers_known(&self) -> bool;
-    /// The wait after `consecutive_empty` claims found nothing to run.
-    fn poll_delay(&self, consecutive_empty: u32) -> Duration;
+    /// Whether the subscription is live.
+    fn listening(&self) -> bool;
+    /// The wait after `consecutive_empty` claims found nothing to run, with the subscription live
+    /// or not.
+    fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration;
     /// Whether the claim gate is open.
     fn claims_allowed(&self) -> bool {
         true
@@ -308,6 +311,8 @@ struct Dispatcher<D: Dispatch> {
     claims: JoinSet<Claimed<D::Task>>,
     plain: HashMap<Id, PlainClaim>,
     consecutive_empty: u32,
+    /// Whether the subscription was live when the loop chose its last wait.
+    listened_at_last_wait: bool,
     /// Counts the notifications the loop has observed.
     wake_version: u64,
     notification_delay_pending: bool,
@@ -356,6 +361,7 @@ impl<D: Dispatch> Dispatcher<D> {
             claims: JoinSet::new(),
             plain: HashMap::new(),
             consecutive_empty: 0,
+            listened_at_last_wait: false,
             wake_version: 0,
             notification_delay_pending: false,
             empty_wait: None,
@@ -512,10 +518,21 @@ impl<D: Dispatch> Dispatcher<D> {
         }
     }
 
+    /// The wait after an empty claim. When the subscription is lost, the backoff restarts: the
+    /// empty claims of the live period do not count.
+    fn poll_delay(&mut self) -> Duration {
+        let listening = self.worker.listening();
+        if !listening && self.listened_at_last_wait {
+            self.consecutive_empty = self.consecutive_empty.min(1);
+        }
+        self.listened_at_last_wait = listening;
+        self.worker.poll_delay(self.consecutive_empty, listening)
+    }
+
     fn back_off(&mut self, wake_version: u64) {
         self.consecutive_empty = self.consecutive_empty.saturating_add(1);
         if self.empty_wait.is_none() {
-            let deadline = Instant::now() + self.worker.poll_delay(self.consecutive_empty);
+            let deadline = Instant::now() + self.poll_delay();
             self.set_empty_wait(Some((deadline, Some(wake_version))));
         }
     }
@@ -525,7 +542,7 @@ impl<D: Dispatch> Dispatcher<D> {
     fn release_wait(&mut self) {
         self.consecutive_empty = self.consecutive_empty.saturating_add(1);
         if !matches!(self.empty_wait, Some((_, None))) {
-            let deadline = Instant::now() + self.worker.poll_delay(self.consecutive_empty);
+            let deadline = Instant::now() + self.poll_delay();
             self.set_empty_wait(Some((deadline, None)));
         }
     }
@@ -567,7 +584,7 @@ pub(super) async fn dispatch<D: Dispatch, F: Future<Output = ()>>(
             if dispatcher.empty_wait.is_some() {
                 dispatcher.set_empty_wait(None);
             }
-            Some(Instant::now() + worker.poll_delay(dispatcher.consecutive_empty))
+            Some(Instant::now() + dispatcher.poll_delay())
         } else if let Some((deadline, version)) = dispatcher.empty_wait {
             let woken = version.is_some_and(|version| dispatcher.wake_version != version);
             if Instant::now() >= deadline || woken {
@@ -684,6 +701,10 @@ mod tests {
         fast_tier_only: AtomicBool,
         tiers_known: AtomicBool,
         poll: Duration,
+        /// Whether the subscription is live. It is live unless a test ends it.
+        listening: AtomicBool,
+        /// The empty-claim counts that the loop chose its waits with.
+        polls: Mutex<Vec<u32>>,
         paused: AtomicBool,
         claims: mpsc::UnboundedSender<ClaimRequest>,
         fused: mpsc::UnboundedSender<FusedRequest>,
@@ -720,7 +741,12 @@ mod tests {
             self.tiers_known.load(Ordering::SeqCst)
         }
 
-        fn poll_delay(&self, _: u32) -> Duration {
+        fn listening(&self) -> bool {
+            self.listening.load(Ordering::SeqCst)
+        }
+
+        fn poll_delay(&self, consecutive_empty: u32, _: bool) -> Duration {
+            lock(&self.polls).push(consecutive_empty);
             self.poll
         }
 
@@ -801,6 +827,8 @@ mod tests {
                 fast_tier_only: AtomicBool::new(setup.fast_tier_only),
                 tiers_known: AtomicBool::new(setup.tiers_known),
                 poll: setup.poll,
+                listening: AtomicBool::new(true),
+                polls: Mutex::default(),
                 paused: AtomicBool::new(setup.paused),
                 claims: sender,
                 fused: fused_sender,
@@ -1140,6 +1168,34 @@ mod tests {
         assert!(waited >= poll, "the next claim came {waited:?} after an empty one");
         let _ = answer.send(Vec::new());
         harness.stop().await;
+    }
+
+    // SM-1648: when the subscription is lost, the empty claims of the live period do not count. So
+    // the backoff starts again at the polling-only base, and not at its ceiling.
+    #[tokio::test]
+    async fn a_lost_subscription_restarts_the_backoff() {
+        let mut harness = Harness::start_plain(1, Duration::from_secs(60), false);
+        // With a live subscription, each empty claim adds to the count. A notification ends each
+        // wait.
+        for _ in 0..5 {
+            let (_, _, answer) = harness.next_claim().await;
+            let _ = answer.send(Vec::new());
+            settled().await;
+            harness.notification.notify_one();
+        }
+        // The subscription is lost before the next empty claim chooses its wait.
+        harness.worker.listening.store(false, Ordering::SeqCst);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        settled().await;
+        harness.notification.notify_one();
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        settled().await;
+        let worker = harness.stop().await;
+        // The first wait without a subscription restarts at one empty claim, and the next one
+        // continues from there.
+        assert_eq!(*lock(&worker.polls), [1, 2, 3, 4, 5, 1, 2]);
     }
 
     #[tokio::test]

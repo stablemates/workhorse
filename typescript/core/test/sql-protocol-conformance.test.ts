@@ -57,6 +57,7 @@ import type {
   PollCadenceRuntimeFixture,
   ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
+  SubscriptionRecoveryRuntimeFixture,
   RuntimeFunctionInjection,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
@@ -176,6 +177,18 @@ async function waitForCondition(condition: () => boolean, message: string): Prom
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error(message);
     await sleep(5);
+  }
+}
+
+// A bounded wait that is longer than the notification base.
+async function waitUntil(
+  condition: () => boolean | Promise<boolean>,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + 7_000;
+  while (!(await condition())) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await sleep(10);
   }
 }
 
@@ -669,6 +682,150 @@ async function executePollCadenceRuntimeFixture(
   const delayMs = ordered[found]!.started - ordered[found - 1]!.returned;
   expect(delayMs).toBeGreaterThanOrEqual(fixture.expectedMinimumDelayMs);
   expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
+}
+
+async function executeSubscriptionRecoveryRuntimeFixture(
+  database: Pool,
+  fixture: SubscriptionRecoveryRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  // The worker can listen, but the runner holds its LISTEN until it releases it. Until then the
+  // worker has no live subscription.
+  let listenGate = deferred<void>();
+  let listenerPid: number | undefined;
+  let recording = true;
+  // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+  const claims: { started: number; returned: number; found: boolean }[] = [];
+  const recorded = async (
+    text: unknown,
+    run: () => Promise<{ rows: unknown[] }>,
+  ): Promise<{ rows: unknown[] }> => {
+    if (typeof text !== "string" || !text.includes("claim_many_v1")) return await run();
+    const started = performance.now();
+    const result = await run();
+    if (recording) {
+      claims.push({ started, returned: performance.now(), found: result.rows.length > 0 });
+    }
+    return result;
+  };
+  const pool = {
+    options: { max: 8 },
+    query: (text: string, values?: unknown[]) => recorded(text, () => database.query(text, values)),
+    async connect() {
+      const client = await database.connect();
+      const query = client.query.bind(client) as (...args: unknown[]) => Promise<{ rows: [] }>;
+      return new Proxy(client, {
+        get(target, property) {
+          if (property === "query") {
+            return async (text: unknown, ...rest: unknown[]) => {
+              if (typeof text === "string" && text.startsWith("LISTEN")) {
+                await listenGate.promise;
+                listenerPid = (target as unknown as { processID: number }).processID;
+              }
+              return await recorded(text, () => query(text, ...rest));
+            };
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? (value as () => unknown).bind(target) : value;
+        },
+      });
+    },
+  };
+  const queue = new Queue(pool as unknown as Queryable);
+  const handled: string[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, (payload) => {
+    handled.push((payload as { task: string }).task);
+    return null;
+  });
+  let recoveryEnd = 0;
+  let lostAt = 0;
+  let enqueuedAfterLoss = 0;
+  const running = worker.run();
+  try {
+    await waitForCondition(
+      () => claims.some((claim) => !claim.found),
+      "the worker made no empty claim before the first enqueue",
+    );
+    await queue.enqueue(fixture.taskType, { task: "first" }, { queue: queueName });
+    await waitForCondition(() => handled.length === 1, "the worker did not run the first task");
+
+    listenGate.resolve();
+    const listenDeadline = Date.now() + 5_000;
+    for (;;) {
+      const listening = await database.query<{ count: number }>(
+        `SELECT count(*)::integer AS count FROM pg_stat_activity
+          WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks'
+            AND state = 'idle'`,
+      );
+      if (listening.rows[0]!.count > 0) break;
+      if (Date.now() >= listenDeadline) throw new Error("the listener did not run LISTEN");
+      await sleep(10);
+    }
+    await queue.enqueue(fixture.taskType, { task: "second" }, { queue: queueName });
+    await waitUntil(() => handled.length === 2, "the worker did not run the second task");
+    await sleep(fixture.observeAfterRecoveryMs);
+    recoveryEnd = claims.length;
+
+    // The next empty claim starts a new wait at the notification base. Then the runner ends the
+    // live listener session and holds the next LISTEN, so the subscription is lost.
+    await waitUntil(
+      () => claims.slice(recoveryEnd).some((claim) => !claim.found),
+      "the worker made no empty claim after the second task",
+    );
+    listenGate = deferred<void>();
+    await database.query("SELECT pg_terminate_backend($1)", [listenerPid]);
+    await waitUntil(async () => {
+      const session = await database.query("SELECT 1 FROM pg_stat_activity WHERE pid = $1", [
+        listenerPid,
+      ]);
+      return session.rows.length === 0;
+    }, "the listener session did not end");
+    lostAt = performance.now();
+    // The loss wakes the worker. The third task waits for the claims after that wake.
+    await waitUntil(
+      () => claims.some((claim) => claim.started >= lostAt),
+      "the worker made no claim after the subscription was lost",
+    );
+    enqueuedAfterLoss = performance.now();
+    await queue.enqueue(fixture.taskType, { task: "third" }, { queue: queueName });
+    await waitUntil(() => handled.length === 3, "the worker did not run the third task");
+  } finally {
+    recording = false;
+    listenGate.resolve();
+    worker.stop();
+    await running;
+  }
+  const ordered = claims.toSorted((left, right) => left.started - right.started);
+  const found = ordered.flatMap((claim, index) => (claim.found ? [index] : []));
+  expect(found, "claims that found a task").toHaveLength(3);
+  const [first, , third] = found as [number, number, number];
+  expect(first, "no empty claim came before the first task").toBeGreaterThan(0);
+  expect(
+    ordered[first]!.started - ordered[first - 1]!.returned,
+    "wait before the claim that found the first task, without a live subscription",
+  ).toBeLessThanOrEqual(fixture.expectedMaximumClaimDelayMs);
+  // With a live subscription, the worker waits the notification base after an empty claim.
+  const recovered = claims
+    .slice(0, recoveryEnd)
+    .toSorted((left, right) => left.started - right.started);
+  expect(
+    recovered.slice(recovered.findLastIndex((claim) => claim.found)).filter((claim) => !claim.found)
+      .length,
+    "empty claims after the second task, with a live subscription",
+  ).toBeLessThanOrEqual(fixture.expectedMaximumEmptyClaimsAfterRecovery);
+  // After the loss, the worker claims at once and then polls at the polling-only base again.
+  expect(
+    ordered.find((claim) => claim.started >= lostAt)!.started - lostAt,
+    "wait for the first claim after the subscription was lost",
+  ).toBeLessThanOrEqual(fixture.expectedMaximumClaimDelayAfterLossMs);
+  expect(
+    ordered[third]!.started - enqueuedAfterLoss,
+    "wait for the claim that found the third task, after the subscription was lost",
+  ).toBeLessThanOrEqual(fixture.expectedMaximumClaimDelayAfterLossMs);
 }
 
 async function executeGracefulDrainRuntimeFixture(
@@ -1479,6 +1636,9 @@ async function executeRuntimeFixture(
       break;
     case "poll-cadence":
       await executePollCadenceRuntimeFixture(database, fixture);
+      break;
+    case "subscription-recovery":
+      await executeSubscriptionRecoveryRuntimeFixture(database, fixture);
       break;
     case "graceful-drain":
       await executeGracefulDrainRuntimeFixture(queue, admin, fixture);

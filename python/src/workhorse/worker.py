@@ -516,6 +516,8 @@ class _DispatchSlots:
     # so a wake does not end that wait: only its deadline, a stop, or a pause does.
     empty_wait: tuple[float, int | None] | None = None
     consecutive_empty_claims: int = 0
+    # Whether the last chosen wait had a live subscription. The backoff restarts after a loss.
+    listened_at_last_wait: bool = False
     claimed_any: bool = False
     # A single pass ends at its first claim that made no progress.
     pass_ended: bool = False
@@ -1524,10 +1526,11 @@ class Worker:
         ):
             raise ValueError("concurrency must be an integer between 1 and 100")
         if cohorts is None:
-            # The listener and the heartbeat connection each hold a pooled connection.
+            # The listener and the heartbeat connection each hold a pooled connection. A pool
+            # smaller than 2 lends no listener, so the worker polls and reserves none for it.
             cohorts = _dispatch_cohorts(
                 concurrency,
-                capacity - 1 - (0 if shared_heartbeats else 1)
+                capacity - (1 if capacity >= 2 else 0) - (0 if shared_heartbeats else 1)
                 if isinstance(capacity, int) and not isinstance(capacity, bool)
                 else None,
             )
@@ -2617,7 +2620,6 @@ class Worker:
                         wake_version = self._dispatch_wake_version
                         failed = slots.claim_error is not None
                         pass_ended = slots.pass_ended
-                        consecutive_empty_claims = slots.consecutive_empty_claims
                         empty_wait = slots.empty_wait
                     if stopping or failed or maintenance_errors:
                         break
@@ -2631,9 +2633,8 @@ class Worker:
                         # ignores the wake of the resume, so it must end here.
                         with self._state_lock:
                             slots.empty_wait = None
-                        self._wake.wait(
-                            self._dispatch_wait_seconds(listener, consecutive_empty_claims)
-                        )
+                            wait_seconds = self._dispatch_wait_seconds(slots)
+                        self._wake.wait(wait_seconds)
                         continue
                     if empty_wait is not None:
                         remaining = empty_wait[0] - monotonic()
@@ -2653,7 +2654,9 @@ class Worker:
                             self._run_maintenance_if_due()
                         while (claim := next_claim()) is not None:
                             start_claim(*claim)
-                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
+                    with self._state_lock:
+                        wait_seconds = self._dispatch_wait_seconds(slots)
+                    self._wake.wait(wait_seconds)
             finally:
                 # Completions stop claiming with the loop. Tasks an in-flight claim returns hold
                 # leases, so they run before the drain. A claim that has not returned by the stop
@@ -2731,9 +2734,7 @@ class Worker:
             return
         slots.consecutive_empty_claims += 1
         slots.pass_ended = True
-        deadline = monotonic() + self._dispatch_wait_seconds(
-            slots.listener, slots.consecutive_empty_claims
-        )
+        deadline = monotonic() + self._dispatch_wait_seconds(slots)
         if not outcome.claimed:
             if slots.empty_wait is None:
                 slots.empty_wait = (deadline, outcome.wake_version)
@@ -2987,10 +2988,7 @@ class Worker:
                 slots.pass_ended = True
                 if slots.empty_wait is None:
                     slots.empty_wait = (
-                        monotonic()
-                        + self._dispatch_wait_seconds(
-                            slots.listener, slots.consecutive_empty_claims
-                        ),
+                        monotonic() + self._dispatch_wait_seconds(slots),
                         reservation.wake_version,
                     )
         for thread in threads:
@@ -3441,18 +3439,25 @@ class Worker:
                 "deregistration",
             )
 
-    def _dispatch_wait_seconds(
-        self, listener: _ListenerSubscription | None, consecutive_empty_claims: int = 0
-    ) -> float:
+    def _dispatch_wait_seconds(self, slots: _DispatchSlots) -> float:
+        """Choose the wait after an empty claim from the live subscription state.
+
+        The caller holds the state lock. Without a live subscription, the backoff restarts when
+        the wait before had one, so the empty claims of the live period do not count.
+        """
+        listener = slots.listener
         listening = self._notification_listening.is_set() or (
             listener is not None and listener.is_listening()
         )
+        if not listening and slots.listened_at_last_wait:
+            slots.consecutive_empty_claims = min(slots.consecutive_empty_claims, 1)
+        slots.listened_at_last_wait = listening
         wait_ms = (
             self._notification_poll_ms
             if listening
             else min(
                 _MAX_EMPTY_POLL_MS,
-                self.poll_ms * 2 ** max(0, consecutive_empty_claims - 1),
+                self.poll_ms * 2 ** max(0, slots.consecutive_empty_claims - 1),
             )
         )
         wait_ms = max(1, round(wait_ms * random.uniform(0.9, 1.1)))

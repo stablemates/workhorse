@@ -147,7 +147,9 @@ pub struct WorkerOptions {
     /// Defaults to the larger of 100ms and a third of the lease. The smallest supported value is
     /// 100ms. The worker accepts a shorter value, but on a loaded host it can renew no lease.
     pub heartbeat_interval: Option<Duration>,
-    /// Defaults to 5s while a notification listener is expected and 250ms when polling only.
+    /// The wait after an empty claim. Defaults to 5s while the notification listener is connected.
+    /// Without a connected listener, it defaults to 250ms, which doubles toward 5s after each empty
+    /// claim.
     pub poll_interval: Option<Duration>,
     pub maintenance_interval: Duration,
     pub maintenance_routine_interval: Duration,
@@ -836,8 +838,12 @@ impl dispatch::Dispatch for WorkerDispatch {
         self.inner.tiers_known()
     }
 
-    fn poll_delay(&self, consecutive_empty: u32) -> Duration {
-        self.inner.poll_delay(consecutive_empty, self.listening.load(Ordering::SeqCst))
+    fn listening(&self) -> bool {
+        self.listening.load(Ordering::SeqCst)
+    }
+
+    fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration {
+        self.inner.poll_delay(consecutive_empty, listening)
     }
 
     fn claims_allowed(&self) -> bool {
@@ -1198,8 +1204,15 @@ impl Inner {
         }
     }
 
+    /// The wait after an empty claim. Without a caller interval, the base follows the listener: a
+    /// configured listener that is not connected yet, or that reconnects, wakes nobody. So the
+    /// worker polls at the polling-only base until a `LISTEN` succeeds.
     fn poll_delay(&self, consecutive_empty: u32, listening: bool) -> Duration {
-        let mut delay = self.poll_interval;
+        let mut delay = self.options.poll_interval.unwrap_or(if listening {
+            LISTENING_POLL
+        } else {
+            POLLING_POLL
+        });
         if !listening {
             delay = delay.min(MAX_EMPTY_POLL);
             for _ in 0..consecutive_empty.saturating_sub(1).min(30) {
@@ -1870,5 +1883,26 @@ mod tests {
         assert!(first >= Duration::from_millis(225) && first <= Duration::from_millis(275));
         let ceiling = worker.0.poll_delay(40, false);
         assert!(ceiling >= Duration::from_millis(4500) && ceiling <= Duration::from_millis(5500));
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_is_not_connected_polls_at_the_polling_only_base() {
+        let config: tokio_postgres::Config =
+            "host=127.0.0.1 port=1 user=workhorse".parse().unwrap();
+        let options = WorkerOptions { listen_config: Some(config), ..Default::default() };
+        let worker = Worker::new(pool(4), options.clone()).unwrap();
+        let polling = worker.0.poll_delay(1, false);
+        assert!(polling >= Duration::from_millis(225) && polling <= Duration::from_millis(275));
+        let listening = worker.0.poll_delay(1, true);
+        assert!(
+            listening >= Duration::from_millis(4500) && listening <= Duration::from_millis(5500)
+        );
+        // An explicit interval keeps its value in both states.
+        let explicit = WorkerOptions { poll_interval: Some(Duration::from_secs(1)), ..options };
+        let worker = Worker::new(pool(4), explicit).unwrap();
+        for listening in [false, true] {
+            let delay = worker.0.poll_delay(1, listening);
+            assert!(delay >= Duration::from_millis(900) && delay <= Duration::from_millis(1100));
+        }
     }
 }

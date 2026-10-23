@@ -143,7 +143,8 @@ module Stablemates
       class DispatchSlots # :nodoc:
         attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers, :gate,
           :cohort_active, :cohort_handed_over, :cohort_reserved, :cohort_claims, :handed_over, :thread_cohorts
-        attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open
+        attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open,
+          :listened_at_last_wait
 
         def initialize(concurrency, cohorts, listener, version, run_errors, handlers, gate)
           @concurrency = concurrency
@@ -167,6 +168,8 @@ module Stablemates
           @whole_claims = 0
           @reserved = 0
           @empty = 0
+          # Whether the last chosen wait had a live subscription. The backoff restarts after a loss.
+          @listened_at_last_wait = false
           @empty_wait = nil
           @pass_ended = false
           @claimed_any = false
@@ -242,7 +245,7 @@ module Stablemates
           concurrency.is_a?(Integer) && concurrency.between?(1, 100)
 
         @concurrency = concurrency
-        @cohorts = dispatch_cohorts(cohorts, pool, shared_heartbeats)
+        @cohorts = dispatch_cohorts(cohorts, pool, shared_heartbeats, polling_only)
         @worker_id = worker_id || "#{Socket.gethostname}-#{Process.pid}-#{SecureRandom.hex(4)}"
         raise ArgumentError, "worker_id must be a non-empty String" unless @worker_id.is_a?(String) && !@worker_id.empty?
 
@@ -378,8 +381,9 @@ module Stablemates
 
       # Slot cohorts for fast-tier dispatch (ADR 0076). Without the option, a worker keeps one
       # pooled connection per cohort after the listener and the heartbeat connection, which every
-      # worker on the pool shares.
-      def dispatch_cohorts(cohorts, pool, shared_heartbeats)
+      # worker on the pool shares. A polling-only worker opens no listener, so it keeps that
+      # connection for its cohorts.
+      def dispatch_cohorts(cohorts, pool, shared_heartbeats, polling_only)
         unless cohorts.nil?
           raise ArgumentError, "cohorts must be an integer between 1 and concurrency" unless
             cohorts.is_a?(Integer) && cohorts.between?(1, @concurrency)
@@ -390,7 +394,7 @@ module Stablemates
         capacity = pool.respond_to?(:size) ? pool.size : nil
         return default unless capacity.is_a?(Integer)
 
-        spare = capacity - 1 - (shared_heartbeats ? 0 : 1)
+        spare = capacity - (polling_only ? 0 : 1) - (shared_heartbeats ? 0 : 1)
         spare.clamp(1, default)
       end
 
@@ -675,15 +679,18 @@ module Stablemates
 
               # A pause ends the empty wait, so a resume claims at once. A release wait ignores the
               # wake of the resume, so it must end here.
-              @state_lock.synchronize { slots.empty_wait = nil }
-              @wake.wait(dispatch_wait(empty, listener))
+              wait = @state_lock.synchronize do
+                slots.empty_wait = nil
+                dispatch_wait(slots)
+              end
+              @wake.wait(wait)
               next
             end
             unless gate.ready?
               break unless continuous
 
               # The heartbeat wakes dispatch when its replacement connection is ready.
-              @wake.wait(dispatch_wait(empty, listener))
+              @wake.wait(@state_lock.synchronize { dispatch_wait(slots) })
               next
             end
             if empty_wait
@@ -710,7 +717,7 @@ module Stablemates
             # A thread whose task already left @active returns to the executor at once, and no
             # wakeup follows its return, so dispatch rechecks shortly instead.
             returning = handlers.active_count > @active.size
-            @wake.wait(returning ? THREAD_RETURN_WAIT : dispatch_wait(empty, listener))
+            @wake.wait(returning ? THREAD_RETURN_WAIT : @state_lock.synchronize { dispatch_wait(slots) })
           end
         ensure
           # Completions stop claiming with the loop. Tasks an in-flight claim returns hold leases,
@@ -744,7 +751,7 @@ module Stablemates
           # empty claim does instead of spinning on a task no handler here runs.
           slots.empty += 1
           slots.pass_ended = true
-          deadline = monotonic + dispatch_wait(slots.empty, slots.listener)
+          deadline = monotonic + dispatch_wait(slots)
           if claimed.empty?
             slots.empty_wait ||= [deadline, claimed_version]
           elsif slots.empty_wait.nil? || !slots.empty_wait[1].nil?
@@ -1060,7 +1067,7 @@ module Stablemates
             # has no other.
             slots.empty += 1
             slots.pass_ended = true
-            slots.empty_wait ||= [monotonic + dispatch_wait(slots.empty, slots.listener), reservation.wake_version]
+            slots.empty_wait ||= [monotonic + dispatch_wait(slots), reservation.wake_version]
           end
         end
         @wake.set
@@ -1247,12 +1254,17 @@ module Stablemates
       end
 
       # The wait before the next claim. A listening worker waits for a notification; a polling
-      # worker backs off exponentially while claims come back empty.
-      def dispatch_wait(empty, listener)
-        milliseconds = if listener&.listening?
+      # worker backs off exponentially while claims come back empty. The caller holds @state_lock.
+      # Without a live subscription, the backoff restarts when the wait before had one, so the
+      # empty claims of the live period do not count.
+      def dispatch_wait(slots)
+        listening = slots.listener&.listening? || false
+        slots.empty = [slots.empty, 1].min if !listening && slots.listened_at_last_wait
+        slots.listened_at_last_wait = listening
+        milliseconds = if listening
           @notification_poll_ms
         else
-          [MAX_EMPTY_POLL_MS, @poll_ms * (2**[0, empty - 1].max)].min
+          [MAX_EMPTY_POLL_MS, @poll_ms * (2**[0, slots.empty - 1].max)].min
         end
         milliseconds = [1, (milliseconds * rand(0.9..1.1)).round].max
         milliseconds = [milliseconds, @registry_ms].min if @registry_ms.positive?

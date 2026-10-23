@@ -90,6 +90,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"lease-loss":               executeWorkerLeaseLossFixture,
 		"heartbeat-cadence":        executeWorkerHeartbeatFixture,
 		"poll-cadence":             executeWorkerPollCadenceFixture,
+		"subscription-recovery":    executeWorkerSubscriptionRecoveryFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
 		"slot-refill":              executeWorkerSlotRefillFixture,
 		"trace-propagation":        executeWorkerTracePropagationFixture,
@@ -299,6 +300,254 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 		delay > time.Duration(fixture.ExpectedMaximumDelayMS)*time.Millisecond {
 		t.Fatalf("the claim after %d empty polls waited %s, want %d ms to %d ms",
 			fixture.EmptyPollsBeforeEnqueue, delay, fixture.ExpectedMinimumDelayMS, fixture.ExpectedMaximumDelayMS)
+	}
+}
+
+// subscriptionRecoveryQueryTracer holds each LISTEN of the listener until the test closes the
+// current listen gate, so the worker has no live subscription until then. The test can arm a new
+// gate to hold the next LISTEN. The tracer records the backend pid of the connection that runs
+// LISTEN. It records every claim_many_v1 call but does not hold it.
+type subscriptionRecoveryQueryTracer struct {
+	mu          sync.Mutex
+	listenGate  chan struct{}
+	listenerPID uint32
+	recording   bool
+	claims      []pollCadenceClaim
+}
+
+func (tracer *subscriptionRecoveryQueryTracer) TraceQueryStart(
+	ctx context.Context,
+	conn *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if data.SQL == "LISTEN workhorse_tasks" {
+		tracer.mu.Lock()
+		gate := tracer.listenGate
+		tracer.mu.Unlock()
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+		tracer.mu.Lock()
+		tracer.listenerPID = conn.PgConn().PID()
+		tracer.mu.Unlock()
+		return ctx
+	}
+	if !strings.Contains(data.SQL, "claim_many_v1") {
+		return ctx
+	}
+	return context.WithValue(ctx, pollCadenceQueryContextKey{}, time.Now())
+}
+
+func (tracer *subscriptionRecoveryQueryTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryEndData,
+) {
+	started, ok := ctx.Value(pollCadenceQueryContextKey{}).(time.Time)
+	if !ok {
+		return
+	}
+	claim := pollCadenceClaim{started: started, returned: time.Now(), found: data.CommandTag.RowsAffected() > 0}
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	if tracer.recording {
+		tracer.claims = append(tracer.claims, claim)
+	}
+}
+
+func (tracer *subscriptionRecoveryQueryTracer) snapshot() []pollCadenceClaim {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return slices.Clone(tracer.claims)
+}
+
+func executeWorkerSubscriptionRecoveryFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-subscription-recovery")
+	ctx := context.Background()
+	tracer := &subscriptionRecoveryQueryTracer{listenGate: make(chan struct{}), recording: true}
+	// releaseListen opens the current listen gate. holdListen arms a new gate for the next LISTEN.
+	listenOpen := false
+	releaseListen := func() {
+		tracer.mu.Lock()
+		defer tracer.mu.Unlock()
+		if !listenOpen {
+			listenOpen = true
+			close(tracer.listenGate)
+		}
+	}
+	holdListen := func() {
+		tracer.mu.Lock()
+		defer tracer.mu.Unlock()
+		listenOpen = false
+		tracer.listenGate = make(chan struct{})
+	}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = tracer
+	// The pool lends connections to the listener and the heartbeat, so the worker can listen.
+	config.MaxConns = 8
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	// The worker is configured for notifications and has no explicit poll interval.
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID, Concurrency: 1, DisableRegistry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan string, 3)
+	worker.Handle(fixture.TaskType, func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		task, _ := payload.(map[string]any)["task"].(string)
+		handled <- task
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	stopped := false
+	stopWorker := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		releaseListen()
+		stop()
+		if err := <-runResult; err != nil {
+			t.Error(err)
+		}
+	}
+	defer stopWorker()
+	waitForHandled := func(expected string, timeout time.Duration) {
+		t.Helper()
+		select {
+		case task := <-handled:
+			if task != expected {
+				t.Fatalf("the worker ran task %q, want %q", task, expected)
+			}
+		case <-time.After(timeout):
+			t.Fatalf("the worker did not run the %s task", expected)
+		}
+	}
+
+	waitForBudgetRace(t, "the worker made no empty claim before the first enqueue", func() bool {
+		return slices.ContainsFunc(tracer.snapshot(), func(claim pollCadenceClaim) bool { return !claim.found })
+	})
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"task": "first"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForHandled("first", 5*time.Second)
+
+	releaseListen()
+	waitForBudgetRace(t, "the listener did not run LISTEN", func() bool {
+		var listening int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND query = 'LISTEN workhorse_tasks' AND state = 'idle'`).Scan(&listening)
+		return err == nil && listening > 0
+	})
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"task": "second"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForHandled("second", 7*time.Second)
+	time.Sleep(time.Duration(fixture.ObserveAfterRecoveryMS) * time.Millisecond)
+	recoveryEnd := len(tracer.snapshot())
+
+	// The next empty claim starts a new wait at the notification base. Then the runner ends the
+	// live listener session and holds the next LISTEN, so the subscription is lost.
+	waitUntil := func(message string, condition func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(7 * time.Second)
+		for !condition() {
+			if time.Now().After(deadline) {
+				t.Fatal(message)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitUntil("the worker made no empty claim after the second task", func() bool {
+		return slices.ContainsFunc(tracer.snapshot()[recoveryEnd:], func(claim pollCadenceClaim) bool { return !claim.found })
+	})
+	holdListen()
+	tracer.mu.Lock()
+	listenerPID := tracer.listenerPID
+	tracer.mu.Unlock()
+	if _, err := pool.Exec(ctx, "SELECT pg_terminate_backend($1)", listenerPID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil("the listener session did not end", func() bool {
+		var sessions int
+		err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid = $1", listenerPID).Scan(&sessions)
+		return err == nil && sessions == 0
+	})
+	lostAt := time.Now()
+	// The loss wakes the worker. The third task waits for the claims after that wake.
+	waitUntil("the worker made no claim after the subscription was lost", func() bool {
+		return slices.ContainsFunc(tracer.snapshot(), func(claim pollCadenceClaim) bool { return !claim.started.Before(lostAt) })
+	})
+	enqueuedAfterLoss := time.Now()
+	if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"task": "third"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForHandled("third", 7*time.Second)
+	tracer.mu.Lock()
+	tracer.recording = false
+	tracer.mu.Unlock()
+	stopWorker()
+
+	claims := tracer.snapshot()
+	recovered := slices.Clone(claims[:recoveryEnd])
+	byStart := func(a, b pollCadenceClaim) int { return a.started.Compare(b.started) }
+	slices.SortFunc(claims, byStart)
+	slices.SortFunc(recovered, byStart)
+	var found []int
+	for index, claim := range claims {
+		if claim.found {
+			found = append(found, index)
+		}
+	}
+	if len(found) != 3 {
+		t.Fatalf("%d claims found a task, want 3", len(found))
+	}
+	first, third := found[0], found[2]
+	if first == 0 {
+		t.Fatal("no empty claim came before the claim that found the first task")
+	}
+	// Without a live subscription, the worker polls at the polling-only base.
+	delay := claims[first].started.Sub(claims[first-1].returned)
+	if delay > time.Duration(fixture.ExpectedMaximumClaimDelayMS)*time.Millisecond {
+		t.Fatalf("the claim that found the first task waited %s without a live subscription, want at most %d ms",
+			delay, fixture.ExpectedMaximumClaimDelayMS)
+	}
+	// With a live subscription, the worker waits the notification base after an empty claim.
+	// Count the empty claims at and after the last claim that found a task before recoveryEnd.
+	empty := 0
+	for _, claim := range slices.Backward(recovered) {
+		if claim.found {
+			break
+		}
+		empty++
+	}
+	if empty > fixture.MaximumEmptyAfterRecovery {
+		t.Fatalf("%d empty claims after the second task with a live subscription, want at most %d",
+			empty, fixture.MaximumEmptyAfterRecovery)
+	}
+	// After the loss, the worker claims at once and then polls at the polling-only base again.
+	maximumAfterLoss := time.Duration(fixture.MaximumClaimDelayAfterLossMS) * time.Millisecond
+	afterLoss := slices.IndexFunc(claims, func(claim pollCadenceClaim) bool { return !claim.started.Before(lostAt) })
+	if delay := claims[afterLoss].started.Sub(lostAt); delay > maximumAfterLoss {
+		t.Fatalf("the first claim after the subscription was lost waited %s, want at most %s", delay, maximumAfterLoss)
+	}
+	if delay := claims[third].started.Sub(enqueuedAfterLoss); delay > maximumAfterLoss {
+		t.Fatalf("the claim that found the third task waited %s after the subscription was lost, want at most %s",
+			delay, maximumAfterLoss)
 	}
 }
 

@@ -106,6 +106,24 @@ func TestWorkerHoldsTheClaimIntervalFlatWhileItListens(t *testing.T) {
 	}
 }
 
+func TestWorkerWithoutALiveSubscriptionPollsOnTheShorterInterval(t *testing.T) {
+	// The worker expects notifications, but its listener is not live yet or reconnects.
+	worker := newDefaultWorker(t, WorkerOptions{})
+	if base := worker.claimPollBase(false); base != 250*time.Millisecond {
+		t.Fatalf("poll base without a live subscription: got %s, want 250ms", base)
+	}
+	if base := worker.claimPollBase(true); base != 5*time.Second {
+		t.Fatalf("poll base with a live subscription: got %s, want 5s", base)
+	}
+	// An explicit interval keeps its value in both states.
+	explicit := newDefaultWorker(t, WorkerOptions{PollInterval: time.Second})
+	for _, listening := range []bool{false, true} {
+		if base := explicit.claimPollBase(listening); base != time.Second {
+			t.Fatalf("explicit poll base, listening %t: got %s, want 1s", listening, base)
+		}
+	}
+}
+
 func TestWorkerOffersMaintenanceRoutinesOnTheirOwnCadence(t *testing.T) {
 	// The tick runs every second to bound dispatch latency. ADR 0011 puts the slow routines on a
 	// minute, because PostgreSQL owns the global due decision.

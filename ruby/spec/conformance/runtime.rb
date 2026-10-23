@@ -68,6 +68,7 @@ module Conformance
       when "expiration" then expiration(fixture)
       when "heartbeat-cadence" then heartbeat_cadence(fixture)
       when "poll-cadence" then poll_cadence(fixture)
+      when "subscription-recovery" then subscription_recovery(fixture)
       when "graceful-drain" then graceful_drain(fixture)
       when "slot-refill" then slot_refill(fixture)
       when "budget-admission-race" then budget_race(fixture)
@@ -389,6 +390,121 @@ module Conformance
       check(delay.between?(fixture["expectedMinimumDelayMs"], fixture["expectedMaximumDelayMs"]),
         "the claim after #{polls} empty polls waited #{delay.round} ms, want " \
         "#{fixture["expectedMinimumDelayMs"]} to #{fixture["expectedMaximumDelayMs"]} ms")
+    end
+
+    # Holds the listener's LISTEN until the driver releases it. Until then the worker has no live
+    # subscription, so it must poll at the polling-only base. After the release, it must wait the
+    # notification poll interval after each empty claim. Then the driver ends the listener session.
+    # The loss must wake the worker, and the worker must poll at the polling-only base again.
+    #
+    # The worker can listen and keeps the default poll interval. The registry is off, because its
+    # interval caps the claim wait.
+    def subscription_recovery(fixture)
+      name = queue_name(fixture)
+      # The driver can arm the hold again for the next LISTEN.
+      listen_released = Concurrent::AtomicReference.new(Concurrent::Event.new)
+      # The backend pid of the connection that runs LISTEN.
+      listener_pid = Concurrent::AtomicReference.new
+      recording = Concurrent::AtomicBoolean.new(true)
+      # Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+      claims = Concurrent::Array.new
+      handled = Concurrent::Array.new
+      recovery_end = 0
+      lost_at = 0.0
+      enqueued_after_loss = 0.0
+      # The wait runs before LISTEN reaches PostgreSQL.
+      hold_listen = lambda do |connection|
+        connection.define_singleton_method(:exec) do |sql, *rest, &block|
+          if sql.start_with?("LISTEN")
+            raise "a held LISTEN was never released" unless listen_released.get.wait(15)
+
+            listener_pid.set(backend_pid)
+          end
+          super(sql, *rest, &block)
+        end
+      end
+      with_pool(on_connect: hold_listen) do |pool|
+        subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true)
+          .handle(fixture["taskType"]) do |payload|
+            handled << payload["task"]
+            nil
+          end
+        wrap_rows(subject) do |original, sql, params|
+          next original.call(sql, params) unless sql == W::SqlCatalogue::CLAIM_MANY_V1
+
+          started = monotonic
+          rows = original.call(sql, params)
+          claims << [started, monotonic, rows.any?] if recording.true?
+          rows
+        end
+        thread = Thread.new { subject.run }
+        begin
+          eventually("the worker made no empty claim before the first enqueue", 5) { claims.any? { |_, _, any| !any } }
+          queue.enqueue(fixture["taskType"], {"task" => "first"}, queue: name)
+          eventually("the worker did not run the first task", 5) { handled.size == 1 }
+
+          listen_released.get.set
+          eventually("the listener did not run LISTEN", 5) do
+            Integer(value("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " \
+              "AND query = 'LISTEN workhorse_tasks' AND state = 'idle'"), 10).positive?
+          end
+          queue.enqueue(fixture["taskType"], {"task" => "second"}, queue: name)
+          eventually("the worker did not run the second task", 7) { handled.size == 2 }
+          sleep(fixture["observeAfterRecoveryMs"] / 1000.0)
+          recovery_end = claims.size
+
+          # The next empty claim starts a new wait at the notification base. Then the driver ends
+          # the live listener session and holds the next LISTEN, so the subscription is lost.
+          eventually("the worker made no empty claim after the second task", 7) do
+            claims.drop(recovery_end).any? { |_, _, any| !any }
+          end
+          listen_released.set(Concurrent::Event.new)
+          pid = listener_pid.get
+          check(pid, "the driver did not see the listener's LISTEN")
+          value("SELECT pg_terminate_backend($1)", pid)
+          eventually("the listener session did not end", 7) do
+            value("SELECT 1 FROM pg_stat_activity WHERE pid = $1", pid).nil?
+          end
+          lost_at = monotonic
+          # The loss wakes the worker. The third task waits for the claims after that wake.
+          eventually("the worker made no claim after the subscription was lost", 7) do
+            claims.any? { |started, _, _| started >= lost_at }
+          end
+          enqueued_after_loss = monotonic
+          queue.enqueue(fixture["taskType"], {"task" => "third"}, queue: name)
+          eventually("the worker did not run the third task", 7) { handled.size == 3 }
+        ensure
+          recording.make_false
+          listen_released.get.set
+          subject.stop
+          check(thread.join(10), "the worker did not stop")
+        end
+      end
+      ordered = claims.sort_by(&:first)
+      found = ordered.each_index.select { |index| ordered[index][2] }
+      check(found.size == 3, "#{found.size} claims found a task, want 3")
+      first, _, third = found
+      check(first.positive?, "no empty claim came before the first task")
+      delay = (ordered[first][0] - ordered[first - 1][1]) * 1000
+      check(delay <= fixture["expectedMaximumClaimDelayMs"],
+        "the claim that found the first task waited #{delay.round} ms without a live subscription, " \
+        "want at most #{fixture["expectedMaximumClaimDelayMs"]} ms")
+      # With a live subscription, the worker waits the notification base after an empty claim.
+      recovered = claims.take(recovery_end).sort_by(&:first)
+      second = recovered.rindex { |claim| claim[2] }
+      empty = recovered[second..].count { |claim| !claim[2] }
+      check(empty <= fixture["expectedMaximumEmptyClaimsAfterRecovery"],
+        "#{empty} empty claims after the second task with a live subscription, " \
+        "want at most #{fixture["expectedMaximumEmptyClaimsAfterRecovery"]}")
+      # After the loss, the worker claims at once and then polls at the polling-only base again.
+      maximum = fixture["expectedMaximumClaimDelayAfterLossMs"]
+      woken = (ordered.find { |claim| claim[0] >= lost_at }[0] - lost_at) * 1000
+      check(woken <= maximum,
+        "the first claim after the subscription was lost waited #{woken.round} ms, want at most #{maximum} ms")
+      third_delay = (ordered[third][0] - enqueued_after_loss) * 1000
+      check(third_delay <= maximum,
+        "the claim that found the third task waited #{third_delay.round} ms after the subscription was lost, " \
+        "want at most #{maximum} ms")
     end
 
     def graceful_drain(fixture)

@@ -60,6 +60,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "expiration" => expiration(database, fixture).await,
             "heartbeat-cadence" => heartbeat_cadence(database, fixture).await,
             "poll-cadence" => poll_cadence(database, fixture).await,
+            "subscription-recovery" => subscription_recovery(database, fixture).await,
             "graceful-drain" => graceful_drain(database, fixture).await,
             "slot-refill" => slot_refill(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
@@ -178,12 +179,20 @@ async fn run_once(worker: &Worker, expected: bool) -> Checked {
     check(processed == expected, || format!("run_once() processed={processed}, want {expected}"))
 }
 
-async fn eventually<F, Fut>(message: &str, mut predicate: F) -> Checked
+async fn eventually<F, Fut>(message: &str, predicate: F) -> Checked
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Checked<bool>>,
 {
-    let deadline = Instant::now() + WAIT;
+    eventually_within(WAIT, message, predicate).await
+}
+
+async fn eventually_within<F, Fut>(limit: Duration, message: &str, mut predicate: F) -> Checked
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Checked<bool>>,
+{
+    let deadline = Instant::now() + limit;
     while Instant::now() < deadline {
         if predicate().await? {
             return Ok(());
@@ -752,8 +761,10 @@ async fn heartbeat_cadence(database: &ScratchDatabase, fixture: &Value) -> Check
 /// last empty claim to the start of the next claim. That span is the worker's own cadence. It
 /// leaves out the enqueue, the claim that finds the task, and the dispatch to the handler, so a
 /// slow runner or a slow database cannot charge that latency to the backoff.
-async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
-    let client = database.connect().await;
+/// Wraps `claim_many_v1` so each call records its start, its end, and whether it found a task in
+/// `workhorse.runtime_poll_claims`. If `hold` is true, each empty claim waits at its end until the
+/// test advances `workhorse.runtime_poll_released`. `runtime_poll_control` turns the hold off.
+async fn record_claims(client: &Client, hold: bool) -> Checked {
     let row = client
         .query_one(
             "SELECT pg_get_function_arguments(oid), pg_get_function_result(oid), pronargs
@@ -767,7 +778,7 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
     client
         .batch_execute(&format!(
             "CREATE TABLE workhorse.runtime_poll_control (hold_claims boolean NOT NULL);
-             INSERT INTO workhorse.runtime_poll_control VALUES (true);
+             INSERT INTO workhorse.runtime_poll_control VALUES ({hold});
              CREATE TABLE workhorse.runtime_poll_claims (
                started timestamptz NOT NULL,
                finished timestamptz NOT NULL,
@@ -799,7 +810,12 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
              $$;"
         ))
         .await
-        .map_err(sql)?;
+        .map_err(sql)
+}
+
+async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    record_claims(&client, true).await?;
     let queue = queue(database, fixture).await?;
     let task_type = text(fixture, "taskType");
     let worker = worker(
@@ -875,6 +891,256 @@ async fn poll_cadence(database: &ScratchDatabase, fixture: &Value) -> Checked {
             "the claim after {polls} empty polls waited {delay:?}, want {minimum:?} to {maximum:?}"
         )
     })
+}
+
+/// A TCP proxy to the test database that holds each connection while `release` is `false`.
+/// While it holds a connection, the proxy accepts it but does not connect to PostgreSQL, so the
+/// connect and the `LISTEN` cannot finish. After the release, the proxy connects to PostgreSQL and
+/// copies the bytes in both directions. A change of `close` closes both sockets of each connection
+/// that it copies, and `closed` then receives one message for each of them.
+struct HoldingProxy {
+    config: tokio_postgres::Config,
+    release: watch::Sender<bool>,
+    close: watch::Sender<u64>,
+    closed: mpsc::UnboundedReceiver<()>,
+}
+
+async fn holding_proxy(database: &ScratchDatabase) -> Checked<HoldingProxy> {
+    let upstream: tokio_postgres::Config = database.url().parse().map_err(sql)?;
+    let tokio_postgres::config::Host::Tcp(host) = &upstream.get_hosts()[0] else {
+        return Err("the test database must be reachable over TCP".into());
+    };
+    let address = (host.clone(), upstream.get_ports()[0]);
+    let proxy =
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|error| error.to_string())?;
+    let mut config = tokio_postgres::Config::new();
+    config.host("127.0.0.1").port(proxy.local_addr().map_err(|error| error.to_string())?.port());
+    config.user(upstream.get_user().ok_or("the test database URL names no user")?);
+    config.dbname(upstream.get_dbname().ok_or("the test database URL names no database")?);
+    if let Some(password) = upstream.get_password() {
+        config.password(password);
+    }
+    let (release, released) = watch::channel(false);
+    let (close, closing) = watch::channel(0_u64);
+    let (closed_sender, closed) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = proxy.accept().await {
+            let address = address.clone();
+            let mut released = released.clone();
+            let mut closing = closing.clone();
+            let closed = closed_sender.clone();
+            tokio::spawn(async move {
+                if released.wait_for(|released| *released).await.is_err() {
+                    return;
+                }
+                let Ok(mut server) = tokio::net::TcpStream::connect(address).await else { return };
+                closing.borrow_and_update();
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
+                    Ok(()) = closing.changed() => {
+                        drop((client, server));
+                        let _ = closed.send(());
+                    }
+                }
+            });
+        }
+    });
+    Ok(HoldingProxy { config, release, close, closed })
+}
+
+/// The time from `earlier` to `later`, in microseconds from a shared origin.
+fn gap(earlier: i64, later: i64) -> Duration {
+    Duration::from_micros(u64::try_from(later - earlier).unwrap_or(0))
+}
+
+async fn subscription_recovery(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    record_claims(&client, false).await?;
+    let queue = queue(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    // The worker can listen, but the proxy holds its LISTEN until the test releases it. Until
+    // then the worker has no live subscription.
+    let HoldingProxy { config: listen_config, release, close, mut closed } =
+        holding_proxy(database).await?;
+    // The pool has more than one connection and the worker has a listen_config, so the worker
+    // expects a listener. The worker has no explicit poll interval.
+    let worker = worker(
+        database,
+        8,
+        WorkerOptions {
+            concurrency: 1,
+            polling_only: false,
+            poll_interval: None,
+            listen_config: Some(listen_config),
+            ..options(fixture)
+        },
+    )?;
+    let (ran, mut handled) = mpsc::unbounded_channel();
+    worker.handle(task_type, move |payload: Value, _| {
+        let _ = ran.send(payload["task"].as_str().unwrap_or_default().to_owned());
+        async { Ok(Value::Null) }
+    });
+    let (stop, running) = run(&worker);
+    let observed = async {
+        eventually("the worker made no empty claim before the first enqueue", || async {
+            let row = client
+                .query_one(
+                    "SELECT count(*) FROM workhorse.runtime_poll_claims WHERE NOT found",
+                    &[],
+                )
+                .await
+                .map_err(sql)?;
+            Ok(row.get::<_, i64>(0) > 0)
+        })
+        .await?;
+        for (task, timeout) in [("first", 5), ("second", 7)] {
+            if task == "second" {
+                let _ = release.send(true);
+                eventually("the listener did not run LISTEN", || async {
+                    let row = client
+                        .query_one(
+                            "SELECT count(*) FROM pg_stat_activity
+                              WHERE datname = current_database()
+                                AND query = 'LISTEN workhorse_tasks' AND state = 'idle'",
+                            &[],
+                        )
+                        .await
+                        .map_err(sql)?;
+                    Ok(row.get::<_, i64>(0) > 0)
+                })
+                .await?;
+            }
+            queue
+                .enqueue(task_type, &json!({ "task": task }), Default::default())
+                .await
+                .map_err(driver)?;
+            let ran = tokio::time::timeout(Duration::from_secs(timeout), handled.recv())
+                .await
+                .map_err(|_| format!("the worker did not run the {task} task"))?
+                .ok_or("the handler channel closed")?;
+            check(ran == task, || format!("the worker ran task {ran}, want {task}"))?;
+        }
+        tokio::time::sleep(millis(fixture, "observeAfterRecoveryMs")).await;
+        // The claims recorded until now belong to the live period. Each time is in microseconds
+        // on the clock of PostgreSQL, which records the claims.
+        let now = "(extract(epoch FROM clock_timestamp()) * 1000000)::bigint";
+        let recovery_end: i64 =
+            client.query_one(&format!("SELECT {now}"), &[]).await.map_err(sql)?.get(0);
+
+        // The next empty claim starts a new wait at the notification base. Then the proxy closes
+        // the live listener connection and holds the next one, so the subscription is lost.
+        eventually_within(
+            Duration::from_secs(7),
+            "the worker made no empty claim after the second task",
+            || async {
+                let row = client
+                    .query_one(
+                        "SELECT count(*) FROM workhorse.runtime_poll_claims
+                          WHERE NOT found
+                            AND (extract(epoch FROM finished) * 1000000)::bigint > $1",
+                        &[&recovery_end],
+                    )
+                    .await
+                    .map_err(sql)?;
+                Ok(row.get::<_, i64>(0) > 0)
+            },
+        )
+        .await?;
+        let _ = release.send(false);
+        close.send_modify(|generation| *generation += 1);
+        tokio::time::timeout(Duration::from_secs(7), closed.recv())
+            .await
+            .map_err(|_| "the proxy did not close the listener connection")?
+            .ok_or("the proxy stopped")?;
+        let lost_at: i64 =
+            client.query_one(&format!("SELECT {now}"), &[]).await.map_err(sql)?.get(0);
+        // The loss wakes the worker. The third task waits for the claims after that wake.
+        eventually_within(
+            Duration::from_secs(7),
+            "the worker made no claim after the subscription was lost",
+            || async {
+                let row = client
+                    .query_one(
+                        "SELECT count(*) FROM workhorse.runtime_poll_claims
+                          WHERE (extract(epoch FROM started) * 1000000)::bigint >= $1",
+                        &[&lost_at],
+                    )
+                    .await
+                    .map_err(sql)?;
+                Ok(row.get::<_, i64>(0) > 0)
+            },
+        )
+        .await?;
+        let enqueued_after_loss: i64 =
+            client.query_one(&format!("SELECT {now}"), &[]).await.map_err(sql)?.get(0);
+        queue
+            .enqueue(task_type, &json!({ "task": "third" }), Default::default())
+            .await
+            .map_err(driver)?;
+        let ran = tokio::time::timeout(Duration::from_secs(7), handled.recv())
+            .await
+            .map_err(|_| "the worker did not run the third task")?
+            .ok_or("the handler channel closed")?;
+        check(ran == "third", || format!("the worker ran task {ran}, want third"))?;
+        // Each claim's start and end, in microseconds, and whether it found a task.
+        let rows = client
+            .query(
+                "SELECT (extract(epoch FROM started) * 1000000)::bigint,
+                        (extract(epoch FROM finished) * 1000000)::bigint,
+                        found
+                   FROM workhorse.runtime_poll_claims ORDER BY started",
+                &[],
+            )
+            .await
+            .map_err(sql)?;
+        let claims = rows
+            .iter()
+            .map(|row| (row.get::<_, i64>(0), row.get::<_, i64>(1), row.get::<_, bool>(2)))
+            .collect::<Vec<_>>();
+        Ok::<_, String>((claims, recovery_end, lost_at, enqueued_after_loss))
+    }
+    .await;
+    // A failure above must not leave the LISTEN held or the worker running.
+    let _ = release.send(true);
+    let _ = stop.send(());
+    let stopped = running.await.map_err(|error| error.to_string());
+    let (claims, recovery_end, lost_at, enqueued_after_loss) = observed?;
+    stopped?.map_err(driver)?;
+
+    let found: Vec<usize> = (0..claims.len()).filter(|&index| claims[index].2).collect();
+    check(found.len() == 3, || format!("{} claims found a task, want 3", found.len()))?;
+    let (first, third) = (found[0], found[2]);
+    check(first > 0, || "no empty claim came before the claim that found the first task".into())?;
+    // Without a live subscription, the worker polls at the polling-only base.
+    let waited = gap(claims[first - 1].1, claims[first].0);
+    let maximum = millis(fixture, "expectedMaximumClaimDelayMs");
+    check(waited <= maximum, || {
+        format!("the claim that found the first task waited {waited:?} without a live subscription, want at most {maximum:?}")
+    })?;
+    // With a live subscription, the worker waits the notification base after an empty claim.
+    // Only the claims recorded before the loss count, from the last one that found a task.
+    let recovered: Vec<_> = claims.iter().filter(|claim| claim.1 <= recovery_end).collect();
+    let second = recovered.iter().rposition(|claim| claim.2).unwrap_or(0);
+    let empty = recovered[second..].iter().filter(|claim| !claim.2).count() as i64;
+    let maximum = number(fixture, "expectedMaximumEmptyClaimsAfterRecovery");
+    check(empty <= maximum, || {
+        format!("{empty} empty claims after the second task with a live subscription, want at most {maximum}")
+    })?;
+    // After the loss, the worker claims at once and then polls at the polling-only base again.
+    let maximum = millis(fixture, "expectedMaximumClaimDelayAfterLossMs");
+    let after_loss = claims
+        .iter()
+        .find(|claim| claim.0 >= lost_at)
+        .ok_or("no claim started after the subscription was lost")?;
+    let waited = gap(lost_at, after_loss.0);
+    check(waited <= maximum, || {
+        format!("the first claim after the subscription was lost waited {waited:?}, want at most {maximum:?}")
+    })?;
+    let waited = gap(enqueued_after_loss, claims[third].0);
+    check(waited <= maximum, || {
+        format!("the claim that found the third task waited {waited:?} after the subscription was lost, want at most {maximum:?}")
+    })?;
+    Ok(())
 }
 
 async fn graceful_drain(database: &ScratchDatabase, fixture: &Value) -> Checked {

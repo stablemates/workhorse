@@ -228,6 +228,10 @@ Rust, Java, or Kotlin worker holds its own.
   `sync_rate_limit_policies_v1` notify once for each affected queue.
 - A failed listener reconnects after exponential delays from 100 ms to 5,000 ms. Every reconnect
   wakes its subscribers.
+- A listener that has not run `LISTEN` yet, or that reconnects, counts as no listener. The worker
+  uses the 250 ms starting wait until `LISTEN` succeeds.
+- A lost listener wakes the worker. The backoff then restarts at 250 ms, because the empty claims
+  of the live period do not count.
 - A pool with a capacity of 1 stays polling-only. Go `WorkerOptions.PollingOnly` turns the listener
   off for a transaction-mode pooler.
 

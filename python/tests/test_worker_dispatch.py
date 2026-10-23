@@ -446,6 +446,28 @@ def test_notified_claim_waits_only_after_a_claim_that_found_nothing(
     assert errors == []
 
 
+# SM-1648: the empty claims of a live subscription do not count toward the backoff after its loss.
+def test_lost_subscription_restarts_the_empty_claim_backoff() -> None:
+    claims = ScriptedClaims()
+    executions = Executions(claims)
+    worker = scripted_worker(claims, concurrency=1, poll_ms=40)
+    # The flag stands in for a live subscription, so the worker waits the flat base.
+    worker._set_notification_listening(True)
+    with running(worker, executions) as errors:
+        wait_for(lambda: claims.claims() >= 6, "the worker did not poll with a live subscription")
+        # The listener clears the flag and then wakes the worker when the subscription is lost.
+        worker._set_notification_listening(False)
+        lost_at = monotonic()
+        worker._wake_from_notification()
+        sleep(1)
+        with claims._lock:
+            after_loss = [claimed for claimed in claims.claimed_at if claimed >= lost_at]
+    assert errors == []
+    # The backoff restarts at the base: the woken claim, then waits of 40 ms and 80 ms. A backoff
+    # that counts the live empty claims waits more than two seconds after the woken claim.
+    assert len(after_loss) >= 3, f"{len(after_loss)} claims in the second after the loss"
+
+
 def handled_rows(count: int) -> list[dict[str, object]]:
     return [task_row(sequence, HANDLED) for sequence in range(count)]
 
@@ -472,6 +494,16 @@ def test_default_cohorts_follow_concurrency_and_spare_connections() -> None:
     assert capped.cohorts == 3
     explicit = Worker(SizedPool(), queue="dispatch", concurrency=64, cohorts=6)  # type: ignore[arg-type]
     assert explicit.cohorts == 6
+    # Without a dedicated heartbeat connection, only the listener holds a pooled connection.
+    shared = Worker(SizedPool(), queue="dispatch", concurrency=64, shared_heartbeats=True)  # type: ignore[arg-type]
+    assert shared.cohorts == 4
+
+    class SinglePool:
+        max_size = 1
+
+    # A pool of one lends no listener, so the polling worker keeps its one connection for claims.
+    polling = Worker(SinglePool(), queue="dispatch", concurrency=16, shared_heartbeats=True)  # type: ignore[arg-type]
+    assert polling.cohorts == 1
     for invalid in (0, 65, True):
         with pytest.raises(ValueError, match="cohorts must be an integer"):
             Worker(

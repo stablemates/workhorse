@@ -20,6 +20,25 @@ upgrade steps.
 
 ## Unreleased
 
+### A worker without a live notification subscription polls at the short interval
+
+A worker that can listen uses a 5,000 ms wait after an empty claim, because a notification wakes it
+for new work. Before this change, the TypeScript worker chose that wait from its configuration, not from
+the state of its listener. If the listener had not run `LISTEN` yet, or reconnected after a lost
+connection, nothing woke the worker. A new task then waited up to 5 s for a claim (SM-1648).
+
+Now `Worker.run()` reads the listener state before each wait. Without a live subscription, the default
+wait starts at 250 ms and doubles toward 5,000 ms after each empty claim, as in the other SDKs.
+When `LISTEN` succeeds, the 5,000 ms wait applies again. An explicit `pollMs` does not change.
+
+When a live subscription is lost, the backoff restarts at 250 ms, because the empty claims of the
+live period do not count. Before this change, a worker that was idle for some time while it
+listened went to the 5,000 ms ceiling at once after a loss. The .NET worker now also clears its
+listening state before it wakes its workers after a loss, and it wakes them after a failed
+keepalive.
+
+The `subscription-recovery` case in `protocol/v1/runtime.json` checks these rules in every SDK.
+
 ### A late schedule pass no longer loses a `skip` occurrence
 
 A worker waits one maintenance interval after its schedule pass ends, so the next pass always

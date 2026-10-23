@@ -174,6 +174,34 @@ export interface PollCadenceRuntimeFixture extends RuntimeFixtureBase {
   expectedMaximumDelayMs: number;
 }
 
+/**
+ * A worker that is configured for notifications, with its default poll interval, but whose
+ * subscription is not live yet. The runner holds the listener's `LISTEN` until it releases it.
+ * While the subscription is not live, the worker polls at the polling-only base. After the
+ * `LISTEN` succeeds, the worker waits the notification base after an empty claim. Then the runner
+ * ends the listener's session and holds its next `LISTEN`, so the subscription is lost.
+ */
+export interface SubscriptionRecoveryRuntimeFixture extends RuntimeFixtureBase {
+  kind: "subscription-recovery";
+  /**
+   * The most time from the return of an empty claim to the start of the claim that finds the
+   * first task. The runner enqueues that task after the first empty claim.
+   */
+  expectedMaximumClaimDelayMs: number;
+  /** How long the runner records claims after the claim that finds the second task. */
+  observeAfterRecoveryMs: number;
+  /**
+   * The most empty claims after the claim that finds the second task. One empty claim can refill
+   * the slot, and one can follow a late notification. A worker at the polling-only base makes more.
+   */
+  expectedMaximumEmptyClaimsAfterRecovery: number;
+  /**
+   * The most time from the enqueue of the third task, after the runner ended the live listener
+   * session, to the start of the claim that finds it.
+   */
+  expectedMaximumClaimDelayAfterLossMs: number;
+}
+
 export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
   kind: "graceful-drain";
   concurrency: number;
@@ -397,6 +425,7 @@ export type RuntimeFixture =
   | LeaseLossRuntimeFixture
   | HeartbeatCadenceRuntimeFixture
   | PollCadenceRuntimeFixture
+  | SubscriptionRecoveryRuntimeFixture
   | GracefulDrainRuntimeFixture
   | SlotRefillRuntimeFixture
   | TracePropagationRuntimeFixture

@@ -5,6 +5,10 @@ import static run.workhorse.conformance.Failure.check;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -33,7 +37,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
+import org.postgresql.PGConnection;
 import run.workhorse.AlreadyWaitingException;
 import run.workhorse.BatchFailed;
 import run.workhorse.BatchHandler;
@@ -129,6 +135,7 @@ final class RuntimeFixtures {
         case "budget-admission-race" -> budgetRace(fixture);
         case "missing-handler" -> missingHandler(fixture);
         case "release-wait" -> releaseWait(fixture);
+        case "subscription-recovery" -> subscriptionRecovery(fixture);
         case "json-round-trip" -> jsonRoundTrip(fixture);
         case "oversized-result" -> oversizedResult(fixture);
         case "shutdown-cancellation" -> shutdownCancellation(fixture);
@@ -1394,6 +1401,254 @@ final class RuntimeFixtures {
           gap >= (Long) fixture.get("expectedMinimumReleaseGapMs"),
           "the worker released the task again after " + Math.round(gap) + " ms");
     }
+  }
+
+  /**
+   * Runs a worker that can listen, but holds its {@code LISTEN} until the first task ran. Without a
+   * live subscription, the worker polls at the polling-only base. With one, it waits for the
+   * notification poll interval after each empty claim. When the runner ends the listener session,
+   * the loss wakes the worker, and it polls at the polling-only base again.
+   */
+  private void subscriptionRecovery(Map<String, @Nullable Object> fixture) throws Exception {
+    String name = queueName(fixture);
+    AtomicReference<CountDownLatch> listenGate = new AtomicReference<>(new CountDownLatch(1));
+    // The backend pid of the connection that ran the last LISTEN.
+    AtomicInteger listenerPid = new AtomicInteger();
+    AtomicBoolean recording = new AtomicBoolean(true);
+    // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+    List<long[]> claims = Collections.synchronizedList(new ArrayList<>());
+    Map<Intercept.Call, Long> starts =
+        Collections.synchronizedMap(new java.util.IdentityHashMap<>());
+    List<String> handled = new CopyOnWriteArrayList<>();
+    int recoveryEnd = 0;
+    long lostAt = 0;
+    long enqueuedAfterLoss = 0;
+    Intercept.Hook hook =
+        new Intercept.Hook() {
+          @Override
+          public void before(Intercept.Call call) {
+            if (call.is(SqlCatalogue.CLAIM_MANY_V1)) {
+              starts.put(call, System.nanoTime());
+            }
+          }
+
+          @Override
+          public void after(Intercept.Call call) {
+            if (!call.is(SqlCatalogue.CLAIM_MANY_V1)) {
+              return;
+            }
+            Long start = starts.remove(call);
+            if (recording.get()) {
+              claims.add(new long[] {start == null ? 0 : start, System.nanoTime(), call.rows()});
+            }
+          }
+        };
+    try (Intercept pool = new Intercept(opener, hook)) {
+      Worker subject =
+          Worker.builder(holdingListen(pool, listenGate, listenerPid))
+              .queues(name)
+              .workerId("jvm-" + fixture.get("id"))
+              .disableRegistry(true)
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    handled.add(String.valueOf(((Map<?, ?>) payload).get("task")));
+                    return null;
+                  })
+              .build();
+      CompletableFuture<Void> run = running(subject, subject::run);
+      try {
+        eventually(
+            "the worker made no empty claim before the first enqueue",
+            5,
+            () -> {
+              synchronized (claims) {
+                return claims.stream().anyMatch(claim -> claim[2] == 0);
+              }
+            });
+        enqueue(taskType(fixture), Map.of("task", "first"), options(name));
+        eventually("the worker did not run the first task", 5, () -> handled.size() == 1);
+
+        listenGate.get().countDown();
+        eventually(
+            "the listener did not run LISTEN",
+            5,
+            () ->
+                Long.parseLong(
+                        Objects.requireNonNull(
+                            value(
+                                "SELECT count(*) FROM pg_stat_activity WHERE datname ="
+                                    + " current_database() AND query = 'LISTEN workhorse_tasks'"
+                                    + " AND state = 'idle'")))
+                    > 0);
+        enqueue(taskType(fixture), Map.of("task", "second"), options(name));
+        eventually("the worker did not run the second task", 7, () -> handled.size() == 2);
+        Thread.sleep((Long) fixture.get("observeAfterRecoveryMs"));
+        recoveryEnd = claims.size();
+
+        // The next empty claim starts a new wait at the notification base. Then the runner ends the
+        // live listener session and holds the next LISTEN, so the subscription is lost.
+        int afterRecovery = recoveryEnd;
+        eventually(
+            "the worker made no empty claim after the second task",
+            7,
+            () -> {
+              synchronized (claims) {
+                return claims.subList(afterRecovery, claims.size()).stream()
+                    .anyMatch(claim -> claim[2] == 0);
+              }
+            });
+        listenGate.set(new CountDownLatch(1));
+        int pid = listenerPid.get();
+        check(pid != 0, "the runner did not see the pid of the listener session");
+        value("SELECT pg_terminate_backend(" + pid + ")::text");
+        eventually(
+            "the listener session did not end",
+            7,
+            () -> value("SELECT 1 FROM pg_stat_activity WHERE pid = " + pid) == null);
+        lostAt = System.nanoTime();
+        // The loss wakes the worker. The third task waits for the claims after that wake.
+        long lost = lostAt;
+        eventually(
+            "the worker made no claim after the subscription was lost",
+            7,
+            () -> {
+              synchronized (claims) {
+                return claims.stream().anyMatch(claim -> claim[0] >= lost);
+              }
+            });
+        enqueuedAfterLoss = System.nanoTime();
+        enqueue(taskType(fixture), Map.of("task", "third"), options(name));
+        eventually("the worker did not run the third task", 7, () -> handled.size() == 3);
+      } finally {
+        recording.set(false);
+        listenGate.get().countDown();
+        subject.stop();
+        run.get(10, TimeUnit.SECONDS);
+      }
+    }
+    List<long[]> ordered;
+    synchronized (claims) {
+      ordered = new ArrayList<>(claims);
+    }
+    ordered.sort((left, right) -> Long.compare(left[0], right[0]));
+    List<Integer> found = new ArrayList<>();
+    for (int index = 0; index < ordered.size(); index++) {
+      if (ordered.get(index)[2] > 0) {
+        found.add(index);
+      }
+    }
+    check(found.size() == 3, found.size() + " claims found a task, want 3");
+    int first = found.get(0);
+    check(first > 0, "no empty claim came before the first task");
+    long waited = TimeUnit.NANOSECONDS.toMillis(ordered.get(first)[0] - ordered.get(first - 1)[1]);
+    long maximum = (Long) fixture.get("expectedMaximumClaimDelayMs");
+    check(
+        waited <= maximum,
+        "without a live subscription, the claim of the first task waited "
+            + waited
+            + " ms, want at most "
+            + maximum
+            + " ms");
+    // With a live subscription, the worker waits the notification base after an empty claim.
+    List<long[]> recovered;
+    synchronized (claims) {
+      recovered = new ArrayList<>(claims.subList(0, recoveryEnd));
+    }
+    recovered.sort((left, right) -> Long.compare(left[0], right[0]));
+    int lastFound = 0;
+    for (int index = 0; index < recovered.size(); index++) {
+      if (recovered.get(index)[2] > 0) {
+        lastFound = index;
+      }
+    }
+    long empty =
+        recovered.subList(lastFound, recovered.size()).stream().filter(c -> c[2] == 0).count();
+    long allowed = (Long) fixture.get("expectedMaximumEmptyClaimsAfterRecovery");
+    check(
+        empty <= allowed,
+        "with a live subscription, "
+            + empty
+            + " empty claims followed the second task, want at most "
+            + allowed);
+    // After the loss, the worker claims at once and then polls at the polling-only base again.
+    long lossMaximum = (Long) fixture.get("expectedMaximumClaimDelayAfterLossMs");
+    long lost = lostAt;
+    long afterLoss =
+        TimeUnit.NANOSECONDS.toMillis(
+            ordered.stream()
+                    .filter(claim -> claim[0] >= lost)
+                    .findFirst()
+                    .orElseThrow(() -> new Failure("no claim started after the loss"))[0]
+                - lostAt);
+    check(
+        afterLoss <= lossMaximum,
+        "after the subscription was lost, the first claim waited "
+            + afterLoss
+            + " ms, want at most "
+            + lossMaximum
+            + " ms");
+    long third = TimeUnit.NANOSECONDS.toMillis(ordered.get(found.get(2))[0] - enqueuedAfterLoss);
+    check(
+        third <= lossMaximum,
+        "after the subscription was lost, the claim of the third task waited "
+            + third
+            + " ms, want at most "
+            + lossMaximum
+            + " ms");
+  }
+
+  /**
+   * A data source over {@code pool} whose plain statements hold {@code LISTEN workhorse_tasks}
+   * until the current latch of {@code gate} opens. Until then the worker has no live subscription.
+   * The runner can set a new latch to hold the next {@code LISTEN}. {@code pid} receives the
+   * backend pid of the connection that runs the {@code LISTEN}. {@link Intercept} sees only
+   * prepared statements, and the listener runs a plain one.
+   */
+  private static DataSource holdingListen(
+      Intercept pool, AtomicReference<CountDownLatch> gate, AtomicInteger pid) {
+    return proxy(
+        DataSource.class,
+        (proxy, method, arguments) -> {
+          Object result = invoke(pool, method, arguments);
+          return result instanceof Connection connection
+              ? proxy(
+                  Connection.class,
+                  (connectionProxy, connectionMethod, connectionArguments) -> {
+                    Object made = invoke(connection, connectionMethod, connectionArguments);
+                    return made instanceof Statement statement
+                            && connectionMethod.getName().equals("createStatement")
+                        ? proxy(
+                            Statement.class,
+                            (statementProxy, statementMethod, statementArguments) -> {
+                              if (statementMethod.getName().equals("execute")
+                                  && statementArguments != null
+                                  && "LISTEN workhorse_tasks".equals(statementArguments[0])) {
+                                gate.get().await();
+                                pid.set(connection.unwrap(PGConnection.class).getBackendPID());
+                              }
+                              return invoke(statement, statementMethod, statementArguments);
+                            })
+                        : made;
+                  })
+              : result;
+        });
+  }
+
+  private static @Nullable Object invoke(
+      Object target, Method method, @Nullable Object @Nullable [] arguments) throws Throwable {
+    try {
+      return method.invoke(target, arguments);
+    } catch (InvocationTargetException error) {
+      throw error.getCause();
+    }
+  }
+
+  private static <T> T proxy(Class<T> type, InvocationHandler handler) {
+    return type.cast(
+        Proxy.newProxyInstance(
+            RuntimeFixtures.class.getClassLoader(), new Class<?>[] {type}, handler));
   }
 
   private void jsonRoundTrip(Map<String, @Nullable Object> fixture) throws Exception {

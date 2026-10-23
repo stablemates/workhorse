@@ -6,6 +6,7 @@ using System.Text.Json;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
+using Workhorse.Internal.Runtime;
 using Workhorse.Internal.Telemetry;
 using Workhorse.Tests.Testing;
 
@@ -85,6 +86,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "budget-admission-race" => BudgetRaceAsync(fixture),
             "missing-handler" => MissingHandlerAsync(fixture),
             "release-wait" => ReleaseWaitAsync(fixture),
+            "subscription-recovery" => SubscriptionRecoveryAsync(fixture),
             "json-round-trip" => JsonRoundTripAsync(fixture),
             "oversized-result" => OversizedResultAsync(fixture),
             "shutdown-cancellation" => ShutdownCancellationAsync(fixture),
@@ -1203,6 +1205,137 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             var gap = times[index] - times[index - 1];
             Failure.Check(gap >= (long)fixture["expectedMinimumReleaseGapMs"]!, $"the worker released the task again after {Math.Round(gap)} ms");
         }
+    }
+
+    /// <summary>
+    /// Runs a worker that can listen, but holds its <c>LISTEN</c> until the first task ran. Without a
+    /// live subscription, the worker polls at the polling-only base. With one, it waits for the
+    /// notification poll interval after each empty claim. When the runner ends the listener session,
+    /// the loss wakes the worker, and it polls at the polling-only base again.
+    /// </summary>
+    private async Task SubscriptionRecoveryAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var name = QueueName(fixture);
+        // The runner can replace the gate to hold the next LISTEN. Each gate opens in the finally path.
+        var listenGate = new ManualResetEventSlim(false);
+        var gates = new ConcurrentQueue<ManualResetEventSlim>([listenGate]);
+        // The backend process id of the connection that ran the last LISTEN.
+        var listenerPid = 0;
+        var recording = 1;
+        var recoveryEnd = 0;
+        long lostAt = 0;
+        long enqueuedAfterLoss = 0;
+
+        // Each claim_many_v1 call's start, its return to the worker, and whether it found a task.
+        var claims = new ConcurrentQueue<(long Start, long End, long Rows)>();
+        var starts = new ConcurrentDictionary<Intercept.Call, long>();
+        var handled = new ConcurrentQueue<string>();
+        var hook = new Intercept.Callbacks(
+            before: call =>
+            {
+                if (call.Sql == SessionCommands.Listen)
+                {
+                    // Until the runner releases it, the worker has no live subscription.
+                    Volatile.Read(ref listenGate).Wait();
+                    Volatile.Write(ref listenerPid, call.ProcessId);
+                }
+                else if (call.Is(SqlCatalogue.ClaimManyV1))
+                {
+                    starts[call] = Stopwatch.GetTimestamp();
+                }
+            },
+            after: call =>
+            {
+                if (!call.Is(SqlCatalogue.ClaimManyV1))
+                {
+                    return;
+                }
+
+                starts.TryRemove(call, out var start);
+                if (Volatile.Read(ref recording) == 1)
+                {
+                    claims.Enqueue((start, Stopwatch.GetTimestamp(), call.Rows));
+                }
+            });
+        await using (var pool = Intercept.Create(_database, hook))
+        {
+            var options = BaseOptions(name, $"dotnet-{Runner.Text(fixture["id"])}");
+            options.PollingOnly = false;
+            await using var subject = new Worker(pool.DataSource, options);
+            subject.Handle<JsonElement>(TaskType(fixture), (_, payload) =>
+            {
+                handled.Enqueue(payload.GetProperty("task").GetString()!);
+                return Task.CompletedTask;
+            });
+            var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
+            try
+            {
+                await EventuallyAsync("the worker made no empty claim before the first enqueue", 5, () => claims.Any(claim => claim.Rows == 0));
+                await EnqueueAsync(TaskType(fixture), Json.Members(("task", "first")), Options(name));
+                await EventuallyAsync("the worker did not run the first task", 5, () => handled.Count == 1);
+
+                listenGate.Set();
+                await EventuallyAsync("the listener did not run LISTEN", 5, () => subject.ListeningForTests);
+                await EnqueueAsync(TaskType(fixture), Json.Members(("task", "second")), Options(name));
+                await EventuallyAsync("the worker did not run the second task", 7, () => handled.Count == 2);
+                await Task.Delay(Millis(fixture, "observeAfterRecoveryMs"));
+                recoveryEnd = claims.Count;
+
+                // The next empty claim starts a new wait at the notification base. Then the runner ends
+                // the live listener session and holds the next LISTEN, so the subscription is lost.
+                await EventuallyAsync("the worker made no empty claim after the second task", 7, () => claims.Skip(recoveryEnd).Any(claim => claim.Rows == 0));
+                var held = new ManualResetEventSlim(false);
+                gates.Enqueue(held);
+                Volatile.Write(ref listenGate, held);
+                var pid = Volatile.Read(ref listenerPid);
+                Failure.Check(pid != 0, "the runner did not see the pid of the listener session");
+                await ValueAsync($"SELECT pg_terminate_backend({pid})::text");
+                await EventuallyAsync("the listener session did not end", 7, async () => await ValueAsync($"SELECT 1 FROM pg_stat_activity WHERE pid = {pid}") is null);
+                lostAt = Stopwatch.GetTimestamp();
+
+                // The loss wakes the worker. The third task waits for the claims after that wake.
+                await EventuallyAsync("the worker made no claim after the subscription was lost", 7, () => claims.Any(claim => claim.Start >= lostAt));
+                enqueuedAfterLoss = Stopwatch.GetTimestamp();
+                await EnqueueAsync(TaskType(fixture), Json.Members(("task", "third")), Options(name));
+                await EventuallyAsync("the worker did not run the third task", 7, () => handled.Count == 3);
+            }
+            finally
+            {
+                Volatile.Write(ref recording, 0);
+                foreach (var gate in gates)
+                {
+                    gate.Set();
+                }
+
+                subject.Stop();
+                await Settled(run);
+                foreach (var gate in gates)
+                {
+                    gate.Dispose();
+                }
+            }
+        }
+
+        var ordered = claims.OrderBy(claim => claim.Start).ToList();
+        var found = Enumerable.Range(0, ordered.Count).Where(index => ordered[index].Rows > 0).ToList();
+        Failure.Check(found.Count == 3, $"{found.Count} claims found a task, want 3");
+        Failure.Check(found[0] > 0, "no empty claim came before the first task");
+        var first = (long)Stopwatch.GetElapsedTime(ordered[found[0] - 1].End, ordered[found[0]].Start).TotalMilliseconds;
+        var maximum = (long)fixture["expectedMaximumClaimDelayMs"]!;
+        Failure.Check(first <= maximum, $"without a live subscription, the claim of the first task waited {first} ms, want at most {maximum} ms");
+        // With a live subscription, the worker waits the notification base after an empty claim.
+        var recovered = claims.Take(recoveryEnd).OrderBy(claim => claim.Start).ToList();
+        var lastFound = recovered.FindLastIndex(claim => claim.Rows > 0);
+        var empty = recovered.Skip(Math.Max(0, lastFound)).Count(claim => claim.Rows == 0);
+        var allowed = (long)fixture["expectedMaximumEmptyClaimsAfterRecovery"]!;
+        Failure.Check(empty <= allowed, $"with a live subscription, {empty} empty claims followed the second task, want at most {allowed}");
+
+        // After the loss, the worker claims at once and then polls at the polling-only base again.
+        var lossMaximum = (long)fixture["expectedMaximumClaimDelayAfterLossMs"]!;
+        var afterLoss = (long)Stopwatch.GetElapsedTime(lostAt, ordered.First(claim => claim.Start >= lostAt).Start).TotalMilliseconds;
+        Failure.Check(afterLoss <= lossMaximum, $"after the subscription was lost, the first claim waited {afterLoss} ms, want at most {lossMaximum} ms");
+        var third = (long)Stopwatch.GetElapsedTime(enqueuedAfterLoss, ordered[found[2]].Start).TotalMilliseconds;
+        Failure.Check(third <= lossMaximum, $"after the subscription was lost, the claim of the third task waited {third} ms, want at most {lossMaximum} ms");
     }
 
     private async Task JsonRoundTripAsync(OrderedDictionary<string, object?> fixture)
