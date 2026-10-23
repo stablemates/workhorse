@@ -322,11 +322,24 @@ outside it. The Spring Boot `JacksonJsonCodec` also keeps an integer exact. Rust
 holds an integer exactly within the signed and unsigned 64-bit ranges. TypeScript and Go decode it
 as an IEEE-754 double, which holds integers exactly only up to 2^53 - 1.
 
+.NET reads a value through `System.Text.Json` as the type that the caller declares. An untyped
+value is a `JsonElement`, which keeps the integer text exactly at any size. A `long` holds an
+integer exactly within the signed 64-bit range. A `decimal` holds an integer exactly up to 2^96 - 1
+in magnitude. If the integer is outside the range of a `decimal` or of a declared integer type, the
+read throws `JsonException`. A `double` rounds the integer as TypeScript and Go do, and reports no
+error.
+
+The .NET SDK does not support `BigInteger`, because `System.Text.Json` has no number converter for
+it. [ADR 0107](decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md)
+records that rule. [SM-1746](https://linear.app/stablemates/issue/SM-1746) records that the SDK does
+not yet refuse a `BigInteger` when it writes one.
+
 So a payload, result, checkpoint, or progress value that carries an integer larger than
 9,007,199,254,740,991 in magnitude is not portable. Enqueued from Python and handled by a Python,
-Ruby, or JVM worker, it survives. A Rust worker keeps it while it fits in 64 bits. Enqueued from
-Python and handled by a TypeScript or Go worker, it arrives rounded: the worker never sees the value
-the caller sent, and never reports an error.
+Ruby, or JVM worker, it survives. A Rust worker keeps it while it fits in 64 bits. A .NET worker
+keeps it in a `JsonElement`, and in a `long` while it fits in 64 bits. Enqueued from Python and
+handled by a TypeScript or Go worker, it arrives rounded: the worker never sees the value the caller
+sent, and never reports an error.
 
 Workhorse does not reject such a value, because PostgreSQL accepts it and some languages read it
 correctly. Send an identifier beyond that bound as a string instead. Within the bound every SDK
@@ -334,6 +347,8 @@ round-trips an integer exactly, and `typescript/core/test/json-integers.test.ts`
 `python/tests/test_json_integers.py`, and `go/json_integers_test.go` hold those languages to that.
 `jvm/workhorse/src/test/java/run/workhorse/internal/JsonTest.java` holds the JVM parser to a
 `BigInteger` above the 64-bit range.
+`dotnet/tests/Workhorse.Tests/Internal/Json/JsonIntegersTests.cs` holds the .NET codec to the bound,
+to an exact `JsonElement` and `long` beyond it, and to `JsonException` above the `long` range.
 
 Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
 workspace, `SM` team, and `workhorse` project. This document changes only
