@@ -105,6 +105,12 @@ lease after the request. In the example, the last accepted heartbeat was at 10 s
 expires at about 40 s. Then recovery cancels the task, and Workhorse does not schedule another
 attempt.
 
+The worker learns about the request from a heartbeat. If no heartbeat of the task succeeds, no
+heartbeat reports the request. This can occur on a loaded host when the heartbeat interval is below
+the supported minimum. Then the worker aborts `ctx.signal` only when a deadline or an execution
+timeout of the task ends, or when the lease expires. After the lease expires, recovery cancels the
+task.
+
 After a cancellation request, the task always ends `canceled`. If the handler returns, throws an
 error, or completes the task, Workhorse refuses the completion or the failure. Then the worker
 confirms the cancellation. If the handler runs after its lease expires, recovery confirms the
@@ -131,9 +137,12 @@ cancellation. Your handler code decides how quickly the cancellation occurs.
 | `leaseMs`            | 30,000 ms                         |
 | `heartbeatMs`        | `max(100, floor(leaseMs / 3))` ms |
 
-The smallest supported `heartbeatMs` is 100 ms.
+The smallest supported `heartbeatMs` is 100 ms. If no heartbeat of the task succeeds, no
+heartbeat returns `cancel_requested`. The local timer of a deadline or an execution timeout can
+still get `cancel_requested` from `expire_owned_v1`. Otherwise the lease watchdog ends the attempt,
+and recovery confirms the cancellation.
 
-More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work) and [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options).
+More detail: [Task lifecycle: Active work](../architecture/lifecycle.md#active-work), [Task lifecycle: Worker options](../architecture/lifecycle.md#worker-options), and [Task lifecycle: Supported heartbeat interval](../architecture/lifecycle.md#supported-heartbeat-interval).
 
 </details>
 

@@ -2002,9 +2002,14 @@ If a preparation uses the time that remains, the Python round fails before it se
 A failed statement rolls back while time remains. In TypeScript, Go, and Python, a deadlock
 (`40P01`) is then sent again in a new transaction with the time that remains, for every round of
 the transaction, at most 3 times in total. In Rust, Ruby, JVM, and .NET, a deadlock fails the
-round, and a later round sends again. A round
-that fails or passes its deadline discards its connection, because the worker cannot know its state.
-As before, a failed round changes no lease: every task continues, and the next round tries again.
+round, and a later round sends again.
+
+In TypeScript, Go, Python, Rust, and Ruby, a round that fails or passes its deadline discards its
+connection. The worker cannot know the state of that connection. The exception is a clean expiry
+before the heartbeat statement, which the next paragraph describes. The JVM and .NET keep the
+connection of a failed round when it is still open and its `ROLLBACK` ended before the deadline.
+They discard it in the other cases ([Heartbeat schedule](#heartbeat-schedule), item 5). As before,
+a failed round changes no lease: every task continues, and the next round tries again.
 
 A round that expires before it sends the heartbeat statement keeps its connection, because no
 statement of the round can still run. The worker keeps the connection in these cases:
@@ -2015,8 +2020,10 @@ statement of the round can still run. The worker keeps the connection in these c
    `ROLLBACK` succeeds, the worker keeps the connection, and the next round uses it.
 
 The worker discards the connection if the `ROLLBACK` cannot be sent, fails, or does not end in its
-bound. It also discards the connection if the deadline passes while a statement is in flight, and
-after any failure at or after step 5. The kept round still counts as a failed round: it renews no
+bound. It also discards the connection if the deadline passes while a statement is in flight. In
+TypeScript, Go, Python, Rust, and Ruby, it also discards the connection after any failure at or
+after step 5. The JVM and .NET keep a connection that is still open after such a failure, if its
+`ROLLBACK` ended before the deadline. The kept round still counts as a failed round: it renews no
 lease, and a busy retry schedules no other retry. Thus a handler that holds every
 other pool connection cannot make a short round take the heartbeat connection away
 ([ADR 0071](../decisions/0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md)).
@@ -2080,9 +2087,31 @@ still apply.
 
 Below 100 ms, the behavior of the worker does not change. The worker accepts the interval, and it
 does not reject or warn about it. But on a loaded host, the round bound can be shorter than one
-round needs. Then a round can miss its deadline every time. Each failed round also discards its
-connection, so the worker must take a new one, as step 2 of [Heartbeat round
-deadline](#heartbeat-round-deadline) describes.
+round needs. Then a round can miss its deadline every time.
+
+A round that misses its deadline can make the next round slower. In TypeScript, Go, Python, Rust,
+and Ruby, a round that fails at or after its heartbeat statement discards its connection. The next
+round then runs on a new connection, as step 2 of [Heartbeat round
+deadline](#heartbeat-round-deadline) describes. The JVM and .NET keep the connection of a failed
+round when it is still open and its `ROLLBACK` ended before the deadline.
+
+In a new session, the first call of `heartbeat_many_v2` takes more time than a later call.
+PostgreSQL compiles the PL/pgSQL function and fills the caches of that session on the first call.
+Thus a round after a discard needs more time than a round on a kept connection.
+
+If no heartbeat of a lease succeeds, the worker gets no heartbeat status for that lease. Thus no
+heartbeat reports a cancel request for the running handler ([Cancellation](#cancellation)). The
+local timer of a deadline or an execution timeout does not use the heartbeat. When it fires,
+`expire_owned_v1` can still return `cancel_requested`, and the worker then aborts the handler. If
+no such timer fires first, the handler runs until the lease watchdog ends the attempt. Recovery then
+cancels the task.
+
+This repeated failure needs a round bound. In TypeScript, Python, Rust, Ruby, and the JVM, rounds
+under shared heartbeats have no round bound, as [Heartbeat round
+deadline](#heartbeat-round-deadline) describes. They wait for each heartbeat statement, so a slow
+statement does not fail them. Rounds under the .NET `SharedHeartbeats` also have no round bound,
+but each statement has a command timeout of 30 s. A Go round under `SharedHeartbeats` keeps the
+round bound.
 
 If every renewal of a lease misses its deadline, the worker never renews that lease. On the
 dedicated connection, one transaction renews every batch of a round ([Pool renewal](#pool-renewal)).
