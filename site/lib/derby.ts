@@ -95,6 +95,49 @@ export function formatRaceClock(tick: number): string {
   return `t+${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
+/** The phase of the Derby: the visitor picks a horse, the race runs, or the result shows. */
+export type DerbyPhase = "pick" | "running" | "done";
+
+/**
+ * The status line under the Derby. The page puts `announcement` in a live region, so a screen
+ * reader reads it once each time it changes: after a pick, at the race start, and at the result.
+ * `clock` is the race clock while the race runs. It changes on each tick, so the page shows it
+ * outside the live region and a screen reader does not read it on each tick.
+ */
+export function derbyStatus({
+  phase,
+  pickedId,
+  winnerId,
+  pickedRank,
+  tick,
+}: {
+  phase: DerbyPhase;
+  pickedId: string | null;
+  winnerId: string | null;
+  pickedRank: number | undefined;
+  tick: number;
+}): { announcement: string; clock: string | null; won: boolean } {
+  if (phase === "pick") {
+    return {
+      announcement: pickedId
+        ? `${pickedId} at the gate — start when ready`
+        : "pick a horse to enter",
+      clock: null,
+      won: false,
+    };
+  }
+  if (phase === "running")
+    return { announcement: "racing", clock: formatRaceClock(tick), won: false };
+  if (winnerId === pickedId) {
+    return { announcement: `${winnerId} wins — you picked the winner`, clock: null, won: true };
+  }
+  return {
+    announcement: `${winnerId} wins — ${pickedId} finished #${pickedRank}`,
+    clock: null,
+    won: false,
+  };
+}
+
 function formatSeconds(ticks: number): string {
   return `${(ticks / DERBY_TUNING.ticksPerSecond).toFixed(1)}s`;
 }

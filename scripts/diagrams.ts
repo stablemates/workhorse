@@ -397,3 +397,24 @@ export const diagrams = [
   demoSchemaStep,
   demoSchemaStepNarrow,
 ];
+
+/**
+ * The CSS width and height of each diagram, keyed by slug and in slug order. The site writes them
+ * on each `<img>` and `<source>`, so the page reserves the space of an image before it loads. The
+ * light and dark images of a diagram must have the same size.
+ */
+export function diagramSizes(): Record<string, [width: number, height: number]> {
+  const sizes: Record<string, [number, number]> = {};
+  for (const diagram of diagrams.toSorted((a, b) => a.slug.localeCompare(b.slug))) {
+    const [light, dark] = (["light", "dark"] as const).map((theme) => {
+      const match = /<svg [^>]*viewBox="0 0 (\d+) (\d+)"/.exec(diagram.render(theme));
+      if (!match) throw new Error(`${diagram.slug}-${theme}.svg has no viewBox`);
+      return [Number(match[1]), Number(match[2])] as [number, number];
+    });
+    if (light![0] !== dark![0] || light![1] !== dark![1]) {
+      throw new Error(`${diagram.slug} has different light and dark sizes`);
+    }
+    sizes[diagram.slug] = light!;
+  }
+  return sizes;
+}

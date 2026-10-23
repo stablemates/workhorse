@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { diagrams } from "./diagrams.js";
+import { diagramSizes, diagrams } from "./diagrams.js";
 import { repositoryRoot } from "./packages.js";
 
 describe("documentation diagrams", () => {
@@ -15,4 +15,11 @@ describe("documentation diagrams", () => {
       });
     }
   }
+
+  it("matches the committed size map that the site reads", async () => {
+    const file = path.join(repositoryRoot, "site/lib/diagram-sizes.json");
+    expect(JSON.parse(await readFile(file, "utf8")), "Run `pnpm diagrams:generate`.").toEqual(
+      diagramSizes(),
+    );
+  });
 });
