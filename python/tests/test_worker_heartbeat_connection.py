@@ -32,6 +32,11 @@ pytestmark = pytest.mark.integration
 CHECKPOINT_HOLD_SECONDS = 10
 LEASE_MS = 3_000
 HEARTBEAT_MS = 1_000
+# A round whose COMMIT ends after the round bound renews nothing. A 3 s lease outlives only one such
+# round, and a loaded host can delay two COMMITs in sequence. So the async test uses a lease that
+# outlives the hold. It waits for the renewals while the checkpoint is held.
+HELD_ASYNC_LEASE_MS = 30_000
+RENEWALS_DURING_HOLD = 3
 
 
 class StatementLog:
@@ -238,24 +243,70 @@ async def test_a_held_async_checkpoint_does_not_delay_heartbeats(
         async def release(self, connection: LoggedConnection) -> None:
             await asyncpg_pool.release(connection._connection)
 
+    renewed_at: list[float] = []
+    stop_observing = Event()
+
+    def current_expiry() -> Any:
+        """Read the lease expiry, or None after the task finished."""
+        with psycopg.connect(database_url, autocommit=True) as observer:
+            row = observer.execute(
+                "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def observe_renewals() -> None:
+        """Count the renewals that the heartbeat makes while the checkpoint is held."""
+        while not hold.lock_held.wait(0.05):
+            if stop_observing.is_set():
+                return
+        held_until = hold.held_from + CHECKPOINT_HOLD_SECONDS
+        expiry = current_expiry()
+        while expiry is not None and len(renewed_at) < RENEWALS_DURING_HOLD:
+            if stop_observing.is_set():
+                return
+            current = current_expiry()
+            # A read that ends after the hold counts nothing, also when the task has finished.
+            if current is None or monotonic() >= held_until:
+                return
+            if current > expiry:
+                expiry = current
+                renewed_at.append(monotonic())
+            sleep(0.02)
+
     logged_pool = LoggedPool()
+    renewals = asyncio.ensure_future(asyncio.to_thread(observe_renewals))
     try:
         worker = AsyncWorker.from_asyncpg(
             logged_pool,
             queue="heartbeat-connection-async",
             worker_id="python-async-heartbeat-connection",
-            lease_ms=LEASE_MS,
+            lease_ms=HELD_ASYNC_LEASE_MS,
             heartbeat_ms=HEARTBEAT_MS,
         ).handle("checkpoint.held.async", handler)
         assert await worker.run_once() is True
         await asyncio.to_thread(hold.join)
+        await renewals
     finally:
         worker.stop()
+        # The observer stops within one poll, so it ends before the scratch database goes.
+        stop_observing.set()
+        await asyncio.wait((renewals,))
+        if not renewals.cancelled():
+            renewals.exception()
 
-    assert handler_resumed_at
+    if not handler_resumed_at:
+        with psycopg.connect(database_url, autocommit=True) as observer:
+            settled = observer.execute(
+                "SELECT state, error FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
+            ).fetchone()
+        pytest.fail(f"the handler did not resume after the held checkpoint; outcome {settled}")
+    # The heartbeat renewed the lease while the checkpoint statement waited for the lock.
+    assert len(renewed_at) == RENEWALS_DURING_HOLD, (
+        f"the heartbeat renewed the lease {len(renewed_at)} times while the checkpoint was held, "
+        f"not {RENEWALS_DURING_HOLD}"
+    )
+    # The checkpoint statement stayed blocked for the hold.
     assert handler_resumed_at[0] - hold.held_from >= CHECKPOINT_HOLD_SECONDS - 1
-    # The pooled heartbeat connection is independently reserved; handler timing
-    # verifies that the checkpoint remained blocked during the lease renewal.
     assert outcome(database_url, task_id) == ("succeeded",)
 
 
