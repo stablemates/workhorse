@@ -324,7 +324,7 @@ export function createSingleAdminAuthentication(
       const now = Date.now();
       // The key comes from the transport, never from a Forwarded or X-Forwarded-For value the
       // client wrote itself. A Node host reads those headers only from a peer the operator named as
-      // a trusted proxy. One client's failures therefore cannot pause another client's login.
+      // a trusted proxy. One client's failures therefore cannot fill another client's window.
       const client = loginThrottleKey(clientAddress);
       const reservations = currentLoginFailures(client, now);
       if (reservations.length >= MAX_FAILED_LOGINS) {
@@ -333,7 +333,9 @@ export function createSingleAdminAuthentication(
         );
       }
       // Distinct clients can each submit their own reservations, so the process separately bounds
-      // how many scrypt derivations run at once.
+      // how many scrypt derivations run at once. The slots are shared by every client: while they
+      // are busy, a correct password from another client also gets 429. The rejection adds no
+      // reservation and keeps no slot or place in a queue for the client, which must submit again.
       if (activePasswordHashes >= MAX_CONCURRENT_PASSWORD_HASHES) return tooManyRequests(1);
       // Reserve capacity before scrypt yields. Concurrent submissions cannot all observe the same
       // spare slot and create an unbounded password-hashing burst.

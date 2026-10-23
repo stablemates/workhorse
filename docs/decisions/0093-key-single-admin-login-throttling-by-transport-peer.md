@@ -68,3 +68,19 @@ resource use without refusing a client that has not failed.
 
 A caller with enough addresses could then lock out every new client. Evicting the oldest entry
 keeps login available.
+
+## Amendment: busy hash slots can reject a correct login (2026-10-23)
+
+The first consequence above says that a direct caller cannot lock out an administrator who connects
+from another address. That is true for the per-client failure window only.
+[SM-1667](https://linear.app/stablemates/issue/SM-1667) records this correction. The decision and the bound do not change.
+
+1. The global bound on scrypt derivations is shared by every client. While all its slots are busy,
+   a submission from any client gets `429` with `Retry-After: 1`, also with the correct password.
+2. Thus a caller who keeps the slots busy can delay the administrator's login from another address.
+   The administrator must submit again.
+3. The rejection adds no reservation to the client's window. It also keeps no slot and no place in
+   a queue for the client.
+
+The bound stays, because it limits the CPU and memory that hashing costs. The
+[dashboard architecture](../architecture/dashboard.md#login-rate-limit) states the current values.

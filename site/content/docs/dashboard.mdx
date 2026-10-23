@@ -990,6 +990,14 @@ requests when the number of tasks increases.
    page.
 5. Dana selects manual refresh. The dashboard reads the third page again.
 
+Automatic refresh also pauses while a refresh could change what you read or edit. It pauses while
+the dashboard window is not active, and a visible window without focus is not active. It also pauses
+while an action menu, a confirmation dialog, or the task drawer is open. A focused form field and
+unsaved settings also pause it.
+
+When the last cause ends, a short countdown shows on the `Refresh` button. Then automatic refresh
+continues the interval. Manual refresh reads the page at once, also during a pause.
+
 The dashboard is a view for operators, not a transaction snapshot. PostgreSQL statistics and
 worker registry rows can be behind the processes that they describe.
 
@@ -999,12 +1007,30 @@ worker registry rows can be behind the processes that they describe.
 - The browser polls only the active page, at the selected cadence.
 - An automatic refresh does not start while the same read is still loading.
 - After an operator action, the dashboard fetches the committed result.
-- Auto refresh pauses while a task listing is pinned to a cursor or to a page beyond the first.
-  Returning to the first page resumes the configured cadence.
-- Manual refresh works on every page.
+- The interval choices are manual refresh only, 5 s, 15 s, 30 s, 1 min, and 5 min. The default is
+  15 s.
+- Auto refresh pauses while one or more of these conditions is true:
+  1. The document is hidden, or it does not have focus. A visible window without focus pauses.
+  2. A task action menu or a queue tier menu is open.
+  3. A confirmation dialog is open to cancel a task, cancel a task group, or pause or resume a
+     schedule.
+  4. The task drawer is open.
+  5. The Settings page has unsaved maintenance changes.
+  6. A task listing is pinned to a cursor or to a page beyond the first.
+  7. An `input`, `textarea`, `select`, or `contenteditable` element has focus. A `hidden`,
+     `checkbox`, or `radio` input does not pause.
+- The interval button shows `paused`, and its title names the condition. A pause keeps the time
+  left in the interval. A background read of the page data or the navigation counts that returns
+  during a pause does not change the page. An activity chart request that started before the pause
+  can still change the chart.
+- When the last condition ends, the `Refresh` button counts down from 3 seconds. Then auto refresh
+  continues with the time left in the interval. A condition that starts again stops the countdown.
+- Manual refresh works on every page and in every state. It starts the interval again from its full
+  length. It does not end a pause condition.
 - PostgreSQL statistics and worker registry rows can lag their processes.
 
-More detail: [Operations: Dashboard refresh and build reuse](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#dashboard-refresh-and-build-reuse)
+More detail: [Dashboard: Auto refresh and its pauses](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#auto-refresh-and-its-pauses),
+[Operations: Dashboard refresh and build reuse](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#dashboard-refresh-and-build-reuse),
 and [Task lifecycle: Read models and health](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#read-models-and-health).
 
 </details>

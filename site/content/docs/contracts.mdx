@@ -375,6 +375,19 @@ To hide a field of the payload, put its name in `sensitivePayloadKeys`. To hide 
 result, use `sensitiveResultKeys`. Task lookup, task lists, and dead letters also do not show the
 hidden fields.
 
+These key lists hide fields of the payload and the result only. A handler can store other values:
+
+- A [checkpoint](/docs/concepts) stores the result of one step of the handler.
+- A [progress value](/docs/agentic-flow) tells operators how far the task is.
+- A [human wait](/docs/human-waits) stops the task until a person decides. Its context
+  tells that person what to decide.
+
+Workhorse does not hide fields in those values. The dashboard shows them as the handler stored
+them.
+
+Remove each secret before the handler saves a checkpoint, sets a progress value, or starts a human
+wait. If a secret is in one of those values, every dashboard operator can read it.
+
 <details>
 <summary>Reference: redaction keys</summary>
 
@@ -387,8 +400,12 @@ hidden fields.
   `RedactedTaskError` and the message `Task handler failed; details redacted`. It does so before
   `fail_v1` writes any error. `Worker` applies the same rule before it records the exception in
   OpenTelemetry.
+- The key lists do not apply to `task_checkpoint.checkpoint_value`, `task_progress.progress_value`,
+  or `task_human_wait.context`. `dashboard_task_detail_v1`, `dashboard_checkpoint_value_v1`, and
+  `dashboard_human_waits_v1` return those values as stored.
 
-More detail: [Data model: Redaction keys](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#redaction-keys).
+More detail: [Data model: Redaction keys](https://github.com/stablemates/workhorse/blob/main/docs/architecture/data-model.md#redaction-keys) and
+[Dashboard: Redaction scope](https://github.com/stablemates/workhorse/blob/main/docs/architecture/dashboard.md#redaction-scope).
 
 </details>
 

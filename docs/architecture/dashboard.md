@@ -457,6 +457,25 @@ the task list and the activity chart, which never read a result.
 `dashboard_task_estimate_v1()` returns the planner tuple estimate for the private `task` table.
 The dashboard uses it to choose exact counts or estimates without naming the private relation.
 
+### Redaction scope
+
+`payload_redact_keys` and `result_redact_keys` apply only to the payload and the result. The
+dashboard read surface returns these other handler-written values as the handler stored them:
+
+| Value              | Stored in                          | Dashboard reads                                                                          |
+| ------------------ | ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| Checkpoint value   | `task_checkpoint.checkpoint_value` | `dashboard_task_detail_v1` (`checkpoints`), `dashboard_checkpoint_value_v1`              |
+| Progress value     | `task_progress.progress_value`     | `dashboard_task_detail_v1` (`progress.value`)                                            |
+| Human-wait context | `task_human_wait.context`          | `dashboard_task_detail_v1` (`humanWait.context`), `dashboard_human_waits_v1` (`context`) |
+
+No dashboard function applies `redact_top_level_keys_v1` to these values. If a handler copies a secret into
+one of them, every dashboard operator can read that secret. The handler must remove each secret
+before it saves a checkpoint, sets a progress value, or starts a human wait.
+
+The task listing reads human-wait context only through `dashboard_human_wait_quick_action_v1`. That
+function returns the `dashboard.quickAction.label` string, trimmed and cut to 200 characters. It
+returns no other part of the context.
+
 ### Task listing
 
 `dashboard_tasks_v1(p_input jsonb)` applies these inputs and returns the complete version 1
@@ -1083,6 +1102,78 @@ Navigation between routes changes the document and the focus.
 - The first focusable element is a `Skip to main content` link. It moves focus to the page area
   `#dashboard-main`, and it shows only while it has focus.
 
+### Auto refresh and its pauses
+
+Auto refresh reads the open page again at a fixed interval. It pauses while a refresh could replace
+data that the operator reads or edits. `dashboard/app/src/refresh-policy.ts` and
+`dashboard/app/src/refresh-blockers.tsx` own these rules.
+
+#### Interval
+
+The operator selects the interval in the menu beside the `Refresh` button. The SPA stores the
+choice in the `workhorse-auto-refresh` browser preference. The default is `15s`.
+
+| Value | Menu label          | Interval   |
+| ----- | ------------------- | ---------- |
+| `off` | Manual refresh only | none       |
+| `5s`  | Every 5s            | 5 seconds  |
+| `15s` | Every 15s           | 15 seconds |
+| `30s` | Every 30s           | 30 seconds |
+| `1m`  | Every minute        | 60 seconds |
+| `5m`  | Every 5 minutes     | 5 minutes  |
+
+Each tick reads the open page and the navigation counts. On the Tasks page it also reloads the
+activity chart. `createDashboardPollingClock` schedules the ticks.
+
+#### Pause conditions
+
+Auto refresh pauses while one or more of these conditions is true:
+
+| Condition                                                                                                                                                 | Source                                            | Priority |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------- |
+| The window is not active: the document is hidden, or the document does not have focus. A visible window without focus also pauses.                        | `dashboardWindowIsActive`, `inactiveWindow`       | 30       |
+| A task action menu is open. It can be in the task listing or in the task drawer.                                                                          | `Menu` with `blocksRefresh`, `taskContextMenu`    | 20       |
+| A queue tier menu is open on the Queues page.                                                                                                             | `Menu` with `blocksRefresh`, `taskContextMenu`    | 20       |
+| A confirmation dialog for one of these actions is open: cancel a task, cancel a task group, or pause or resume a schedule. Other dialogs do not pause.    | `useConfirmationActivity`, `taskContextMenu`      | 20       |
+| The task drawer is open.                                                                                                                                  | `taskDrawerOpened`, `taskDrawer`                  | 10       |
+| The Settings page has unsaved maintenance changes: time zone or history retention time.                                                                   | `dirtySettings`                                   | 10       |
+| The task listing is pinned to a cursor or to a page after the first.                                                                                      | `taskListingPinned`, `pinnedTaskPage`             | 5        |
+| An `input`, a `textarea`, a `select`, or a `contenteditable` element in the dashboard has focus. A `hidden`, `checkbox`, or `radio` input does not pause. | `dashboardInputTypeBlocksRefresh`, `focusedInput` | 0        |
+
+- `subscribeDashboardWindowActivity` checks the window again on `focus`, `blur`, and
+  `visibilitychange`. After `visibilitychange` it checks once more after a zero-delay timer.
+- The interval button shows `paused`. Its `title` and `aria-label` give the description of the
+  condition with the highest priority, for example `Auto refresh paused while task details are open`.
+- The pause keeps the time that is left in the current interval. The progress bar under the control
+  stops at the same point.
+- A background read of the page data or the navigation counts that returns while a condition is
+  true is discarded. `discardBackgroundRefresh` makes this decision. The activity chart on the Tasks
+  page has its own request, and it does not check the conditions. If a chart request starts before
+  a pause, its response can change the chart during the pause.
+
+#### Resume countdown
+
+When the last condition ends, auto refresh does not continue at once.
+`createDashboardRefreshResumePolicy` starts a countdown of 3 seconds.
+
+1. The `Refresh` button shows `Refresh (3)`, then `Refresh (2)`, then `Refresh (1)`.
+2. The interval button stays `paused`. Its description is `Auto refresh resumes in N seconds`.
+3. If a condition starts again during the countdown, the countdown stops. The next end of all
+   conditions starts a new countdown.
+4. When the countdown ends, the polling clock continues with the time that was left in the
+   interval.
+
+If the interval is `off`, no countdown starts.
+
+#### Manual refresh
+
+The `Refresh` button works in every state, also while auto refresh pauses or counts down.
+
+- It reads the open page as a foreground load. A pause condition does not discard its response.
+- It starts the interval again from its full length. A route change and an interval change also
+  start it again.
+- It does not end a pause condition. If a condition is still true, auto refresh stays paused.
+
 ### Status labels and explanations
 
 Status labels repeat on each row of a list, and a list can show 100 rows. These rules keep the
@@ -1694,7 +1785,8 @@ Single-admin authentication retains at most five login reservations per client i
    requests cannot bypass the bound.
 3. Invalid submissions retain their reservations and return the generic `401` response.
 4. Further submissions from that client return `429` with `Retry-After` until its oldest
-   reservation leaves the window. Other clients keep logging in.
+   reservation leaves the window. Other clients keep their own windows, so this `429` does not
+   reach them.
 5. A successful login clears that client's reservations.
 
 The server tracks at most `MAX_TRACKED_LOGIN_CLIENTS` (1,024) clients. Before it tracks another,
@@ -1702,7 +1794,14 @@ it removes clients without a current reservation, then the client it started tra
 ago.
 
 At most `MAX_CONCURRENT_PASSWORD_HASHES` (2) scrypt derivations run at once across every client.
-A submission that finds both slots busy returns `429` with `Retry-After: 1`. It reserves nothing.
+A submission that finds both slots busy returns `429` with `Retry-After: 1`. The rejection adds no
+reservation to the client's window. It also keeps no slot and no place in a queue for the client.
+
+The hash slots are shared, so this `429` can reject a correct password. If two submissions from
+any clients are in scrypt, the administrator's login from another address gets `429`. The
+administrator must submit again after the slots are free. The per-client window keeps one client's
+failures from blocking another client. The hash slots do not, because they bound CPU and memory,
+not failures.
 
 `dashboardNodeMiddleware` passes `request.socket.remoteAddress` as `clientAddress` by default. A
 host that calls `handle(request, context)` itself supplies an address it established. Behind a
