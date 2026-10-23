@@ -136,9 +136,19 @@ public sealed class TelemetrySurfaceTests
         "workhorse.worker.queues",
     ];
 
+    /// <summary>
+    /// The TypeScript-only counter of failed heartbeat rounds and its attribute. SM-1704 adds them
+    /// to the .NET worker and removes this group.
+    /// </summary>
+    private static readonly string[] HeartbeatRoundFailure =
+    [
+        "workhorse.heartbeat.failure_reason",
+        "workhorse.worker.heartbeat.round_failure",
+    ];
+
     /// <summary>The names of <c>api/telemetry.txt</c> that the .NET SDK does not emit.</summary>
     private static readonly string[][] NotEmitted =
-        [QueueMetrics, MetricsObserver, SingleHeartbeat, PolicySync, FusedCompletion, QueueAndAdmin, LogRecordAttributes];
+        [QueueMetrics, MetricsObserver, SingleHeartbeat, PolicySync, FusedCompletion, QueueAndAdmin, LogRecordAttributes, HeartbeatRoundFailure];
 
     private static readonly TelemetrySurface Surface = TelemetrySurface.Read();
 

@@ -82,7 +82,25 @@ describe("dashboard mutation authorization", () => {
 
       await expect(
         (client.dashboard as Record<string, (value: unknown) => Promise<unknown>>)[name]?.(input),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      ).rejects.toMatchObject({ code: "FORBIDDEN", message: "This dashboard is read-only" });
+      expect(context.database.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(Object.entries(MUTATION_INPUTS))(
+    "names %s when a writable host does not provide it",
+    async (name, input) => {
+      // A writable host that wires no demo operator and no controllers.
+      const context: DashboardRpcContext = { ...readOnlyContext(), operator: { mode: "writable" } };
+      const client = createRouterClient(dashboardRouter, { context });
+
+      await expect(
+        (client.dashboard as Record<string, (value: unknown) => Promise<unknown>>)[name]?.(input),
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        status: 403,
+        message: `This dashboard host does not provide the ${name} action`,
+      });
       expect(context.database.execute).not.toHaveBeenCalled();
     },
   );

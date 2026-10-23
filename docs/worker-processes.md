@@ -174,7 +174,8 @@ startup or during a failure drain.
 3. Create and configure every `Worker`.
 4. Start the optional probe-only HTTP server.
 5. Start every worker run loop.
-6. Report readiness only after the workers have started.
+6. Report readiness only after every worker passes its startup checks: the reserved heartbeat
+   connection, a compatible schema, and its first registration write.
 
 A configuration or probe startup failure closes adapter-owned resources and rejects startup. An unexpected resolution or rejection from any worker is fatal to the dedicated process runtime: sibling workers are stopped, all runs settle, resources close, and the CLI exits unsuccessfully. A fatal error reaches the runtime before the failing worker drains, as [Fatal worker error](#fatal-worker-error) describes.
 
@@ -229,10 +230,17 @@ The deadline exists because JavaScript cannot safely preempt an arbitrary promis
 
 When `probes` is configured, Workhorse starts a small status-only HTTP server:
 
-| Endpoint      | Running | Draining or failing |
-| ------------- | ------: | ------------------: |
-| `GET /livez`  |     200 |                 200 |
-| `GET /readyz` |     200 |                 503 |
+| Endpoint      | Starting | Running or paused | Draining or failing |
+| ------------- | -------: | ----------------: | ------------------: |
+| `GET /livez`  |      200 |               200 |                 200 |
+| `GET /readyz` |      503 |               200 |                 503 |
+
+While a worker has not passed its startup checks, the readiness body is `{"status":"starting"}`.
+A startup refusal rejects the run before that, so the process never reports ready. While draining,
+the body is `{"status":"draining"}`.
+
+A pause does not change readiness. If every worker is paused, locally or by an operator, readiness
+stays 200 and its body is `{"status":"ok","paused":true}`.
 
 Liveness stays 200 during a failure drain. The failure deadline, not the liveness probe, ends a
 process whose handlers do not settle.

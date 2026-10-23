@@ -73,6 +73,33 @@ catch-up limits do not change.
 The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
 changes no stored data.
 
+### Worker readiness waits for startup, and failed heartbeat rounds have a counter
+
+A worker process reported ready on `/readyz` as soon as it started its workers. A worker that then
+failed its startup check, for example on an incompatible schema, gave a short ready interval. Now
+readiness returns 503 with `{"status":"starting"}` until every worker has the reserved heartbeat
+connection, a compatible schema, and its first registration write. A pause does not change
+readiness: a paused process stays ready, and the body adds `"paused":true` while every worker is
+paused (SM-1669).
+
+A heartbeat round that failed before PostgreSQL answered left no log record and no metric. Now the
+TypeScript worker counts each such round in the new counter
+`workhorse.worker.heartbeat.round_failure`, by the bounded attribute
+`workhorse.heartbeat.failure_reason`: `timeout`, `connection`, `database`, or `other`. A failed
+round still gives no ownership verdict, so `workhorse.worker.heartbeat.failure` does not change.
+The other SDKs do not record the counter yet. The new instrument is an addition.
+
+### The dashboard server names a mutation that the host does not provide
+
+A writable dashboard host that wired no controller for a mutation answered "This dashboard is
+read-only". Now it answers `FORBIDDEN` with the message "This dashboard host does not provide the
+<action> action". A read-only host keeps its message. The code and the HTTP status 403 do not
+change.
+
+If a bounded dashboard read failed and its `ROLLBACK` also failed, the server released the client
+to the pool for reuse. Now it releases the client with the `ROLLBACK` error, so that the pool
+destroys it. The caller still gets the original read error.
+
 ### TypeScript schedule sync reads the current payload contract from PostgreSQL
 
 A schedule stores the payload contract version, size limits, and redaction keys of its task type.

@@ -110,8 +110,9 @@ export const schemaExpandContractNarrow = {
 const statesTitle = "Every state of a worker process, and how the process leaves it";
 const statesDescription =
   "A worker process starts in starting. From starting, a configuration or probe failure exits " +
-  "with failure, every run loop started with readiness true makes it running, and a first signal " +
-  "makes it draining after startup completes. From running, a first SIGTERM or SIGINT makes it " +
+  "with failure, a refused startup check makes it failing, every worker passing its startup " +
+  "checks with readiness true makes it running, and a first signal makes it draining after " +
+  "startup completes. From running, a first SIGTERM or SIGINT makes it " +
   "draining, and a fatal worker-loop failure makes it failing. From failing, the process exits " +
   "with failure when its siblings settle or the deadline is missed. From draining, it exits with " +
   "code 0 when handlers settle and resources close cleanly, with code 1 when a run loop or close " +
@@ -120,7 +121,8 @@ const statesDescription =
 const transitions: readonly (readonly [from: string, to: string, trigger: string])[] = [
   ["start", "starting", "the process starts"],
   ["starting", "exited_failure", "configuration or probe failure"],
-  ["starting", "running", "every run loop started, readiness true"],
+  ["starting", "failing", "startup check refused"],
+  ["starting", "running", "startup checks passed, readiness true"],
   ["starting", "draining", "first signal, after startup completes"],
   ["running", "draining", "first SIGTERM or SIGINT"],
   ["running", "failing", "fatal worker-loop failure"],

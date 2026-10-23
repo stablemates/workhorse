@@ -107,11 +107,93 @@ external supervisor can restart it.
   <img src="../../site/public/diagrams/worker-shutdown-light.png" width="960" alt="A worker process drains after the first signal and exits early only on a failure">
 </picture>
 
+### Database failures that stop a worker
+
+A worker keeps running through some database failures and stops on others. The worker process
+turns a stop into a process exit, so the supervisor decides when the work starts again. The
+TypeScript `Worker` behaves as follows.
+
+These failures stop the worker. `run()` rejects, and the process runner starts its drain:
+
+- A startup refusal. The reserved heartbeat connection is not ready within the startup budget, or
+  the schema compatibility check refuses the installed schema. The startup budget is the larger of
+  `heartbeatMs` and 5 seconds.
+- A failed claim statement.
+- A failed maintenance statement: `tick_v1`, the schedule firing, or a maintenance routine.
+- A failed settlement write of a handler result.
+
+These failures do not stop the worker:
+
+- A failed registration write. The worker keeps its last pause value and calls
+  `onRegistrationError`.
+- A failed notification listener. The worker polls and calls `onNotificationError`.
+- A failed heartbeat round. The handlers keep running, the next round retries, and
+  `workhorse.worker.heartbeat.round_failure` counts the round. The lease watchdog aborts an attempt
+  whose last accepted renewal is one full lease old.
+- A lost heartbeat connection. The worker starts no claim until the reserved connection is ready
+  again.
+
+### Return to service after a failure
+
+The worker process does not start a failed worker again. It drains and exits, and the supervisor
+starts a new process. The time to return to service has three parts:
+
+1. The drain. The active handlers settle, or the shutdown deadline ends the drain. The deadline is
+   `shutdownTimeoutMs`. A drain that does not finish by the deadline exits with code 1.
+2. The restart delay. The restart policy of the supervisor sets it, for example the back-off of a
+   Kubernetes pod or the `RestartSec` of a systemd unit. A supervisor that does not restart the
+   process leaves the work stopped.
+3. The startup. The new process reports `starting` on readiness until every worker passes its
+   startup checks. If the database is still not available, the startup check fails by the end of
+   the startup budget. The process then exits with code 1, and the supervisor restarts it again.
+
+A supervisor with an increasing back-off can thus wait longer than the database outage. Set the
+largest back-off from the time that the queues can wait.
+
+### Lease recovery after a restart
+
+A restarted process does not continue the leases of the old process. Each claim of the new process
+starts a new attempt.
+
+- A process that drained before it exited settled each task that it ran.
+- A process that exited at the deadline, or that the host stopped, leaves its leases active. Each
+  lease stays active until it expires. That is at most `leaseMs` after its last accepted renewal.
+- After the expiry, a maintenance tick of any worker runs `recover_expired_v1`. It makes each
+  expired attempt ready, scheduled, or terminal, as the retry policy selects. A scheduled retry
+  starts after its retry delay.
+- A late write of the old process matches no row, because recovery replaced its lease generation.
+
+Thus a task of a stopped process can start again only after its lease expires, a tick recovers it,
+and its retry delay ends. Recovery can take more than one maintenance interval. It locks expired rows
+in bounded batches, it skips a row that another transaction locks, and a tick skips the lease scan
+if another tick ran it recently ([Task lifecycle: Expired-lease recovery](lifecycle.md#expired-lease-recovery)).
+
 ### Probe listener
 
-The optional probe-only listener reports liveness while the process runs or drains. It reports
-readiness only while the process accepts claims. It does not expose application HTTP ingress,
-queue data, or mutations.
+The optional probe-only listener reports liveness while the process runs or drains. It does not
+expose application HTTP ingress, queue data, or mutations.
+
+Readiness means that the startup checks of every worker passed and that the process is not draining.
+It does not mean that the process claims tasks now. Each worker passes its startup checks when its
+run has the reserved heartbeat connection and a compatible schema, and its first registration write
+has finished. A failed registration write does not stop the worker, so it does not hold readiness.
+
+| State                                             | Readiness response                   |
+| ------------------------------------------------- | ------------------------------------ |
+| A worker has not passed its startup checks        | 503, `{"status":"starting"}`         |
+| Every worker passed, and a worker is not paused   | 200, `{"status":"ok"}`               |
+| Every worker passed, and every worker is paused   | 200, `{"status":"ok","paused":true}` |
+| After a signal, a worker failure, or `shutdown()` | 503, `{"status":"draining"}`         |
+
+A startup refusal rejects `run()` before the worker passes its startup checks. Thus the process
+never reports ready before it drains.
+
+A pause does not change readiness. A local `pause()` and an operator pause in the worker registry
+are deliberate states, not faults. A failed probe during a pause could stop a rolling deployment or
+start alerts while the operator is in control. A restarted worker starts unpaused, because each run
+registers with a new `instance_id` ([Worker pause](#worker-pause)).
+
+The liveness response is always 200, `{"status":"ok"}`.
 
 ## Command-line entry points
 

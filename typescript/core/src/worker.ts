@@ -36,6 +36,7 @@ import {
   logDebug,
   logInfo,
   logWarn,
+  recordHeartbeatRoundFailure,
   recordMaintenanceMetrics,
   telemetryMetrics,
   type WorkhorseTelemetrySpan,
@@ -83,7 +84,7 @@ import {
   workerQueueTierRead,
   workerWaitsRead,
 } from "./worker-internal.js";
-import { reportWorkerFailure } from "./worker-failure.js";
+import { reportWorkerFailure, reportWorkerStartup } from "./worker-failure.js";
 import { createHandlerContext } from "./handler-context.js";
 import { TaskAttempt } from "./task-attempt.js";
 
@@ -926,10 +927,11 @@ export class Worker {
             this.busyRetryAt = monotonicNow() + this.busyRetryDelayMs();
           }
         },
-        () => {
+        (error: unknown) => {
           // A failed round proves nothing about ownership, so every task keeps running and the
           // next regular round retries. Each attempt's lease watchdog aborts it once its last
           // accepted renewal is a full lease old.
+          recordHeartbeatRoundFailure(error);
         },
       )
       .finally(() => {
@@ -2100,6 +2102,7 @@ export class Worker {
       await this.untilAborted(firstRegistration, stopSignal);
       this.abortRun = undefined;
       if (shouldStop()) return;
+      reportWorkerStartup(this);
 
       const subscribeToTaskNotifications = this.queue.subscribeToTaskNotifications;
       if (typeof subscribeToTaskNotifications === "function") {

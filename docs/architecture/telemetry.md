@@ -42,31 +42,54 @@ takes effect.
 
 Queue and worker operations emit these synchronous instruments:
 
-| Instrument                           | Kind and unit           | Recording point and attributes                                                                                                                                                                                                                   |
-| ------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `workhorse.tasks.enqueued`           | counter, `{task}`       | One accepted `enqueue_batch_v1` member, grouped by `workhorse.queue.name` and `workhorse.task.type`. An outer caller transaction can still roll back after this statement returns.                                                               |
-| `workhorse.tasks.enqueue.outcomes`   | counter, `{request}`    | Every `enqueue_many_v1` result, grouped by `workhorse.queue.name` and bounded `workhorse.enqueue.outcome`. Outcomes are `accepted`, `replayed`, `replaced`, `non_replaceable`, and `coalesced`. An outer caller transaction can still roll back. |
-| `workhorse.tasks.claimed`            | counter, `{task}`       | One successfully claimed task, by queue and task type. Empty claim polls emit nothing.                                                                                                                                                           |
-| `workhorse.tasks.completed`          | counter, `{task}`       | One accepted `complete_v1`, by queue and task type. A rejected stale completion emits nothing.                                                                                                                                                   |
-| `workhorse.tasks.failed`             | counter, `{task}`       | One `fail_v1` result, by queue, task type, and `workhorse.attempt.outcome`.                                                                                                                                                                      |
-| `workhorse.tasks.retried`            | counter, `{task}`       | Each attempt returned to live work by failure, owned expiry, or bounded recovery, by queue and task type. Recovery rows without dimensions use `unknown` for both.                                                                               |
-| `workhorse.tasks.cancellation`       | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                                                                      |
-| `workhorse.tasks.redrive`            | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                                                              |
-| `workhorse.handler.executions`       | counter, `{execution}`  | One worker handler activation, by queue, task type, and `workhorse.handler.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`.                                     |
-| `workhorse.handler.duration`         | histogram, `ms`         | Wall-clock duration of the same activation, with the same attributes. An activation that ends without a recorded outcome reports `unknown`. Durable wait suspension closes an activation without closing its logical attempt.                    |
-| `workhorse.handler.runtime`          | counter, `ms`           | Cumulative handler execution time by queue and task type.                                                                                                                                                                                        |
-| `workhorse.handler.batch.size`       | histogram, `{task}`     | Tasks delivered in one `BatchHandler` invocation, by queue, task type, and bounded full/partial flag.                                                                                                                                            |
-| `workhorse.handler.batch.linger`     | histogram, `ms`         | Time from the first member reaching its coordinator until batch dispatch, with the same attributes.                                                                                                                                              |
-| `workhorse.claim.duration`           | histogram, `ms`         | One `claim_v1`, `claim_many_v1`, or `complete_many_and_claim_v1` statement, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                      |
-| `workhorse.leases.expired`           | counter, `{lease}`      | Leases that `recover_expired_v1` recovers. Zero-result passes emit nothing.                                                                                                                                                                      |
-| `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a task ID, by schedule namespace and name.                                                                                                                                                              |
-| `workhorse.schedule.lag`             | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                                                          |
-| `workhorse.worker.heartbeat.failure` | counter, `{heartbeat}`  | Every per-task `heartbeat_many_v2` status other than `accepted`, `busy` too, by `workhorse.heartbeat.status`. TypeScript also counts the answers of `Queue.heartbeatStatus` and `Queue.tryHeartbeat`.                                            |
-| `workhorse.maintenance.runs`         | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                                                                  |
-| `workhorse.maintenance.rows`         | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                                                                 |
-| `workhorse.maintenance.duration`     | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                                                                        |
-| `workhorse.maintenance.errors`       | counter, `{error}`      | Maintenance results whose `error` is non-null, with the same attributes.                                                                                                                                                                         |
-| `workhorse.maintenance.drift`        | histogram, `ms`         | Delay beyond a worker maintenance loop's configured cadence, by loop.                                                                                                                                                                            |
+| Instrument                                 | Kind and unit           | Recording point and attributes                                                                                                                                                                                                                   |
+| ------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `workhorse.tasks.enqueued`                 | counter, `{task}`       | One accepted `enqueue_batch_v1` member, grouped by `workhorse.queue.name` and `workhorse.task.type`. An outer caller transaction can still roll back after this statement returns.                                                               |
+| `workhorse.tasks.enqueue.outcomes`         | counter, `{request}`    | Every `enqueue_many_v1` result, grouped by `workhorse.queue.name` and bounded `workhorse.enqueue.outcome`. Outcomes are `accepted`, `replayed`, `replaced`, `non_replaceable`, and `coalesced`. An outer caller transaction can still roll back. |
+| `workhorse.tasks.claimed`                  | counter, `{task}`       | One successfully claimed task, by queue and task type. Empty claim polls emit nothing.                                                                                                                                                           |
+| `workhorse.tasks.completed`                | counter, `{task}`       | One accepted `complete_v1`, by queue and task type. A rejected stale completion emits nothing.                                                                                                                                                   |
+| `workhorse.tasks.failed`                   | counter, `{task}`       | One `fail_v1` result, by queue, task type, and `workhorse.attempt.outcome`.                                                                                                                                                                      |
+| `workhorse.tasks.retried`                  | counter, `{task}`       | Each attempt returned to live work by failure, owned expiry, or bounded recovery, by queue and task type. Recovery rows without dimensions use `unknown` for both.                                                                               |
+| `workhorse.tasks.cancellation`             | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                                                                      |
+| `workhorse.tasks.redrive`                  | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                                                              |
+| `workhorse.handler.executions`             | counter, `{execution}`  | One worker handler activation, by queue, task type, and `workhorse.handler.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`.                                     |
+| `workhorse.handler.duration`               | histogram, `ms`         | Wall-clock duration of the same activation, with the same attributes. An activation that ends without a recorded outcome reports `unknown`. Durable wait suspension closes an activation without closing its logical attempt.                    |
+| `workhorse.handler.runtime`                | counter, `ms`           | Cumulative handler execution time by queue and task type.                                                                                                                                                                                        |
+| `workhorse.handler.batch.size`             | histogram, `{task}`     | Tasks delivered in one `BatchHandler` invocation, by queue, task type, and bounded full/partial flag.                                                                                                                                            |
+| `workhorse.handler.batch.linger`           | histogram, `ms`         | Time from the first member reaching its coordinator until batch dispatch, with the same attributes.                                                                                                                                              |
+| `workhorse.claim.duration`                 | histogram, `ms`         | One `claim_v1`, `claim_many_v1`, or `complete_many_and_claim_v1` statement, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                      |
+| `workhorse.leases.expired`                 | counter, `{lease}`      | Leases that `recover_expired_v1` recovers. Zero-result passes emit nothing.                                                                                                                                                                      |
+| `workhorse.schedule.fired`                 | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a task ID, by schedule namespace and name.                                                                                                                                                              |
+| `workhorse.schedule.lag`                   | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                                                          |
+| `workhorse.worker.heartbeat.failure`       | counter, `{heartbeat}`  | Every per-task `heartbeat_many_v2` status other than `accepted`, `busy` too, by `workhorse.heartbeat.status`. TypeScript also counts the answers of `Queue.heartbeatStatus` and `Queue.tryHeartbeat`.                                            |
+| `workhorse.worker.heartbeat.round_failure` | counter, `{round}`      | One TypeScript heartbeat round that rejected before PostgreSQL returned a status, by the bounded `workhorse.heartbeat.failure_reason`.                                                                                                           |
+| `workhorse.maintenance.runs`               | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                                                                  |
+| `workhorse.maintenance.rows`               | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                                                                 |
+| `workhorse.maintenance.duration`           | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                                                                        |
+| `workhorse.maintenance.errors`             | counter, `{error}`      | Maintenance results whose `error` is non-null, with the same attributes.                                                                                                                                                                         |
+| `workhorse.maintenance.drift`              | histogram, `ms`         | Delay beyond a worker maintenance loop's configured cadence, by loop.                                                                                                                                                                            |
+
+#### Failed heartbeat rounds
+
+A heartbeat round renews every lease of a worker in one request. The request can fail before
+PostgreSQL answers, for example when the connection breaks or the round reaches its deadline. Such a
+round gives no ownership verdict. Thus `workhorse.worker.heartbeat.failure` does not count it, and
+every handler keeps running. The next regular round retries, and the lease watchdog of each attempt
+still aborts it when its last accepted renewal is one full lease old.
+
+The TypeScript worker counts each rejected round once in `workhorse.worker.heartbeat.round_failure`.
+The worker sends at most one round at a time, so the count rate stays bounded by the heartbeat
+interval and the busy retries. The counter adds no log record. `heartbeatRoundFailureReason` in
+`typescript/core/src/telemetry.ts` sets `workhorse.heartbeat.failure_reason`:
+
+| Value        | Failure                                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout`    | The round deadline (`HeartbeatRoundTimeoutError`), `statement_timeout` (`57014`), or `idle_in_transaction_session_timeout` (`25P03`)  |
+| `connection` | A socket or DNS error code, a SQLSTATE that starts with `08`, a server shutdown (`57P01` to `57P03`), or a terminated `pg` connection |
+| `database`   | Any other SQLSTATE                                                                                                                    |
+| `other`      | A failure without a SQLSTATE or a connection code                                                                                     |
+
+Only the TypeScript worker records this counter. The other workers do not count a failed round yet.
 
 Each lifecycle event reaches exactly one instrument. `workhorse.handler.executions` counts a handler
 activation, and `workhorse.handler.duration` times it. Both are dimensioned by outcome. The queue
@@ -777,6 +800,29 @@ not on an emission path.
   `workhorse.queue.rate_limit.throttled_ready`, and
   `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
 
+#### Oldest-ready age
+
+Two gauges report the age of the oldest ready task in a queue. They have different sources and
+units, and they report an empty queue differently. Use one of them for each alert. Their names and
+units do not change.
+
+| Gauge                              | Source                                                                   | Unit | Queue with no ready task                  |
+| ---------------------------------- | ------------------------------------------------------------------------ | ---- | ----------------------------------------- |
+| `workhorse.queue.oldest_ready.age` | `WorkhorseMetricsObserver`, `metrics_observer` query, every `intervalMs` | `s`  | Records 0                                 |
+| `workhorse.queue.oldest_ready_age` | `registerQueueMetrics`, `queue_metric_snapshot`, at each collection      | `ms` | Records no point, so the series has a gap |
+
+The SigNoz dashboards in `ops/signoz/dashboards/` and `docs/signoz/` chart the seconds gauge.
+
+Set a threshold from the queue-delay SLO of the application, in the unit of the gauge. For example,
+for an SLO of 60 seconds:
+
+- `workhorse.queue.oldest_ready.age > 60`
+- `workhorse.queue.oldest_ready_age > 60000`
+
+An empty queue reads 0 on the seconds gauge, so its alert clears. On the milliseconds gauge, the
+alert sees no data for that queue. Configure the backend to treat missing data as healthy for that
+alert.
+
 #### Shared aggregates
 
 `workhorse.queue.depth` and `WorkhorseMetricsObserver`'s `workhorse.tasks.count` measure the same
@@ -823,6 +869,7 @@ attributes.
 | `workhorse.tasks.failed`                                        | Also uses the bounded `workhorse.attempt.outcome`                                |
 | Claim latency                                                   | `workhorse.queue.name` and the bounded `workhorse.claim.result`                  |
 | Maintenance instruments                                         | Retain their bounded loop attribute                                              |
+| `workhorse.worker.heartbeat.round_failure`                      | Only the bounded `workhorse.heartbeat.failure_reason`                            |
 
 The `workhorse.attempt.outcome` values are those `fail_v1` returns: `ready`, `scheduled`, `failed`,
 `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, and `stale`.
