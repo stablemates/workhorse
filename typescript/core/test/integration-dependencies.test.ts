@@ -30,6 +30,26 @@ const insertDependency = (
     [dependentTaskId, prerequisiteTaskId],
   );
 
+const backendPid = async (client: PoolClient): Promise<number> =>
+  (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+
+/**
+ * Wait until PostgreSQL reports that `holder` blocks `waiter`. A pending promise alone does not
+ * show that the waiter reached the lock wait, so the test reads `pg_blocking_pids` instead.
+ */
+async function waitUntilBlocked(waiter: number, holder: number): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const blocked = await pool.query<{ blocked: boolean }>(
+        "SELECT $2::integer = ANY(pg_blocking_pids($1)) AS blocked",
+        [waiter, holder],
+      );
+      expect(blocked.rows[0]!.blocked, `backend ${waiter} waits for backend ${holder}`).toBe(true);
+    },
+    { timeout: 10_000, interval: 10 },
+  );
+}
+
 const within = <T>(work: Promise<T>) =>
   Promise.race([
     work,
@@ -763,6 +783,7 @@ describe("task dependencies", () => {
       await insertDependency(first, firstId, secondId);
 
       await second.query("BEGIN");
+      const [firstPid, secondPid] = await Promise.all([backendPid(first), backendPid(second)]);
       const oppositeInsert = insertDependency(second, secondId, firstId)
         .then(
           (result) => ({ result }),
@@ -771,7 +792,7 @@ describe("task dependencies", () => {
         .finally(() => {
           secondSettled = true;
         });
-      await sleep(50);
+      await waitUntilBlocked(secondPid, firstPid);
       expect(secondSettled).toBe(false);
 
       await first.query("COMMIT");
@@ -804,10 +825,11 @@ describe("task dependencies", () => {
       await insertDependency(merger, lowerId, upperId);
 
       await waiter.query("BEGIN");
+      const [mergerPid, waiterPid] = await Promise.all([backendPid(merger), backendPid(waiter)]);
       const waitingInsert = insertDependency(waiter, upperId, thirdId).finally(() => {
         waiterSettled = true;
       });
-      await sleep(50);
+      await waitUntilBlocked(waiterPid, mergerPid);
       expect(waiterSettled).toBe(false);
 
       await merger.query("COMMIT");

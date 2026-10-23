@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatBatchStatus } from "../src/index.js";
 import { Worker } from "../src/index.js";
 import { workerHeartbeatReservation } from "../src/worker-internal.js";
+import { type HeartbeatSchedule, recordHeartbeatTimers } from "./support/heartbeat-timers.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 // Heartbeat rounds start on a fixed schedule: each round falls due one heartbeatMs after the
@@ -15,6 +16,9 @@ interface Round {
   startedAt: number;
   endedAt?: number;
   failed?: boolean;
+  // The worker's next regular slot when the round starts. A regular round sets it to its send
+  // time plus one interval before it sends.
+  slot?: number;
 }
 
 /**
@@ -51,13 +55,14 @@ function recordRounds(
   },
   firstDelayMs = 0,
   everyDelayMs = 0,
+  slot?: () => number | undefined,
 ): Round[] {
   const rounds: Round[] = [];
   const original = target.heartbeatMany.bind(target) as (
     ...args: unknown[]
   ) => Promise<Map<string, HeartbeatBatchStatus>>;
   vi.spyOn(target, "heartbeatMany").mockImplementation(async (...args: never[]) => {
-    const round: Round = { startedAt: performance.now() };
+    const round: Round = { startedAt: performance.now(), slot: slot?.() };
     rounds.push(round);
     try {
       if (rounds.length === 1 && firstDelayMs > 0) await sleep(firstDelayMs);
@@ -170,9 +175,17 @@ describe("heartbeat schedule", () => {
   });
 
   it("sends one round at a time and starts one overdue round without replaying missed slots", async () => {
-    // Shared rounds have no deadline, so a round on a locked row lasts until the lock ends.
+    // Shared rounds have no deadline, so a round on a locked row lasts until the lock ends. The
+    // checks read the slots that the worker stores and the timers that it arms. They do not
+    // measure gaps, so a slow host cannot fail them (SM-1670). Each wait for a round allows 15 s,
+    // because a COMMIT on a host with a slow disk can take some seconds.
     const heartbeatMs = 200;
-    const rounds = recordRounds(queue as unknown as Parameters<typeof recordRounds>[0]);
+    const rounds = recordRounds(
+      queue as unknown as Parameters<typeof recordRounds>[0],
+      0,
+      0,
+      () => (worker as unknown as HeartbeatSchedule).nextHeartbeatAt,
+    );
     let release!: () => void;
     const released = new Promise<void>((resolve) => {
       release = resolve;
@@ -192,27 +205,36 @@ describe("heartbeat schedule", () => {
       await released;
       return null;
     });
+    const schedule = worker as unknown as HeartbeatSchedule;
+    const timers = recordHeartbeatTimers(worker);
     const controller = new AbortController();
     const run = worker.run(controller.signal);
     try {
       const first = await queue.enqueue("flight", {}, { queue: "heartbeat-schedule-flight" });
-      await vi.waitFor(() => expect(started).toEqual([first]), { timeout: 5_000, interval: 10 });
+      await vi.waitFor(() => expect(started).toEqual([first]), { timeout: 15_000, interval: 10 });
       const commit = await blockHeartbeats();
       try {
-        await vi.waitFor(() => expect(rounds.length).toBe(1), { timeout: 5_000, interval: 5 });
+        await vi.waitFor(() => expect(rounds.length).toBe(1), { timeout: 15_000, interval: 5 });
         // A lease that registers during the round must not start a second round.
         const second = await queue.enqueue("flight", {}, { queue: "heartbeat-schedule-flight" });
         await vi.waitFor(() => expect(started).toEqual([first, second]), {
-          timeout: 5_000,
+          timeout: 15_000,
           interval: 10,
         });
-        await sleep(3.5 * heartbeatMs);
+        // Hold the round until it has missed three slots. While it is in flight, the worker arms
+        // no timer, so no second round can start.
+        await vi.waitFor(
+          () => expect(performance.now()).toBeGreaterThan(rounds[0]!.slot! + 2 * heartbeatMs),
+          { timeout: 15_000, interval: 10 },
+        );
+        expect(schedule.heartbeatInFlight).toBe(true);
+        expect(schedule.heartbeatTimer).toBeUndefined();
         expect(rounds.length).toBe(1);
       } finally {
         await commit();
       }
       await vi.waitFor(() => expect(rounds[2]?.endedAt).toBeDefined(), {
-        timeout: 5_000,
+        timeout: 15_000,
         interval: 10,
       });
       // No round started before the round before it ended.
@@ -220,17 +242,28 @@ describe("heartbeat schedule", () => {
         expect(rounds[index - 1]!.endedAt).toBeDefined();
         expect(rounds[index]!.startedAt).toBeGreaterThanOrEqual(rounds[index - 1]!.endedAt!);
       }
-      // The first round missed three slots. One overdue round starts when it ends, and the next
-      // round falls due one interval after that start.
-      expect(rounds[1]!.startedAt - rounds[0]!.endedAt!).toBeLessThan(heartbeatMs / 2);
-      expect(rounds[2]!.startedAt - rounds[1]!.startedAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
+      // When the first round ends, the worker arms one timer for the slot that the round missed.
+      // That slot is already past, so the timer has no delay and the overdue round starts at once.
+      const afterFirst = timers.find((timer) => timer.at >= rounds[0]!.endedAt!);
+      expect(afterFirst).toMatchObject({ dueAt: rounds[0]!.slot, delayMs: 0, retry: false });
+      // The overdue round counts the next slot from its own send, which follows the end of the
+      // first round. A schedule that replays the missed slots would keep a slot before that end.
+      const overdueSentAt = rounds[1]!.slot! - heartbeatMs;
+      expect(overdueSentAt).toBeGreaterThanOrEqual(rounds[0]!.endedAt!);
+      const afterOverdue = timers.find((timer) => timer.at >= rounds[1]!.endedAt!);
+      expect(afterOverdue).toMatchObject({ dueAt: rounds[1]!.slot, retry: false });
+      expect(rounds[2]!.startedAt - overdueSentAt).toBeGreaterThanOrEqual(0.9 * heartbeatMs);
     } finally {
       release();
       controller.abort();
-      await run;
-      vi.restoreAllMocks();
+      try {
+        await run;
+      } finally {
+        // Also removes the timer recording, which replaces the global clearTimeout.
+        vi.restoreAllMocks();
+      }
     }
-  });
+  }, 60_000);
 
   it("keeps the slot of a lease that registers while the round of an earlier lease is in flight", async () => {
     // The first task finishes during a slow round, so no lease remains. The second task registers

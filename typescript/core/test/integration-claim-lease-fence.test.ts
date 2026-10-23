@@ -2543,25 +2543,42 @@ describe("claim lease fence", () => {
     await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
   it("renews leases on a reserved connection while handlers hold every other pooled one", async () => {
-    // Several heartbeats fit in one lease, so a loaded runner that delays one heartbeat does not
-    // lose the lease. The handler still holds the pool for two leases.
-    const leaseMs = 2_000;
+    // A round has a bound of three quarters of the interval, so an interval of 2 s gives 1.5 s. A
+    // COMMIT that waits for a slow disk can pass a short bound. The worker then counts the round as
+    // failed, but PostgreSQL can still renew the lease. Later rounds report the row busy until that
+    // COMMIT ends, and a busy answer does not move the watchdog. Under load, an interval of 500 ms
+    // let the watchdog end the attempt (SM-1698). The test waits up to 12 s for each of two
+    // renewals. Both waits fit in the lease of 30 s.
+    const leaseMs = 30_000;
+    const renewalWait = { timeout: 12_000, interval: 20 };
     const small = new Pool({ connectionString: databaseUrl, max: 3 });
     try {
       const smallQueue = new Queue(small, `reserved-heartbeat-${randomUUID()}`);
       const id = await smallQueue.enqueue("reserved-heartbeat", null, { maxAttempts: 1 });
       let abortedBy: unknown;
+      const renewals: number[] = [];
       const worker = new Worker(smallQueue, {
         workerId: "reserved-heartbeat-worker",
         registryIntervalMs: 0,
         leaseMs,
-        heartbeatMs: 250,
+        heartbeatMs: 2_000,
       }).handle("reserved-heartbeat", async (_payload, context) => {
         // Take every connection the pool can still lend, as busy handlers would.
         const held: PoolClient[] = [];
         while (small.totalCount < 3 || small.idleCount > 0) held.push(await small.connect());
         try {
-          await sleep(leaseMs * 2);
+          // Two renewals while the pool lends nothing prove that the reserved connection renews.
+          let previous = await expiresAt(id);
+          for (let renewal = 0; renewal < 2; renewal += 1) {
+            await vi.waitFor(async () => {
+              const current = await expiresAt(id);
+              expect(current, `renewal ${renewal + 1} of the held-pool lease`).toBeGreaterThan(
+                previous,
+              );
+              previous = current;
+            }, renewalWait);
+            renewals.push(previous);
+          }
         } finally {
           for (const client of held) client.release();
         }
@@ -2571,13 +2588,23 @@ describe("claim lease fence", () => {
 
       await expect(worker.runOnce()).resolves.toBe(true);
 
+      expect(renewals).toHaveLength(2);
       expect(abortedBy).toBeUndefined();
       await expect(admin.getTask(id)).resolves.toMatchObject({ state: "succeeded" });
     } finally {
       await small.end();
     }
-  });
+  }, 60_000);
 });
+
+/** The lease end of one full-tier task, read from a connection outside the worker's pool. */
+async function expiresAt(taskId: string): Promise<number> {
+  const result = await pool.query<{ expires_at: Date }>(
+    "SELECT expires_at FROM workhorse.task_runtime WHERE task_id = $1",
+    [taskId],
+  );
+  return result.rows[0]!.expires_at.getTime();
+}
 
 /** Ready rows of one queue that another session cannot lock, counted from a third connection. */
 async function lockedReadyRows(queueName: string): Promise<number> {
