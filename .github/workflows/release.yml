@@ -393,6 +393,129 @@ jobs:
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
         run: pnpm exec tsx scripts/upload-maven-central.ts "$RUNNER_TEMP/workhorse-jvm.zip" "workhorse-jvm-$GITHUB_REF_NAME"
 
+  # The four .NET packages of ADR 0107 publish to nuget.org from the train tag. Like the crate, the
+  # gem, and the JVM artifacts, they join only when `dotnet/Directory.Build.props` carries the tag's
+  # version, and they follow npm so that a stopped train never reaches nuget.org.
+  #
+  # THIS JOB IS OFF. The `false &&` in its condition keeps it from starting, so no run enters the
+  # `nuget` environment, asks for an OIDC token, or pushes a package. The job stays off until the
+  # maintainer finishes SM-1441: the nuget.org organization, the trusted publishing policy for this
+  # workflow file and the `nuget` environment, the protected `nuget` environment with a required
+  # reviewer, and its `NUGET_USER` secret. To turn the job on, the maintainer removes `false &&` and
+  # adds `nuget` to the `needs` of `github-release`, in one pull request. Until then `github-release`
+  # does not wait for this job, because a skipped job that it needs would skip the release too.
+  #
+  # Publication carries no stored key. `NuGet/login` exchanges this job's OIDC identity for an API
+  # key that nuget.org mints for one hour, only for the trusted publishing policy of SM-1441. Only
+  # the push step receives that key. nuget.org never deletes a published version, so the reviewer
+  # of the `nuget` environment is the human check before the versions become permanent. nuget.org
+  # signs each package with its repository signature, so the job adds no author signature.
+  #
+  # The job pushes the bytes that its own consumer ran. The check packs the four packages into
+  # one directory, runs package validation against the previous published version, and runs the
+  # release consumer from that directory. The push step then sends the same files.
+  nuget:
+    if: false && startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+    needs: publish
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    # The consumer runs one task in a scratch database. Under CI the check refuses to skip it.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_test_packed
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare the .NET version with the tag
+        id: version
+        env:
+          # Only whether the secret exists. The value stays out of this step.
+          HAS_USER: ${{ secrets.NUGET_USER != '' }}
+        run: |
+          set -euo pipefail
+          dotnet="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' dotnet/Directory.Build.props)"
+          if [ "v$dotnet" != "$GITHUB_REF_NAME" ]; then
+            message="dotnet/Directory.Build.props is at $dotnet, so $GITHUB_REF_NAME does not publish the .NET packages to nuget.org"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_USER" != "true" ]; then
+            message="The nuget environment lacks the NUGET_USER secret, so $GITHUB_REF_NAME does not publish the .NET packages (SM-1441)"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.version.outputs.publish == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No pnpm store cache and no NuGet package cache, for the same reason as the publish job:
+      # this job can mint a nuget.org key, so the lockfiles and the pinned versions alone decide
+      # what runs beside it.
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The SDK goes into its own directory, so the muxer finds no other SDK of the runner image.
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: 10.0.402 # Pinned to the dotnet version in mise.toml.
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+      # The check refuses a version that differs from the tag. This step gets no secret.
+      - name: Pack, validate, and run the release consumer
+        if: steps.version.outputs.publish == 'true'
+        env:
+          DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
+        run: pnpm dotnet:package-check --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/nuget"
+      # The build servers of the check would otherwise run on beside the step that gets the key.
+      - name: Stop the .NET build servers
+        if: always() && steps.version.outputs.publish == 'true'
+        run: dotnet build-server shutdown
+      - name: Exchange the OIDC identity for a nuget.org key
+        if: steps.version.outputs.publish == 'true'
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      # `Workhorse` goes first, because each other package depends on it. `--skip-duplicate` lets a
+      # run that stopped partway through push the rest of the packages again. Each push also sends
+      # the `.snupkg` beside its `.nupkg`.
+      - name: Publish the .NET packages
+        if: steps.version.outputs.publish == 'true'
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for id in Workhorse Workhorse.Hosting Workhorse.EntityFrameworkCore Workhorse.AspNetCore; do
+            dotnet nuget push "$RUNNER_TEMP/nuget/$id.$version.nupkg" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
+
   # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
   # no way to create a development database from a published artifact. Attaching the clean-install
   # SQL to the release gives them one. It is a development path: `psql -f` applies none of the CLI's

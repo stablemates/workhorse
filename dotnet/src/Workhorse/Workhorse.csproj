@@ -3,6 +3,7 @@
   <PropertyGroup>
     <PackageId>Workhorse</PackageId>
     <RootNamespace>Workhorse</RootNamespace>
+    <Description>The Workhorse client and worker for .NET: a durable task queue on PostgreSQL.</Description>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Npgsql" />

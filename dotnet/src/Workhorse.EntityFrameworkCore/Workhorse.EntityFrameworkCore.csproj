@@ -3,6 +3,7 @@
   <PropertyGroup>
     <PackageId>Workhorse.EntityFrameworkCore</PackageId>
     <RootNamespace>Workhorse.EntityFrameworkCore</RootNamespace>
+    <Description>Gives Workhorse the Npgsql connection and the transaction of an EF Core DbContext.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Workhorse/Workhorse.csproj" />

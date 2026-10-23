@@ -730,6 +730,10 @@ jobs:
       # one scratch database that the tests make from DATABASE_URL_TEST.
       - if: matrix.runtime == 'sdk'
         run: pnpm dotnet:test
+      # The .NET release dry run of ADR 0107 on the first lane: it packs the four packages, checks
+      # them, and runs the release consumer from a local feed. It publishes nothing.
+      - if: matrix.runtime == 'sdk' && matrix.postgres == fromJSON(needs.plan.outputs.dotnet).include[0].postgres
+        run: pnpm dotnet:package-check
       - if: matrix.runtime != 'sdk'
         env:
           DOTNET_ROLL_FORWARD_TO_PRERELEASE: ${{ matrix.runtime == 'preview' && '1' || '0' }}

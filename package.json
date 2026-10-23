@@ -204,6 +204,8 @@
     "jvm:format:check": "tsx scripts/with-env.ts gradle -p jvm spotlessCheck",
     "jvm:vuln": "tsx scripts/with-env.ts tsx scripts/audit-jvm-dependencies.ts",
     "dotnet:vuln": "tsx scripts/with-env.ts tsx scripts/audit-dotnet-dependencies.ts",
+    "dotnet:package-check": "tsx scripts/with-env.ts tsx scripts/check-dotnet-release.ts",
+    "dotnet:release-check": "pnpm dotnet:lint && pnpm dotnet-api:check && pnpm dotnet:vuln && pnpm dotnet:package-check",
     "jvm:verification-metadata": "tsx scripts/with-env.ts tsx scripts/jvm-verification-metadata.ts",
     "jvm:verification-metadata:check": "tsx scripts/with-env.ts tsx scripts/jvm-verification-metadata.ts --check",
     "jvm:package-check": "tsx scripts/with-env.ts tsx scripts/check-jvm-release.ts",

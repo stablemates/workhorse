@@ -3,6 +3,7 @@
   <PropertyGroup>
     <PackageId>Workhorse.Hosting</PackageId>
     <RootNamespace>Workhorse.Hosting</RootNamespace>
+    <Description>Dependency injection, options, the hosted worker, and health checks for Workhorse on the .NET Generic Host.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Workhorse/Workhorse.csproj" />

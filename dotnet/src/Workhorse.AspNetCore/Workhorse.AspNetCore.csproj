@@ -3,6 +3,7 @@
   <PropertyGroup>
     <PackageId>Workhorse.AspNetCore</PackageId>
     <RootNamespace>Workhorse.AspNetCore</RootNamespace>
+    <Description>The embedded Workhorse dashboard backend for ASP.NET Core.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Workhorse/Workhorse.csproj" />
