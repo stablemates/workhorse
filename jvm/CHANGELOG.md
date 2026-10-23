@@ -41,6 +41,11 @@ adds.
 
 ### Fixes
 
+- **A lost notification subscription restarts the poll backoff.** Before this change, the empty
+  claims of a live period counted toward the 250 ms backoff without a live subscription. After a
+  loss, a worker that was idle for some time waited the 5,000 ms ceiling at once. Now the backoff
+  restarts at 250 ms when the subscription is lost (SM-1648). The `subscription-recovery` case in
+  `protocol/v1/runtime.json` checks this rule in every SDK.
 - **A refused completion settles a due deadline or attempt timeout.** A handler can return just
   before its deadline or attempt timeout, and the completion write can then arrive after that
   boundary. PostgreSQL refuses the completion. Before this change, the worker only tried to

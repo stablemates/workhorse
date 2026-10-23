@@ -289,6 +289,9 @@ public final class Listener {
         holding.set(true);
         try {
           backoff = listen(connection, stop, backoff);
+          // A stopped pass no longer listens. A subscriber that arrived during the stop reads the
+          // cleared flag after this wake.
+          wakeAll();
         } finally {
           holding.set(false);
         }

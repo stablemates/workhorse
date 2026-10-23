@@ -128,7 +128,7 @@ public sealed partial class Worker
                         run.EmptyWait = null;
                     }
 
-                    await _wake.WaitAsync(LoopWait(DispatchWait(empty, listener), continuous, run)).ConfigureAwait(false);
+                    await _wake.WaitAsync(LoopWait(DispatchWait(run), continuous, run)).ConfigureAwait(false);
                     continue;
                 }
 
@@ -184,7 +184,7 @@ public sealed partial class Worker
                     }
                 }
 
-                await _wake.WaitAsync(LoopWait(DispatchWait(empty, listener), continuous, run)).ConfigureAwait(false);
+                await _wake.WaitAsync(LoopWait(DispatchWait(run), continuous, run)).ConfigureAwait(false);
             }
         }
         finally
@@ -378,7 +378,7 @@ public sealed partial class Worker
             // The data source runs above read committed. The worker logs it and claims again later.
             WorkerLog.ClaimIsolation(_logger, isolation.IsolationLevel);
             run.Empty++;
-            run.EmptyWait = new EmptyWait(Monotonic.Now() + DispatchWait(run.Empty, run.Listener), null);
+            run.EmptyWait = new EmptyWait(Monotonic.Now() + DispatchWait(run), null);
             return;
         }
 
@@ -400,7 +400,7 @@ public sealed partial class Worker
         // does instead of spinning on a task that no handler here runs.
         run.Empty++;
         run.PassEnded = true;
-        var deadline = Monotonic.Now() + DispatchWait(run.Empty, run.Listener);
+        var deadline = Monotonic.Now() + DispatchWait(run);
         if (claimed.Count == 0)
         {
             run.EmptyWait ??= new EmptyWait(deadline, wakeVersion);
@@ -558,19 +558,30 @@ public sealed partial class Worker
 
     /// <summary>
     /// The wait before the next claim. A listening worker waits for a notification; a polling worker
-    /// backs off exponentially while claims come back empty.
+    /// backs off exponentially while claims come back empty. When the subscription is lost, the
+    /// backoff restarts: the empty claims of the live period do not count.
     /// </summary>
-    private long DispatchWait(int empty, Listener.Subscription? listener)
+    private long DispatchWait(RunState run)
     {
         long milliseconds;
-        if (listener is { IsListening: true })
+        lock (_stateLock)
         {
-            milliseconds = _notificationPollMs;
-        }
-        else
-        {
-            var doublings = Math.Min(Math.Max(0, empty - 1), 20);
-            milliseconds = Math.Min(MaxEmptyPollMs, _pollMs << doublings);
+            var listening = run.Listener is { IsListening: true };
+            if (!listening && run.ListenedAtLastWait)
+            {
+                run.Empty = Math.Min(run.Empty, 1);
+            }
+
+            run.ListenedAtLastWait = listening;
+            if (listening)
+            {
+                milliseconds = _notificationPollMs;
+            }
+            else
+            {
+                var doublings = Math.Min(Math.Max(0, run.Empty - 1), 20);
+                milliseconds = Math.Min(MaxEmptyPollMs, _pollMs << doublings);
+            }
         }
 
         milliseconds = Math.Max(1, (long)Math.Round(milliseconds * (0.9 + (0.2 * Random.Shared.NextDouble()))));

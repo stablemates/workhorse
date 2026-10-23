@@ -87,6 +87,9 @@ internal sealed class Intercept : IAsyncDisposable
         /// <summary>The SQL text of the statement.</summary>
         internal string Sql { get; } = command.CommandText;
 
+        /// <summary>The backend process id of the connection that runs the statement.</summary>
+        internal int ProcessId => _command.Connection?.ProcessID ?? 0;
+
         /// <summary>The rows that the statement returned. Valid in <see cref="Hook.After"/>.</summary>
         internal long Rows { get; private set; }
 

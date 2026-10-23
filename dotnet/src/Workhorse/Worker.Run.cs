@@ -71,6 +71,9 @@ public sealed partial class Worker
         // The dispatch progress of the run. It changes under the state lock.
         internal Listener.Subscription? Listener;
         internal int Empty;
+
+        /// <summary>Whether the subscription was live when the run chose its last wait.</summary>
+        internal bool ListenedAtLastWait;
         internal EmptyWait? EmptyWait;
         internal bool PassEnded;
         internal bool ClaimedAny;

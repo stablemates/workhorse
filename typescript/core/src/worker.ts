@@ -489,8 +489,9 @@ export interface WorkerOptions {
    */
   sharedHeartbeats?: boolean;
   /**
-   * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
-   * 250 milliseconds without it. `runOnce()` does not wait: it claims on each call.
+   * Idle fallback polling delay. By default, `run()` waits five seconds while its notification
+   * subscription is live. Without a live subscription, it starts at 250 milliseconds and backs off
+   * after each empty claim. `runOnce()` does not wait: it claims on each call.
    */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
@@ -644,7 +645,8 @@ export class Worker {
   // is called.
   private abortRun: (() => void) | undefined;
   private readonly pollMs: number;
-  private readonly dispatchPollMs: number;
+  // The caller's poll interval. Without one, the base follows the subscription at each wait.
+  private readonly explicitPollMs: number | undefined;
   private readonly supportsNotifications: boolean;
   private readonly maintenanceIntervalMs: number;
   private readonly maintenanceRoutinePollMs: number;
@@ -967,6 +969,8 @@ export class Worker {
   private dispatchWakeController = new AbortController();
   private dispatchWakeVersion = 0;
   private consecutiveEmptyClaims = 0;
+  // Whether the subscription was live when the worker chose its last wait.
+  private listenedAtLastWait = false;
   private notificationClaimDelayPending = false;
   private notificationSubscriptions: TaskNotificationSubscription[] = [];
 
@@ -1007,9 +1011,7 @@ export class Worker {
     this.heartbeatRoundMs = heartbeatRoundBoundMs(this.heartbeatMs);
     this.startupBudgetMs = heartbeatStartupBudgetMs(this.heartbeatMs);
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    this.dispatchPollMs =
-      options.pollMs ??
-      (this.supportsNotifications ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
+    this.explicitPollMs = options.pollMs;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
     this.maintenanceRoutinePollMs = options.maintenanceRoutinePollMs ?? 60_000;
     this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
@@ -2637,10 +2639,19 @@ export class Worker {
     const listening = this.notificationSubscriptions.some(
       (subscription) => subscription.isListening?.() === true,
     );
+    // A configured listener that is not live yet, or that reconnects, wakes nobody. So the worker
+    // polls at the polling-only base until a LISTEN succeeds. When the subscription is lost, the
+    // backoff restarts: the empty claims of the live period do not count.
+    if (!listening && this.listenedAtLastWait) {
+      this.consecutiveEmptyClaims = Math.min(this.consecutiveEmptyClaims, 1);
+    }
+    this.listenedAtLastWait = listening;
+    const baseMs =
+      this.explicitPollMs ?? (listening ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
     const exponent = listening ? 0 : Math.max(0, this.consecutiveEmptyClaims - 1);
     const durationMs = Math.min(
       MAX_EMPTY_POLL_MS,
-      Math.max(1, this.dispatchPollMs) * 2 ** Math.min(exponent, 30),
+      Math.max(1, baseMs) * 2 ** Math.min(exponent, 30),
     );
     return jitterDuration(durationMs);
   }

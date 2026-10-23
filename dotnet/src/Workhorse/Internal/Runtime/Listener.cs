@@ -142,6 +142,9 @@ internal sealed class Listener
             }
 
             NpgsqlConnection? connection = null;
+            // The pass wakes every worker once at its end, after it clears its published state. A
+            // worker that wakes earlier can still read a live subscription.
+            var wake = false;
             try
             {
                 connection = DataSources.OpenAsync(_dataSource, stop).GetAwaiter().GetResult();
@@ -167,7 +170,7 @@ internal sealed class Listener
                 if (Current(generation))
                 {
                     Report(error);
-                    WakeAll();
+                    wake = true;
                 }
             }
             finally
@@ -179,10 +182,18 @@ internal sealed class Listener
                 {
                     if (generation == _generation)
                     {
+                        // A current pass that loses its live subscription wakes the workers, so a
+                        // worker in a listening wait claims at once.
+                        wake |= _listening && _subscribers.Count > 0;
                         _listening = false;
                         _holding = false;
                     }
                 }
+            }
+
+            if (wake)
+            {
+                WakeAll();
             }
 
             if (!Current(generation))

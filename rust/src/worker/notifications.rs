@@ -26,7 +26,8 @@ impl Drop for Driver {
 }
 
 /// Listens until `stop` fires, and gives each notification payload to `deliver`. After each
-/// successful `LISTEN`, it calls `deliver(None)`, so every subscriber claims once.
+/// successful `LISTEN`, and after the loss of a connection that listened, it calls
+/// `deliver(None)`, so every subscriber claims once.
 ///
 /// A pool cannot hand out a connection's notification stream, so the listener opens its own
 /// connection from `config`. It reconnects with a doubling delay after a failure. `stop` also ends
@@ -90,7 +91,13 @@ pub(super) async fn listen(
                         }
                     }
                 };
-                listening.store(false, Ordering::SeqCst);
+                let lost = listening.swap(false, Ordering::SeqCst);
+                // A lost subscription wakes every subscriber once, after the flag is clear. So a
+                // worker ends the wait that it chose while the subscription was live, and it polls
+                // at the polling-only base again.
+                if lost && !stop.is_cancelled() {
+                    deliver(None);
+                }
                 if stop.is_cancelled() {
                     if let Ok(Err(error)) =
                         tokio::time::timeout(CLEANUP_TIMEOUT, client.batch_execute(UNLISTEN)).await

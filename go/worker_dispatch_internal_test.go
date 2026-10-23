@@ -61,6 +61,9 @@ type dispatchHarness struct {
 	settled chan bool
 	// withoutHeartbeat closes the claim gate, as a pool without its heartbeat connection does.
 	withoutHeartbeat atomic.Bool
+	// notListening reports that the subscription is not live. The loop then polls at the
+	// polling-only base.
+	notListening atomic.Bool
 	// gate, when set, answers each read of the claim gate in place of withoutHeartbeat.
 	gate      atomic.Pointer[func() bool]
 	heartbeat chan struct{}
@@ -129,7 +132,7 @@ func startDispatchWith(t *testing.T, worker *Worker, tier dispatchTier) *dispatc
 			executionResults: harness.results,
 			notificationWake: harness.notification,
 			registryWake:     harness.registry,
-			listening:        func() bool { return true },
+			listening:        func() bool { return !harness.notListening.Load() },
 			claimable: func() bool {
 				if gate := harness.gate.Load(); gate != nil {
 					return (*gate)()
@@ -297,6 +300,38 @@ func TestDispatchWaitsThePollIntervalAfterAnEmptyClaim(t *testing.T) {
 	call = harness.expectClaim(2)
 	if waited := time.Since(wokenAt); waited >= pollInterval*9/10 {
 		t.Fatalf("a notification claimed after %s, want before the poll interval", waited)
+	}
+	if err := harness.stop([]fakeClaimCall{call}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// SM-1648: when the subscription is lost, the empty claims of the live period do not count. So the
+// backoff starts again at the polling-only base, and not at its ceiling.
+func TestDispatchRestartsTheBackoffWhenTheSubscriptionIsLost(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 1}, false)
+	// With a live subscription, each empty claim adds to the count. A notification ends each wait.
+	for range 6 {
+		harness.expectClaim(1).respond <- fakeClaimResponse{}
+		// The loop chooses the wait of the empty claim when it settles the claim.
+		<-harness.settled
+		harness.notification <- struct{}{}
+	}
+
+	// The subscription is lost before the next empty claim chooses its wait.
+	harness.notListening.Store(true)
+	harness.expectClaim(1).respond <- fakeClaimResponse{}
+	emptyAt := time.Now()
+	call := harness.expectClaim(1)
+	if waited := time.Since(emptyAt); waited > 2*defaultWorkerPollInterval {
+		t.Fatalf("claimed again after %s, want about the %s polling-only base", waited, defaultWorkerPollInterval)
+	}
+	// The next empty claim continues the backoff from the restart.
+	call.respond <- fakeClaimResponse{}
+	emptyAt = time.Now()
+	call = harness.expectClaim(1)
+	if waited := time.Since(emptyAt); waited < defaultWorkerPollInterval*2*9/10 || waited > 4*defaultWorkerPollInterval {
+		t.Fatalf("claimed again after %s, want about twice the %s polling-only base", waited, defaultWorkerPollInterval)
 	}
 	if err := harness.stop([]fakeClaimCall{call}, nil); err != nil {
 		t.Fatal(err)

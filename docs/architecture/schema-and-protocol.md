@@ -239,12 +239,27 @@ fixtures.
 | Batch        | Priority order, positional outcomes, retries, terminal failures, and independent attempt state.                                                                                                      |
 | Suspension   | Durable-timer suspension, immediate worker-slot release, replay within one logical attempt, and reuse of completed checkpoints.                                                                      |
 | Ownership    | Cooperative cancellation, database-authoritative deadline and execution-timeout settlement, lease-loss fencing, non-overlapping worker heartbeat batches, and graceful drain without further claims. |
-| Poll cadence | The empty-claim backoff step.                                                                                                                                                                        |
+| Poll cadence | The empty-claim backoff step, and the polling-only base while a configured subscription is not live.                                                                                                 |
 
 In the poll-cadence fixture, `emptyPollsBeforeEnqueue` names the step under test. Each language
 holds its worker at the end of every empty claim. Thus the enqueue occurs on that step, not on the
 step that the runner reached. `enqueueStallMs` then delays the enqueue past one full step. Thus an
 executor that only counts empty polls fails on every run instead of once under load.
+
+In the subscription-recovery fixture, the worker can listen and uses its default poll interval. The
+runner holds the `LISTEN workhorse_tasks` statement of its listener, so the subscription is not
+live. After the first empty claim, the runner enqueues a task. The claim that finds it must start
+within `expectedMaximumClaimDelayMs` after the empty claim before it. Then the runner releases the
+`LISTEN` and enqueues a second task. It records claims for `observeAfterRecoveryMs` after that
+task. At most `expectedMaximumEmptyClaimsAfterRecovery` empty claims can follow the claim that finds
+it: one claim can refill the slot, and one can follow a late notification. A worker at the
+polling-only base makes more empty claims in that time.
+
+In the third phase, the runner waits for the next empty claim, which starts a new 5,000 ms wait.
+Then it ends the session of the live listener and holds the next `LISTEN`, so the subscription is
+lost. The first claim after the loss must start within `expectedMaximumClaimDelayAfterLossMs`.
+After that claim, the runner enqueues a third task. The claim that finds it must also start within
+`expectedMaximumClaimDelayAfterLossMs` after the enqueue.
 
 ### Durable replay conflicts
 
@@ -1599,7 +1614,7 @@ other. Thus they cannot multiply the concurrency budget or race the queue cursor
 | `WorkerOptions.WorkerID`                   | Host name, process ID, and a random suffix                                                        |                                                                    |
 | `WorkerOptions.Concurrency`                | 1                                                                                                 | Integers from 1 through 100                                        |
 | `WorkerOptions.LeaseDuration`              | 30,000 milliseconds                                                                               | Whole-millisecond values from 100 through 86,400,000               |
-| `WorkerOptions.PollInterval`               | 5,000 milliseconds, or 250 milliseconds with `PollingOnly`                                        |                                                                    |
+| `WorkerOptions.PollInterval`               | 5,000 milliseconds while the listener is live, else 250 milliseconds, doubling toward 5 seconds   |                                                                    |
 | `WorkerOptions.HeartbeatInterval`          | The larger of 100 milliseconds and one third of `LeaseDuration`, truncated to a whole millisecond | Positive values shorter than the lease                             |
 | `WorkerOptions.MaintenanceInterval`        | 1,000 milliseconds                                                                                | Positive whole-millisecond values                                  |
 | `WorkerOptions.MaintenanceRoutineInterval` | 60,000 milliseconds                                                                               | Positive whole-millisecond values                                  |
@@ -2443,7 +2458,7 @@ crate. Then it tests the default consumer.
 | `concurrency`                  | 1                                                                                           | 1 through 100                                                           |
 | `lease_duration`               | 30 seconds                                                                                  | Whole milliseconds from 100 milliseconds through 24 hours               |
 | `heartbeat_interval`           | The larger of 100 milliseconds and one third of the lease, truncated to a whole millisecond | Positive values shorter than the lease                                  |
-| `poll_interval`                | 5 seconds when the worker expects a listener, else 250 milliseconds                         |                                                                         |
+| `poll_interval`                | 5 seconds while the listener is connected, else 250 milliseconds, doubling toward 5 seconds |                                                                         |
 | `maintenance_interval`         | 1 second                                                                                    | Positive whole milliseconds                                             |
 | `maintenance_routine_interval` | 60 seconds                                                                                  | Positive whole milliseconds                                             |
 | `registry_interval`            | 5 seconds                                                                                   | Whole milliseconds of at least 100                                      |

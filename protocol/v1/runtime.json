@@ -196,6 +196,16 @@
     "expectedMaximumDelayMs": 300
   },
   {
+    "id": "a-worker-without-a-live-subscription-polls-at-the-polling-only-base",
+    "kind": "subscription-recovery",
+    "covers": ["subscription-poll-base"],
+    "taskType": "protocol.subscription-recovery",
+    "expectedMaximumClaimDelayMs": 2500,
+    "observeAfterRecoveryMs": 2500,
+    "expectedMaximumEmptyClaimsAfterRecovery": 2,
+    "expectedMaximumClaimDelayAfterLossMs": 2000
+  },
+  {
     "id": "stop-drains-active-slots-without-new-claims",
     "kind": "graceful-drain",
     "covers": ["graceful-drain"],

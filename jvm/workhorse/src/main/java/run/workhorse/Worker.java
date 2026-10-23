@@ -679,6 +679,8 @@ public final class Worker implements AutoCloseable {
     // fast-tier completions read and change it too.
     Listener.@Nullable Subscription listener;
     int empty;
+    // Whether the subscription was live when the run chose its last wait.
+    boolean listenedAtLastWait;
     @Nullable EmptyWait emptyWait;
     boolean passEnded;
     boolean claimedAny;
@@ -1161,7 +1163,7 @@ public final class Worker implements AutoCloseable {
           } finally {
             stateLock.unlock();
           }
-          wake.await(dispatchWait(empty, listener));
+          wake.await(dispatchWait(run));
           continue;
         }
         if (emptyWait != null) {
@@ -1204,7 +1206,7 @@ public final class Worker implements AutoCloseable {
             startClaim(plan, wakeVersion, empty > 0, run);
           }
         }
-        wake.await(dispatchWait(empty, listener));
+        wake.await(dispatchWait(run));
       }
     } finally {
       run.deadline = shutdownDeadline(run);
@@ -1602,8 +1604,7 @@ public final class Worker implements AutoCloseable {
           "Claims need read committed isolation; configure the pool at read committed",
           Map.of("workhorse.isolation_level", isolation.isolationLevel()));
       run.empty++;
-      run.emptyWait =
-          new EmptyWait(System.nanoTime() + dispatchWait(run.empty, run.listener), null);
+      run.emptyWait = new EmptyWait(System.nanoTime() + dispatchWait(run), null);
       return;
     }
     if (error != null) {
@@ -1626,7 +1627,7 @@ public final class Worker implements AutoCloseable {
     // does instead of spinning on a task that no handler here runs.
     run.empty++;
     run.passEnded = true;
-    long deadline = System.nanoTime() + dispatchWait(run.empty, run.listener);
+    long deadline = System.nanoTime() + dispatchWait(run);
     if (claimed.isEmpty()) {
       if (run.emptyWait == null) {
         run.emptyWait = new EmptyWait(deadline, wakeVersion);
@@ -1930,15 +1931,27 @@ public final class Worker implements AutoCloseable {
 
   /**
    * The wait before the next claim, in nanoseconds. A listening worker waits for a notification; a
-   * polling worker backs off exponentially while claims come back empty.
+   * polling worker backs off exponentially while claims come back empty. When the subscription is
+   * lost, the backoff restarts: the empty claims of the live period do not count.
    */
-  private long dispatchWait(int empty, Listener.@Nullable Subscription listener) {
+  private long dispatchWait(RunState run) {
     long milliseconds;
-    if (listener != null && listener.isListening()) {
-      milliseconds = notificationPollMs;
-    } else {
-      int doublings = Math.min(Math.max(0, empty - 1), 20);
-      milliseconds = Math.min(MAX_EMPTY_POLL_MS, pollMs << doublings);
+    stateLock.lock();
+    try {
+      Listener.Subscription listener = run.listener;
+      boolean listening = listener != null && listener.isListening();
+      if (!listening && run.listenedAtLastWait) {
+        run.empty = Math.min(run.empty, 1);
+      }
+      run.listenedAtLastWait = listening;
+      if (listening) {
+        milliseconds = notificationPollMs;
+      } else {
+        int doublings = Math.min(Math.max(0, run.empty - 1), 20);
+        milliseconds = Math.min(MAX_EMPTY_POLL_MS, pollMs << doublings);
+      }
+    } finally {
+      stateLock.unlock();
     }
     milliseconds =
         Math.max(1, Math.round(milliseconds * ThreadLocalRandom.current().nextDouble(0.9, 1.1)));
@@ -3231,9 +3244,7 @@ public final class Worker implements AutoCloseable {
         run.passEnded = true;
         if (run.emptyWait == null) {
           run.emptyWait =
-              new EmptyWait(
-                  System.nanoTime() + dispatchWait(run.empty, run.listener),
-                  reservation.wakeVersion);
+              new EmptyWait(System.nanoTime() + dispatchWait(run), reservation.wakeVersion);
         }
       }
     } finally {

@@ -311,7 +311,7 @@ public sealed partial class Worker
                 // has no other.
                 run.Empty++;
                 run.PassEnded = true;
-                run.EmptyWait ??= new EmptyWait(Monotonic.Now() + DispatchWait(run.Empty, run.Listener), reservation.WakeVersion);
+                run.EmptyWait ??= new EmptyWait(Monotonic.Now() + DispatchWait(run), reservation.WakeVersion);
             }
         }
 

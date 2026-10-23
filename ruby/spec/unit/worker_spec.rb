@@ -87,6 +87,31 @@ RSpec.describe W::Worker do
     runner&.join(5)
   end
 
+  # SM-1648: the empty claims of a live subscription do not count toward the backoff after its loss.
+  it "restarts the empty-claim backoff when the subscription is lost" do
+    subject = worker(poll_interval: 0.04)
+    listening = Concurrent::AtomicBoolean.new(true)
+    subscription = Struct.new(:flag) { def listening? = flag.true? }.new(listening)
+    # The stand-in subscription reports the live state, so the worker waits the flat base.
+    allow(subject).to receive(:dispatch).and_wrap_original do |original, continuous, version, handlers, _listener, *rest|
+      original.call(continuous, version, handlers, subscription, *rest)
+    end
+    runner = Thread.new { subject.run }
+    sleep 0.005 until claims >= 6
+    # The listener clears the flag and then wakes the worker when the subscription is lost.
+    listening.make_false
+    lost = claims
+    subject.send(:notify)
+    sleep 1
+
+    # The backoff restarts at the base: the woken claim, then waits of 40 ms and 80 ms. A backoff
+    # that counts the live empty claims waits more than two seconds after the woken claim.
+    expect(claims - lost).to be >= 3
+  ensure
+    subject.stop
+    runner&.join(5)
+  end
+
   it "polls while idle and returns from run once stopped" do
     subject = worker
     runner = Thread.new { subject.run }
@@ -105,8 +130,12 @@ RSpec.describe W::Worker do
 
   it "keeps a claim connection for each default cohort and validates an explicit count" do
     pool.capacity = 4
-    expect(worker(concurrency: 64).cohorts).to eq(2)
-    expect(worker(concurrency: 64, shared_heartbeats: true).cohorts).to eq(3)
+    # A listening worker leaves one connection to the listener and one to the heartbeat.
+    expect(worker(concurrency: 64, polling_only: false).cohorts).to eq(2)
+    expect(worker(concurrency: 64, polling_only: false, shared_heartbeats: true).cohorts).to eq(3)
+    # A polling-only worker opens no listener, so it reserves no connection for one.
+    expect(worker(concurrency: 64).cohorts).to eq(3)
+    expect(worker(concurrency: 64, shared_heartbeats: true).cohorts).to eq(4)
     [0, 9, 2.0, "2"].each do |cohorts|
       expect { worker(concurrency: 8, cohorts: cohorts) }.to raise_error(ArgumentError, /cohorts/)
     end
