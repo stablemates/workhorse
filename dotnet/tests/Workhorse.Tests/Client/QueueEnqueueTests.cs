@@ -219,6 +219,13 @@ public sealed class QueueEnqueueTests(ScratchDatabase database)
             },
         }, Token);
         Assert.Equal("blocked", (await TaskAsync(database, dependent.TaskId))!.Text("state"));
+
+        // PostgreSQL stores the prerequisite and each policy, so a wrong policy fails here.
+        var stored = await Workhorse.Tests.Testing.WorkerHarness.TaskAsync(database.DataSource, dependent.TaskId);
+        Assert.Equal(prerequisite.TaskId, stored.Uuid("prerequisite_task_id"));
+        Assert.Equal("release", stored.Text("dependency_on_success"));
+        Assert.Equal("cancel", stored.Text("dependency_on_failure"));
+        Assert.Equal("fail", stored.Text("dependency_on_cancellation"));
     }
 
     [Theory]

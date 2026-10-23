@@ -11,11 +11,13 @@ import {
   type ActiveJobParityCell,
   type ParityCell,
   type ParityDefaultRow,
+  type DotnetParityCell,
   type JvmParityCell,
   type ParityRow,
   type RubyParityCell,
   type RustParityCell,
 } from "../typescript/core/test/support/parity-capabilities.js";
+import { dotnetEvidenceProblems, readDotnetEvidenceState } from "./dotnet-parity-evidence.js";
 import { jvmEvidenceProblems, readJvmEvidenceState } from "./jvm-parity-evidence.js";
 import { repositoryRoot } from "./packages.js";
 import {
@@ -36,7 +38,9 @@ const tables = [
 
 const productColumns = ["PostgreSQL", "Dashboard", "CLI"] as const;
 
-function status(cell: ParityCell | RustParityCell | RubyParityCell | JvmParityCell): string {
+function status(
+  cell: ParityCell | RustParityCell | RubyParityCell | JvmParityCell | DotnetParityCell,
+): string {
   if ("absent" in cell) return "Absent";
   // Reference-style so the reader reaches the Issue; the definitions are generated below.
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
@@ -61,9 +65,14 @@ function jvmCell(row: ParityRow, table: "client" | "worker" | "operator"): JvmPa
   throw new Error(`JVM ${table} row "${row.capability}" needs a cell`);
 }
 
+function dotnetCell(row: ParityRow, table: "client" | "worker" | "operator"): DotnetParityCell {
+  if (row.dotnet) return row.dotnet;
+  throw new Error(`.NET ${table} row "${row.capability}" needs a cell`);
+}
+
 function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "operator"): string {
   return renderCells([
-    ["Capability", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM"],
+    ["Capability", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM", ".NET"],
     ...rows.map((row) => [
       row.capability,
       status(row.typescript),
@@ -72,13 +81,18 @@ function renderTable(rows: readonly ParityRow[], table: "client" | "worker" | "o
       status(rustCell(row, table)),
       status(row.ruby),
       status(jvmCell(row, table)),
+      status(dotnetCell(row, table)),
     ]),
   ]);
 }
 
 /** A default renders its value, or Absent when the language has no such setting. */
 function defaultValue(
-  cell: ParityDefaultRow["typescript"] | ParityDefaultRow["rust"] | ParityDefaultRow["jvm"],
+  cell:
+    | ParityDefaultRow["typescript"]
+    | ParityDefaultRow["rust"]
+    | ParityDefaultRow["jvm"]
+    | ParityDefaultRow["dotnet"],
 ): string {
   if (cell === undefined || "absent" in cell) return "Absent";
   if ("planned" in cell) return `[Planned][${cell.planned}]`;
@@ -90,9 +104,14 @@ function jvmDefault(row: ParityDefaultRow): NonNullable<ParityDefaultRow["jvm"]>
   throw new Error(`JVM default "${row.setting}" needs a cell`);
 }
 
+function dotnetDefault(row: ParityDefaultRow): NonNullable<ParityDefaultRow["dotnet"]> {
+  if (row.dotnet) return row.dotnet;
+  throw new Error(`.NET default "${row.setting}" needs a cell`);
+}
+
 function renderDefaultsTable(): string {
   return renderCells([
-    ["Setting", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM"],
+    ["Setting", "TypeScript", "Python", "Go", "Rust", "Ruby", "JVM", ".NET"],
     ...PARITY_DEFAULT_ROWS.map((row) => [
       row.setting,
       defaultValue(row.typescript),
@@ -101,6 +120,7 @@ function renderDefaultsTable(): string {
       defaultValue(row.rust ?? { planned: "SM-878" }),
       defaultValue(row.ruby),
       defaultValue(jvmDefault(row)),
+      defaultValue(dotnetDefault(row)),
     ]),
   ]);
 }
@@ -183,6 +203,15 @@ if (jvmProblems.length > 0) {
   throw new Error(`JVM parity cells lack executed evidence:\n${jvmProblems.join("\n")}`);
 }
 
+// Both modes refuse a .NET row without a cell, and a .NET Supported cell the .NET suite does not back.
+const dotnetProblems = dotnetEvidenceProblems(
+  tables.flatMap(([, rows]) => rows),
+  readDotnetEvidenceState(repositoryRoot),
+);
+if (dotnetProblems.length > 0) {
+  throw new Error(`.NET parity cells lack executed evidence:\n${dotnetProblems.join("\n")}`);
+}
+
 const current = await readFile(documentPath, "utf8");
 const generatedLanguages = tables.reduce(
   (document, [name, rows]) => replaceGeneratedTable(document, name, rows, name),
@@ -229,6 +258,7 @@ const plannedItems = [
           rustCell(row, name),
           row.ruby,
           jvmCell(row, name),
+          dotnetCell(row, name),
         ]),
       ),
       ...ACTIVE_JOB_PARITY_ROWS.flatMap((row) => [row.defaultJob, row.typedJob]),
@@ -237,6 +267,7 @@ const plannedItems = [
         row.rust ?? { planned: "SM-878" },
         row.ruby,
         jvmDefault(row),
+        dotnetDefault(row),
       ]),
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),

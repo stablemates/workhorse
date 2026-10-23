@@ -7,6 +7,7 @@ import {
   PARITY_TEST_ROOTS,
   PRODUCT_PARITY_ROWS,
   PRODUCT_PARITY_TEST_ROOTS,
+  type DotnetParityCell,
   type JvmParityCell,
   type ParityCell,
   type ParityDefaultRow,
@@ -32,6 +33,8 @@ interface DocumentedRow {
   statuses: Record<ExistingLanguage, Status>;
   /** The JVM column, the seventh cell of a row. */
   jvm?: Status;
+  /** The .NET column, the eighth cell of a row. */
+  dotnet?: Status;
 }
 
 /**
@@ -44,7 +47,7 @@ function documentedTables(markdown: string): DocumentedRow[][] {
   let current: DocumentedRow[] | null = null;
   for (const line of markdown.split("\n")) {
     if (
-      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*(\|\s*Ruby\s*(\|\s*JVM\s*)?)?)?\|$/.test(
+      /^\|\s*Capability\s*\|\s*TypeScript\s*\|\s*Python\s*\|\s*Go\s*(\|\s*Rust\s*(\|\s*Ruby\s*(\|\s*JVM\s*(\|\s*\.NET\s*)?)?)?)?\|$/.test(
         line,
       )
     ) {
@@ -62,12 +65,13 @@ function documentedTables(markdown: string): DocumentedRow[][] {
       .slice(1, -1)
       // The generator links a Planned cell to its issue, as `[Planned][SM-1261]`.
       .map((cell) => cell.trim().replace(/^\[Planned\]\[[^\]]+\]$/, "Planned"));
-    if (cells.length < 4 || cells.length > 7 || /^-+$/.test(cells[0]!)) continue;
+    if (cells.length < 4 || cells.length > 8 || /^-+$/.test(cells[0]!)) continue;
     const [capability, ...statuses] = cells as [string, ...Status[]];
     current.push({
       capability,
       statuses: { typescript: statuses[0]!, python: statuses[1]!, go: statuses[2]! },
       jvm: statuses[5],
+      dotnet: statuses[6],
     });
   }
   return tables;
@@ -80,6 +84,10 @@ function statusOf(cell: ParityCell): Status {
 }
 
 function jvmStatusOf(cell: JvmParityCell): Status {
+  return "planned" in cell ? "Planned" : "Supported";
+}
+
+function dotnetStatusOf(cell: DotnetParityCell): Status {
   return "planned" in cell ? "Planned" : "Supported";
 }
 
@@ -186,6 +194,17 @@ describe("parity matrix", () => {
     expect(documented).toBe(row.jvm === undefined ? undefined : jvmStatusOf(row.jvm));
   });
 
+  it.each(
+    PARITY_TABLES.flatMap((table, index) =>
+      table.map((row) => [row.capability, index, row] as const),
+    ),
+  )("%s / .NET has the same status in the document and the registry", (_capability, index, row) => {
+    // Executed evidence for a .NET Supported cell is checked by scripts/dotnet-parity-evidence.test.ts.
+    expect(row.dotnet).toBeDefined();
+    const documented = tables[index]?.find((entry) => entry.capability === row.capability)?.dotnet;
+    expect(documented).toBe(row.dotnet === undefined ? undefined : dotnetStatusOf(row.dotnet));
+  });
+
   it("records a reason for every Absent cell", () => {
     expect(unexplainedAbsent(registryCells.map(({ row, language }) => row[language]))).toEqual([]);
   });
@@ -256,6 +275,22 @@ describe("parity matrix", () => {
     expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
   });
 
+  it.each(
+    PARITY_DEFAULT_ROWS.flatMap((row) =>
+      row.dotnet === undefined || "planned" in row.dotnet
+        ? []
+        : [[row.setting, row.dotnet] as const],
+    ),
+  )("%s / .NET publishes the value its source still sets", async (_setting, cell) => {
+    expect(await describeDefault(cell)).toEqual({ sourced: true, published: true });
+  });
+
+  it("gives every runtime default a .NET cell", () => {
+    expect(
+      PARITY_DEFAULT_ROWS.filter((row) => row.dotnet === undefined).map((row) => row.setting),
+    ).toEqual([]);
+  });
+
   it("gives every runtime default a JVM cell", () => {
     expect(
       PARITY_DEFAULT_ROWS.filter((row) => row.jvm === undefined).map((row) => row.setting),
@@ -269,6 +304,8 @@ describe("parity matrix", () => {
       ...registryCells.map(({ row, language }) => row[language]),
       ...PARITY_TABLES.flatMap((table) => table.flatMap((row) => (row.jvm ? [row.jvm] : []))),
       ...PARITY_DEFAULT_ROWS.flatMap((row) => (row.jvm ? [row.jvm] : [])),
+      ...PARITY_TABLES.flatMap((table) => table.flatMap((row) => (row.dotnet ? [row.dotnet] : []))),
+      ...PARITY_DEFAULT_ROWS.flatMap((row) => (row.dotnet ? [row.dotnet] : [])),
       ...productCells.map(({ row, target }) => row[target]),
     ]
       .filter((cell) => "planned" in cell)

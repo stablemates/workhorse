@@ -42,6 +42,49 @@ public sealed class WorkerTests(ScratchDatabase database)
     }
 
     [Fact]
+    public async Task AReplayConflictInsideAWrapperFailsTheTaskWithoutARetry()
+    {
+        var queue = UniqueQueue("wrapped-conflict");
+        var delays = 0;
+        await using var worker = new Worker(database.DataSource, Options(queue, options => options.RetryDelay = (_, _) =>
+        {
+            Interlocked.Increment(ref delays);
+            return TimeSpan.Zero;
+        }));
+        worker.Handle<Order>("replay", (_, _) =>
+            Task.FromException(new InvalidOperationException("wrapped", new ConflictException("checkpoint", "saved"))));
+        var taskId = await EnqueueAsync(database.DataSource, queue, "replay", new { orderId = 1 }, new { maxAttempts = 5 });
+
+        Assert.True(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
+        var row = await TaskAsync(database.DataSource, taskId);
+        Assert.Equal("failed", row.Text("state"));
+        Assert.Equal(1, row.RequiredInteger("current_attempt"));
+        Assert.Equal("ConflictException", row.Json("error")!.Value.GetProperty("name").GetString());
+        Assert.Equal(0, delays);
+    }
+
+    [Fact]
+    public async Task APlainWrapperWithoutAConflictStillRetries()
+    {
+        var queue = UniqueQueue("wrapped-plain");
+        var delays = 0;
+        await using var worker = new Worker(database.DataSource, Options(queue, options => options.RetryDelay = (_, _) =>
+        {
+            Interlocked.Increment(ref delays);
+            return TimeSpan.FromMinutes(1);
+        }));
+        worker.Handle<Order>("replay", (_, _) =>
+            Task.FromException(new InvalidOperationException("wrapped", new TimeoutException("slow"))));
+        var taskId = await EnqueueAsync(database.DataSource, queue, "replay", new { orderId = 1 }, new { maxAttempts = 5 });
+
+        Assert.True(await worker.RunOnceAsync(TestContext.Current.CancellationToken));
+        var row = await TaskAsync(database.DataSource, taskId);
+        Assert.Equal("scheduled", row.Text("state"));
+        Assert.Equal(2, row.RequiredInteger("current_attempt"));
+        Assert.Equal(1, delays);
+    }
+
+    [Fact]
     public async Task AHandlerExceptionFailsTheAttemptAndTheWorkerContinues()
     {
         var queue = UniqueQueue("failure");
@@ -356,10 +399,14 @@ public sealed class WorkerTests(ScratchDatabase database)
 
         await ScalarAsync(database.DataSource, "SELECT 1 FROM workhorse.set_worker_paused_v1($1, true, 'test', 'maintenance', $2)", worker.WorkerId, Guid.NewGuid().ToString());
         await EventuallyAsync(() => worker.IsPaused, "the worker reads the remote pause");
+
+        // A paused worker claims nothing, so the task stays ready for many poll intervals.
+        var taskId = await EnqueueAsync(database.DataSource, queue, "paused", new { orderId = 1 });
+        await Task.Delay(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+        Assert.Equal("ready", (await TaskAsync(database.DataSource, taskId)).Text("state"));
+
         await ScalarAsync(database.DataSource, "SELECT 1 FROM workhorse.set_worker_paused_v1($1, false, 'test', 'done', $2)", worker.WorkerId, Guid.NewGuid().ToString());
         await EventuallyAsync(() => !worker.IsPaused, "the worker reads the resume");
-
-        var taskId = await EnqueueAsync(database.DataSource, queue, "paused", new { orderId = 1 });
         await TaskInStateAsync(database.DataSource, taskId, "succeeded");
         await running.StopAsync();
         await EventuallyAsync(

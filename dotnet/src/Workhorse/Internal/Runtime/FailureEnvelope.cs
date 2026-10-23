@@ -15,6 +15,9 @@ internal static class FailureEnvelope
     /// <summary>The <c>genericName</c> entry of C# in <c>protocol/v1/failures.json</c>.</summary>
     internal const string GenericName = "Exception";
 
+    /// <summary>The most exceptions that <see cref="ReplayConflict"/> reads, as in the JVM and Ruby SDKs.</summary>
+    internal const int CauseDepth = 16;
+
     private static readonly char[] ForbiddenNameCharacters = ['*', '.', '<', ' '];
 
     /// <summary>The envelope as JSON text.</summary>
@@ -31,7 +34,8 @@ internal static class FailureEnvelope
             }
             else
             {
-                writer.WriteString("name", Name(error));
+                // A durable replay conflict keeps its type name through a wrapper, as in the JVM and Ruby SDKs.
+                writer.WriteString("name", Name(ReplayConflict(error) ?? error));
                 writer.WriteString("message", Storable(Format(() => error.Message, error)));
                 writer.WriteString("stack", Storable(Format(error.ToString, error)));
             }
@@ -40,6 +44,29 @@ internal static class FailureEnvelope
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    /// <summary>
+    /// The durable replay conflict of ADR 0098 that <paramref name="error"/> is or wraps, or
+    /// <c>null</c>. A conflict is terminal also inside a wrapper (SM-1512). The walk follows
+    /// <see cref="Exception.InnerException"/>, so it reads the first inner exception of an
+    /// <see cref="AggregateException"/>, as the JVM follows one cause. It reads at most
+    /// <see cref="CauseDepth"/> exceptions, so a cycle cannot hold it.
+    /// </summary>
+    internal static ConflictException? ReplayConflict(Exception error)
+    {
+        Exception? current = error;
+        for (var depth = 0; depth < CauseDepth && current is not null; depth++)
+        {
+            if (current is ConflictException conflict)
+            {
+                return conflict;
+            }
+
+            current = current.InnerException;
+        }
+
+        return null;
     }
 
     /// <summary>
