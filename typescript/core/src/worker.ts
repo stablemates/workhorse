@@ -557,6 +557,10 @@ function requireTimerInterval(
   }
 }
 
+/** The largest retry delay that `fail_v1` accepts: the PostgreSQL `integer` maximum. */
+const MAX_RETRY_DELAY_MS = 2_147_483_647;
+const RETRY_DELAY_RANGE = `between 0 and ${MAX_RETRY_DELAY_MS}`;
+
 function requireSafeInteger(
   name: string,
   value: number,
@@ -1034,8 +1038,13 @@ export class Worker {
     requireSafeInteger("scheduleCatchupLimit", this.scheduleCatchupLimit, 1, "between 1 and 10000");
     if (this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be a safe integer between 1 and 10000");
-    if (typeof options.retryDelayMs === "number")
-      requireSafeInteger("retryDelayMs", options.retryDelayMs, 0);
+    // fail_v1 takes the delay as a PostgreSQL integer. A larger fixed delay would pass here and
+    // then stop the worker at its first handler failure, so the constructor rejects it.
+    if (typeof options.retryDelayMs === "number") {
+      requireSafeInteger("retryDelayMs", options.retryDelayMs, 0, RETRY_DELAY_RANGE);
+      if (options.retryDelayMs > MAX_RETRY_DELAY_MS)
+        throw new Error(`retryDelayMs must be a safe integer ${RETRY_DELAY_RANGE}`);
+    }
     if (options.sharedHeartbeats !== true) {
       // A custom WorkerQueueApi chooses its own transport, so only a Workhorse Queue is checked.
       const problem = (queue as Partial<WorkerHeartbeatReservation>)[
@@ -1815,11 +1824,9 @@ export class Worker {
     if (
       !terminalConflict &&
       delay !== undefined &&
-      (!Number.isSafeInteger(delay) || delay < 0 || delay > 2_147_483_647)
+      (!Number.isSafeInteger(delay) || delay < 0 || delay > MAX_RETRY_DELAY_MS)
     ) {
-      throw new Error(
-        "retryDelayMs must return a safe integer between 0 and 2147483647, or undefined",
-      );
+      throw new Error(`retryDelayMs must return a safe integer ${RETRY_DELAY_RANGE}, or undefined`);
     }
     const failed = await this.queue.fail(task, this.workerId, error, delay);
     span.setAttribute("workhorse.handler.outcome", failed);
