@@ -43,7 +43,9 @@ import {
   systemErrorRateWarning,
   systemOldestReadyWarningMs,
 } from "../core.js";
+import { ExplainedValue } from "../components/explained-value.js";
 import { HelpButton } from "../components/help-button.js";
+import { warningTextColor } from "../status-colors.js";
 import { taskDisplayName } from "../components/task-list.js";
 import { retryBucketLabel, sortQueuesByRisk } from "../presentation-policy.js";
 import { formatCount } from "../count-format.js";
@@ -312,30 +314,29 @@ export function QueuePressure({
                   <Table.Td ta="right">{formatCount(queue.dueSoon)}</Table.Td>
                   <Table.Td ta="right">{formatCount(queue.active)}</Table.Td>
                   <Table.Td ta="right">
-                    <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
+                    <ExplainedValue size="sm" explanation={limit.title}>
                       {limit.label}
-                    </Text>
+                    </ExplainedValue>
                     {blocked.blocking ? (
-                      <Text
-                        c="yellow.8"
+                      <ExplainedValue
+                        c={warningTextColor}
                         size="xs"
                         fw={650}
-                        title={blocked.title}
-                        aria-label={`Blocked: ${blocked.title}`}
+                        explanation={blocked.title}
                       >
                         {blocked.label} blocked
-                      </Text>
+                      </ExplainedValue>
                     ) : null}
                     {ratePolicy === null ? null : (
-                      <Text
-                        c={throttled.throttling ? "yellow.8" : "dimmed"}
+                      <ExplainedValue
+                        c={throttled.throttling ? warningTextColor : "dimmed"}
                         size="xs"
                         fw={throttled.throttling ? 650 : undefined}
-                        title={throttled.title}
+                        explanation={throttled.title}
                       >
                         {rate.label}
                         {throttled.throttling ? ` · ${throttled.label} throttled` : ""}
-                      </Text>
+                      </ExplainedValue>
                     )}
                   </Table.Td>
                   <Table.Td ta="right">{formatCount(queue.retrying)}</Table.Td>

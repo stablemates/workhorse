@@ -50,6 +50,24 @@ stays omitted.
 The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
 changes no stored data.
 
+### Dashboard status labels are static, and the theme has a System option
+
+Before this change, each status label in the dashboard was a live region. On a list of 100 tasks,
+a refresh could make a screen reader announce each changed row (SM-1662). The dashboard also had
+smaller accessibility problems (SM-1672).
+
+- Status labels are static text. A refresh does not announce changed rows. The dashboard keeps a
+  live region only for the connection state, a failed refresh, and a copy result.
+- The queue, budget, and System queue tables give each explanation as text. A focusable tooltip
+  shows it by pointer, keyboard, and touch. No paragraph has an `aria-label`.
+- The task and event drawers have one heading each. The resize separator is outside the heading.
+- Warning and danger text, and light badges in the light theme, have a contrast ratio of at least
+  4.5:1 in both themes.
+- The color theme control adds System. While System is selected, the dashboard follows the
+  browser setting. The dashboard stores the theme only when the user selects an option.
+- `@stablemates/workhorse-dashboard` exports `DashboardThemePreference`. The value of
+  `useWorkhorseTheme` adds `preference` and `setPreference`, and keeps `scheme` and `setScheme`.
+
 ### Partition preparation no longer blocks lifecycle transitions behind a reader
 
 Partition preparation creates the next daily partitions of `task_event` and `attempt_history`. It

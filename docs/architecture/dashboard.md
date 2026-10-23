@@ -977,16 +977,16 @@ The SPA keeps display preferences in the browser's `localStorage`. These prefere
 the display, so the dashboard must work when the browser does not let it read or write storage.
 For example, a browser policy can block site data for the dashboard origin.
 
-| Key                            | Preference                                 | Default             |
-| ------------------------------ | ------------------------------------------ | ------------------- |
-| `workhorse-theme-scheme`       | Color theme, `light` or `dark`             | System color scheme |
-| `workhorse-timezone`           | Display time zone, or `system`             | Browser time zone   |
-| `workhorse-auto-refresh`       | Automatic refresh interval                 | `15s`               |
-| `workhorse-system-window`      | Time window on the System page             | `1h`                |
-| `workhorse-activity-period`    | Activity chart period                      | `1h`                |
-| `workhorse-activity-group`     | Activity chart grouping                    | `task`              |
-| `workhorse-task-chart-visible` | Activity chart visibility on the task page | Visible             |
-| `workhorse-task-drawer-width`  | Task drawer width in pixels                | `780`               |
+| Key                            | Preference                                 | Default           |
+| ------------------------------ | ------------------------------------------ | ----------------- |
+| `workhorse-theme-scheme`       | Color theme, `light`, `dark`, or `system`  | `system`          |
+| `workhorse-timezone`           | Display time zone, or `system`             | Browser time zone |
+| `workhorse-auto-refresh`       | Automatic refresh interval                 | `15s`             |
+| `workhorse-system-window`      | Time window on the System page             | `1h`              |
+| `workhorse-activity-period`    | Activity chart period                      | `1h`              |
+| `workhorse-activity-group`     | Activity chart grouping                    | `task`            |
+| `workhorse-task-chart-visible` | Activity chart visibility on the task page | Visible           |
+| `workhorse-task-drawer-width`  | Task drawer width in pixels                | `780`             |
 
 `dashboard/app/src/browser-storage.ts` is the only SPA module that calls `localStorage`. Its
 `readStoredValue` returns `null` when a read throws, so the caller uses the default. If a write
@@ -998,6 +998,16 @@ An `oxlint` `no-restricted-globals` rule rejects `localStorage`, `window.localSt
 `globalThis.localStorage` in other SPA source modules. The inline theme script in
 `dashboard/app/browser/index.html` runs before the SPA modules load. It catches a failed read and
 uses the system color scheme.
+
+The color theme control in the header offers Light, Dark, and System.
+
+- If no value is stored, or the stored value is unknown, the preference is `system`.
+  `readStoredThemePreference` in `dashboard/app/src/theme.tsx` makes this decision.
+- The SPA stores `workhorse-theme-scheme` only when the user selects an option. Opening the
+  dashboard does not store a value.
+- While the preference is `system`, the dashboard follows `prefers-color-scheme`.
+  `followSystemScheme` listens for each change of the browser setting.
+- The inline theme script reads `system` the same as a missing value.
 
 ### Page loads, task reloads, and focus
 
@@ -1052,6 +1062,52 @@ Navigation between routes changes the document and the focus.
   `h1`. The full error screen also has an `h1`.
 - The first focusable element is a `Skip to main content` link. It moves focus to the page area
   `#dashboard-main`, and it shows only while it has focus.
+
+### Status labels and explanations
+
+Status labels repeat on each row of a list, and a list can show 100 rows. These rules keep the
+labels readable without a screen reader announcement for each row.
+
+- A status label is static text. `StatusBadge`, `StatusLabel`, and the task wait, blocked, and
+  cancellation badges have no `role="status"` and no `aria-live`.
+- `StatusText` in `dashboard/app/src/status-badge.tsx` hides the visible text from assistive
+  technology and gives the full label as visually hidden text. A badge is a generic element, so
+  an `aria-label` on it gives no accessible name.
+- A label with details, such as an error message, is focusable. Its tooltip opens on hover, focus,
+  and touch.
+- A refresh does not announce changed rows. The dashboard keeps a live region only where one
+  element reports one change: the header connection badge, the `Refresh failed` warning, and
+  the copy result in the task drawer.
+
+The queue, budget, and System queue tables show short values, such as `8 / 8`, with a longer
+explanation.
+
+- `ExplainedValue` in `dashboard/app/src/components/explained-value.tsx` puts the explanation
+  after the value as visually hidden text, so a screen reader reads it with the cell.
+- The value is focusable, and its tooltip opens on hover, focus, and touch. A tap on the value
+  does not select its row.
+- No paragraph has an `aria-label`, because a paragraph has no accessible name.
+
+The task and event drawers have one heading each.
+
+- Mantine renders the drawer title as the `h2` that names the dialog. The title is plain text.
+- `ResizableTaskDrawer` composes the drawer parts. The resize separator is in the header, next to
+  the title and outside it. It keeps `aria-valuemin`, `aria-valuemax`, `aria-valuenow`, and
+  `aria-valuetext`.
+
+Status text has a contrast ratio of at least 4.5:1 in the light and the dark theme.
+
+- `statusTextColors` in `dashboard/app/src/status-colors.ts` holds the warning and danger text
+  colors for each theme. The theme gives them as `--workhorse-color-warning-text` and
+  `--workhorse-color-danger-text`.
+- Retry counts, blocked counts, throttled counts, error rates, and overdue deadlines use these
+  colors.
+- Text in a tooltip keeps the tooltip text color. The tooltip background is inverted, so a page
+  text color has low contrast on it. The failure detail in a status tooltip follows this rule.
+- A light badge in the light theme sets its text to 25% lightness with the badge hue. Mantine's
+  shade 9 text gives yellow, orange, green, and teal badges less than 4.5:1.
+- `dashboard/app/src/accessibility-semantics-ui.test.tsx` computes each ratio from the Mantine
+  theme values. It checks the body, striped row, and hovered row backgrounds of a table.
 
 ### Human waits
 

@@ -116,7 +116,7 @@ describe("queues page tier column", () => {
       ]),
     );
     expect(markup).toContain(">Tier<");
-    expect(markup).toContain('aria-label="Tier: Full tier: Workhorse records every attempt');
+    expect(markup).toContain(">. Full tier: Workhorse records every attempt");
     expect(markup).toContain(">Fast<");
     expect(markup).toContain(">Records claims<");
   });

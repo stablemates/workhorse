@@ -45,8 +45,10 @@ describe("human decision controls", () => {
     });
 
     expect(html).toContain("Overdue · ");
-    expect(html).toContain('role="status"');
-    expect(html).toContain('aria-label="Overdue. Deadline August 16 at 9:00 AM"');
+    expect(html).toContain("Deadline August 16 at 9:00 AM");
+    // The deadline is static text: it is not a live region and has no name on a paragraph.
+    expect(html).not.toContain('role="status"');
+    expect(html).not.toContain("aria-label=");
   });
 
   it("confirms an application-defined quick action before completion", async () => {

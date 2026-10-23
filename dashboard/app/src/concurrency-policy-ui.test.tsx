@@ -208,10 +208,12 @@ describe("queues page concurrency columns", () => {
     expect(html).toContain("8 / 8");
     expect(html).toContain("Per key 2 · 3 keys full");
     expect(html).toContain(">12<");
-    expect(html).toContain('aria-label="Limit: Fleet-wide budget');
-    expect(html).toContain('aria-label="Blocked: At least 12 ready tasks');
+    // Each explanation is hidden text after its value, not an `aria-label` on a paragraph.
+    expect(html).toContain(">. Fleet-wide budget");
+    expect(html).toContain(">. At least 12 ready tasks");
+    expect(html).not.toMatch(/<p[^>]*aria-label=/);
     // Blocked work is emphasised amber only while it is positive.
-    expect(html).toContain("yellow");
+    expect(html).toContain("--workhorse-color-warning-text");
   });
 
   it("keeps the pause control separate from the limit columns", async () => {
@@ -220,7 +222,7 @@ describe("queues page concurrency columns", () => {
     // Pausing stops new claims entirely; the limit only budgets them. They stay distinct controls.
     expect(html).toContain('aria-label="Pause mail"');
     expect(html).toContain("Worker slots limit one process instead, and pausing is separate.");
-    expect(html).not.toContain('aria-label="Limit: Paused');
+    expect(html).not.toContain(">. Paused");
   });
 
   it("does not colour a zero blocked count and shows an em dash without a policy", async () => {
@@ -231,7 +233,7 @@ describe("queues page concurrency columns", () => {
       }),
       QueuesPage,
     );
-    expect(html).toContain('aria-label="Limit: This queue has no fleet-wide limit');
+    expect(html).toContain(">. This queue has no fleet-wide limit");
     expect(html).not.toContain("Per key");
   });
 
@@ -618,7 +620,8 @@ describe("system queue pressure concurrency column", () => {
     expect(html).toContain(">Admission<");
     expect(html).toContain("4 / 4");
     expect(html).toContain("3 blocked");
-    expect(html).toContain('aria-label="Blocked: At least 3 ready tasks');
+    expect(html).toContain(">. At least 3 ready tasks");
+    expect(html).not.toMatch(/<p[^>]*aria-label=/);
   });
 
   it("footnotes a capped policy scan", async () => {

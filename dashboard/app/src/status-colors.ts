@@ -28,3 +28,17 @@ export function statusColor(state: string): string {
   if (warningStates.has(state)) return taskStatusColors.scheduled;
   return "gray";
 }
+
+/**
+ * Text colors for status notes such as retry counts and blocked counts. A filled palette shade
+ * is too light for text on a light background: `yellow.8` gives about 2.5:1 on white. Each value
+ * here reaches 4.5:1 on the body, striped row, and hovered row backgrounds of its color scheme.
+ */
+export const statusTextColors = {
+  warning: { light: "#946200", dark: "#fcc419" },
+  danger: { light: "#c92a2a", dark: "#ff8787" },
+} as const;
+
+/** CSS values that resolve to the status text color of the current color scheme. */
+export const warningTextColor = "var(--workhorse-color-warning-text)";
+export const dangerTextColor = "var(--workhorse-color-danger-text)";

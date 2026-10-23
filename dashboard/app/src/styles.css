@@ -134,6 +134,12 @@ body {
   --mantine-line-height-md: 1.55;
 }
 
+/* Mantine renders the drawer title as the one `h2` of the dialog. */
+.task-drawer__title {
+  font-size: var(--mantine-font-size-lg);
+  font-weight: 600;
+}
+
 .task-drawer__resize-handle {
   position: absolute;
   top: 0;
@@ -554,9 +560,18 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   }
 }
 
-.status-label:focus-visible {
+.status-label:focus-visible,
+.explained-value:focus-visible {
   outline: 2px solid var(--mantine-primary-color-filled);
   outline-offset: 3px;
+}
+
+/*
+ * The light theme keeps the badge hue and sets the text lightness to 25%. Mantine's shade 9 gives
+ * yellow, orange, green, and teal badges less than 4.5:1 contrast on their shade 1 background.
+ */
+html[data-mantine-color-scheme="light"] .mantine-Badge-root[data-variant="light"] {
+  color: hsl(from var(--badge-color) h s 25%);
 }
 
 html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"] {

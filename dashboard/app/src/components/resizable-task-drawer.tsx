@@ -8,8 +8,22 @@ import {
   taskDrawerWidthBounds,
 } from "../task-view-preferences.js";
 
-/** Resize state lives here so dragging does not rerender the task's detail content. */
-export function ResizableTaskDrawer({ title, size, ...props }: DrawerProps) {
+/**
+ * Resize state lives here so dragging does not rerender the task's detail content.
+ *
+ * The parts compose the drawer so the separator sits in the header beside the title, not inside
+ * it. Mantine names the dialog after its title element, so the name contains only the title.
+ */
+export function ResizableTaskDrawer({
+  title,
+  size,
+  withOverlay = true,
+  overlayProps,
+  withCloseButton = true,
+  closeButtonProps,
+  children,
+  ...props
+}: DrawerProps) {
   const [preferredWidth, setPreferredWidth] = useState(readTaskDrawerWidth);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const drag = useRef<{ x: number; width: number; preference: number } | null>(null);
@@ -31,12 +45,11 @@ export function ResizableTaskDrawer({ title, size, ...props }: DrawerProps) {
   };
 
   return (
-    <Drawer
-      {...props}
-      size={fullWidth ? "100%" : width}
-      title={
-        <>
-          {title}
+    <Drawer.Root {...props} size={fullWidth ? "100%" : width}>
+      {withOverlay ? <Drawer.Overlay {...overlayProps} /> : null}
+      <Drawer.Content>
+        <Drawer.Header>
+          <Drawer.Title className="task-drawer__title">{title}</Drawer.Title>
           {!fullWidth && props.opened ? (
             <span
               className="task-drawer__resize-handle"
@@ -97,8 +110,10 @@ export function ResizableTaskDrawer({ title, size, ...props }: DrawerProps) {
               }}
             />
           ) : null}
-        </>
-      }
-    />
+          {withCloseButton ? <Drawer.CloseButton {...closeButtonProps} /> : null}
+        </Drawer.Header>
+        <Drawer.Body>{children}</Drawer.Body>
+      </Drawer.Content>
+    </Drawer.Root>
   );
 }
