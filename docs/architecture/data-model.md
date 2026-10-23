@@ -3523,7 +3523,8 @@ no rows for an unregistered worker.
 
 The flag is scoped to a process incarnation. Each worker lifecycle start announces a fresh
 `instance_id`. `register_worker_v1` keeps the pause and request evidence only while that instance
-keeps refreshing. A new instance of the same worker id clears them. A TypeScript `Worker` announces a
+keeps refreshing. A refresh after maintenance pruned the row of the instance also keeps them
+([Pause after a prune](#pause-after-a-prune)). A new instance of the same worker id clears them. A TypeScript `Worker` announces a
 new instance at each `run()`, and `runOnce()` keeps the instance of the last run. The other SDKs
 announce a new instance at each run and each one-shot run.
 
@@ -3554,6 +3555,50 @@ refresh, and a handler already executing runs to completion.
   stale.
 - `run_maintenance_v1` calls the bounded `prune_worker_registry_v1` with a one-minute maximum age.
 - `Queue.pruneWorkerRegistry` accepts an explicit window for operator calls.
+- `prune_worker_registry_v1` removes a row only after the longest of three ages: the requested
+  window, one minute, and three of the row's own `registry_interval_ms`. Thus a worker with a long
+  registration interval is not pruned between two healthy refreshes. Since migration 0082, which
+  produces schema version 81, the function applies the third age.
+- The function returns the number of registry rows that it removed.
+
+#### Pause after a prune
+
+A live instance can stop refreshing for a short time, for example during a network partition or a
+PostgreSQL failover. Maintenance can then prune its row. Before migration 0082, the next
+registration of that instance inserted a new row with `paused = false`, so the operator pause ended
+without an operator action.
+
+Since migration 0082, `prune_worker_registry_v1` copies the pause of each pruned paused row into
+`workhorse.worker_pause_tombstone`, in the same statement as the delete. That table holds at most
+one kept pause for each `worker_id`:
+
+| Column                       | Meaning                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| `worker_id`                  | Primary key                                                                   |
+| `instance_id`                | The instance whose pause is kept                                              |
+| `paused_by`, `paused_reason` | The attribution of the pause                                                  |
+| `paused_request_id_*`        | The request ID evidence of the pause                                          |
+| `paused_at`                  | When the operator paused the instance                                         |
+| `pruned_at`                  | When maintenance pruned the row                                               |
+| `expires_at`                 | `pruned_at` plus one day or three `registry_interval_ms`, whichever is longer |
+
+These events end a kept pause:
+
+1. `register_worker_v1` removes the kept pause of its `worker_id` after its upsert. If the kept
+   pause names the same `instance_id` and has not expired, the function restores `paused = true`
+   and the attribution, and returns `true`. A different instance starts running.
+2. `set_worker_paused_internal_v1` with `p_paused = false` removes the kept pause. It still returns
+   no rows when no registry row exists.
+3. `deregister_worker_v2` removes the kept pause of its `instance_id`. `deregister_worker_v1`
+   removes the kept pause of its `worker_id`.
+4. `prune_worker_registry_v1` removes each kept pause whose `expires_at` has passed.
+
+`register_worker_v1`, `set_worker_paused_internal_v1`, and both deregistration functions take the
+transaction advisory lock `hashtextextended('workhorse:worker-registry:' || worker_id, 0)` before
+they write. Thus a resume waits for a registration that restores a kept pause, and then ends it.
+`prune_worker_registry_v1` only tries that lock for each stale row and each expired kept pause. It
+skips a locked worker ID, so it cannot deadlock, and a later prune removes the row. [ADR 0108](../decisions/0108-keep-an-operator-pause-after-a-registry-prune.md)
+records this decision.
 
 Reported slot use is therefore eventually consistent with the worker's real event loop. Read it as
 an operational indicator rather than a synchronous cross-process read.

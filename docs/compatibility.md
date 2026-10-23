@@ -1517,8 +1517,8 @@ read the retention preview through the new `dashboard_retention_preview_v1`. Its
 through the new `deregister_worker_v2`. Thus the schema floor rises. The upgrade is a rolling
 deployment, and a mixed fleet is supported while it runs.
 
-1. Run `workhorse schema migrate`. It applies migrations 0075 through 0081 and leaves the schema at
-   version 80.
+1. Run `workhorse schema migrate`. It applies migrations 0075 through 0082 and leaves the schema at
+   version 81.
 2. Roll out the new processes in any order.
 
 A 0.9.0 database is at schema version 73. The migrations only add, or change behavior that was an
@@ -1533,6 +1533,7 @@ error:
 | `0079-bound-the-history-partition-lock-waits.sql`             | 78             | Partition DDL waits at most 250 ms for each lock, and retention and partition preparation run last                 |
 | `0080-compare-the-enqueue-fingerprint-instants-as-values.sql` | 79             | An enqueue fingerprint compares `runAt` and `deadline` as instants, so a replay matches from any session time zone |
 | `0081-bound-the-dense-cron-evaluation.sql`                    | 80             | `cron_occurrences_v1` resolves only the wall-clock times near its window, and its results do not change            |
+| `0082-keep-the-operator-pause-after-a-registry-prune.sql`     | 81             | A registry prune keeps the operator pause of a paused instance, and the same instance gets it back                 |
 
 The SDK schema floor rises from 73 to 76. Every SDK statement catalogue names
 `dashboard_retention_preview_v1`, which schema version 75 adds, and `deregister_worker_v2`, which
@@ -1562,7 +1563,14 @@ Schema version 80 does not raise the floor. Migration 0081 changes only the body
 `cron_occurrences_v1`, and no signature. The occurrences and their order do not change. Every
 process gets the bounded evaluation when the migration commits.
 
-A 0.9 process keeps working on schema version 80. Its dashboard host still sends its own retention
+Schema version 81 does not raise the floor. Migration 0082 adds the table `worker_pause_tombstone`.
+It changes the bodies of `register_worker_v1`, `deregister_worker_v1`, `deregister_worker_v2`,
+`set_worker_paused_internal_v1`, and `prune_worker_registry_v1`, and no signature. A worker of any
+SDK version gets its kept pause back when it registers again, because the pause comes back in the
+return value of `register_worker_v1`. A registration with a long `registry_interval_ms` now stays
+for at least three intervals before maintenance prunes it.
+
+A 0.9 process keeps working on schema version 81. Its dashboard host still sends its own retention
 preview statement, which reads tables that the migrations do not change. Its worker still sends
 `deregister_worker_v1`, which migration 0077 does not change. Every process gets the throttle
 behavior when migration 0075 commits. On schema 73, a throttled enqueue into a fast-tier queue still

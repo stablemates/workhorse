@@ -77,6 +77,40 @@ const stallWait = { timeout: 10_000 };
 // well before that, or a poll could pass the check.
 const notificationWait = { timeout: 1_000 };
 
+const prunedRegistration = (workerId: string) => ({
+  workerId,
+  hostname: "test-host",
+  pid: 4321,
+  queue: "default",
+  concurrency: 1,
+  activeSlots: 0,
+  draining: false,
+});
+const ageRegistrations = (age: string) =>
+  pool.query(
+    "UPDATE workhorse.worker_registry SET last_heartbeat_at = clock_timestamp() - $1::interval",
+    [age],
+  );
+const keptPauses = async (workerId: string) =>
+  (
+    await pool.query<{ instance_id: string }>(
+      "SELECT instance_id::text FROM workhorse.worker_pause_tombstone WHERE worker_id = $1",
+      [workerId],
+    )
+  ).rows.map((row) => row.instance_id);
+// Pause one registered instance, then let maintenance prune its stale row, as a network
+// partition longer than the prune age does.
+const pauseAndPrune = async (workerId: string, instanceId: string) => {
+  await queue.registerWorker({ ...prunedRegistration(workerId), instanceId });
+  await admin.setWorkerPaused(workerId, true, {
+    ...adminAudit("investigate the worker"),
+    actor: "operator",
+  });
+  await ageRegistrations("10 minutes");
+  await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+  expect((await admin.listWorkers()).some((entry) => entry.workerId === workerId)).toBe(false);
+};
+
 describe("worker registry", () => {
   it("claims configured queues through one worker identity and shared slot budget", async () => {
     const firstQueue = `multi-queue-first-${randomUUID()}`;
@@ -596,6 +630,226 @@ describe("worker registry", () => {
     await expect(
       admin.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
     ).resolves.not.toContain("registry-automatic-prune");
+  });
+
+  describe("operator pause after a registry prune", () => {
+    it("restores the pause when the same instance registers again", async () => {
+      const workerId = "registry-pruned-pause";
+      const instanceId = randomUUID();
+      await queue.registerWorker({ ...prunedRegistration(workerId), instanceId });
+      await admin.setWorkerPaused(workerId, true, {
+        ...adminAudit("investigate the worker"),
+        actor: "operator",
+      });
+      await ageRegistrations("10 minutes");
+
+      // Automatic maintenance prunes the row, as it does after a partition of more than a minute.
+      await new Worker(queue, { workerId: "registry-pruned-pause-maintenance" }).runOnce();
+      expect((await admin.listWorkers()).some((entry) => entry.workerId === workerId)).toBe(false);
+      await expect(keptPauses(workerId)).resolves.toEqual([instanceId]);
+
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: true });
+      expect(
+        (await admin.listWorkers()).find((entry) => entry.workerId === workerId),
+      ).toMatchObject({
+        instanceId,
+        paused: true,
+        pausedBy: "operator",
+        reason: "investigate the worker",
+      });
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+    });
+
+    it("keeps no pause when it prunes a running registration", async () => {
+      const workerId = "registry-pruned-running";
+      const instanceId = randomUUID();
+      await queue.registerWorker({ ...prunedRegistration(workerId), instanceId });
+      await ageRegistrations("10 minutes");
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: false });
+    });
+
+    it("starts a new instance running and ends the kept pause of the earlier one", async () => {
+      const workerId = "registry-pruned-replaced";
+      const ended = randomUUID();
+      await pauseAndPrune(workerId, ended);
+
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId: randomUUID() }),
+      ).resolves.toEqual({ paused: false });
+      expect(
+        (await admin.listWorkers()).find((entry) => entry.workerId === workerId),
+      ).toMatchObject({ paused: false, pausedBy: null, reason: null, pausedAt: null });
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+    });
+
+    it("ends the kept pause on an explicit operator resume", async () => {
+      const workerId = "registry-pruned-resumed";
+      const instanceId = randomUUID();
+      await pauseAndPrune(workerId, instanceId);
+
+      // No row exists to report, but the resume still ends the kept pause.
+      await expect(
+        admin.setWorkerPaused(workerId, false, adminAudit("resume the worker")),
+      ).resolves.toBeNull();
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: false });
+    });
+
+    it("ends the kept pause when the instance deregisters", async () => {
+      const workerId = "registry-pruned-deregistered";
+      const instanceId = randomUUID();
+      await pauseAndPrune(workerId, instanceId);
+
+      // A fenced deregistration of another instance keeps the pause of this one.
+      await expect(queue.deregisterWorker(workerId, randomUUID())).resolves.toBe(false);
+      await expect(keptPauses(workerId)).resolves.toEqual([instanceId]);
+
+      await expect(queue.deregisterWorker(workerId, instanceId)).resolves.toBe(false);
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+    });
+
+    it("removes an expired kept pause during the next prune", async () => {
+      const workerId = "registry-pruned-expired";
+      const instanceId = randomUUID();
+      await pauseAndPrune(workerId, instanceId);
+      const expiry = await pool.query<{ kept_for: boolean }>(
+        `SELECT expires_at - pruned_at = interval '1 day' AS kept_for
+           FROM workhorse.worker_pause_tombstone WHERE worker_id = $1`,
+        [workerId],
+      );
+      expect(expiry.rows).toEqual([{ kept_for: true }]);
+
+      await pool.query(
+        "UPDATE workhorse.worker_pause_tombstone SET expires_at = clock_timestamp() - interval '1 second'",
+      );
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(0);
+      await expect(keptPauses(workerId)).resolves.toEqual([]);
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: false });
+    });
+
+    it("lets a resume wait for a registration that restores the kept pause", async () => {
+      const workerId = "registry-pruned-concurrent-resume";
+      const instanceId = randomUUID();
+      await pauseAndPrune(workerId, instanceId);
+      const registering = await pool.connect();
+      const resuming = await pool.connect();
+      let resume: Promise<{ rows: { paused: boolean }[] }> | undefined;
+      try {
+        // The registration restores the pause and holds its transaction open.
+        await registering.query("BEGIN");
+        const restored = await registering.query<{ paused: boolean }>(
+          `SELECT workhorse.register_worker_v1(
+                    $1, $2::uuid, 'test-host', 4321, ARRAY['default'], ARRAY[]::text[], 1, 30000,
+                    10000, 250, 1000, 60000, 5000, 0, false, NULL, NULL, NULL
+                  ) AS paused`,
+          [workerId, instanceId],
+        );
+        expect(restored.rows).toEqual([{ paused: true }]);
+
+        // A resume in that time must wait, and then end the restored pause.
+        const resumingPid = (
+          await resuming.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+        ).rows[0]!.pid;
+        resume = resuming.query<{ paused: boolean }>(
+          "SELECT paused FROM workhorse.set_worker_paused_internal_v1($1, false)",
+          [workerId],
+        );
+        await vi.waitFor(async () => {
+          const waiting = await pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [resumingPid],
+          );
+          expect(waiting.rows[0]!.blocked).toBe(true);
+        }, stallWait);
+        await registering.query("COMMIT");
+        await expect(resume).resolves.toMatchObject({ rows: [{ paused: false }] });
+      } finally {
+        await registering.query("ROLLBACK").catch(() => undefined);
+        await resume?.catch(() => undefined);
+        registering.release();
+        resuming.release();
+      }
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: false });
+    });
+
+    it("skips a stale registration whose worker ID another call holds", async () => {
+      const busy = "registry-pruned-busy";
+      const idle = "registry-pruned-idle";
+      await queue.registerWorker({ ...prunedRegistration(busy), instanceId: randomUUID() });
+      await queue.registerWorker({ ...prunedRegistration(idle), instanceId: randomUUID() });
+      await ageRegistrations("10 minutes");
+      const holder = await pool.connect();
+      try {
+        // A registration, resume, or deregistration of the busy worker holds this lock.
+        await holder.query("BEGIN");
+        await holder.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:worker-registry:' || $1, 0))",
+          [busy],
+        );
+        await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+        const remaining = (await admin.listWorkers()).map((entry) => entry.workerId);
+        expect(remaining).toContain(busy);
+        expect(remaining).not.toContain(idle);
+      } finally {
+        await holder.query("ROLLBACK").catch(() => undefined);
+        holder.release();
+      }
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+    });
+
+    it("prunes and keeps the pause of the largest accepted registration interval", async () => {
+      const workerId = "registry-largest-interval";
+      const instanceId = randomUUID();
+      await queue.registerWorker({
+        ...prunedRegistration(workerId),
+        instanceId,
+        registryIntervalMs: 2_147_483_647,
+      });
+      await admin.setWorkerPaused(workerId, true, adminAudit("pause the slow worker"));
+
+      // Three intervals of 2^31 - 1 ms are about 74.6 days, which integer arithmetic cannot hold.
+      await ageRegistrations("10 minutes");
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(0);
+      await ageRegistrations("75 days");
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+      const expiry = await pool.query<{ kept_for: boolean }>(
+        `SELECT expires_at - pruned_at = make_interval(secs => 6442450.941) AS kept_for
+           FROM workhorse.worker_pause_tombstone WHERE worker_id = $1`,
+        [workerId],
+      );
+      expect(expiry.rows).toEqual([{ kept_for: true }]);
+      await expect(
+        queue.registerWorker({ ...prunedRegistration(workerId), instanceId }),
+      ).resolves.toEqual({ paused: true });
+    });
+
+    it("keeps a registration for three of its own registration intervals", async () => {
+      const workerId = "registry-long-interval";
+      await queue.registerWorker({
+        ...prunedRegistration(workerId),
+        instanceId: randomUUID(),
+        registryIntervalMs: 120_000,
+      });
+
+      // Two missed refreshes of two minutes each are not yet stale for this worker.
+      await ageRegistrations("5 minutes");
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(0);
+      await ageRegistrations("7 minutes");
+      await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+    });
   });
 
   it("bounds overlap, claims only free slots, and breaks the claim loop on the first null", async () => {

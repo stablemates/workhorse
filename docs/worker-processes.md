@@ -40,6 +40,11 @@ This makes worker control cooperative and durable rather than a process-local me
   worker comes back running, whether or not its id is stable, so a pause can never become a
   forgotten flag that idles a worker after a later deployment. Use queue pause when you need to
   stop work durably.
+- The pause stays with the running process when maintenance removes its stale registration. This
+  can occur after a network partition or a PostgreSQL failover. If the same process registers
+  again before the kept pause expires, it is still paused. The kept pause expires after one day,
+  or after three registration intervals if that is longer. An operator resume, a deregistration of
+  that process, or a new process ends the pause earlier.
 - A local `worker.resume()` cannot clear an operator pause that is still in effect.
 - Reported slot use is only as fresh as the cadence. Treat it as an operational indicator, not as a
   synchronous read of another process's event loop.
