@@ -1367,7 +1367,7 @@ module Stablemates
           ])
         rescue => e
           log(:info, "workhorse.worker.registration_failed", "Worker registration failed",
-            "error.type" => e.class.name)
+            "error.type" => error_name(e))
           call_reporter(:on_registration_error, @on_registration_error, e)
           return
         end
@@ -1521,7 +1521,7 @@ module Stablemates
               run_handler(task, handler, claim_started_at, active, arbiter, state)
             end
           rescue Exception => e # rubocop:disable Lint/RescueException
-            Telemetry.record_error(span, e.class.name)
+            Telemetry.record_error(span, error_name(e))
             raise
           ensure
             finish_telemetry(task, span, arbiter, state, started_at, attributes)
@@ -1593,7 +1593,7 @@ module Stablemates
           end
 
           state[:span_outcome] = settle_failure(task, e, arbiter)
-          state[:errors] << (task.redact_error_details ? REDACTED_NAME : e.class.name)
+          state[:errors] << (task.redact_error_details ? REDACTED_NAME : error_name(e))
           return
         ensure
           ownership.release
@@ -1945,9 +1945,18 @@ module Stablemates
         return {"name" => REDACTED_NAME, "message" => REDACTED_MESSAGE} if redact
 
         # A wrapped durable replay conflict keeps its name. The message and stack stay the outer ones.
-        name = (durable_replay_conflict(error) || error).class.name
-        {"name" => name.is_a?(String) ? storable_text(name) : name, "message" => storable_text(error.message.to_s),
+        {"name" => storable_text(error_name(durable_replay_conflict(error) || error)),
+         "message" => storable_text(error.message.to_s),
          "stack" => storable_text(error.full_message(highlight: false, order: :top))}
+      end
+
+      # The class name of +error+. An anonymous class has no name, so the worker uses the name of
+      # its nearest named superclass. Thus +Class.new(StandardError)+ gives "StandardError", and no
+      # envelope records a null name. +Exception+ has a name, so the walk ends.
+      def error_name(error)
+        klass = error.class
+        klass = klass.superclass until klass.name.is_a?(String)
+        klass.name
       end
 
       # +text+ as UTF-8 with each NUL and each byte that is not UTF-8 replaced by U+FFFD. PostgreSQL

@@ -270,7 +270,8 @@ Four rows carry a condition the setting name alone cannot.
   not run in lockstep. The quotient rounds up, and a worker that knows its pool size caps the
   default at the connections left after its listener and heartbeat connection. A worker that
   only polls reserves no listener connection, and a worker with shared heartbeats reserves no
-  heartbeat connection. An explicit cohort count is never capped.
+  heartbeat connection. A JVM `DataSource` reports no size, so the JVM worker caps the default only
+  at a declared `poolMaxSize`. An explicit cohort count is never capped.
 - **Maintenance routine offer interval.** All seven tick maintenance every 1,000 ms, which bounds
   dispatch latency. The slower retention routines keep their own minute, because PostgreSQL owns
   the global due decision and a faster offer only adds rejected calls. All seven bind the text

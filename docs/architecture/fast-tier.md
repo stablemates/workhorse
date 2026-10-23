@@ -841,6 +841,21 @@ Claims and fused completion work as follows:
   `FENCED_WRITE_DEADLOCK_ATTEMPTS` (3) times in total.
 - A chunk that raises `FastTierUnsupportedError` completes each task through `complete_v1`.
 
+#### JVM worker
+
+`Worker.Builder.cohorts` takes an integer from 1 through `concurrency`. An explicit value is never
+capped. Without it, `Worker.defaultCohorts(concurrency, spareConnections)` applies the TypeScript
+default.
+
+A `DataSource` reports no pool size, so the cap applies only when the caller declares `poolMaxSize`:
+
+- `spareConnections` is the declared size, minus 1 for the listener when the worker listens, minus 1
+  for the heartbeat connection unless `sharedHeartbeats` is true.
+- The worker listens unless `pollingOnly` is true. Under `sharedHeartbeats(true)`, it listens only
+  when the declared size is at least 2.
+- Declared sizes of 3, 4, 6, and 10 give a concurrency-64 worker 1, 2, 4, and 8 cohorts.
+- Without `poolMaxSize`, the default is not capped.
+
 #### Handler context rejections
 
 A fast-tier handler context rejects durable execution locally with `FastTierUnsupportedError` for

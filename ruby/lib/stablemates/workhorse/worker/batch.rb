@@ -57,7 +57,7 @@ module Stablemates
         log(:warn, "workhorse.handler.batch_evidence_failed", "Batch execution evidence could not be persisted",
           "workhorse.queue.name" => tasks.first.queue, "workhorse.task.type" => task_type,
           "workhorse.handler.batch.full" => full, "workhorse.handler.batch.size" => batch.size,
-          "workhorse.handler.batch.evidence_phase" => phase, "error.type" => e.class.name)
+          "workhorse.handler.batch.evidence_phase" => phase, "error.type" => error_name(e))
       end
 
       # Logs and measures one batch as it starts.

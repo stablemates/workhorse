@@ -453,6 +453,9 @@ Each language gets `name` from its own error. It never gets `name` from its type
   stack.
 - Python reads `type(error).__name__`. It always renders a stack through
   `traceback.format_exception`.
+- Ruby reads the name of the error class through `error_name`. An anonymous error class has a nil
+  name, so Ruby records the name of the nearest named superclass. `Class.new(StandardError)` records
+  `StandardError`.
 - Go has no name on an error. `handlerErrorName` keeps a wrapped durable conflict's class.
   Otherwise, it uses the first of these:
   1. the result of `ErrorName()` on any error in the chain that implements `ErrorNamer`;
@@ -2865,19 +2868,19 @@ throws `IllegalArgumentException` before any statement.
 `Worker.builder(DataSource)` returns a `Worker.Builder`. `build()` throws
 `IllegalArgumentException` for an invalid option. Durations round to whole milliseconds.
 
-| Option                       | Default                                                                                             | Accepts                                                                        |
-| ---------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `queues`                     | `default`                                                                                           | Non-empty names                                                                |
-| `concurrency`                | 1                                                                                                   | 1 through 100                                                                  |
-| `lease`                      | 30 seconds                                                                                          | 100 milliseconds through 1 day                                                 |
-| `heartbeat`                  | The larger of 100 milliseconds and a third of the lease                                             | 1 millisecond through `Integer.MAX_VALUE` milliseconds, shorter than the lease |
-| `pollInterval`               | 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                 | 1 millisecond through `Integer.MAX_VALUE` milliseconds                         |
-| `maintenanceInterval`        | 1 second                                                                                            | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
-| `maintenanceRoutineInterval` | 60 seconds                                                                                          | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
-| `registryInterval`           | 5 seconds                                                                                           | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
-| `scheduleCatchupLimit`       | 100                                                                                                 | 1 through 10,000                                                               |
-| `shutdownGrace`              | 25 seconds                                                                                          | 0 through 1 day                                                                |
-| `cohorts`                    | 1 when `concurrency` is below 8; otherwise `concurrency` divided by 8, rounded up, from 2 through 8 | 1 through `concurrency`                                                        |
+| Option                       | Default                                                                                                                                      | Accepts                                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `queues`                     | `default`                                                                                                                                    | Non-empty names                                                                |
+| `concurrency`                | 1                                                                                                                                            | 1 through 100                                                                  |
+| `lease`                      | 30 seconds                                                                                                                                   | 100 milliseconds through 1 day                                                 |
+| `heartbeat`                  | The larger of 100 milliseconds and a third of the lease                                                                                      | 1 millisecond through `Integer.MAX_VALUE` milliseconds, shorter than the lease |
+| `pollInterval`               | 5 seconds with a listener; 250 milliseconds, doubling toward 5 seconds, without one                                                          | 1 millisecond through `Integer.MAX_VALUE` milliseconds                         |
+| `maintenanceInterval`        | 1 second                                                                                                                                     | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `maintenanceRoutineInterval` | 60 seconds                                                                                                                                   | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `registryInterval`           | 5 seconds                                                                                                                                    | 100 milliseconds through `Integer.MAX_VALUE` milliseconds                      |
+| `scheduleCatchupLimit`       | 100                                                                                                                                          | 1 through 10,000                                                               |
+| `shutdownGrace`              | 25 seconds                                                                                                                                   | 0 through 1 day                                                                |
+| `cohorts`                    | 1 when `concurrency` is below 8; otherwise `concurrency` divided by 8, rounded up, from 2 through 8, then capped by a declared `poolMaxSize` | 1 through `concurrency`                                                        |
 
 The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a shorter value
 ([Supported heartbeat interval](lifecycle.md#supported-heartbeat-interval)).
@@ -2886,8 +2889,8 @@ The smallest supported `heartbeat` is 100 milliseconds. The worker accepts a sho
 rounds borrow from the `DataSource`. `pollingOnly(true)` opens no listener. `retryDelay` takes a
 `RetryDelay` that returns a delay of 0 through 2,147,483,647 milliseconds, or `null` for the
 persisted policy. The worker rounds the delay to the nearest millisecond, half up. A negative delay,
-or one that rounds above the limit, throws `IllegalArgumentException` before `fail_v1` (ADR 0111). A `DataSource` reports no pool size, so the worker checks no pool size and never
-caps the default cohorts. It refuses to start only when its startup steps do not end within the
+or one that rounds above the limit, throws `IllegalArgumentException` before `fail_v1` (ADR 0111). A `DataSource` reports no pool size, so only a declared `poolMaxSize` caps the
+default cohorts ([JVM worker](fast-tier.md#jvm-worker)). The worker refuses to start only when its startup steps do not end within the
 startup budget ([JVM connections](#jvm-connections)).
 
 `handle(taskType, payloadClass, handler)` and `handle(TaskHandler)` register a handler. A second

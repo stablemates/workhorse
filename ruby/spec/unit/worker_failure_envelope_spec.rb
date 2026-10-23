@@ -30,6 +30,15 @@ RSpec.describe W::Worker do
   it "replaces a NUL in a name that a class defines for itself" do
     named = Class.new(StandardError) { def self.name = "Payment\u0000Declined" }
     expect(envelope(named.new("x"))["name"]).to eq("Payment�Declined")
-    expect(envelope(Class.new(StandardError).new("x"))["name"]).to be_nil
+  end
+
+  # An anonymous class has a nil name, and the envelope recorded JSON null (SM-1668, PAR-14).
+  it "records the nearest named superclass for an anonymous error class" do
+    anonymous = Class.new(StandardError)
+    recorded = envelope(anonymous.new("declined"))
+    expect(recorded["name"]).to eq("StandardError")
+    expect(JSON.parse(JSON.generate(recorded))["name"]).to eq("StandardError")
+    expect(envelope(Class.new(anonymous).new("x"))["name"]).to eq("StandardError")
+    expect(envelope(Class.new(ArgumentError).new("x"))["name"]).to eq("ArgumentError")
   end
 end

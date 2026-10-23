@@ -312,7 +312,7 @@ class WorkerFastTierDatabaseTest {
       defaults.put(concurrency, worker().concurrency(concurrency).build().cohorts());
     }
     assertEquals(Map.of(1, 1, 7, 1, 8, 2, 9, 2, 64, 8), defaults);
-    assertEquals(Worker.defaultCohorts(100), 8);
+    assertEquals(8, Worker.defaultCohorts(100, null));
     assertEquals(3, worker().concurrency(3).cohorts(3).build().cohorts());
     assertThrows(IllegalArgumentException.class, () -> worker().cohorts(0));
     assertThrows(IllegalArgumentException.class, () -> worker().concurrency(2).cohorts(3).build());

@@ -5,6 +5,14 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### An anonymous error class records the name of its superclass
+
+Ruby gives an anonymous class a nil name. Before this change, a handler that raised an instance of
+`Class.new(StandardError)` recorded JSON null as the failure `name` (SM-1668).
+
+Now the failure envelope records the name of the nearest named superclass, `StandardError` in that
+example. Logs and telemetry use the same name for `error.type`.
+
 ### retry_delay refuses a small negative value and rounds exact values exactly
 
 `fail_v1` takes the retry delay as a PostgreSQL `integer`. Before this change, the worker rounded a
