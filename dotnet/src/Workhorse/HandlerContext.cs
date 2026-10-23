@@ -109,6 +109,13 @@ public abstract class HandlerContext
     /// </summary>
     /// <param name="name">The timer name, of 1 to 200 characters.</param>
     /// <param name="time">At most 365 days in the future.</param>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public Task SleepUntilAsync(string name, DateTimeOffset time) => SleepCoreAsync(name, null, time);
 
     /// <summary>

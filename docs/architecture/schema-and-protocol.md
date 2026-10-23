@@ -3441,6 +3441,28 @@ A duration is a `TimeSpan`, a point in time is a `DateTimeOffset`, a task ID is 
 token is a `long`. The SDK converts each `DateTimeOffset` with `ToUniversalTime()` before it binds
 it, and reads each `timestamptz` column with offset zero. No public signature takes a `DateTime`.
 
+C# converts a `DateTime` to a `DateTimeOffset` implicitly, so a caller can still pass a `DateTime`
+where the SDK takes a point in time. If the `Kind` of the `DateTime` is `Local` or `Unspecified`, the
+conversion uses the offset of the host. If the `Kind` is `Utc`, the offset is zero. The SDK cannot
+find the conversion, because the `DateTimeOffset` keeps only the offset. Thus a `DateTime` with
+`Kind` `Unspecified` can name an instant that the caller does not intend. This rule applies to
+`EnqueueOptions.RunAt`, `EnqueueOptions.Deadline`, `HandlerContext.SleepUntilAsync`,
+`TaskQuery.CreatedAfter` and `CreatedBefore`, and the `FinishedAfter` and `FinishedBefore` filters
+of `DeadLetterQuery` and `RedriveFilter`.
+
+A caller can make the build report each implicit conversion:
+
+1. Add the `Microsoft.CodeAnalysis.BannedApiAnalyzers` package to the caller project.
+2. Add a `BannedSymbols.txt` file to the project as an `AdditionalFiles` item.
+3. Write this line in the file:
+
+   ```text
+   M:System.DateTimeOffset.op_Implicit(System.DateTime)~System.DateTimeOffset;Pass a DateTimeOffset
+   ```
+
+The analyzer then reports warning RS0030 at each implicit conversion, also for a `DateTime` with
+`Kind` `Utc`. An explicit `DateTimeOffset` does not cause the warning.
+
 ### .NET connections
 
 Every statement runs on an `NpgsqlConnection`. The SDK never changes session state on a connection
@@ -3579,6 +3601,11 @@ default options. Each method is asynchronous and takes a last `CancellationToken
 | `Debounce`, `Throttle`     | `Key` of 1 through 512 UTF-8 bytes and `Window` of 1 ms through 365 days.                   |
 | `Dependencies`             | 1 through 100 unique `PrerequisiteTaskIds`, and `OnSuccess`, `OnFailure`, `OnCancellation`. |
 | `RetryPolicy`              | `RetryPolicy.Fixed`, `RetryPolicy.Exponential`, or `RetryPolicy.DecorrelatedJitter`.        |
+
+C# converts a `DateTime` to the `DateTimeOffset` of `RunAt` or `Deadline` implicitly. If the `Kind`
+of the `DateTime` is `Local` or `Unspecified`, the conversion uses the offset of the host. If the
+`Kind` is `Utc`, the offset is zero. Thus a caller must pass a `DateTimeOffset`, or a `DateTime`
+with `Kind` `Utc`. The [.NET SDK](#net-sdk) section gives the opt-in build warning.
 
 A request takes at most one of idempotency, debounce, and throttle. Debounce takes no `RunAt`.
 Debounce and throttle take no dependencies. An invalid option throws `ArgumentException` before any
@@ -4024,6 +4051,10 @@ token callback always reads a reason. `CancelReason` is `Requested`, `DeadlineEx
 | `WaitForSignalAsync<T>(name, timeout)` and `WaitForHumanAsync<TContext, T>(name, context, timeout)` | Take a `TimeSpan?` timeout from 1 millisecond through 7 days. `null` selects 7 days, or an earlier task deadline.                 |
 | `RunChildAsync<TPayload, T>(name, taskType, payload, options)`                                      | Takes `EnqueueOptions` less idempotency, debounce, throttle, and dependencies, and calls `create_child_v2`.                       |
 | `RunChildrenAsync(children)` and `RunChildrenAllAsync(children)`                                    | Take at most 100 `ChildRequest` values with unique names, and call `create_children_v1` with mode `settled` or `all_success`.     |
+
+C# converts a `DateTime` to the `time` of `SleepUntilAsync` implicitly. If the `Kind` of the
+`DateTime` is `Local` or `Unspecified`, the conversion uses the offset of the host. The
+[.NET SDK](#net-sdk) section gives the rule and the opt-in build warning.
 
 A durable method takes no `CancellationToken`. Its statement runs to its end also when the worker
 cancels the handler, and only the stop-path deadline can cancel it. Only the checkpoint operation

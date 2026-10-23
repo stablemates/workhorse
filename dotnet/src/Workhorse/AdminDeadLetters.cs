@@ -27,9 +27,23 @@ public sealed record DeadLetterQuery
     public string? ErrorName { get; init; }
 
     /// <summary>The earliest finish time, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? FinishedAfter { get; init; }
 
     /// <summary>The latest finish time, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? FinishedBefore { get; init; }
 }
 
@@ -61,9 +75,23 @@ public sealed record RedriveFilter
     public string? ErrorName { get; init; }
 
     /// <summary>The earliest finish time, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? FinishedAfter { get; init; }
 
     /// <summary>The latest finish time, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? FinishedBefore { get; init; }
 }
 

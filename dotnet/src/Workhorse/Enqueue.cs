@@ -16,9 +16,23 @@ public sealed record EnqueueOptions
     public string? Budget { get; init; }
 
     /// <summary>The earliest run time, or <c>null</c> for now.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? RunAt { get; init; }
 
     /// <summary>The absolute deadline, or <c>null</c>.</summary>
+    /// <remarks>
+    /// C# converts a <see cref="DateTime"/> to a <see cref="DateTimeOffset"/> implicitly. If the
+    /// <see cref="DateTime.Kind"/> is <see cref="DateTimeKind.Local"/> or
+    /// <see cref="DateTimeKind.Unspecified"/>, the conversion uses the offset of the host. Pass a
+    /// <see cref="DateTimeOffset"/>, or a <see cref="DateTime"/> of kind
+    /// <see cref="DateTimeKind.Utc"/>.
+    /// </remarks>
     public DateTimeOffset? Deadline { get; init; }
 
     /// <summary>The timeout of each attempt, or <c>null</c> or zero for none.</summary>
