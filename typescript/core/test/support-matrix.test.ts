@@ -871,8 +871,8 @@ describe("continuous integration", () => {
 
     expect(scripts["python:test"]).toContain("pytest python/tests");
     expect(scripts["python:vuln"]).toContain("audit-python-dependencies.sh");
-    expect(scripts["go:test"]).toContain("run-go-check.ts test ./...");
-    expect(scripts["go:test:race"]).toContain("run-go-check.ts test -race ./...");
+    expect(scripts["go:test"]).toContain("run-go-check.ts test -count=1 ./...");
+    expect(scripts["go:test:race"]).toContain("run-go-check.ts test -count=1 -race ./...");
     expect(scripts["go:vuln"]).toContain("govulncheck");
     expect(scripts["npm:vuln"]).toContain("audit-npm-dependencies.ts");
     expect(scripts["rust:vuln"]).toContain("audit-rust-dependencies.ts");
