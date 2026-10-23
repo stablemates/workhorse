@@ -1191,6 +1191,13 @@
       "catalogues": ["internal"]
     },
     {
+      "name": "database_time",
+      "pythonBinding": "database_time",
+      "arity": 0,
+      "contract": "SELECT clock_timestamp() AS now",
+      "catalogues": ["internal"]
+    },
+    {
       "name": "current_database",
       "arity": 0,
       "contract": "SELECT current_database() AS database",

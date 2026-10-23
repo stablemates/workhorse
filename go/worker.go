@@ -1659,10 +1659,13 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 	if !worker.dueForMaintenanceRoutines() {
 		return nil
 	}
+	// Maintenance writes shared due times and retention cutoffs, so the database clock chooses its
+	// time. pgx sends a string in text format, and PostgreSQL resolves "now" at the start of this
+	// autocommit statement.
 	maintenance, err := executor.Query(
 		ctx,
 		internalStatementRegistry[runMaintenanceStatementName],
-		time.Now(),
+		databaseNow,
 	)
 	if err != nil {
 		return err

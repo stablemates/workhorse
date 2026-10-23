@@ -44,6 +44,21 @@ The migration does not raise the SDK compatibility floor, and no signature or re
 changes. Run `workhorse schema migrate`. Every process gets the new behavior when the migration
 commits.
 
+### Workers use the database clock for maintenance
+
+Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before
+this change, each TypeScript and .NET worker sent its host clock as the maintenance time. If that clock was two days
+fast, other workers skipped a routine until that future time. Retention also deleted a 13-day-old
+schedule occurrence under a 14-day policy (SM-1645).
+
+Now both workers bind the text `now`, and PostgreSQL resolves it to its own time at the start of
+the call. `Queue.runMaintenance`, `prepareHistoryPartitions`, `rollupStatistics`, `retainHistory`,
+and `pruneTerminalStorage` also use the database clock when the caller gives no `now`. An explicit
+`now` stays as a seam for tests and operator repairs. Inside a caller's transaction, the default
+is the start time of that transaction.
+
+The schema does not change.
+
 ### A worker without a live notification subscription polls at the short interval
 
 A worker that can listen uses a 5,000 ms wait after an empty claim, because a notification wakes it

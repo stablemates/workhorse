@@ -4,6 +4,7 @@
 //! leases in one batched round, and runs the maintenance and registry loops ADR 0072 describes.
 mod batch;
 mod completion;
+mod database_now;
 mod dispatch;
 mod execute;
 mod handler;
@@ -45,6 +46,7 @@ use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
 use crate::HandlerContext;
 use crate::{Error, Executor, Operation};
+use database_now::DatabaseNow;
 use handler::ErasedHandler;
 
 const DEFAULT_LEASE: Duration = Duration::from_secs(30);
@@ -1398,7 +1400,7 @@ impl Inner {
             due
         };
         if due {
-            self.statements().rows(sql::RUN_MAINTENANCE_V1, &[&Utc::now()]).await?;
+            self.statements().rows(sql::RUN_MAINTENANCE_V1, &[&DatabaseNow]).await?;
         }
         Ok(())
     }

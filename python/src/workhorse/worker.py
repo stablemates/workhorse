@@ -645,6 +645,8 @@ class _DurableWaitSuspension(BaseException):
 _MAX_WAIT_DURATION_MS = 31_536_000_000
 
 _MAX_CHILD_TASKS = 100
+# PostgreSQL resolves this ``timestamptz`` input to the start time of the current transaction.
+_DATABASE_NOW = "now"
 _LookupResult = TypeVar("_LookupResult")
 
 # The contract version each existing child was created under, by child name. None marks a child
@@ -3162,6 +3164,18 @@ class Worker:
         )
         return max(0.0, due_at - monotonic())
 
+    def _maintenance_time(self) -> object:
+        """The time for one maintenance call, from the database clock.
+
+        Maintenance writes shared due times and retention cutoffs, so a fast or slow host clock
+        must not choose them. psycopg binds the text ``now``, and PostgreSQL resolves it at the
+        start of the statement's autocommit transaction. asyncpg binds only a ``datetime`` to a
+        ``timestamptz`` parameter, so that path reads the database time first.
+        """
+        if getattr(self._executor, "dialect", "psycopg") != "asyncpg":
+            return _DATABASE_NOW
+        return self._executor.rows(_STATEMENTS.database_time)[0]["now"]
+
     def _run_maintenance_if_due(self) -> bool:
         """Run the tick and the slow routines, each only when its own cadence is due."""
         now_monotonic = monotonic()
@@ -3240,7 +3254,7 @@ class Worker:
                         attributes,
                     )
             slow_maintenance = (
-                self._executor.rows(_STATEMENTS.run_maintenance, (datetime.now(UTC),))
+                self._executor.rows(_STATEMENTS.run_maintenance, (self._maintenance_time(),))
                 if routines_due
                 else ()
             )

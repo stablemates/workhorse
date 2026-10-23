@@ -619,6 +619,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT current_setting('server_version_num') AS number,\n            current_setting('server_version') AS version",
         "SELECT current_setting('server_version_num') AS number,\n            current_setting('server_version') AS version",
     ),
+    "database_time": (
+        "SELECT clock_timestamp() AS now",
+        "SELECT clock_timestamp() AS now",
+    ),
     "current_database": (
         "SELECT current_database() AS database",
         "SELECT current_database() AS database",
@@ -722,6 +726,7 @@ class StatementRegistry:
     wait_for_human: DriverStatement
     wait_for_signal: DriverStatement
     compatibility: DriverStatement
+    database_time: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -766,4 +771,5 @@ STATEMENTS = StatementRegistry(
     wait_for_human=_statement("wait_for_human_v1"),
     wait_for_signal=_statement("wait_for_signal_v1"),
     compatibility=_statement("compatibility_state"),
+    database_time=_statement("database_time"),
 )

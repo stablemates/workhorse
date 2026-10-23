@@ -1156,6 +1156,9 @@ pub const QUEUE_METRIC_SNAPSHOT: &str = r#"WITH queue_names AS (
 pub const POSTGRES_SUPPORT: &str = r#"SELECT current_setting('server_version_num') AS number,
             current_setting('server_version') AS version"#;
 
+/// `database_time` (internal)
+pub const DATABASE_TIME: &str = r#"SELECT clock_timestamp() AS now"#;
+
 /// `current_database` (admin)
 pub const CURRENT_DATABASE: &str = r#"SELECT current_database() AS database"#;
 

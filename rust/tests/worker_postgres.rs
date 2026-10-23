@@ -1832,6 +1832,41 @@ async fn a_worker_runs_terminal_storage_maintenance() {
     assert!(observer.query_one(completed, &[]).await.unwrap().get::<_, bool>(0));
 }
 
+/// Maintenance writes shared due times and retention cutoffs, so the worker binds the text `now`
+/// and PostgreSQL chooses the time. Then `p_now` equals the start time of the call's transaction. A
+/// time from the host clock is read before the call is sent, so it is not equal to that start.
+#[tokio::test]
+async fn a_worker_binds_the_database_clock_to_maintenance() {
+    let Some(harness) = harness("worker_maintenance_time").await else { return };
+    let observer = harness.database.connect().await;
+    observer
+        .batch_execute(
+            "CREATE TABLE public.maintenance_time_probe(on_database_clock boolean NOT NULL);
+             ALTER FUNCTION workhorse.run_maintenance_v1(timestamptz)
+               RENAME TO run_maintenance_v1_probed;
+             CREATE FUNCTION workhorse.run_maintenance_v1(p_now timestamptz DEFAULT clock_timestamp())
+             RETURNS TABLE (
+               phase text, rows_affected integer, duration_ms integer, skipped_lock boolean,
+               error jsonb
+             ) LANGUAGE plpgsql AS $$
+             BEGIN
+               INSERT INTO public.maintenance_time_probe VALUES (p_now = transaction_timestamp());
+               RETURN QUERY SELECT * FROM workhorse.run_maintenance_v1_probed(p_now);
+             END $$;",
+        )
+        .await
+        .unwrap();
+    assert!(!harness.worker(options()).run_once().await.unwrap());
+    let probes: Vec<bool> = observer
+        .query("SELECT on_database_clock FROM public.maintenance_time_probe", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(probes, vec![true]);
+}
+
 /// The worker records to the global provider with the units and attribute keys of the shared
 /// TypeScript catalog and the descriptions of `api/telemetry.txt`.
 #[cfg(feature = "opentelemetry")]

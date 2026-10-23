@@ -41,6 +41,12 @@ adds.
 
 ### Fixes
 
+- **Workers use the database clock for maintenance.** Maintenance writes shared due times and
+  retention cutoffs. Before this change, the JVM worker sent its host clock as the maintenance time.
+  If that clock was two days fast, other workers skipped a routine until that future time, and
+  retention deleted a 13-day-old schedule occurrence under a 14-day policy. Now `Worker.run` and
+  `Worker.runOnce` bind the text `now`, and PostgreSQL resolves it to its own time at the start of
+  the call (SM-1645). The schema does not change.
 - **A lost notification subscription restarts the poll backoff.** Before this change, the empty
   claims of a live period counted toward the 250 ms backoff without a live subscription. After a
   loss, a worker that was idle for some time waited the 5,000 ms ceiling at once. Now the backoff

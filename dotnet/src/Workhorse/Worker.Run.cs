@@ -559,6 +559,13 @@ public sealed partial class Worker
     }
 
     /// <summary>
+    /// The maintenance time. Maintenance writes shared due times and retention cutoffs, so the
+    /// database clock chooses its time: PostgreSQL resolves this <c>timestamptz</c> input at the
+    /// start of the autocommit statement.
+    /// </summary>
+    internal const string DatabaseNow = "now";
+
+    /// <summary>
     /// Runs one maintenance pass when its interval elapsed. The interval restarts only after a pass
     /// succeeds, so a failed pass runs again.
     /// </summary>
@@ -596,7 +603,7 @@ public sealed partial class Worker
             if (routineDue)
             {
                 Interlocked.Exchange(ref _routineAt, now);
-                foreach (var row in await Sql.RowsAsync(connection, SqlCatalogue.RunMaintenanceV1, [Parameters.Timestamptz(DateTimeOffset.UtcNow)], CancellationToken.None)
+                foreach (var row in await Sql.RowsAsync(connection, SqlCatalogue.RunMaintenanceV1, [Parameters.Text(DatabaseNow)], CancellationToken.None)
                     .ConfigureAwait(false))
                 {
                     pass.Phase(row);

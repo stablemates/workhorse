@@ -11,6 +11,19 @@ adds.
 
 ## Unreleased
 
+### Workers use the database clock for maintenance
+
+Maintenance writes shared state: the due time of each routine and the retention cutoffs. Before
+this change, the Rust worker sent its host clock as the maintenance time. If that clock was two days
+fast, other workers skipped a routine until that future time. Retention also deleted a 13-day-old
+schedule occurrence under a 14-day policy (SM-1645).
+
+Now `Worker::run` and `Worker::run_once` bind the text `now` in text format, and PostgreSQL
+resolves it to its own time at the start of the call. The `bytes` crate, which tokio-postgres
+already uses, is now a required dependency.
+
+The schema does not change.
+
 ### A worker without a live notification subscription polls at the short interval
 
 A worker that can listen uses a 5,000 ms wait after an empty claim, because a notification wakes it

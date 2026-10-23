@@ -918,6 +918,12 @@ internal static class SqlCatalogue
         "SELECT current_setting('server_version_num') AS number,\n            current_setting('server_version') AS version",
         0);
 
+    /// <summary><c>database_time</c> (internal).</summary>
+    internal static readonly Statement DatabaseTime = new(
+        "database_time",
+        "SELECT clock_timestamp() AS now",
+        0);
+
     /// <summary><c>current_database</c> (admin).</summary>
     internal static readonly Statement CurrentDatabase = new(
         "current_database",
@@ -1147,6 +1153,7 @@ internal static class SqlCatalogue
         MetricsObserver,
         QueueMetricSnapshot,
         PostgresSupport,
+        DatabaseTime,
         CurrentDatabase,
         CreateTaskGroupV1,
         AddTaskGroupMembersV1,

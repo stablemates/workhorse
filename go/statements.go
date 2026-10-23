@@ -704,3 +704,8 @@ const (
 // not a protocol call, so it is not in the generated catalogue.
 const roundTimeoutsStatement = "SELECT set_config('statement_timeout', $1, true), " +
 	"set_config('idle_in_transaction_session_timeout', $2, true)"
+
+// databaseNow is the timestamptz input that PostgreSQL resolves to the start time of the current
+// transaction. A worker binds it as the maintenance time, so the database clock sets shared due
+// times and retention cutoffs.
+const databaseNow = "now"

@@ -18,7 +18,7 @@ import type {
 } from "../types.js";
 import { recordRecoveryTelemetry } from "./claim-lease-fence.js";
 import { QueueModule } from "./module-context.js";
-import { RUN_MAINTENANCE_SQL } from "./maintenance-contract.js";
+import { DATABASE_NOW, RUN_MAINTENANCE_SQL } from "./maintenance-contract.js";
 
 export type MaintenancePhase =
   | "promote"
@@ -265,7 +265,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("background_routines", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(RUN_MAINTENANCE_SQL, [
-        options.now ?? new Date(),
+        options.now ?? DATABASE_NOW,
       ]);
       return result.rows.map(maintenancePhaseResult);
     });
@@ -277,7 +277,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     return this.maintenanceSpan("history_partitions", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
         SQL_STATEMENTS["prepare_history_partitions_v1"],
-        [options.force ?? false, options.now ?? new Date()],
+        [options.force ?? false, options.now ?? DATABASE_NOW],
       );
       return result.rows.map(maintenancePhaseResult);
     });
@@ -289,7 +289,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     return this.maintenanceSpan("statistics_rollup", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
         SQL_STATEMENTS["rollup_stats_v1"],
-        [options.force ?? false, options.now ?? new Date(), options.maxBuckets ?? 240],
+        [options.force ?? false, options.now ?? DATABASE_NOW, options.maxBuckets ?? 240],
       );
       return result.rows.map(maintenancePhaseResult);
     });
@@ -301,7 +301,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     return this.maintenanceSpan("history_retention", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
         SQL_STATEMENTS["retain_history_v1"],
-        [options.force ?? false, options.now ?? new Date()],
+        [options.force ?? false, options.now ?? DATABASE_NOW],
       );
       return result.rows.map(maintenancePhaseResult);
     });
@@ -313,7 +313,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     return this.maintenanceSpan("terminal_storage", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
         SQL_STATEMENTS["prune_terminal_storage_v1"],
-        [options.force ?? false, options.now ?? new Date()],
+        [options.force ?? false, options.now ?? DATABASE_NOW],
       );
       return result.rows.map(maintenancePhaseResult);
     });

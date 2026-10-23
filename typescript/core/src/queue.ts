@@ -425,11 +425,18 @@ export class Queue {
     return this.modules.retentionMaintenance.tick(options);
   }
 
-  /** Offer every database-coordinated slow maintenance phase in its required order. */
+  /**
+   * Offer every database-coordinated slow maintenance phase in its required order.
+   *
+   * Without `now`, PostgreSQL uses its own clock at the start of the statement's transaction.
+   * Pass `now` only to test or to repair at a fixed time. Inside a caller's transaction, the
+   * default is the start time of that transaction.
+   */
   async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
     return this.modules.retentionMaintenance.runMaintenance(options);
   }
 
+  /** Without `now`, PostgreSQL uses its own clock. Pass `now` only to test or to repair. */
   async prepareHistoryPartitions(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
@@ -444,6 +451,10 @@ export class Queue {
    * safe to run from every worker and safe to run repeatedly: a bucket is a pure function of the
    * raw history in its minute, and passes serialize on an advisory lock. The cadence, recompute
    * window, and group limit come from the maintenance policy; `force` bypasses the cadence gate.
+   *
+   * Without `now`, PostgreSQL uses its own clock at the start of the statement's transaction.
+   * Pass `now` only to test or to repair at a fixed time. Inside a caller's transaction, the
+   * default is the start time of that transaction.
    */
   async rollupStatistics(
     options: { force?: boolean; now?: Date; maxBuckets?: number } = {},
@@ -451,12 +462,14 @@ export class Queue {
     return this.modules.retentionMaintenance.rollupStatistics(options);
   }
 
+  /** Without `now`, PostgreSQL uses its own clock. Pass `now` only to test or to repair. */
   async retainHistory(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
     return this.modules.retentionMaintenance.retainHistory(options);
   }
 
+  /** Without `now`, PostgreSQL uses its own clock. Pass `now` only to test or to repair. */
   async pruneTerminalStorage(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
