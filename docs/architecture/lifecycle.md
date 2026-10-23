@@ -812,8 +812,19 @@ lock.
 
 `WorkerOptions.concurrency` accepts an integer from 1 through 100 and defaults to 1. The worker
 exposes the configured value as readonly `worker.concurrency`. `worker.runtimeState()` returns the
-process-local snapshot `{ concurrency, activeSlots, paused, draining }`. It is an operational view
-of this object, not durable liveness or membership state.
+process-local snapshot `WorkerRuntimeState`. It is an operational view of this object, not durable
+liveness or membership state. It has six fields:
+
+| Field            | Value                                                                          |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `concurrency`    | The configured `WorkerOptions.concurrency`.                                    |
+| `activeSlots`    | The claimed tasks that this worker executes now.                               |
+| `paused`         | True if `locallyPaused` or `remotelyPaused` is true. Either one stops claims.  |
+| `locallyPaused`  | True after a local `pause()` call and until `resume()`.                        |
+| `remotelyPaused` | True while the last successful registry refresh read back an operator pause.   |
+| `draining`       | True after `stop()` or a run failure, until the run ends and no task executes. |
+
+The two pause sources are independent ([Pause, resume, and stop](#pause-resume-and-stop)).
 
 The constructor requires a safe integer for every timing and limit option. Thus `NaN`, the
 infinities, and fractions throw before any queue operation.
@@ -828,6 +839,11 @@ infinities, and fractions throw before any queue operation.
 | `maintenanceRoutinePollMs` | 100 through 2,147,483,647.                                       |
 | `registryIntervalMs`       | 0, which opts out of registration, or 100 through 2,147,483,647. |
 | `scheduleCatchupLimit`     | 1 through 10,000.                                                |
+
+A `retryDelayMs` callback must return `undefined` or a safe integer from 0 through 2,147,483,647.
+`undefined` defers to the persisted retry policy of the task. The worker checks the result after a
+handler failure and before `fail_v1`. Any other result, such as a fraction, `NaN`, or `-1`, rejects
+the worker run before the failure write. Thus a jittered delay must be rounded and capped.
 
 The default of `leaseMs` is 30,000 ms. The default of `heartbeatMs` is
 `max(100, floor(leaseMs / 3))` ms. The smallest supported `heartbeatMs` is 100 ms. The worker
@@ -921,6 +937,16 @@ Tasks in ordinary active slots rendezvous in the type's process-local coordinato
 dispatches immediately. A partial batch dispatches after its first task has waited `lingerMs`.
 This timer does not depend on `LISTEN` notifications.
 
+If the abort signal of a waiting task aborts, for example after a cancellation or a lease loss, the
+coordinator removes that task from the batch at once. The task settles with the abort reason, and
+the callback never gets it. If no task waits after the removal, the coordinator clears the linger
+timer. The other waiting tasks keep their arrival order and their dispatch.
+
+A task stops waiting when the coordinator selects it for a batch. After the selection, the callback
+owns the outcome of the task, also while the dispatch evidence is written. If the signal of a
+selected task aborts, the callback gets the task. The callback can read the abort signal in its
+context.
+
 Every `BatchHandlerItem` keeps its payload and a `BatchHandlerContext`. This context omits `sleep`,
 `sleepUntil`, `waitForSignal`, `waitForHuman`, `runChild`, and `runChildren`. A task in the batch
 cannot suspend while the shared callback owes an outcome for every task in the batch. The context
@@ -1003,9 +1029,17 @@ Two logs cover batches, without payloads or task IDs:
 #### Pause, resume, and stop
 
 - `pause()` prevents later claims while maintenance and active tasks continue.
-- `resume()` clears the pause and makes claims immediately eligible.
+- `resume()` clears the local pause and makes claims immediately eligible.
 - `stop()` enters draining state and prevents later claims. It allows every already active handler
   and its final fenced transition to finish before `run()` resolves.
+
+A worker has two pause sources, and either one stops claims:
+
+- **Local pause.** `pause()` sets `locallyPaused`, and `resume()` clears it. It applies only to this
+  worker object.
+- **Operator pause.** Each registry refresh reads the operator pause of the worker row back from
+  PostgreSQL into `remotelyPaused`. A failed refresh keeps the last value. `resume()` does not clear
+  an operator pause that is still in effect.
 
 These process-local controls do not apply queue weights. `concurrency_policy` enforces a durable
 active-work budget across worker processes. `rate_limit_policy` enforces a durable start-rate budget

@@ -181,7 +181,7 @@ must still give the same guarantees.
    - `query(text, values)` sends `text` unmodified with `values` as positional parameters.
    - It returns a `QueryResult` whose `rows` preserve result order.
    - `rowsToQueryResult` sets `rowCount` to the row-array length, `command` to the empty string,
-     `oid` to zero, and `fields` to an empty array. Core reads only `rows` and `rowCount`.
+     `oid` to zero, and `fields` to an empty array. Core reads only `rows`.
    - If a provider answers with a value that is not a row array, the query fails. The result is not
      an empty result.
 2. **Transaction adaptation.**
