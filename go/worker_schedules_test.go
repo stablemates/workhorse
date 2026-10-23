@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -28,7 +29,8 @@ func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, "UPDATE workhorse.schedule_definition SET last_evaluated_at = clock_timestamp() - interval '1 second'"); err != nil {
+	var start time.Time
+	if err := pool.QueryRow(ctx, "UPDATE workhorse.schedule_definition SET last_evaluated_at = clock_timestamp() - interval '1 second' RETURNING last_evaluated_at").Scan(&start); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,7 +55,7 @@ func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("locked maintenance run: processed=%t err=%v", processed, err)
 	}
-	assertScheduleOccurrenceCount(t, ctx, pool, "go-worker", "billing-rollup", 1)
+	assertScheduleFiredEachSecondThroughPosition(t, ctx, pool, "go-worker", "billing-rollup", start)
 }
 
 func TestFiredScheduleCarriesTheCurrentContract(t *testing.T) {
@@ -283,6 +285,62 @@ func assertScheduleOccurrenceCount(
 	}
 	if count != want {
 		t.Fatalf("schedule occurrence count: expected %d, received %d", want, count)
+	}
+}
+
+// assertScheduleFiredEachSecondThroughPosition checks an every-second schedule. The pass evaluates
+// on the database clock, so a second boundary before the pass adds an occurrence. A full pass
+// moves the durable position to its pass time. A skip pass also skips each occurrence older than
+// the supported delay, through last_skipped_through. Thus the pass fires each whole second after
+// the later of start and that skip, through the new position, at any wall-clock time. Start is 1
+// second before the pass, so at least one occurrence fires.
+func assertScheduleFiredEachSecondThroughPosition(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	namespace string,
+	name string,
+	start time.Time,
+) {
+	t.Helper()
+	var (
+		position       time.Time
+		skippedThrough *time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT last_evaluated_at, last_skipped_through FROM workhorse.schedule_definition WHERE namespace = $1 AND schedule_name = $2",
+		namespace,
+		name,
+	).Scan(&position, &skippedThrough); err != nil {
+		t.Fatal(err)
+	}
+	after := start
+	if skippedThrough != nil && skippedThrough.After(after) {
+		after = *skippedThrough
+	}
+	var want []time.Time
+	for occurrence := after.Truncate(time.Second).Add(time.Second); !occurrence.After(position); occurrence = occurrence.Add(time.Second) {
+		want = append(want, occurrence)
+	}
+	rows, err := pool.Query(
+		ctx,
+		"SELECT occurrence_at FROM workhorse.schedule_occurrence WHERE namespace = $1 AND schedule_name = $2 ORDER BY occurrence_at",
+		namespace,
+		name,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[time.Time])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) == 0 || !slices.EqualFunc(got, want, time.Time.Equal) {
+		t.Fatalf(
+			"schedule occurrences after %s (skipped through %v) through position %s: expected %v, received %v",
+			start, skippedThrough, position, want, got,
+		)
 	}
 }
 

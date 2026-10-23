@@ -37,6 +37,46 @@ def _sync_schedule(
     return int(revision[0])
 
 
+def _occurrences(connection: psycopg.Connection[object]) -> list[datetime]:
+    return [
+        row[0].astimezone(UTC)
+        for row in connection.execute(
+            "SELECT occurrence_at FROM workhorse.schedule_occurrence "
+            "WHERE namespace = 'python-worker' AND schedule_name = 'billing-rollup' "
+            "ORDER BY occurrence_at"
+        ).fetchall()
+    ]
+
+
+def _seconds_through_position(
+    connection: psycopg.Connection[object], start: datetime
+) -> list[datetime]:
+    """Each whole second after ``start``, through the durable position after the pass.
+
+    The pass evaluates on the database clock, so a second boundary before the pass adds an
+    occurrence of an every-second schedule. A full pass moves the durable position to its pass
+    time. A ``skip`` pass also skips each occurrence older than the supported delay, through
+    ``last_skipped_through``. Thus this list does not depend on the wall clock. The arithmetic
+    uses UTC, so a daylight-saving change in the session time zone has no effect.
+    """
+    position = connection.execute(
+        "SELECT last_evaluated_at, last_skipped_through FROM workhorse.schedule_definition "
+        "WHERE namespace = 'python-worker' AND schedule_name = 'billing-rollup'"
+    ).fetchone()
+    assert position is not None
+    evaluated_at = position[0].astimezone(UTC)
+    after = start.astimezone(UTC)
+    if position[1] is not None:
+        after = max(after, position[1].astimezone(UTC))
+    first = after.replace(microsecond=0) + timedelta(seconds=1)
+    expected: list[datetime] = []
+    while first + timedelta(seconds=len(expected)) <= evaluated_at:
+        expected.append(first + timedelta(seconds=len(expected)))
+    # The old position is 1 second before the pass, so the pass fires at least one occurrence.
+    assert expected
+    return expected
+
+
 def test_worker_fires_when_another_worker_owns_the_maintenance_tick(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as definition_connection,
@@ -44,10 +84,12 @@ def test_worker_fires_when_another_worker_owns_the_maintenance_tick(database_url
         psycopg.connect(database_url) as lock_connection,
     ):
         _sync_schedule(definition_connection, "* * * * * *")
-        worker_connection.execute(
+        start = worker_connection.execute(
             "UPDATE workhorse.schedule_definition "
-            "SET last_evaluated_at = clock_timestamp() - interval '1 second'"
-        )
+            "SET last_evaluated_at = clock_timestamp() - interval '1 second' "
+            "RETURNING last_evaluated_at"
+        ).fetchone()
+        assert start is not None
         lock_connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:tick', 0))"
         )
@@ -59,9 +101,9 @@ def test_worker_fires_when_another_worker_owns_the_maintenance_tick(database_url
         ).handle("billing.rollup", lambda _payload, _context: {"fired": True})
 
         assert worker.run_once() is True
-        assert worker_connection.execute(
-            "SELECT count(*) FROM workhorse.schedule_occurrence"
-        ).fetchone() == (1,)
+        assert _occurrences(worker_connection) == _seconds_through_position(
+            worker_connection, start[0]
+        )
 
 
 def test_worker_fires_cron_catchup_through_the_configured_limit(database_url: str) -> None:
