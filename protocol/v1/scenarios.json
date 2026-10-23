@@ -2340,7 +2340,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 78,
+                "schemaVersion": 79,
                 "terminalCleanupBacklogMs": 21600000
               }
             }
@@ -3804,6 +3804,287 @@
           "rows": [
             {
               "rows": 0
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "idempotency-across-session-time-zones",
+    "steps": [
+      {
+        "id": "explicit-instants-accepted",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'UTC', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "runAt": "2099-03-01T10:00:00.123Z",
+              "deadline": "2099-03-01T12:30:00Z",
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "zoneTask": "0.value.taskId"
+        }
+      },
+      {
+        "id": "explicit-instants-replayed-in-berlin",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'Europe/Berlin', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "runAt": "2099-03-01T10:00:00.123Z",
+              "deadline": "2099-03-01T12:30:00Z",
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "zoneTask"
+                },
+                "outcome": "replayed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "offset-instants-replayed-in-kolkata",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'Asia/Kolkata', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "runAt": "2099-03-01T15:30:00.123+05:30",
+              "deadline": "2099-03-01T18:00:00+05:30",
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "zoneTask"
+                },
+                "outcome": "replayed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "different-run-at-conflicts",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'Europe/Berlin', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "runAt": "2099-03-01T10:00:00.124Z",
+              "deadline": "2099-03-01T12:30:00Z",
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "error": {
+          "code": "P1001",
+          "message": "enqueue idempotency conflict with a retained request",
+          "detail": {
+            "conflictingFields": ["runAt"],
+            "existingTaskId": {
+              "$ref": "zoneTask"
+            },
+            "keyDigest": "b10c859b639d",
+            "keyLength": 9,
+            "keyPreview": "time-zon\u2026zone",
+            "ordinal": 1,
+            "rejectedRequestDigest": "dd512c92d18dd1a631d6d1c436f646f2da2f20b57a72cf63f4168492342e3f25",
+            "scope": "protocol",
+            "storedRequestDigest": "1df37f295fa9be6d55f192018a7f369c897fcbbbf64bcee6aa0efad26d636141"
+          },
+          "hint": {
+            "conflictingFields": ["runAt"],
+            "existingTaskId": {
+              "$ref": "zoneTask"
+            },
+            "keyDigest": "b10c859b639d",
+            "keyLength": 9,
+            "keyPreview": "time-zon\u2026zone",
+            "ordinal": 1,
+            "rejectedRequestDigest": "dd512c92d18dd1a631d6d1c436f646f2da2f20b57a72cf63f4168492342e3f25",
+            "scope": "protocol",
+            "storedRequestDigest": "1df37f295fa9be6d55f192018a7f369c897fcbbbf64bcee6aa0efad26d636141"
+          }
+        }
+      },
+      {
+        "id": "different-deadline-conflicts",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'Asia/Kolkata', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "runAt": "2099-03-01T10:00:00.123Z",
+              "deadline": "2099-03-01T12:30:00.000001Z",
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "error": {
+          "code": "P1001",
+          "message": "enqueue idempotency conflict with a retained request",
+          "detail": {
+            "conflictingFields": ["deadline"],
+            "existingTaskId": {
+              "$ref": "zoneTask"
+            },
+            "keyDigest": "b10c859b639d",
+            "keyLength": 9,
+            "keyPreview": "time-zon\u2026zone",
+            "ordinal": 1,
+            "rejectedRequestDigest": "bb111c7e1d2cf0ad6572f754d33ce9113ad8c445b14feb98d2496a48070df908",
+            "scope": "protocol",
+            "storedRequestDigest": "1df37f295fa9be6d55f192018a7f369c897fcbbbf64bcee6aa0efad26d636141"
+          },
+          "hint": {
+            "conflictingFields": ["deadline"],
+            "existingTaskId": {
+              "$ref": "zoneTask"
+            },
+            "keyDigest": "b10c859b639d",
+            "keyLength": 9,
+            "keyPreview": "time-zon\u2026zone",
+            "ordinal": 1,
+            "rejectedRequestDigest": "bb111c7e1d2cf0ad6572f754d33ce9113ad8c445b14feb98d2496a48070df908",
+            "scope": "protocol",
+            "storedRequestDigest": "1df37f295fa9be6d55f192018a7f369c897fcbbbf64bcee6aa0efad26d636141"
+          }
+        }
+      },
+      {
+        "id": "omitted-run-at-accepted",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'UTC', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone-omitted",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$type": "uuid"
+                },
+                "outcome": "accepted"
+              }
+            }
+          ]
+        },
+        "capture": {
+          "omittedTask": "0.value.taskId"
+        }
+      },
+      {
+        "id": "omitted-run-at-replayed-in-berlin",
+        "sql": "SELECT jsonb_build_object('taskId', result.task_id, 'outcome', result.outcome) AS value FROM (SELECT set_config('TimeZone', 'Europe/Berlin', true) AS setting) session CROSS JOIN LATERAL workhorse.enqueue_many_v1(CASE WHEN session.setting IS NOT NULL THEN $1::jsonb END) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-time-zone",
+              "type": "protocol.time-zone",
+              "payload": {
+                "version": 1
+              },
+              "idempotency": {
+                "scope": "protocol",
+                "key": "time-zone-omitted",
+                "ttlMs": 60000
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "taskId": {
+                  "$ref": "omittedTask"
+                },
+                "outcome": "replayed"
+              }
             }
           ]
         }

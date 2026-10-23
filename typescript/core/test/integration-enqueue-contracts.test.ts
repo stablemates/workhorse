@@ -71,6 +71,17 @@ async function storedSchedule(name: string): Promise<Record<string, unknown>[]> 
   return result.rows;
 }
 
+/** The number of identity rows that bind `key` in the `time-zone` scope. */
+async function timeZoneBindings(key: string): Promise<number> {
+  const counted = await pool.query<{ count: number }>(
+    `SELECT count(*)::integer AS count FROM workhorse.enqueue_idempotency
+      WHERE idempotency_scope = 'time-zone'
+        AND idempotency_key_hash = workhorse.idempotency_key_hash_v1('time-zone', $1)`,
+    [key],
+  );
+  return counted.rows[0]!.count;
+}
+
 const dependencyCoalescingCases = [
   ["debounce", "prerequisiteTaskId"],
   ["debounce", "dependencies"],
@@ -1414,6 +1425,189 @@ describe("enqueue contracts", () => {
         },
       ),
     ).rejects.toMatchObject({ conflictingFields: ["runAt"] });
+  });
+
+  describe("a replay from another session time zone", () => {
+    const runAt = new Date("2099-03-01T10:00:00.123Z");
+    const deadline = new Date("2099-03-01T12:30:00Z");
+    const keyed = (key: string, deadlineAt = deadline): EnqueueOptions => ({
+      runAt,
+      deadline: deadlineAt,
+      idempotency: { key, scope: "time-zone" },
+    });
+
+    /** Enqueue through one connection whose session `TimeZone` is `timeZone`. */
+    async function enqueueIn(timeZone: string, key: string, deadlineAt = deadline) {
+      const client = await pool.connect();
+      try {
+        await client.query("SELECT set_config('TimeZone', $1, false)", [timeZone]);
+        return await queue.enqueue("time-zone", { order: 1 }, keyed(key, deadlineAt), client);
+      } finally {
+        await client.query("RESET TimeZone");
+        client.release();
+      }
+    }
+
+    it("matches the fingerprint and stores its instants as UTC text", async () => {
+      const first = await enqueueIn("UTC", "new-form");
+
+      await expect(enqueueIn("Europe/Berlin", "new-form")).resolves.toBe(first);
+      await expect(enqueueIn("Asia/Kolkata", "new-form")).resolves.toBe(first);
+      expect(await timeZoneBindings("new-form")).toBe(1);
+      const stored = await pool.query<{ run_at: unknown; deadline: unknown }>(
+        `SELECT request_fingerprint->'runAt' AS run_at, request_fingerprint->'deadline' AS deadline
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
+        [first],
+      );
+      expect(stored.rows[0]).toEqual({
+        run_at: "2099-03-01T10:00:00.123000Z",
+        deadline: "2099-03-01T12:30:00.000000Z",
+      });
+    });
+
+    it("matches a fingerprint stored in the earlier offset form", async () => {
+      const first = await enqueueIn("UTC", "old-form");
+      // Before schema version 79, the fingerprint stored the to_jsonb text of the writing session.
+      const client = await pool.connect();
+      try {
+        await client.query("SET TimeZone = 'Asia/Kolkata'");
+        await client.query(
+          `UPDATE workhorse.enqueue_idempotency
+              SET request_fingerprint = request_fingerprint
+                || jsonb_build_object('runAt', to_jsonb($2::timestamptz),
+                                      'deadline', to_jsonb($3::timestamptz))
+            WHERE task_id = $1`,
+          [first, runAt.toISOString(), deadline.toISOString()],
+        );
+      } finally {
+        await client.query("RESET TimeZone");
+        client.release();
+      }
+      const stored = await pool.query<{ run_at: string }>(
+        `SELECT request_fingerprint->>'runAt' AS run_at
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
+        [first],
+      );
+      expect(stored.rows[0]!.run_at).toBe("2099-03-01T15:30:00.123+05:30");
+
+      await expect(enqueueIn("UTC", "old-form")).resolves.toBe(first);
+      await expect(enqueueIn("Europe/Berlin", "old-form")).resolves.toBe(first);
+      expect(await timeZoneBindings("old-form")).toBe(1);
+      await expect(
+        enqueueIn("Europe/Berlin", "old-form", new Date(deadline.getTime() + 1)),
+      ).rejects.toMatchObject({ conflictingFields: ["deadline"] });
+    });
+
+    it("still conflicts when an instant differs", async () => {
+      await enqueueIn("UTC", "different-instant");
+      const client = await pool.connect();
+      try {
+        await client.query("SET TimeZone = 'Europe/Berlin'");
+        await expect(
+          queue.enqueue(
+            "time-zone",
+            { order: 1 },
+            { ...keyed("different-instant"), runAt: new Date(runAt.getTime() + 1) },
+            client,
+          ),
+        ).rejects.toMatchObject({ conflictingFields: ["runAt"] });
+        await expect(
+          queue.enqueue(
+            "time-zone",
+            { order: 1 },
+            keyed("different-instant", new Date(deadline.getTime() - 1)),
+            client,
+          ),
+        ).rejects.toMatchObject({ conflictingFields: ["deadline"] });
+      } finally {
+        await client.query("RESET TimeZone");
+        client.release();
+      }
+    });
+
+    /** Debounce through one connection whose session `TimeZone` is `timeZone`. */
+    async function debounceIn(timeZone: string, key: string) {
+      const client = await pool.connect();
+      try {
+        await client.query("SELECT set_config('TimeZone', $1, false)", [timeZone]);
+        return await queue.enqueueWithResult(
+          "debounced-time-zone",
+          { revision: 1 },
+          {
+            debounce: { key, scope: "debounce-time-zone", windowMs: 60_000, schedule: "preserve" },
+            deadline,
+          },
+          client,
+        );
+      } finally {
+        await client.query("RESET TimeZone");
+        client.release();
+      }
+    }
+
+    it("gives a debounce replacement the same fingerprint in every time zone", async () => {
+      const accepted = await debounceIn("UTC", "new-form");
+      await expect(debounceIn("UTC", "new-form")).resolves.toEqual({
+        taskId: accepted.taskId,
+        outcome: "replaced",
+      });
+      await expect(debounceIn("Europe/Berlin", "new-form")).resolves.toEqual({
+        taskId: accepted.taskId,
+        outcome: "replaced",
+      });
+
+      const events = await pool.query<{ stored: string; request: string }>(
+        `SELECT details->>'stored_request_digest' AS stored, details->>'request_digest' AS request
+           FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'debounced'
+          ORDER BY occurred_at, event_id`,
+        [accepted.taskId],
+      );
+      expect(events.rows).toHaveLength(2);
+      expect(events.rows[1]!.stored).toBe(events.rows[1]!.request);
+      const stored = await pool.query<{ deadline: unknown }>(
+        `SELECT request_fingerprint->'deadline' AS deadline
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
+        [accepted.taskId],
+      );
+      expect(stored.rows[0]!.deadline).toBe("2099-03-01T12:30:00.000000Z");
+    });
+
+    it("replaces a debounced task whose fingerprint has the earlier offset form", async () => {
+      const accepted = await debounceIn("UTC", "old-form");
+      // Before schema version 79, the fingerprint stored the to_jsonb text of the writing session.
+      const client = await pool.connect();
+      try {
+        await client.query("SET TimeZone = 'Asia/Kolkata'");
+        await client.query(
+          `UPDATE workhorse.enqueue_idempotency
+              SET request_fingerprint = request_fingerprint
+                || jsonb_build_object('runAt', to_jsonb((request_fingerprint->>'runAt')::timestamptz),
+                                      'deadline', to_jsonb($2::timestamptz))
+            WHERE task_id = $1`,
+          [accepted.taskId, deadline.toISOString()],
+        );
+      } finally {
+        await client.query("RESET TimeZone");
+        client.release();
+      }
+
+      await expect(debounceIn("Europe/Berlin", "old-form")).resolves.toEqual({
+        taskId: accepted.taskId,
+        outcome: "replaced",
+      });
+      const stored = await pool.query<{ run_at: string; deadline: string }>(
+        `SELECT request_fingerprint->>'runAt' AS run_at,
+                request_fingerprint->>'deadline' AS deadline
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
+        [accepted.taskId],
+      );
+      expect(stored.rows).toHaveLength(1);
+      expect(stored.rows[0]).toEqual({
+        run_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/),
+        deadline: "2099-03-01T12:30:00.000000Z",
+      });
+    });
   });
 
   it("preserves v9 default runAt serialization only for unkeyed requests", async () => {

@@ -33,6 +33,23 @@ the other SDKs do. If PostgreSQL has no payload contract for a task type, the sc
 contract version, even when the queue has a local definition. Call `syncContracts()` before
 `syncSchedules()` to store local definitions first. No schema change is required.
 
+### An idempotent replay matches from any session time zone
+
+An enqueue idempotency key binds a fingerprint of the request. Before this change, the fingerprint
+stored `runAt` and `deadline` as text in the session `TimeZone`. A caller sent an exact replay
+from a session with a different `TimeZone`. Then Workhorse raised SQLSTATE `P1001`, although both
+requests named the same instants (SM-1641).
+
+Migration 0080 (`0080-compare-the-enqueue-fingerprint-instants-as-values.sql`) moves the schema to
+version 79. After it, Workhorse stores each instant as UTC text with microsecond precision. It
+compares `runAt` and `deadline` as instants. A fingerprint stored before the migration keeps its
+offset in the text, so a replay matches it until its retention ends. A different instant still
+raises `P1001`. A debounce replacement stores its fingerprint in the same form. An omitted `runAt`
+stays omitted.
+
+The migration does not raise the SDK compatibility floor. No SDK statement changes. The migration
+changes no stored data.
+
 ### Partition preparation no longer blocks lifecycle transitions behind a reader
 
 Partition preparation creates the next daily partitions of `task_event` and `attempt_history`. It

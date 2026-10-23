@@ -559,6 +559,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "bound the history partition lock waits",
     kind: "additive",
   },
+  {
+    fromVersion: 78,
+    toVersion: 79,
+    file: "0080-compare-the-enqueue-fingerprint-instants-as-values.sql",
+    description: "compare the enqueue fingerprint instants as values",
+    kind: "additive",
+  },
 ];
 
 /**

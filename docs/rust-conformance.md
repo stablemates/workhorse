@@ -19,7 +19,7 @@ fixture does not pass, and when a listed fixture passes. `pnpm rust:test` runs i
 | `interpreter.json`      |        1 |       1 |                    0 |
 | `requests.json`         |        2 |       2 |                    0 |
 | `runtime.json`          |       24 |      24 |                    0 |
-| `scenarios.json`        |       20 |      20 |                    0 |
+| `scenarios.json`        |       21 |      21 |                    0 |
 | `schedules.json`        |        3 |       3 |                    0 |
 
 ## Expected unsupported fixtures

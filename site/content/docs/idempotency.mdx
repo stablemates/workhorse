@@ -374,6 +374,8 @@ transaction fails too. The error shows the existing task and the fields that are
 - Tags are deduplicated and sorted, so their order does not matter.
 - The retry policy and dependencies are normalized before comparison.
 - An omitted `runAt` stays omitted. It does not capture the time of the request.
+- `runAt` and `deadline` compare as instants. The session time zone of the request does not
+  change the result.
 
 **Conflict.** PostgreSQL raises SQLSTATE `P1001`. The TypeScript client throws
 `EnqueueIdempotencyConflictError` with these details:

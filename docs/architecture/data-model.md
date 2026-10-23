@@ -395,6 +395,17 @@ The stored canonical fingerprint covers:
 An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification
 timestamp.
 
+`runAt` and `deadline` compare as instants, not as text. `idempotency_instant_v1` writes each one
+as UTC text with microsecond precision, for example `"2026-10-22T10:00:00.000000Z"`. Thus the
+stored text does not depend on the session `TimeZone`. `enqueue_debounce_v1` writes its replacement
+fingerprint in the same form.
+
+Before schema version 79, the fingerprint stored the `to_jsonb` text, which carries the offset of the
+session that wrote it. If the stored fingerprint differs from the new one,
+`canonical_enqueue_fingerprint_v1` reads the two stored members as `timestamptz`. It writes them
+again in the new form, and `enqueue_batch_v1` compares again. Thus an exact replay matches a
+fingerprint of either form from any session `TimeZone`. A different instant still conflicts.
+
 - Exact replay returns the bound task ID before task, dependency, event, runtime, FIFO-sequence, or
   notification side effects.
 - A mismatch raises a structured conflict and aborts the whole statement or caller transaction.

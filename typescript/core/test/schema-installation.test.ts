@@ -629,6 +629,10 @@ describe("schema installation", () => {
         version: 78,
         description: "bound the history partition lock waits",
       },
+      {
+        version: 79,
+        description: "compare the enqueue fingerprint instants as values",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
