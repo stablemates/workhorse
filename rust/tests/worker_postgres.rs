@@ -1144,12 +1144,12 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
         heartbeat_interval: Some(interval),
         ..options()
     });
-    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let (start, mut running_handlers) = mpsc::unbounded_channel();
     let (reasons, mut reason) = mpsc::unbounded_channel();
     let release = Arc::new(tokio::sync::Notify::new());
     let gate = release.clone();
     worker.handle("rust.margin", move |_: Value, context: HandlerContext| {
-        let _ = started.send(());
+        let _ = start.send(());
         let (gate, reasons) = (gate.clone(), reasons.clone());
         async move {
             gate.notified().await;
@@ -1157,15 +1157,18 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
             Ok::<Value, HandlerError>(json!({}))
         }
     });
-    let (stop, running) = run(&worker);
-    running_handlers.recv().await.unwrap();
+    let (stop, mut running) = run(&worker);
+    started(&mut running_handlers, &mut running).await;
     let handler_started = tokio::time::Instant::now();
 
     let observer = harness.database.connect().await;
     let mut locker = harness.database.connect().await;
     let blocker: i32 = locker.query_one("SELECT pg_backend_pid()", &[]).await.unwrap().get(0);
     let lock = locker.transaction().await.unwrap();
-    lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
+    tokio::time::timeout(WAIT, lock.execute(HOLD_HEARTBEATS, &[]))
+        .await
+        .expect("the test never got the table lock")
+        .unwrap();
     // The first round falls due one interval after the lease registered, just before the handler
     // started. A lock that comes later than half an interval can miss that round.
     let held = handler_started.elapsed();
@@ -1192,14 +1195,24 @@ async fn one_timed_out_heartbeat_round_leaves_a_renewal_margin() {
     // Run past the end of the lease from the claim, so only a renewal keeps the task.
     tokio::time::sleep_until(handler_started + interval * 26 / 10).await;
     release.notify_one();
-    assert_eq!(reason.recv().await, Some(None), "the handler lost its lease");
+    let returned = tokio::time::timeout(WAIT, reason.recv()).await;
+    assert_eq!(
+        returned.expect("the released handler never returned"),
+        Some(None),
+        "the handler lost its lease"
+    );
     harness.wait_for(task, TaskState::Succeeded).await;
     stop.send(()).unwrap();
-    running.await.unwrap().unwrap();
+    tokio::time::timeout(WAIT, running)
+        .await
+        .expect("the worker run did not stop")
+        .unwrap()
+        .unwrap();
 }
 
 /// Whether a heartbeat statement waits on the lock of the backend `blocker` (`waits` true), or no
-/// statement waits on it (`waits` false). An answer after `deadline` does not count.
+/// statement waits on it (`waits` false). An answer after `deadline` does not count, and a query
+/// that has no answer by `deadline` gives `false`.
 async fn heartbeats_reach(
     observer: &Client,
     blocker: i32,
@@ -1207,15 +1220,12 @@ async fn heartbeats_reach(
     deadline: tokio::time::Instant,
 ) -> bool {
     loop {
-        let waiting: i64 = observer
-            .query_one(
-                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) \
-                 AND query LIKE '%heartbeat_many%'",
-                &[&blocker],
-            )
-            .await
-            .unwrap()
-            .get(0);
+        let statement = "SELECT count(*) FROM pg_stat_activity \
+                         WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE '%heartbeat_many%'";
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 1] = [&blocker];
+        let answer = tokio::time::timeout_at(deadline, observer.query_one(statement, &params));
+        let Ok(row) = answer.await else { return false };
+        let waiting: i64 = row.unwrap().get(0);
         if tokio::time::Instant::now() > deadline {
             return false;
         }
@@ -2055,20 +2065,20 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
         ..options()
     });
     let release = Arc::new(tokio::sync::Semaphore::new(0));
-    let (started, mut running_handlers) = mpsc::unbounded_channel();
+    let (start, mut running_handlers) = mpsc::unbounded_channel();
     let gate = Arc::clone(&release);
     worker.handle("rust.held", move |_: Value, context: HandlerContext| {
-        let (gate, started) = (Arc::clone(&gate), started.clone());
+        let (gate, start) = (Arc::clone(&gate), start.clone());
         async move {
-            let _ = started.send(());
+            let _ = start.send(());
             gate.acquire().await.unwrap().forget();
             Ok(json!({"cancelled": context.cancellation().is_cancelled()}))
         }
     });
-    let (stop, running) = run(&worker);
+    let (stop, mut running) = run(&worker);
 
     let before = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
-    running_handlers.recv().await.unwrap();
+    started(&mut running_handlers, &mut running).await;
     // A round has reached PostgreSQL, so the worker holds a connection that ran one.
     heartbeat_backend(&observer, None, false).await;
     release.add_permits(1);
@@ -2082,7 +2092,7 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let after = harness.enqueue("rust.held", json!({}), EnqueueOptions::default()).await;
-    running_handlers.recv().await.unwrap();
+    started(&mut running_handlers, &mut running).await;
     let fresh = heartbeat_backend(&observer, Some(reserved), false).await;
     assert_ne!(fresh, reserved);
     assert!(!running.is_finished(), "the worker run ended after the termination");
@@ -2093,7 +2103,8 @@ async fn heartbeats_resume_after_postgres_terminates_the_idle_reserved_connectio
     assert!(!running.is_finished(), "the worker run ended before its shutdown");
 
     stop.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap().unwrap();
+    let stopped = tokio::time::timeout(Duration::from_secs(5), running).await;
+    stopped.expect("the worker run did not stop within 5 s").unwrap().unwrap();
 }
 
 // The fast task tier (ADR 0077): one runtime row while a task is live and one outcome row after.
@@ -3627,6 +3638,11 @@ async fn an_early_expiry_keeps_the_handler_running_and_renewing_until_postgres_c
 /// An `expire_owned` request that a lock holds, while the heartbeats are held too, must not hold the
 /// attempt after the lease watchdog ends it. The handler returns at the lost lease, and `run_once`
 /// returns without the request's answer.
+///
+/// The test holds the heartbeats before the claim (SM-1743). A round that reaches PostgreSQL after
+/// the 200 ms attempt timeout answers `timeout_exceeded`. The worker then settles the expiry with a
+/// new `expire_owned` request, which waits on the test's lock. A test that took the heartbeat lock
+/// after the handler started thus failed when a loaded host delayed that lock past the timeout.
 #[tokio::test]
 async fn a_blocked_expiry_request_does_not_outlive_an_attempt_that_lost_its_lease() {
     let Some(harness) = harness("worker_expiry_blocked").await else { return };
@@ -3645,8 +3661,12 @@ async fn a_blocked_expiry_request_does_not_outlive_an_attempt_that_lost_its_leas
         .await
         .unwrap();
     let mut gate = harness.database.connect().await;
+    let gate_pid: i32 = gate.query_one("SELECT pg_backend_pid()", &[]).await.unwrap().get(0);
     let expiry_lock = gate.transaction().await.unwrap();
-    expiry_lock.execute("SELECT pg_advisory_xact_lock(1651)", &[]).await.unwrap();
+    tokio::time::timeout(WAIT, expiry_lock.execute("SELECT pg_advisory_xact_lock(1651)", &[]))
+        .await
+        .expect("the test never got the expiry lock")
+        .unwrap();
     let task = harness
         .enqueue(
             "rust.expiry-blocked",
@@ -3658,38 +3678,64 @@ async fn a_blocked_expiry_request_does_not_outlive_an_attempt_that_lost_its_leas
             },
         )
         .await;
+    // No renewal reaches PostgreSQL, so the watchdog ends the attempt one lease after the claim.
+    // The lease leaves the expiry request 1.8 s to reach the test's lock first.
     let worker = harness.worker(WorkerOptions {
-        lease_duration: Duration::from_secs(1),
+        lease_duration: Duration::from_secs(2),
         heartbeat_interval: Some(Duration::from_millis(200)),
         maintenance_interval: Duration::from_secs(3600),
         ..options()
     });
-    let (started, mut handler_started) = mpsc::unbounded_channel();
+    let (start, mut handler_started) = mpsc::unbounded_channel();
     let (reasons, mut reason) = mpsc::unbounded_channel();
     worker.handle("rust.expiry-blocked", move |_: Value, context: HandlerContext| {
-        let (started, reasons) = (started.clone(), reasons.clone());
+        let (start, reasons) = (start.clone(), reasons.clone());
         async move {
-            let _ = started.send(());
+            let _ = start.send(());
             context.cancellation().cancelled().await;
             let _ = reasons.send(context.cancellation().reason());
             Ok::<Value, HandlerError>(Value::Null)
         }
     });
-    let running = {
+    let mut locker = harness.database.connect().await;
+    let heartbeat_lock = locker.transaction().await.unwrap();
+    tokio::time::timeout(WAIT, heartbeat_lock.execute(HOLD_HEARTBEATS, &[]))
+        .await
+        .expect("the test never got the table lock")
+        .unwrap();
+    let mut running = {
         let worker = worker.clone();
         tokio::spawn(async move { worker.run_once().await })
     };
-    tokio::time::timeout(WAIT, handler_started.recv()).await.unwrap().unwrap();
-    let mut locker = harness.database.connect().await;
-    let heartbeat_lock = locker.transaction().await.unwrap();
-    heartbeat_lock.execute(HOLD_HEARTBEATS, &[]).await.unwrap();
+    started(&mut handler_started, &mut running).await;
+    let observer = harness.database.connect().await;
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let blocked: bool = observer
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                      WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid)))",
+                    &[&gate_pid],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if blocked {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the expiry request never reached the test's lock");
 
     let ran = tokio::time::timeout(WAIT, running).await;
     let seen = tokio::time::timeout(WAIT, reason.recv()).await;
     heartbeat_lock.rollback().await.unwrap();
     expiry_lock.rollback().await.unwrap();
     assert!(ran.expect("run_once waited for the blocked expiry request").unwrap().unwrap());
-    assert_eq!(seen.ok().flatten(), Some(Some(CancelReason::LeaseLost)));
+    let seen = seen.expect("the handler never reported why it was cancelled");
+    assert_eq!(seen, Some(Some(CancelReason::LeaseLost)));
     assert_eq!(harness.state(task).await, TaskState::Active);
 }
 
